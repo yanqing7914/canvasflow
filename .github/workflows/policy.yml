@@ -21,11 +21,15 @@ jobs:
         env:
           BASE_BRANCH: ${{ github.base_ref }}
           HEAD_BRANCH: ${{ github.head_ref }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          UPSTREAM_REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ "$BASE_BRANCH" = "main" ] && [ "$HEAD_BRANCH" != "dev" ]; then
-            echo "Only the owner-managed dev -> main release PR may target main."
-            exit 1
+          if [ "$BASE_BRANCH" = "main" ]; then
+            if [ "$HEAD_BRANCH" != "dev" ] || [ "$HEAD_REPOSITORY" != "$UPSTREAM_REPOSITORY" ]; then
+              echo "Only the upstream dev -> main release PR may target main."
+              exit 1
+            fi
           fi
           if [ "$BASE_BRANCH" = "dev" ] && ! printf '%s' "$HEAD_BRANCH" | grep -Eq '^(feat|fix|test|chore)/[a-z0-9._-]+$'; then
             echo "Normal PRs into dev must use feat/*, fix/*, test/*, or chore/* branches."
