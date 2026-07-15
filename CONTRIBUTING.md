@@ -2,14 +2,14 @@
 
 ## Team Workflow
 
-1. Sync the latest `dev` branch from the upstream repository.
+1. Sync the latest `dev` branch from the shared upstream repository.
 2. Let your coding agent implement a small, reviewable change.
 3. Run the local quality checks.
-4. Push the short-lived branch to your private fork and open a pull request into upstream `dev`.
-5. Wait for CI and owner review before merging. The owner is the only upstream merger.
+4. Push the short-lived branch to the shared upstream repository and open a pull request into `dev`.
+5. Wait for CI, Codex review, and owner review before merging. The PR author does not self-merge their own change.
 6. The owner opens a separate `dev` -> `main` pull request for a competition release.
 
-GitHub Free does not provide protected branches for private repositories. To preserve a hard permission boundary, teammates should have `Read` access to the upstream repository and work from private forks. Do not grant `Write` access unless the owner explicitly accepts direct-push risk.
+GitHub Free does not provide protected branches for private repositories. The team therefore treats `dev` and `main` as protected by convention: do not push directly to them, require CI and review on every PR, and let the owner handle the release merge. This is a process gate, not a server-enforced permission gate.
 
 ## Branch Naming
 
@@ -42,12 +42,19 @@ npm test
 npm run build
 ```
 
-## Fork setup
+## Shared repository setup
 
 ```bash
-git remote add upstream https://github.com/yanqing7914/canvasflow.git
-git fetch upstream
-git switch -c feat/your-task upstream/dev
+git remote -v
+git fetch origin
+git switch -c feat/your-task origin/dev
 ```
 
-Push to your fork (`origin`) and open the PR against `upstream/dev`.
+Push the feature branch to `origin` and open the PR against `origin/dev`.
+
+After another PR is merged, update your branch before continuing:
+
+```bash
+git fetch origin
+git rebase origin/dev
+```
