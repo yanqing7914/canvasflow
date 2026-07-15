@@ -6,6 +6,12 @@ on:
       - opened
       - synchronize
       - reopened
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to review
+        required: true
+        type: number
 
 permissions:
   contents: read
@@ -18,12 +24,15 @@ concurrency:
 
 jobs:
   review:
+    # Fork PRs do not receive secrets automatically. Review those from the owner's
+    # machine or dispatch this workflow manually after checking the head ref.
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR
         uses: actions/checkout@v4
         with:
-          ref: refs/pull/${{ github.event.pull_request.number }}/merge
+          ref: refs/pull/${{ github.event.pull_request.number || inputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
 
