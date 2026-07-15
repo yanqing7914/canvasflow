@@ -1,6 +1,6 @@
 # CanvasFlow Agent Guide
 
-This repository is designed for agent-assisted development. It is a private GitHub Free repository, so access control is part of the merge gate: teammates work from private forks, while the owner is the only person who writes to or merges the upstream repository.
+This repository is designed for agent-assisted development. It is a private GitHub Free repository with three collaborators who have normal `Write` access. The team uses pull requests by agreement; GitHub Free cannot technically prevent a collaborator with `Write` access from pushing directly to a private branch.
 
 ## Repo Shape
 
@@ -9,7 +9,7 @@ This repository is designed for agent-assisted development. It is a private GitH
 - All work happens on short-lived `feat/*`, `fix/*`, `test/*`, or `chore/*` branches.
 - Every change lands through a pull request.
 - Keep pull requests small enough to review in one sitting.
-- If you cannot write to the upstream repository, work in your private fork and open a PR back to `yanqing7914/canvasflow`.
+- Teammates may push short-lived feature branches to the upstream repository. Do not push directly to `dev` or `main` during normal work.
 
 ## Required Checks
 
@@ -24,13 +24,13 @@ npm run build
 
 ## Development Flow
 
-1. Start from the latest `dev` for normal work. Start from `main` only for an owner-managed release or hotfix.
-2. Create a new branch for the current change.
+1. Sync the latest `dev` branch from `origin`. Start from `main` only for an owner-managed release or hotfix.
+2. Create a short-lived branch from `origin/dev` for the current change.
 3. Implement the smallest coherent slice of work.
 4. Add or update tests when behavior changes.
 5. Run the required checks locally.
-6. Push the branch to your fork and open a PR into `dev`.
-7. Wait for CI and complete the local Codex review handoff before asking the owner to merge.
+6. Push the branch to the shared upstream repository and open a PR into `dev`.
+7. Wait for CI, Codex review, and owner review before merging. The PR author does not self-merge their own change.
 8. Only the owner opens and merges the `dev` -> `main` release PR.
 
 ## Working Rules
@@ -51,7 +51,7 @@ Stop and report instead of guessing when the request conflicts with product dire
 
 ## Review and handoff contract
 
-The PR author must describe before/after behavior, tests run, visual changes, known risks, and rollback approach. Generated code must be reviewed by the author before handoff. The owner performs the final merge decision after checking CI, the diff, and Codex feedback. A green CI job is necessary but is not a substitute for human review.
+The PR author must describe before/after behavior, tests run, visual changes, known risks, and rollback approach. Generated code must be reviewed by the author before handoff. The owner performs the final merge decision after checking CI, the diff, and Codex feedback. A green CI job is necessary but is not a substitute for human review. If someone accidentally pushes to `dev` or `main`, stop and notify the owner so the commit can be reviewed or reverted.
 
 For a UI change, include a screenshot or short recording. For behavior changes, add a focused test or explain why a test is not practical. Never claim that a check ran if it did not run.
 

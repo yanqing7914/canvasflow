@@ -8,7 +8,7 @@ The repository is set up for a three-person, agent-assisted workflow:
 - CI runs linting, type checking, tests, and production builds.
 - `CODEOWNERS` requests review from the repository owner by default.
 - PRs include an agent / Codex review checklist.
-- Same-repository PRs can trigger automated Codex review when repository secrets are configured. Fork PRs use the local Codex review handoff because GitHub does not safely expose secrets to untrusted fork code.
+- Same-repository PRs can trigger automated Codex review when repository secrets are configured.
 
 ## Getting Started
 
@@ -30,4 +30,4 @@ npm run build
 
 ## Collaboration
 
-The upstream repository stays private. Teammates use private forks and open PRs into `dev`; the owner is the only person who merges upstream changes. This permission-based workflow replaces unavailable branch protection on GitHub Free private repositories.
+The upstream repository stays private. Teammates keep their normal `Write` access, push short-lived branches to the shared repository, and open PRs into `dev`. The owner reviews and merges those PRs, then promotes `dev` to `main`. GitHub Free cannot enforce branch protection on a private repository, so direct pushes to `dev` and `main` are prohibited by team convention and checked by CI where possible.
