@@ -27,11 +27,32 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Configure Codex provider
+        env:
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          CODEX_REVIEW_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/codex-home"
+          node <<'NODE'
+          const fs = require('node:fs')
+
+          const lines = []
+          if (process.env.OPENAI_BASE_URL) {
+            lines.push(`openai_base_url = ${JSON.stringify(process.env.OPENAI_BASE_URL)}`)
+          }
+          if (process.env.CODEX_REVIEW_MODEL) {
+            lines.push(`model = ${JSON.stringify(process.env.CODEX_REVIEW_MODEL)}`)
+          }
+
+          fs.writeFileSync(`${process.env.RUNNER_TEMP}/codex-home/config.toml`, `${lines.join('\n')}\n`)
+          NODE
+
       - name: Run Codex review
         id: codex
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          codex-home: ${{ runner.temp }}/codex-home
           prompt-file: .github/codex/prompts/review.md
           output-file: codex-review.md
           sandbox: read-only
