@@ -8,6 +8,7 @@ The repository is set up for a three-person, agent-assisted workflow:
 - CI runs linting, type checking, tests, and production builds.
 - `CODEOWNERS` requests review from the repository owner by default.
 - PRs include an agent / Codex review checklist.
+- Pull requests trigger automated Codex review when repository secrets are configured.
 
 ## Getting Started
 
@@ -30,4 +31,3 @@ npm run build
 ## Collaboration
 
 Teammates can push feature branches and open PRs. The `main` branch should stay protected by CI and owner review.
-

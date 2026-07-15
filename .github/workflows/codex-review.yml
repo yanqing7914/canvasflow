@@ -28,6 +28,7 @@ jobs:
           persist-credentials: false
 
       - name: Configure Codex provider
+        id: codex_provider
         env:
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           CODEX_REVIEW_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
@@ -45,6 +46,12 @@ jobs:
           }
 
           fs.writeFileSync(`${process.env.RUNNER_TEMP}/codex-home/config.toml`, `${lines.join('\n')}\n`)
+
+          const baseUrl = process.env.OPENAI_BASE_URL?.replace(/\/+$/, '')
+          if (baseUrl) {
+            const endpoint = baseUrl.endsWith('/responses') ? baseUrl : `${baseUrl}/responses`
+            fs.appendFileSync(process.env.GITHUB_OUTPUT, `responses-api-endpoint=${endpoint}\n`)
+          }
           NODE
 
       - name: Run Codex review
@@ -52,10 +59,12 @@ jobs:
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          responses-api-endpoint: ${{ steps.codex_provider.outputs.responses-api-endpoint }}
           codex-home: ${{ runner.temp }}/codex-home
           prompt-file: .github/codex/prompts/review.md
           output-file: codex-review.md
           sandbox: read-only
+          model: ${{ vars.CODEX_REVIEW_MODEL }}
 
       - name: Upload review output
         if: always()
