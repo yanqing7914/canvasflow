@@ -36,7 +36,7 @@ jobs:
     steps:
       - name: Resolve pull request metadata
         id: metadata
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const number = context.eventName === 'workflow_dispatch'
@@ -58,14 +58,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: refs/pull/${{ needs.resolve-pr.outputs.number }}/merge
           fetch-depth: 0
           persist-credentials: false
 
       - name: Checkout trusted review prompt
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ needs.resolve-pr.outputs.base-sha }}
           path: trusted-base
@@ -104,7 +104,7 @@ jobs:
 
       - name: Run Codex review
         id: codex
-        uses: openai/codex-action@v1
+        uses: openai/codex-action@b11346a6fa031e2e164ab4b7c7ea201afffd7d59 # v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           responses-api-endpoint: ${{ steps.codex_provider.outputs.responses-api-endpoint }}
@@ -116,14 +116,14 @@ jobs:
 
       - name: Upload review output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: codex-review-output
           path: codex-review.md
 
       - name: Post review summary
         if: steps.codex.outputs.final-message != ''
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ github.token }}
           script: |
