@@ -24,4 +24,14 @@ describe('airport pickup task engine', () => {
     const event = { eventId: 'landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' }
     expect(planEffects(state, event, {})).toEqual([])
   })
+
+  it('schedules a landing notification only once across provider updates', () => {
+    const first = { eventId: 'landed-1', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' }
+    const second = { ...first, eventId: 'landed-2', timestamp: '2026-07-22T20:41:00+08:00' }
+    const state = createInitialTask()
+    expect(planEffects(state, first, {})).toHaveLength(1)
+    const scheduled = applyEvent(state, first)
+    expect(planEffects(scheduled, second, {})).toEqual([])
+    expect(scheduled.message.idempotencyKey).toBe('pickup-001:MU5102:landing')
+  })
 })
