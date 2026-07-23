@@ -128,6 +128,25 @@ describe('message.failed：不自动重试，只允许用户显式重试', () =>
     expect(spec.meta.requiresConfirm).toBe(false)
   })
 
+  it('返程阶段不再被历史 charging.completed 卡片遮挡座舱偏好', () => {
+    const returning = drivingState({
+      phase: 'returning-home',
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: true },
+      charging: { recommended: true, accepted: true, status: 'completed' },
+      updatedAt: '2026-07-22T20:56:00+08:00',
+    })
+    const spec = composePickupSpec(returning, {
+      toolResults: {
+        'memory.get-preferences': {
+          ok: true,
+          data: { members: [{ memberId: 'mom', rearTemperatureC: 25 }] },
+        },
+      },
+    })
+    expect(spec.components.map((component) => component.type)).toContain('cabin-profile')
+    expect(spec.components.map((component) => component.type)).not.toContain('charging-recommendation')
+  })
+
   it('失败态优先于残留的 memory.get-preferences 结果，仍展示重试入口', () => {
     const scheduled = applyEvent(drivingState(), landedEvent('landed-1', '2026-07-22T20:40:00+08:00'))
     const failed = applyEvent(scheduled, {
