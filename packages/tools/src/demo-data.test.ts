@@ -95,7 +95,8 @@ function executeStepTools(
         break
       }
       case 'navigation.plan-route': {
-        const result = planRoute(ctx, {
+        // Use the registry planner so the route is recorded for later start/update.
+        const result = registry['navigation.plan-route'](ctx, {
           origin: { latitude: DEMO_ORIGIN.latitude, longitude: DEMO_ORIGIN.longitude },
           destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
         })
@@ -115,7 +116,7 @@ function executeStepTools(
       }
       case 'navigation.update-route': {
         if (step.event.type === 'charging.started') {
-          const planned = planRoute(ctx, {
+          const planned = registry['navigation.plan-route'](ctx, {
             origin: { latitude: DEMO_ORIGIN.latitude, longitude: DEMO_ORIGIN.longitude },
             destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
             via: [{ id: 'station-hongqiao-01', name: '虹桥超充站' }],
