@@ -19,11 +19,14 @@ export function composePickupSpec(task: AirportPickupTaskState): UISpec {
   const title = task.passengers.names.length > 0
     ? `去${airport}接${task.passengers.names.join('和')}`
     : '机场接人任务'
-  const progressPhases = task.phase === 'completed'
+  const allProgressPhases = task.phase === 'completed'
     ? phaseOrder.slice(-5)
     : task.phase === 'cancelled'
       ? [...phaseOrder.slice(0, 4), 'cancelled' as const]
-      : phaseOrder.slice(0, 5)
+      : phaseOrder.slice(0, Math.max(5, phaseOrder.indexOf(task.phase) + 1))
+  const progressPhases = allProgressPhases.length > 5
+    ? allProgressPhases.slice(-5)
+    : allProgressPhases
   const components = [
     { id: 'pickup-overview', type: 'pickup-overview' as const, props: { passengers: task.passengers.names, flightNumber: task.flight?.flightNumber ?? '待补充', airport, terminal: task.flight?.terminal ?? 'T2', phaseLabel: phaseLabels[task.phase] } },
     { id: 'task-progress', type: 'task-progress' as const, props: { currentPhase: task.phase, steps: progressPhases.map((phase) => ({ phase, label: phaseLabels[phase], status: progressStatus(phase) })) } },

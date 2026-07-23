@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import App from './App'
 import { createInitialTask } from '@canvasflow/agent'
 import { composePickupSpec } from '@canvasflow/ui'
 
@@ -27,5 +30,14 @@ describe('demo integration', () => {
     const first = composePickupSpec(createInitialTask())
     const second = composePickupSpec({ ...createInitialTask(), taskRevision: 2, uiRevision: first.uiRevision })
     expect(second.uiRevision).toBeGreaterThan(first.uiRevision)
+  })
+
+  it('advances the rendered demo and disables terminal controls', async () => {
+    const user = userEvent.setup()
+    render(<App />)
+    const advance = screen.getByRole('button', { name: '推进下一事件' })
+    expect(screen.getByText(/preparing/)).toBeInTheDocument()
+    await user.click(advance)
+    expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
   })
 })
