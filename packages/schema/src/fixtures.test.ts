@@ -23,15 +23,9 @@ describe('airport pickup fixtures', () => {
         : file === 'invalid-ui-spec.json'
           ? composeFallbackSpec(afterEvent, '界面暂时降级', '已切换到安全模板。', 'error')
           : composePickupSpec(afterEvent, { toolResults: parsed.data.toolResults })
-      expect(composed, file).toMatchObject({
-        taskId: parsed.data.expectedUISpec.taskId,
-        phase: parsed.data.expectedUISpec.phase,
-        title: parsed.data.expectedUISpec.title,
-        presentation: parsed.data.expectedUISpec.presentation,
-        components: parsed.data.expectedUISpec.components,
-        actions: parsed.data.expectedUISpec.actions,
-        meta: { requiresConfirm: parsed.data.expectedUISpec.meta.requiresConfirm },
-      })
+      const normalizedComposed = { ...composed, uiRevision: parsed.data.expectedUISpec.uiRevision, meta: { ...composed.meta, traceId: '<trace>' } }
+      expect(normalizedComposed, file)
+        .toEqual({ ...parsed.data.expectedUISpec, meta: { ...parsed.data.expectedUISpec.meta, traceId: '<trace>' } })
       if (file === 'provider-timeout.json') {
         expect(composeFallbackSpec(afterEvent, '航班数据暂时不可用', '正在使用最近缓存，可稍后重试。'), file)
           .toMatchObject({ ...parsed.data.expectedUISpec, meta: { ...parsed.data.expectedUISpec.meta, traceId: expect.any(String) } })

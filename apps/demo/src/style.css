@@ -15,4 +15,5 @@ header p { color: #b8c8bf; }
 .cards article { background: #eef5ef; color: #102019; min-height: 240px; padding: 1.5rem; }
 .cards h2 { font-family: Georgia, serif; font-size: 2rem; }
 .cards p { color: #42554b; line-height: 1.7; }
+.actions { display: flex; justify-content: flex-end; margin-top: 1rem; }
 @media (max-width: 720px) { .console { align-items: stretch; flex-direction: column; } .cards { grid-template-columns: 1fr; } }

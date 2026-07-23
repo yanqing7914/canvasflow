@@ -41,10 +41,16 @@ export default function App() {
     const event = timeline.find((candidate) => !task.processedEventIds.includes(candidate.eventId))
     if (event) setTask((current) => applyEvent(current, event))
   }
+  const handleAction = (actionId: string) => {
+    if (actionId === 'save-trip-preferences') {
+      setTask((current) => ({ ...current, pendingConfirmation: undefined }))
+    }
+  }
 
   return <main className="demo-shell">
     <header><p className="eyebrow">CanvasFlow / Fixture mode</p><h1>机场接人任务卡片</h1><p>同一个 taskId 随事件演化，UI 只渲染受约束的 UISpec。</p></header>
     <section className="console" aria-label="Event console"><div><span className="label">阶段</span><strong>{spec.title}</strong><small>{task.phase} · taskRevision {task.taskRevision} · uiRevision {spec.uiRevision}</small></div><button type="button" onClick={advance} disabled={task.phase === 'completed' || task.phase === 'cancelled'}>推进下一事件</button></section>
     <section className="cards">{spec.components.map((component) => <article key={component.id}><span className="tag">{component.type}</span><h2>{componentTitle(component)}</h2><p>{componentSummary(component)}</p></article>)}</section>
+    {spec.actions.length > 0 && <section className="actions" aria-label="Task actions">{spec.actions.map((action) => <button key={action.id} type="button" onClick={() => handleAction(action.id)}>{action.label}</button>)}</section>}
   </main>
 }

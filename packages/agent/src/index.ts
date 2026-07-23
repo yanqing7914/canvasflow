@@ -30,11 +30,11 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
   if (state.phase === 'completed' || state.phase === 'cancelled') return state
   const next = structuredClone(state)
   const beforeFacts = taskFacts(state)
-  next.processedEventIds.push(event.eventId)
-  next.updatedAt = event.timestamp
+  let handled = false
 
   switch (event.type) {
     case 'user.input':
+      handled = true
       if (/MU\d+/i.test(event.text)) next.flight = { flightNumber: event.text.match(/MU\d+/i)?.[0].toUpperCase() ?? event.text, status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
       if (/补能|充电/.test(event.text)) next.charging = { ...next.charging, recommended: true, status: 'planned' }
       if (next.flight && next.passengers.names.length > 0 && next.phase === 'collecting-information') next.phase = 'preparing'
@@ -61,9 +61,14 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'charging.completed': if (next.charging.status === 'active') next.charging.status = 'completed'; break
     case 'charging.cancelled': if (next.charging.status === 'planned' || next.charging.status === 'active') next.charging = { ...next.charging, accepted: false, status: 'none' }; break
     case 'user.cancelled-task': next.phase = 'cancelled'; break
+    case 'provider.timeout': handled = true; break
     default: break
   }
   const afterFacts = taskFacts(next)
-  if (JSON.stringify(afterFacts) !== JSON.stringify(beforeFacts)) next.taskRevision += 1
+  if (JSON.stringify(afterFacts) !== JSON.stringify(beforeFacts) || handled) {
+    if (JSON.stringify(afterFacts) !== JSON.stringify(beforeFacts)) next.taskRevision += 1
+    next.processedEventIds.push(event.eventId)
+    next.updatedAt = event.timestamp
+  }
   return airportPickupTaskStateSchema.parse(next)
 }

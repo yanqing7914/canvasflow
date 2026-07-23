@@ -48,4 +48,13 @@ describe('airport pickup task engine', () => {
     expect(planEffects(state, repeated, { 'memory.get-preferences': {} })).toEqual([])
     expect(applyEvent(state, repeated).taskRevision).toBe(state.taskRevision)
   })
+
+  it('allows an out-of-order event to be replayed after its precondition is met', () => {
+    const event = { eventId: 'nav-later', type: 'navigation.started' as const, routeId: 'route', timestamp: '2026-07-22T12:30:00+08:00' }
+    const initial = createInitialTask()
+    const ignored = applyEvent(initial, event)
+    expect(ignored.processedEventIds).not.toContain(event.eventId)
+    const preparing = { ...ignored, phase: 'preparing' as const }
+    expect(applyEvent(preparing, event).phase).toBe('driving-to-airport')
+  })
 })
