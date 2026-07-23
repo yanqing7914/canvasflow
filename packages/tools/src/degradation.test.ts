@@ -46,7 +46,11 @@ describe('重复航班落地事件：消息重复发送率 0%', () => {
 
     expect(planEffects(state, first, {})).toEqual([{ type: 'message.send', status: 'planned', tool: 'message.send' }])
     const scheduled = applyEvent(state, first)
-    expect(scheduled.message).toMatchObject({ status: 'scheduled', idempotencyKey: 'pickup-001:MU5102:landing' })
+    expect(scheduled.message).toMatchObject({
+      status: 'scheduled',
+      idempotencyKey: 'pickup-001:MU5102:landing',
+      pendingContactId: 'contact-mom',
+    })
 
     // 同一事件重放：状态不变，不再计划副作用
     expect(applyEvent(scheduled, first)).toEqual(scheduled)

@@ -49,6 +49,8 @@ export const airportPickupTaskStateSchema = z.object({
     status: z.enum(['idle', 'scheduled', 'cancelled', 'sending', 'sent', 'failed']),
     landingNoticeSent: z.boolean(),
     pendingMessageId: z.string().optional(),
+    /** Authorized recipient retained for schedule/retry; cleared after terminal send outcomes. */
+    pendingContactId: z.string().optional(),
     scheduledAt: z.iso.datetime({ offset: true }).optional(),
     sentAt: z.iso.datetime({ offset: true }).optional(),
     idempotencyKey: z.string().optional(),
