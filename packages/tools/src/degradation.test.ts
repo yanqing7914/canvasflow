@@ -128,6 +128,28 @@ describe('message.failed：不自动重试，只允许用户显式重试', () =>
     expect(spec.meta.requiresConfirm).toBe(false)
   })
 
+  it('失败态优先于残留的 memory.get-preferences 结果，仍展示重试入口', () => {
+    const scheduled = applyEvent(drivingState(), landedEvent('landed-1', '2026-07-22T20:40:00+08:00'))
+    const failed = applyEvent(scheduled, {
+      eventId: 'send-failed',
+      type: 'message.failed',
+      messageId: scheduled.message.pendingMessageId!,
+      errorCode: 'SEND_FAILED',
+      timestamp: '2026-07-22T20:41:00+08:00',
+    })
+    const spec = composePickupSpec(failed, {
+      toolResults: {
+        'memory.get-preferences': {
+          ok: true,
+          data: { members: [{ memberId: 'mom', rearTemperatureC: 25 }] },
+        },
+      },
+    })
+    expect(spec.actions.some((action) => action.id === 'retry-landing-message')).toBe(true)
+    expect(spec.components.map((component) => component.type)).toContain('message-preview')
+    expect(spec.components.map((component) => component.type)).not.toContain('cabin-profile')
+  })
+
   it('UI 重试 action → 签发确认 → provider 发送成功（完整显式重试路径）', () => {
     const scheduled = applyEvent(drivingState(), landedEvent('landed-1', '2026-07-22T20:40:00+08:00'))
     const failed = applyEvent(scheduled, {
