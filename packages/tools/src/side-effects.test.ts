@@ -285,15 +285,64 @@ describe('message.send', () => {
 
   it('失败联系人返回 SEND_FAILED 且不写入幂等账本', () => {
     const registry = createToolRegistry()
+    const message = { contactId: FAILING_CONTACT_ID, messageId: 'msg-fail', text: 'hello' }
     const input = {
-      contactId: FAILING_CONTACT_ID,
-      messageId: 'msg-fail',
-      text: 'hello',
-      confirmationId: sendMessageConfirmationId('pickup-001'),
+      ...message,
+      confirmationId: sendMessageConfirmationId('pickup-001', message),
       idempotencyKey: 'pickup-001:msg-fail',
     }
     expect(registry['message.send'](ctx, input).error?.code).toBe('SEND_FAILED')
     expect(registry['message.send'](ctx, input).error?.code).toBe('SEND_FAILED')
+  })
+
+  it('显式确认凭据绑定到具体消息，换联系人或文案后失效', () => {
+    const registry = createToolRegistry()
+    const message = { contactId: 'contact-mom', messageId: 'msg-confirm-1', text: '我已到达机场' }
+    const confirmationId = sendMessageConfirmationId('pickup-001', message)
+
+    const otherText = registry['message.send'](ctx, {
+      ...message,
+      text: '换一段完全不同的文案',
+      confirmationId,
+      idempotencyKey: 'pickup-001:msg-confirm-other-text',
+    })
+    expect(otherText.error?.code).toBe('AUTHORIZATION_REQUIRED')
+
+    const otherMessageId = registry['message.send'](ctx, {
+      ...message,
+      messageId: 'msg-confirm-2',
+      confirmationId,
+      idempotencyKey: 'pickup-001:msg-confirm-other-id',
+    })
+    expect(otherMessageId.error?.code).toBe('AUTHORIZATION_REQUIRED')
+
+    const bound = registry['message.send'](ctx, {
+      ...message,
+      confirmationId,
+      idempotencyKey: 'pickup-001:msg-confirm-bound',
+    })
+    expect(bound.ok).toBe(true)
+  })
+
+  it('同一 idempotencyKey 换参数不能重放缓存结果', () => {
+    const registry = createToolRegistry()
+    const sendInput = {
+      contactId: 'contact-mom',
+      messageId: 'msg-conflict',
+      text: 'hello',
+      authorizationId: autoNotifyAuthorizationId('pickup-001'),
+      idempotencyKey: 'pickup-001:conflict-key',
+    }
+    expect(registry['message.send'](ctx, sendInput).ok).toBe(true)
+    // 同 key 改文案：不能返回上一次的成功回执
+    const conflict = registry['message.send'](ctx, { ...sendInput, text: 'bye' })
+    expect(conflict.error).toMatchObject({ code: 'INVALID_ARGUMENT', retryable: false })
+
+    // 其他副作用工具同样受保护（以 navigation.start 为代表）
+    const started = registry['navigation.start'](ctx, { routeId: 'route-airport-001', idempotencyKey: 'nav-conflict' })
+    expect(started.ok).toBe(true)
+    const navConflict = registry['navigation.start'](ctx, { routeId: 'route-home-001', idempotencyKey: 'nav-conflict' })
+    expect(navConflict.error).toMatchObject({ code: 'INVALID_ARGUMENT', retryable: false })
   })
 })
 

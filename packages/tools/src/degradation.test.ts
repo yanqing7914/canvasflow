@@ -4,7 +4,7 @@ import { applyEvent, planEffects } from '@canvasflow/agent'
 import { composeFallbackSpec, composePickupSpec } from '@canvasflow/ui'
 import { getFlightStatus } from './flight'
 import { planRoute } from './navigation'
-import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, sendMessageConfirmationId } from './message'
+import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, prepareMessage, sendMessageConfirmationId } from './message'
 import { createSideEffectRuntime } from './idempotency'
 import { createToolRegistry } from './registry'
 import type { ToolContext } from './result'
@@ -56,18 +56,40 @@ describe('重复航班落地事件：消息重复发送率 0%', () => {
     const duplicate = landedEvent('landed-2', '2026-07-22T20:41:00+08:00')
     expect(planEffects(scheduled, duplicate, {})).toEqual([])
 
+    // 完整消息生命周期：message.prepare 生成预览，其 messageId 与任务侧
+    // idempotencyKey 同构（`${taskId}:${pendingMessageId}`），不允许手写标识
+    const prepared = prepareMessage(ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' })
+    expect(prepared.ok).toBe(true)
+    expect(prepared.data!.messageId).toBe(scheduled.message.idempotencyKey)
+    expect(prepared.data!.messageId).toBe(`${scheduled.taskId}:${scheduled.message.pendingMessageId}`)
+
     // Provider 层：同一幂等键重复发送返回缓存的同一结果对象，副作用只发生一次
     const sendInput = {
-      contactId: 'contact-mom',
-      messageId: 'pickup-001:MU5102:landing',
-      text: '我已到达机场接机点，航班 MU5102，预计 20:40 会合。',
-      authorizationId: autoNotifyAuthorizationId('pickup-001'),
+      contactId: prepared.data!.contactId,
+      messageId: prepared.data!.messageId,
+      text: prepared.data!.text,
+      authorizationId: autoNotifyAuthorizationId(scheduled.taskId),
       idempotencyKey: scheduled.message.idempotencyKey!,
     }
     const firstSend = registry['message.send'](ctx, sendInput)
     const secondSend = registry['message.send'](ctx, sendInput)
     expect(firstSend.ok).toBe(true)
     expect(secondSend).toBe(firstSend)
+
+    // 发送回执喂回状态机：状态置为 sent，landingNoticeSent 置位
+    const sentEvent: AirportPickupEvent = {
+      eventId: 'message-sent-1',
+      type: 'message.sent',
+      messageId: scheduled.message.pendingMessageId!,
+      timestamp: '2026-07-22T20:41:30+08:00',
+    }
+    const sent = applyEvent(scheduled, sentEvent)
+    expect(sent.message).toMatchObject({ status: 'sent', landingNoticeSent: true })
+    expect(sent.message.pendingMessageId).toBeUndefined()
+
+    // 发送完成后，重放回执或再次落地推送都不再产生任何副作用
+    expect(applyEvent(sent, sentEvent)).toEqual(sent)
+    expect(planEffects(sent, landedEvent('landed-3', '2026-07-22T20:42:00+08:00'), {})).toEqual([])
   })
 })
 
@@ -100,21 +122,21 @@ describe('message.failed：不自动重试，只允许用户显式重试', () =>
     // 本用例验证的是工具契约侧的重试语义：失败结果不进幂等账本，
     // 携带新幂等键与任务绑定确认凭据的显式重试可以再次尝试。
     const registry = createToolRegistry(createSideEffectRuntime())
+    const failingMessage = { contactId: FAILING_CONTACT_ID, messageId: 'pickup-001:MU5102:landing', text: '我已到达机场接机点。' }
     const failingInput = {
-      contactId: FAILING_CONTACT_ID,
-      messageId: 'pickup-001:MU5102:landing',
-      text: '我已到达机场接机点。',
-      confirmationId: sendMessageConfirmationId('pickup-001'),
+      ...failingMessage,
+      confirmationId: sendMessageConfirmationId('pickup-001', failingMessage),
       idempotencyKey: 'pickup-001:MU5102:landing:attempt-1',
     }
     expect(registry['message.send'](ctx, failingInput).error?.code).toBe('SEND_FAILED')
 
-    const retryInput = {
-      ...failingInput,
-      contactId: 'contact-mom',
+    // 重试指向新的联系人/内容时，确认凭据也必须针对新消息重新签发
+    const retryMessage = { ...failingMessage, contactId: 'contact-mom' }
+    const retried = registry['message.send'](ctx, {
+      ...retryMessage,
+      confirmationId: sendMessageConfirmationId('pickup-001', retryMessage),
       idempotencyKey: 'pickup-001:MU5102:landing:attempt-2',
-    }
-    const retried = registry['message.send'](ctx, retryInput)
+    })
     expect(retried.ok).toBe(true)
     expect(retried.data).toMatchObject({ status: 'sent' })
   })
@@ -155,17 +177,35 @@ describe('charging.completed：恢复前往机场的路线和上下文', () => {
     ])
   })
 
-  it('补能完成后可通过 navigation.update-route 切回直达机场路线', () => {
+  it('补能完成后以任务状态为输入显式切回直达机场路线', () => {
+    // Planner 侧对 charging.completed 的自动改线不属于工具层；当前契约下该事件
+    // 不计划任何副作用，切回直达路线由用户/Planner 显式发起。这里验证：恢复
+    // 调用的全部输入都取自补能完成后的任务状态，而不是测试里手写的常量。
     const registry = createToolRegistry(createSideEffectRuntime())
+    const charging = drivingState({
+      charging: { recommended: true, accepted: true, status: 'active' },
+      navigation: { routeId: 'route-airport-via-charge-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:37:00+08:00', status: 'active' },
+      updatedAt: '2026-07-22T20:17:00+08:00',
+    })
+    const completedEvent: AirportPickupEvent = {
+      eventId: 'charging-done-resume',
+      type: 'charging.completed',
+      batteryPercent: 78,
+      timestamp: '2026-07-22T20:18:00+08:00',
+    }
+    expect(planEffects(charging, completedEvent, {})).toEqual([])
+    const completed = applyEvent(charging, completedEvent)
+    expect(completed.charging.status).toBe('completed')
+
     const resumed = registry['navigation.update-route'](ctx, {
-      routeId: 'route-airport-via-charge-001',
-      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
-      idempotencyKey: 'pickup-001:resume-direct-airport',
+      routeId: completed.navigation!.routeId,
+      destination: { id: 'destination-hongqiao-t2', name: completed.navigation!.destination },
+      idempotencyKey: `${completed.taskId}:resume-direct:${completed.navigation!.routeId}`,
     })
     expect(resumed.ok).toBe(true)
     expect(resumed.data).toMatchObject({
       routeId: 'route-airport-001',
-      destination: '虹桥机场 T2',
+      destination: completed.navigation!.destination,
       status: 'active',
     })
   })
