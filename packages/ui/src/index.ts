@@ -5,7 +5,10 @@ const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'approaching-airport': '接近机场', 'waiting-for-passengers': '等待家人', 'returning-home': '返程中', completed: '已完成', cancelled: '已取消',
 }
 
-export function composePickupSpec(task: AirportPickupTaskState): UISpec {
+export type ComposerContext = { toolResults?: Record<string, unknown>; fallback?: { title: string; message?: string; level?: 'warning' | 'error' } }
+
+export function composePickupSpec(task: AirportPickupTaskState, context: ComposerContext = {}): UISpec {
+  if (context.fallback) return composeFallbackSpec(task, context.fallback.title, context.fallback.message, context.fallback.level)
   const nextUiRevision = Math.max(task.uiRevision, task.taskRevision) + 1
   const phaseOrder: AirportPickupTaskState['phase'][] = ['collecting-information', 'preparing', 'driving-to-airport', 'approaching-airport', 'waiting-for-passengers', 'returning-home', 'completed']
   const currentIndex = phaseOrder.indexOf(task.phase)
@@ -16,9 +19,6 @@ export function composePickupSpec(task: AirportPickupTaskState): UISpec {
     return 'pending' as const
   }
   const airport = task.navigation?.destination?.includes('机场') ? task.navigation.destination.replace(/\s*T\d$/, '') : '虹桥机场'
-  const title = task.passengers.names.length > 0
-    ? `去${airport}接${task.passengers.names.join('和')}`
-    : '机场接人任务'
   const allProgressPhases = task.phase === 'completed'
     ? phaseOrder.slice(-5)
     : task.phase === 'cancelled'
@@ -27,13 +27,25 @@ export function composePickupSpec(task: AirportPickupTaskState): UISpec {
   const progressPhases = allProgressPhases.length > 5
     ? allProgressPhases.slice(-5)
     : allProgressPhases
-  const components = [
+  let components: UISpec['components'] = [
     { id: 'pickup-overview', type: 'pickup-overview' as const, props: { passengers: task.passengers.names, flightNumber: task.flight?.flightNumber ?? '待补充', airport, terminal: task.flight?.terminal ?? 'T2', phaseLabel: phaseLabels[task.phase] } },
     { id: 'task-progress', type: 'task-progress' as const, props: { currentPhase: task.phase, steps: progressPhases.map((phase) => ({ phase, label: phaseLabels[phase], status: progressStatus(phase) })) } },
   ]
+  let title = task.passengers.names.length > 0 ? `去${airport}接${task.passengers.names.join('和')}` : '机场接人任务'
+  let density: UISpec['presentation']['density'] = 'full'
+  let priority: UISpec['presentation']['priority'] = 'normal'
+  if (task.phase === 'collecting-information') components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '请补充航班号' } }]
+  else if (task.phase === 'completed') { title = '接机任务已完成'; components = [components[1]] }
+  else if ('memory.get-preferences' in (context.toolResults ?? {})) { title = '已应用家庭偏好'; density = 'compact'; components = [{ id: 'cabin-profile', type: 'cabin-profile', props: { zone: 'rear', temperatureC: 25, mediaTitle: '豆豆故事', appliedFromMemory: true, reversible: true } }] }
+  else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
+  else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
+  else if (task.charging.status === 'completed') { density = 'compact'; components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: false, reason: '补能完成，已恢复机场路线', currentBatteryPercent: 78, estimatedFinalBatteryPercent: 42 } }] }
+  else if (task.navigation) { density = 'compact'; components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }] }
+  else if (task.charging.recommended && !task.flight) components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: true, reason: '完成往返后预计低于安全余量', currentBatteryPercent: 42, estimatedFinalBatteryPercent: 18, suggestedDurationMinutes: 10, etaImpactMinutes: 12 } }]
+  else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }] }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,
-    phase: task.phase, title, presentation: { mode: 'replace', density: 'full', theme: 'dark', priority: 'normal' },
+    phase: task.phase, title, presentation: { mode: 'replace', density, theme: 'dark', priority },
     layout: { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } }, components, actions: [],
     meta: { generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm: false, generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${nextUiRevision}` },
   })

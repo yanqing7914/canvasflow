@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyEvent, createInitialTask } from './index'
+import { applyEvent, createInitialTask, planEffects } from './index'
 
 describe('airport pickup task engine', () => {
   it('ignores duplicate events and advances through the demo phases', () => {
@@ -17,5 +17,11 @@ describe('airport pickup task engine', () => {
     const completed = { ...createInitialTask(), phase: 'completed' as const, taskRevision: 4 }
     const lateEvent = { eventId: 'late-cancel', type: 'user.cancelled-task' as const, timestamp: '2026-07-22T12:10:00+08:00' }
     expect(applyEvent(completed, lateEvent)).toEqual(completed)
+  })
+
+  it('does not plan duplicate external effects', () => {
+    const state = { ...createInitialTask(), processedEventIds: ['landed'] }
+    const event = { eventId: 'landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' }
+    expect(planEffects(state, event, {})).toEqual([])
   })
 })

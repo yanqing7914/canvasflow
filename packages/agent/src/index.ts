@@ -5,6 +5,8 @@ import {
   type AirportPickupTaskState,
 } from '@canvasflow/schema'
 
+export * from './effects'
+
 export function createInitialTask(taskId = 'pickup-001'): AirportPickupTaskState {
   return airportPickupTaskStateSchema.parse({
     taskId, surfaceId: 'airport-pickup-main', taskRevision: 0, uiRevision: 0, phase: 'collecting-information',
