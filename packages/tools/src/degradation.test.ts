@@ -94,7 +94,11 @@ describe('message.failed：不自动重试，只允许用户显式重试', () =>
     expect(spec.meta.requiresConfirm).toBe(false)
   })
 
-  it('Provider 发送失败不缓存，用户显式重试（新幂等键）可以再次尝试', () => {
+  it('Provider 层失败不缓存，显式重试语义 = 新幂等键 + 任务确认凭据', () => {
+    // 说明：显式重试的产品入口（重试按钮/语音指令）属于 UI 层，当前 UISpec
+    // 不提供 retry action（上面已断言 failed 状态无 message-preview、无确认要求）。
+    // 本用例验证的是工具契约侧的重试语义：失败结果不进幂等账本，
+    // 携带新幂等键与任务绑定确认凭据的显式重试可以再次尝试。
     const registry = createToolRegistry(createSideEffectRuntime())
     const failingInput = {
       contactId: FAILING_CONTACT_ID,
@@ -131,7 +135,13 @@ describe('charging.completed：恢复前往机场的路线和上下文', () => {
     })
     expect(completed.charging.status).toBe('completed')
     expect(completed.phase).toBe('driving-to-airport')
-    expect(completed.navigation).toMatchObject({ destination: '虹桥机场 T2', status: 'active' })
+    // 途经充电站的路线本身就以机场为终点：补能完成后路线、ETA 与全部上下文原样保留
+    expect(completed.navigation).toEqual({
+      routeId: 'route-airport-via-charge-001',
+      destination: '虹桥机场 T2',
+      eta: '2026-07-22T20:37:00+08:00',
+      status: 'active',
+    })
     expect(completed.flight).toEqual(charging.flight)
     expect(completed.passengers).toEqual(charging.passengers)
 
@@ -143,6 +153,21 @@ describe('charging.completed：恢复前往机场的路线和上下文', () => {
         props: expect.objectContaining({ recommended: false, reason: '补能完成，已恢复机场路线' }),
       }),
     ])
+  })
+
+  it('补能完成后可通过 navigation.update-route 切回直达机场路线', () => {
+    const registry = createToolRegistry(createSideEffectRuntime())
+    const resumed = registry['navigation.update-route'](ctx, {
+      routeId: 'route-airport-via-charge-001',
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      idempotencyKey: 'pickup-001:resume-direct-airport',
+    })
+    expect(resumed.ok).toBe(true)
+    expect(resumed.data).toMatchObject({
+      routeId: 'route-airport-001',
+      destination: '虹桥机场 T2',
+      status: 'active',
+    })
   })
 
   it('经停充电站与直达机场两条 fixture 路线都可确定性规划', () => {
