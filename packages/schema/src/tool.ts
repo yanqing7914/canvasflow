@@ -247,6 +247,8 @@ export const proposeMemoryUpdateOutputSchema = z.object({
   before: z.record(z.string(), z.unknown()),
   after: z.record(z.string(), z.unknown()),
   requiresConfirmation: z.literal(true),
+  /** The exact confirmation credential `memory.confirm-update` will accept for this proposal. */
+  confirmationId: z.string().min(1),
 })
 
 export const confirmMemoryUpdateInputSchema = z.object({

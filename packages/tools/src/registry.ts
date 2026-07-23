@@ -5,7 +5,7 @@ import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
 import { createSideEffectRuntime, type SideEffectRuntime } from './idempotency'
 import { createMediaPlayer } from './media'
-import { getPreferences } from './memory'
+import { createPreferenceReader } from './memory'
 import { createMemoryWriteTools } from './memory-write'
 import { createMessageSender, prepareMessage } from './message'
 import { createNavigationSideEffects, planRoute } from './navigation'
@@ -131,7 +131,8 @@ export function createToolRegistry(runtime: SideEffectRuntime = createSideEffect
 
   return {
     'family.resolve-members': resolveMembers,
-    'memory.get-preferences': getPreferences,
+    // 绑定 runtime 的可变偏好副本，让 memory.confirm-update 的写入对读取可见。
+    'memory.get-preferences': createPreferenceReader(runtime.preferences),
     'memory.propose-update': memoryWrite.proposeMemoryUpdate,
     'memory.confirm-update': memoryWrite.confirmMemoryUpdate,
     'flight.get-status': getFlightStatus,

@@ -37,6 +37,8 @@ export type MemoryProposalRecord = {
   memberId: string
   before: Record<string, unknown>
   after: Record<string, unknown>
+  /** Credential that memory.confirm-update must present to apply this proposal. */
+  confirmationId: string
   confirmed: boolean
   expiresAtMs: number
 }
