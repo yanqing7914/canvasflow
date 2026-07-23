@@ -1,0 +1,11 @@
+{
+  "id": "task-created",
+  "title": "创建机场接人任务",
+  "mode": "fixture",
+  "inputEvent": { "eventId": "event-task-created", "type": "user.input", "text": "我现在要去机场接妈妈和豆豆", "timestamp": "2026-07-22T20:00:00+08:00" },
+  "initialTaskState": { "taskId": "pickup-001", "surfaceId": "airport-pickup-main", "taskRevision": 0, "uiRevision": 0, "phase": "collecting-information", "passengers": { "memberIds": [], "names": [], "confirmedOnboard": false }, "charging": { "recommended": false, "accepted": false, "status": "none" }, "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false }, "processedEventIds": [], "updatedAt": "2026-07-22T20:00:00+08:00" },
+  "toolResults": {},
+  "expectedTaskState": { "taskId": "pickup-001", "surfaceId": "airport-pickup-main", "taskRevision": 0, "uiRevision": 0, "phase": "collecting-information", "passengers": { "memberIds": [], "names": [], "confirmedOnboard": false }, "charging": { "recommended": false, "accepted": false, "status": "none" }, "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false }, "processedEventIds": ["event-task-created"], "updatedAt": "2026-07-22T20:00:00+08:00" },
+  "expectedUISpec": { "version": "1.0", "taskId": "pickup-001", "surfaceId": "airport-pickup-main", "taskRevision": 0, "uiRevision": 1, "phase": "collecting-information", "title": "机场接人任务", "presentation": { "mode": "replace", "density": "full", "theme": "dark", "priority": "normal" }, "layout": { "type": "stack", "gap": "md", "slots": { "main": ["status-banner"] } }, "components": [{ "id": "status-banner", "type": "status-banner", "props": { "level": "info", "title": "请补充航班号" } }], "actions": [], "meta": { "generatedBy": "composer", "sourceTaskRevision": 0, "requiresConfirm": false, "generatedAt": "2026-07-22T20:00:00+08:00", "traceId": "trace-task-created" } },
+  "expectedEffects": []
+}
