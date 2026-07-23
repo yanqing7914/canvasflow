@@ -54,14 +54,41 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       after[key] = value
     }
 
-    const proposalId = `${ctx.taskId}:memory:${parsed.data.memberId}:${Object.keys(changes).sort().join(',')}`
+    const baseId = `${ctx.taskId}:memory:${parsed.data.memberId}:${Object.keys(changes).sort().join(',')}`
+    const now = runtime.nowMs()
+    const related = [...runtime.memoryProposals.values()].filter(
+      (candidate) => candidate.proposalId === baseId || candidate.proposalId.startsWith(`${baseId}:v`),
+    )
+    const active = related.find((candidate) => !candidate.confirmed && now <= candidate.expiresAtMs)
+
+    // 同内容的未决提案幂等返回；不同内容不静默覆盖，旧提案显式失效并签发新版本号。
+    if (active && JSON.stringify(active.after) === JSON.stringify(after)) {
+      return okResult(
+        ctx,
+        PROPOSE,
+        proposeMemoryUpdateOutputSchema.parse({
+          proposalId: active.proposalId,
+          before: active.before,
+          after: active.after,
+          requiresConfirmation: true,
+          confirmationId: active.confirmationId,
+        }),
+      )
+    }
+    if (active) {
+      active.expiresAtMs = now - 1
+    }
+
+    const proposalId = related.length === 0 ? baseId : `${baseId}:v${related.length + 1}`
+    const confirmationId = `${proposalId}:confirm`
     runtime.memoryProposals.set(proposalId, {
       proposalId,
       memberId: parsed.data.memberId,
       before,
       after,
+      confirmationId,
       confirmed: false,
-      expiresAtMs: runtime.nowMs() + PROPOSAL_TTL_MS,
+      expiresAtMs: now + PROPOSAL_TTL_MS,
     })
 
     return okResult(
@@ -72,6 +99,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
         before,
         after,
         requiresConfirmation: true,
+        confirmationId,
       }),
     )
   }
@@ -85,10 +113,6 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(CONFIRM, parsed.data.idempotencyKey)
     if (cached) return cached
 
-    if (!parsed.data.confirmationId) {
-      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '写入长期记忆需要确认', false)
-    }
-
     const proposal = runtime.memoryProposals.get(parsed.data.proposalId)
     if (!proposal) {
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案不存在或已过期：${parsed.data.proposalId}`, false)
@@ -96,6 +120,11 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     if (runtime.nowMs() > proposal.expiresAtMs) {
       runtime.memoryProposals.delete(proposal.proposalId)
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案已过期：${parsed.data.proposalId}`, false)
+    }
+
+    // 确认凭据必须与提案签发的凭据一致，任意非空字符串不再有效。
+    if (parsed.data.confirmationId !== proposal.confirmationId) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案不匹配', false)
     }
 
     if (!proposal.confirmed) {
