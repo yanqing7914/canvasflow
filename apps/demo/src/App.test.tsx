@@ -22,4 +22,10 @@ describe('demo integration', () => {
       expect(progress?.props.steps.some((step) => step.phase === phase && step.status === 'active')).toBe(true)
     }
   })
+
+  it('keeps UI revisions ahead of task revisions', () => {
+    const first = composePickupSpec(createInitialTask())
+    const second = composePickupSpec({ ...createInitialTask(), taskRevision: 2, uiRevision: first.uiRevision })
+    expect(second.uiRevision).toBeGreaterThan(first.uiRevision)
+  })
 })

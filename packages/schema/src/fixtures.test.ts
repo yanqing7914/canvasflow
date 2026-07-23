@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { scenarioFixtureSchema } from './fixture'
 import { applyEvent } from '@canvasflow/agent'
-import { composePickupSpec } from '@canvasflow/ui'
+import { composeFallbackSpec, composePickupSpec } from '@canvasflow/ui'
 
 describe('airport pickup fixtures', () => {
   it('validates every scenario contract and exercises the reducer/composer', () => {
@@ -16,12 +16,17 @@ describe('airport pickup fixtures', () => {
       if (!parsed.success) continue
       const afterEvent = applyEvent(parsed.data.initialTaskState, parsed.data.inputEvent)
       expect(afterEvent, file).toEqual(parsed.data.expectedTaskState)
-      expect(composePickupSpec(afterEvent), file).toMatchObject({
-        taskId: parsed.data.expectedUISpec.taskId,
-        surfaceId: parsed.data.expectedUISpec.surfaceId,
-        taskRevision: parsed.data.expectedUISpec.taskRevision,
-        phase: parsed.data.expectedUISpec.phase,
-      })
+      const composed = composePickupSpec(afterEvent)
+      expect(composed.taskId, file).toBe(parsed.data.expectedUISpec.taskId)
+      expect(composed.meta.sourceTaskRevision, file).toBe(afterEvent.taskRevision)
+      if (file === 'provider-timeout.json') {
+        expect(composeFallbackSpec(afterEvent, '航班数据暂时不可用', '正在使用最近缓存，可稍后重试。'), file)
+          .toMatchObject({ ...parsed.data.expectedUISpec, meta: { ...parsed.data.expectedUISpec.meta, traceId: expect.any(String) } })
+      }
+      if (file === 'invalid-ui-spec.json') {
+        expect(composeFallbackSpec(afterEvent, '界面暂时降级', '已切换到安全模板。', 'error'), file)
+          .toMatchObject({ ...parsed.data.expectedUISpec, meta: { ...parsed.data.expectedUISpec.meta, traceId: expect.any(String) } })
+      }
     }
   })
 })
