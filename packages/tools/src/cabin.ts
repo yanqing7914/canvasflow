@@ -25,7 +25,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', '需要 zone、sourceMemberIds 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<ApplyCabinProfileOutput>(parsed.data.idempotencyKey)
+    const cached = runtime.idempotency.get<ApplyCabinProfileOutput>(APPLY, parsed.data.idempotencyKey)
     if (cached) return cached
 
     const unknownMembers = parsed.data.sourceMemberIds.filter((memberId) => !(memberId in memberPreferences))
@@ -62,7 +62,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
         reversible: true,
       }),
     )
-    runtime.idempotency.set(parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(APPLY, parsed.data.idempotencyKey, result)
     return result
   }
 
@@ -72,7 +72,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, REVERT, 'INVALID_ARGUMENT', '需要 effectId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<RevertCabinProfileOutput>(parsed.data.idempotencyKey)
+    const cached = runtime.idempotency.get<RevertCabinProfileOutput>(REVERT, parsed.data.idempotencyKey)
     if (cached) return cached
 
     const effect = runtime.cabinEffects.get(parsed.data.effectId)
@@ -94,7 +94,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
         current: cloneProfile(runtime.cabinCurrent),
       }),
     )
-    runtime.idempotency.set(parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(REVERT, parsed.data.idempotencyKey, result)
     return result
   }
 

@@ -4,16 +4,18 @@ import { memberPreferences, type MemberPreferenceRecord } from './data'
 /**
  * In-memory idempotency ledger for fixture/mock side effects.
  * Duplicate keys return the original ToolResult and do not re-run the effect.
+ * Entries are namespaced per tool so reusing one idempotencyKey across
+ * different tools can never return a cached result of the wrong type.
  */
 export class IdempotencyStore {
   private readonly results = new Map<string, ToolResult<unknown>>()
 
-  get<T>(idempotencyKey: string): ToolResult<T> | undefined {
-    return this.results.get(idempotencyKey) as ToolResult<T> | undefined
+  get<T>(tool: string, idempotencyKey: string): ToolResult<T> | undefined {
+    return this.results.get(`${tool}\u0000${idempotencyKey}`) as ToolResult<T> | undefined
   }
 
-  set<T>(idempotencyKey: string, result: ToolResult<T>): void {
-    this.results.set(idempotencyKey, result as ToolResult<unknown>)
+  set<T>(tool: string, idempotencyKey: string, result: ToolResult<T>): void {
+    this.results.set(`${tool}\u0000${idempotencyKey}`, result as ToolResult<unknown>)
   }
 }
 

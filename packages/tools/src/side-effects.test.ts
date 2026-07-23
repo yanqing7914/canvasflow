@@ -92,6 +92,47 @@ describe('media.play', () => {
     })
     expect(result.error).toMatchObject({ code: 'MEDIA_UNAVAILABLE', retryable: false })
   })
+
+  it('sourceMemberId 与该成员偏好一致时才允许播放', () => {
+    const registry = createToolRegistry()
+    const authorized = registry['media.play'](ctx, {
+      mediaTitle: '豆豆故事',
+      sourceMemberId: 'doubao',
+      idempotencyKey: 'pickup-001:media-doubao',
+    })
+    expect(authorized.ok).toBe(true)
+    expect(authorized.data).toMatchObject({ title: '豆豆故事', status: 'playing' })
+  })
+
+  it('sourceMemberId 未知或与偏好不匹配返回 POLICY_DENIED', () => {
+    const registry = createToolRegistry()
+    const unknownMember = registry['media.play'](ctx, {
+      mediaTitle: '豆豆故事',
+      sourceMemberId: 'stranger',
+      idempotencyKey: 'pickup-001:media-stranger',
+    })
+    expect(unknownMember.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
+    const mismatched = registry['media.play'](ctx, {
+      mediaTitle: '豆豆故事',
+      sourceMemberId: 'mom',
+      idempotencyKey: 'pickup-001:media-mom',
+    })
+    expect(mismatched.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
+  })
+})
+
+describe('idempotency store isolation', () => {
+  it('不同工具复用同一 idempotencyKey 不会串用缓存结果', () => {
+    const registry = createToolRegistry()
+    const sharedKey = 'pickup-001:shared-key'
+    const navigation = registry['navigation.start'](ctx, { routeId: 'route-airport-001', idempotencyKey: sharedKey })
+    const media = registry['media.play'](ctx, { mediaTitle: '轻音乐', idempotencyKey: sharedKey })
+    expect(navigation.ok).toBe(true)
+    expect(media.ok).toBe(true)
+    expect(navigation.meta.tool).toBe('navigation.start')
+    expect(media.meta.tool).toBe('media.play')
+    expect(media.data).toMatchObject({ title: '轻音乐', status: 'playing' })
+  })
 })
 
 describe('message.send', () => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { z } from 'zod'
 import { toolResultSchema } from '@canvasflow/schema'
 import { recommendCharging } from './charging'
+import { getFixtureChargingRecommendation, getFixtureFlightStatus } from './compat'
 import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
 import { getPreferences } from './memory'
@@ -262,5 +263,19 @@ describe('charging.recommend', () => {
   it('缺少输入返回 INSUFFICIENT_INPUT', () => {
     const result = recommendCharging(ctx, { batteryPercent: 42 })
     expect(result.error).toMatchObject({ code: 'INSUFFICIENT_INPUT', retryable: false })
+  })
+})
+
+describe('deprecated compat wrappers', () => {
+  it('保留旧 taskId 签名并返回与新 provider 一致的结果', () => {
+    const flight = getFixtureFlightStatus('pickup-001')
+    expect(flight).toEqual(getFlightStatus(ctx, { flightNumber: 'MU5102', date: '2026-07-22' }))
+    expect(flight.ok).toBe(true)
+    expect(flight.meta).toMatchObject({ taskId: 'pickup-001', tool: 'flight.get-status' })
+
+    const charging = getFixtureChargingRecommendation('pickup-001')
+    expect(charging).toEqual(recommendCharging(ctx, canonicalInputs['charging.recommend']))
+    expect(charging.ok).toBe(true)
+    expect(charging.data).toMatchObject({ recommended: true, estimatedFinalBatteryPercent: 18 })
   })
 })
