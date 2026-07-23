@@ -6,13 +6,17 @@ import {
 } from '@canvasflow/schema'
 
 export * from './effects'
+export * from './composer'
+export * from './gateway'
+export * from './planner'
+export * from './store'
 
-export function createInitialTask(taskId = 'pickup-001'): AirportPickupTaskState {
+export function createInitialTask(taskId = 'pickup-001', updatedAt = '2026-07-22T12:00:00+08:00'): AirportPickupTaskState {
   return airportPickupTaskStateSchema.parse({
     taskId, surfaceId: 'airport-pickup-main', taskRevision: 0, uiRevision: 0, phase: 'collecting-information',
     passengers: { memberIds: [], names: [], confirmedOnboard: false }, charging: { recommended: false, accepted: false, status: 'none' },
     message: { autoNotifyAuthorized: true, status: 'idle', landingNoticeSent: false }, processedEventIds: [],
-    updatedAt: '2026-07-22T12:00:00+08:00',
+    updatedAt,
   })
 }
 
