@@ -243,6 +243,27 @@ describe('idempotency store isolation', () => {
     expect(other.data?.navigationId).toContain('pickup-002')
     expect(first.data?.navigationId).toContain('pickup-001')
   })
+
+  it('message.send 跨 task 复用 idempotencyKey 不会命中他任务缓存', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const payload = {
+      contactId: 'contact-mom',
+      messageId: 'shared-msg',
+      text: 'hello',
+      authorizationId: autoNotifyAuthorizationId('pickup-001'),
+      idempotencyKey: 'shared-send-key',
+    }
+    const first = registry['message.send']({ taskId: 'pickup-001' }, payload)
+    expect(first.ok).toBe(true)
+    const other = registry['message.send'](
+      { taskId: 'pickup-002' },
+      { ...payload, authorizationId: autoNotifyAuthorizationId('pickup-002') },
+    )
+    expect(other.ok).toBe(true)
+    expect(other).not.toBe(first)
+    expect(other.meta.taskId).toBe('pickup-002')
+  })
 })
 
 describe('message.send', () => {

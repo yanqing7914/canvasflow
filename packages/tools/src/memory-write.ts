@@ -113,12 +113,6 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '需要 proposalId、confirmationId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(ctx.taskId, CONFIRM, parsed.data.idempotencyKey, parsed.data)
-    if (cached.kind === 'hit') return cached.result
-    if (cached.kind === 'conflict') {
-      return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
-    }
-
     const proposal = runtime.memoryProposals.get(parsed.data.proposalId)
     if (!proposal) {
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案不存在或已过期：${parsed.data.proposalId}`, false)
@@ -129,8 +123,29 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     }
 
     // Opaque token must match the proposal and be unspent for the first apply.
+    // Validate before idempotency hit so a cached success cannot skip confirmation.
     if (parsed.data.confirmationId !== proposal.confirmationId) {
       return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案不匹配', false)
+    }
+    if (
+      !proposal.confirmed &&
+      !runtime.confirmations.matchesMemoryConfirmation(parsed.data.confirmationId, {
+        taskId: ctx.taskId,
+        proposalId: proposal.proposalId,
+      })
+    ) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据无效或已使用', false)
+    }
+
+    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(ctx.taskId, CONFIRM, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') {
+      if (cached.result.meta.taskId !== ctx.taskId) {
+        return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '幂等结果与当前任务不匹配', false)
+      }
+      return cached.result
+    }
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
     }
 
     if (!proposal.confirmed) {

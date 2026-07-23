@@ -60,7 +60,13 @@ export function createMessageSender(runtime: SideEffectRuntime) {
     }
 
     const cached = runtime.idempotency.get<MessageSendOutput>(ctx.taskId, SEND, parsed.data.idempotencyKey, parsed.data)
-    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'hit') {
+      // Ledger is task-scoped; still refuse a hit whose stored meta belongs elsewhere.
+      if (cached.result.meta.taskId !== ctx.taskId) {
+        return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '幂等结果与当前任务不匹配', false)
+      }
+      return cached.result
+    }
     if (cached.kind === 'conflict') {
       return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
     }
@@ -78,6 +84,7 @@ export function createMessageSender(runtime: SideEffectRuntime) {
     const autoNotifyGranted =
       parsed.data.authorizationId === autoNotifyAuthorizationId(ctx.taskId) &&
       member !== undefined &&
+      Object.hasOwn(runtime.preferences, member.memberId) &&
       runtime.preferences[member.memberId]?.landingNotificationAuthorized === true
     const confirmationValid =
       parsed.data.confirmationId !== undefined &&
