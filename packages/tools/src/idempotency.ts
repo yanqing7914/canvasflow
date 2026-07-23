@@ -26,21 +26,25 @@ export type IdempotencyLookup<T> =
  * ToolResult and do not re-run the effect; the same key with a different
  * request payload is a caller bug and is reported as a conflict instead of
  * silently replaying a success that belongs to another request.
- * Entries are namespaced per tool so reusing one idempotencyKey across
- * different tools can never return a cached result of the wrong type.
+ * Entries are namespaced per taskId + tool so reusing one idempotencyKey
+ * across tasks or tools can never return a cached result of the wrong scope.
  */
 export class IdempotencyStore {
   private readonly results = new Map<string, { fingerprint: string; result: ToolResult<unknown> }>()
 
-  get<T>(tool: string, idempotencyKey: string, input: unknown): IdempotencyLookup<T> {
-    const entry = this.results.get(`${tool}\u0000${idempotencyKey}`)
+  private key(taskId: string, tool: string, idempotencyKey: string): string {
+    return `${taskId}\u0000${tool}\u0000${idempotencyKey}`
+  }
+
+  get<T>(taskId: string, tool: string, idempotencyKey: string, input: unknown): IdempotencyLookup<T> {
+    const entry = this.results.get(this.key(taskId, tool, idempotencyKey))
     if (!entry) return { kind: 'miss' }
     if (entry.fingerprint !== canonicalFingerprint(input)) return { kind: 'conflict' }
     return { kind: 'hit', result: entry.result as ToolResult<T> }
   }
 
-  set<T>(tool: string, idempotencyKey: string, input: unknown, result: ToolResult<T>): void {
-    this.results.set(`${tool}\u0000${idempotencyKey}`, {
+  set<T>(taskId: string, tool: string, idempotencyKey: string, input: unknown, result: ToolResult<T>): void {
+    this.results.set(this.key(taskId, tool, idempotencyKey), {
       fingerprint: canonicalFingerprint(input),
       result: result as ToolResult<unknown>,
     })

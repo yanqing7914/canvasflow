@@ -77,7 +77,7 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '需要 contactId、messageId、text 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<MessageSendOutput>(SEND, parsed.data.idempotencyKey, parsed.data)
+    const cached = runtime.idempotency.get<MessageSendOutput>(ctx.taskId, SEND, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
@@ -121,7 +121,7 @@ export function createMessageSender(runtime: SideEffectRuntime) {
         sentAt: FIXTURE_GENERATED_AT,
       }),
     )
-    runtime.idempotency.set(SEND, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, SEND, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 }

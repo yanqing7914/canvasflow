@@ -110,7 +110,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '需要 proposalId、confirmationId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(CONFIRM, parsed.data.idempotencyKey, parsed.data)
+    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(ctx.taskId, CONFIRM, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
@@ -145,7 +145,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
         applied: proposal.after,
       }),
     )
-    runtime.idempotency.set(CONFIRM, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, CONFIRM, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 
