@@ -24,11 +24,7 @@ function isSuccessfulPreferences(value: unknown): boolean {
   const members = (data as { members?: unknown }).members
   return Array.isArray(members) && members.some((member) => {
     if (typeof member !== 'object' || member === null) return false
-    const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown; fanLevel?: unknown }
-    return (
-      typeof record.rearTemperatureC === 'number' ||
-      typeof record.mediaTitle === 'string' ||
-      typeof record.fanLevel === 'number'
-    )
+    const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown }
+    return typeof record.rearTemperatureC === 'number' || typeof record.mediaTitle === 'string'
   })
 }
