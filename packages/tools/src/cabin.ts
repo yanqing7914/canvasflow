@@ -28,8 +28,11 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', '需要 zone、sourceMemberIds 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<ApplyCabinProfileOutput>(APPLY, parsed.data.idempotencyKey)
-    if (cached) return cached
+    const cached = runtime.idempotency.get<ApplyCabinProfileOutput>(APPLY, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
 
     // 授权基于 runtime 的可变偏好副本，与 memory.confirm-update 的写入保持一致。
     const unknownMembers = parsed.data.sourceMemberIds.filter((memberId) => !(memberId in runtime.preferences))
@@ -82,7 +85,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
         reversible: true,
       }),
     )
-    runtime.idempotency.set(APPLY, parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(APPLY, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 
@@ -92,8 +95,11 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, REVERT, 'INVALID_ARGUMENT', '需要 effectId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<RevertCabinProfileOutput>(REVERT, parsed.data.idempotencyKey)
-    if (cached) return cached
+    const cached = runtime.idempotency.get<RevertCabinProfileOutput>(REVERT, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, REVERT, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
 
     const effect = runtime.cabinEffects.get(parsed.data.effectId)
     if (!effect) {
@@ -120,7 +126,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
         current: cloneProfile(runtime.cabinCurrent),
       }),
     )
-    runtime.idempotency.set(REVERT, parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(REVERT, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 
