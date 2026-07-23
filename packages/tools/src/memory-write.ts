@@ -82,7 +82,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '需要 proposalId、confirmationId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(parsed.data.idempotencyKey)
+    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(CONFIRM, parsed.data.idempotencyKey)
     if (cached) return cached
 
     if (!parsed.data.confirmationId) {
@@ -113,7 +113,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
         applied: proposal.after,
       }),
     )
-    runtime.idempotency.set(parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(CONFIRM, parsed.data.idempotencyKey, result)
     return result
   }
 

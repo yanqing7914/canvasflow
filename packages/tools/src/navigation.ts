@@ -58,7 +58,7 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
       return errorResult(ctx, START, 'INVALID_ARGUMENT', '需要 routeId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<NavigationStartOutput>(parsed.data.idempotencyKey)
+    const cached = runtime.idempotency.get<NavigationStartOutput>(START, parsed.data.idempotencyKey)
     if (cached) return cached
 
     if (!knownRouteIds.has(parsed.data.routeId)) {
@@ -74,7 +74,7 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
         status: 'active',
       }),
     )
-    runtime.idempotency.set(parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(START, parsed.data.idempotencyKey, result)
     return result
   }
 
@@ -84,7 +84,7 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
       return errorResult(ctx, UPDATE, 'INVALID_ARGUMENT', '需要 routeId、destination 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<NavigationUpdateRouteOutput>(parsed.data.idempotencyKey)
+    const cached = runtime.idempotency.get<NavigationUpdateRouteOutput>(UPDATE, parsed.data.idempotencyKey)
     if (cached) return cached
 
     if (!knownRouteIds.has(parsed.data.routeId)) {
@@ -116,7 +116,7 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
         status: 'active',
       }),
     )
-    runtime.idempotency.set(parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(UPDATE, parsed.data.idempotencyKey, result)
     return result
   }
 

@@ -18,11 +18,25 @@ export function createMediaPlayer(runtime: SideEffectRuntime) {
       return errorResult(ctx, TOOL, 'INVALID_ARGUMENT', '需要 mediaTitle 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<MediaPlayOutput>(parsed.data.idempotencyKey)
+    const cached = runtime.idempotency.get<MediaPlayOutput>(TOOL, parsed.data.idempotencyKey)
     if (cached) return cached
 
     if (!AVAILABLE_MEDIA_TITLES.has(parsed.data.mediaTitle)) {
       return errorResult(ctx, TOOL, 'MEDIA_UNAVAILABLE', `媒体不可用：${parsed.data.mediaTitle}`, false)
+    }
+
+    // sourceMemberId 表示"以某成员的偏好为依据播放"，必须与该成员存储的偏好一致。
+    if (parsed.data.sourceMemberId !== undefined) {
+      const record = runtime.preferences[parsed.data.sourceMemberId]
+      if (!record || record.mediaTitle !== parsed.data.mediaTitle) {
+        return errorResult(
+          ctx,
+          TOOL,
+          'POLICY_DENIED',
+          `成员 ${parsed.data.sourceMemberId} 未授权播放：${parsed.data.mediaTitle}`,
+          false,
+        )
+      }
     }
 
     const result = okResult(
@@ -35,7 +49,7 @@ export function createMediaPlayer(runtime: SideEffectRuntime) {
         reversible: true,
       }),
     )
-    runtime.idempotency.set(parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(TOOL, parsed.data.idempotencyKey, result)
     return result
   }
 }
