@@ -43,7 +43,21 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     requiresConfirm = task.pendingConfirmation?.action === 'save-memory'
     actions = requiresConfirm ? [{ id: 'save-trip-preferences', label: '保存本次偏好', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } }] : []
   }
-  else if (successfulPreferences(context.toolResults?.['memory.get-preferences'])) { const members = (context.toolResults!['memory.get-preferences'] as { data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string }> } }).data.members; const temperatureC = members.find((member) => typeof member.rearTemperatureC === 'number')!.rearTemperatureC!; const mediaTitle = members.find((member) => typeof member.mediaTitle === 'string')?.mediaTitle; title = '已应用家庭偏好'; density = 'compact'; components = [{ id: 'cabin-profile', type: 'cabin-profile', props: { zone: 'rear', temperatureC, mediaTitle, appliedFromMemory: true, reversible: true } }] }
+  else if (successfulPreferences(context.toolResults?.['memory.get-preferences'])) {
+    const members = (context.toolResults!['memory.get-preferences'] as { data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string }> } }).data.members
+    const temperatureC = members.find((member) => typeof member.rearTemperatureC === 'number')?.rearTemperatureC
+    const mediaTitle = members.find((member) => typeof member.mediaTitle === 'string')?.mediaTitle
+    title = '已应用家庭偏好'
+    density = 'compact'
+    const cabinProps: { zone: 'rear'; appliedFromMemory: true; reversible: true; temperatureC?: number; mediaTitle?: string } = {
+      zone: 'rear',
+      appliedFromMemory: true,
+      reversible: true,
+    }
+    if (temperatureC !== undefined) cabinProps.temperatureC = temperatureC
+    if (mediaTitle !== undefined) cabinProps.mediaTitle = mediaTitle
+    components = [{ id: 'cabin-profile', type: 'cabin-profile', props: cabinProps }]
+  }
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
   else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
   else if (task.charging.status === 'completed') { density = 'compact'; components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: false, reason: '补能完成，已恢复机场路线', currentBatteryPercent: 78, estimatedFinalBatteryPercent: 42 } }] }
@@ -58,15 +72,21 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   })
 }
 
-/** Matches the memory.get-preferences output contract: { members: [{ rearTemperatureC?, mediaTitle? }] }. */
+/** Matches the memory.get-preferences output contract: any applicable cabin/media preference counts. */
 function successfulPreferences(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return false
   const data = (value as { data?: unknown }).data
   if (typeof data !== 'object' || data === null) return false
   const members = (data as { members?: unknown }).members
-  return Array.isArray(members) && members.some(
-    (member) => typeof (member as { rearTemperatureC?: unknown } | null)?.rearTemperatureC === 'number',
-  )
+  return Array.isArray(members) && members.some((member) => {
+    if (typeof member !== 'object' || member === null) return false
+    const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown; fanLevel?: unknown }
+    return (
+      typeof record.rearTemperatureC === 'number' ||
+      typeof record.mediaTitle === 'string' ||
+      typeof record.fanLevel === 'number'
+    )
+  })
 }
 
 export function composeFallbackSpec(task: AirportPickupTaskState, title: string, message?: string, level: 'warning' | 'error' = 'warning'): UISpec {

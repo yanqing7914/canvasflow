@@ -68,7 +68,7 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
   componentBase.extend({
     type: z.literal('cabin-profile'),
     props: z.object({
-      zone: z.literal('rear'), temperatureC: z.number(), fanLevel: z.number().optional(), mediaTitle: z.string().optional(),
+      zone: z.literal('rear'), temperatureC: z.number().optional(), fanLevel: z.number().optional(), mediaTitle: z.string().optional(),
       appliedFromMemory: z.boolean(), reversible: z.boolean(),
     }),
   }),
