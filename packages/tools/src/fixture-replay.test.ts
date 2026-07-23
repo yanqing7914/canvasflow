@@ -222,13 +222,13 @@ function replayMainTimeline(): TimelineRun {
   expect(started.ok).toBe(true)
 
   step({ eventId: 'timeline-charging-started', type: 'charging.started', stationId: 'station-hongqiao-01', timestamp: '2026-07-22T20:06:00+08:00' })
-  expect(state.charging.status).toBe('active')
+  expect(state.charging).toMatchObject({ accepted: true, status: 'active' })
 
   step(event('flight-in-air'))
   expect(state.flight?.status).toBe('in-air')
 
   step(event('charging-completed'))
-  expect(state.charging.status).toBe('completed')
+  expect(state.charging).toMatchObject({ accepted: true, status: 'completed' })
 
   step(event('flight-landed'))
   expect(state.message).toMatchObject({ status: 'scheduled', idempotencyKey: 'pickup-001:MU5102:landing' })

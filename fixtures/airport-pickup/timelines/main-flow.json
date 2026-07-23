@@ -60,7 +60,7 @@
       "toolCalls": ["vehicle.get-status"],
       "expectedPhase": "driving-to-airport",
       "expectedTaskRevision": 6,
-      "note": "补能完成，恢复前往机场的路线上下文"
+      "note": "补能完成，机场路线上下文保持（直达切回由 Planner 显式发起）"
     },
     {
       "event": { "eventId": "event-flight-landed", "type": "flight.updated", "flight": { "flightNumber": "MU5102", "status": "landed", "estimatedArrival": "2026-07-22T20:40:00+08:00", "terminal": "T2", "baggageClaim": "12" }, "timestamp": "2026-07-22T20:40:00+08:00" },

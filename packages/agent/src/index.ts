@@ -59,7 +59,12 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'vehicle.parked': if (next.phase === 'approaching-airport') next.phase = 'waiting-for-passengers'; break
     case 'user.confirmed-passengers-onboard': if (next.phase === 'waiting-for-passengers') { next.passengers.confirmedOnboard = true; next.phase = 'returning-home' } break
     case 'destination.arrived': if (next.phase === 'returning-home') { next.phase = 'completed'; next.navigation = next.navigation ? { ...next.navigation, destination: event.destination, status: 'arrived' } : undefined; next.pendingConfirmation = { confirmationId: `${next.taskId}:save-memory`, action: 'save-memory' } } break
-    case 'charging.started': if (next.phase === 'driving-to-airport' && next.charging.status === 'planned') next.charging.status = 'active'; break
+    case 'charging.started':
+      if (next.phase === 'driving-to-airport' && next.charging.status === 'planned') {
+        // Starting charging records that the user accepted the recommended plan.
+        next.charging = { ...next.charging, accepted: true, status: 'active' }
+      }
+      break
     case 'charging.completed': if (next.charging.status === 'active') next.charging.status = 'completed'; break
     case 'charging.cancelled': if (next.charging.status === 'planned' || next.charging.status === 'active') next.charging = { ...next.charging, accepted: false, status: 'none' }; break
     case 'user.cancelled-task': next.phase = 'cancelled'; next.pendingConfirmation = undefined; next.message.pendingMessageId = undefined; break
