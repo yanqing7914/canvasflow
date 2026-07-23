@@ -1,0 +1,122 @@
+{
+  "id": "main-flow",
+  "title": "机场接人主流程演示时间线",
+  "description": "5 分钟 Demo 的完整事件序列：创建任务 → 准备出发 → 途中（补能子任务 + 航班落地自动通知）→ 接近机场 → 等待家人 → 返程 → 行程结束。advisory 步骤是仅供参考的传感器事件，按契约不得直接切换阶段；statePatch 表示该步骤由 Planner/工具写入的状态（事件本身不携带）。",
+  "mode": "fixture",
+  "initialTaskState": { "taskId": "pickup-001", "surfaceId": "airport-pickup-main", "taskRevision": 0, "uiRevision": 0, "phase": "collecting-information", "passengers": { "memberIds": [], "names": [], "confirmedOnboard": false }, "charging": { "recommended": false, "accepted": false, "status": "none" }, "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false }, "processedEventIds": [], "updatedAt": "2026-07-22T20:00:00+08:00" },
+  "steps": [
+    {
+      "event": { "eventId": "event-task-created", "type": "user.input", "text": "我现在要去机场接妈妈和豆豆", "timestamp": "2026-07-22T20:00:00+08:00" },
+      "toolCalls": ["family.resolve-members"],
+      "statePatch": { "passengers": { "memberIds": ["mom", "doubao"], "names": ["妈妈", "豆豆"], "confirmedOnboard": false } },
+      "expectedPhase": "collecting-information",
+      "expectedTaskRevision": 0,
+      "note": "创建任务并解析家庭成员，缺航班号时追问"
+    },
+    {
+      "event": { "eventId": "event-flight-number", "type": "user.input", "text": "MU5102", "timestamp": "2026-07-22T20:01:00+08:00" },
+      "toolCalls": ["flight.get-status"],
+      "expectedPhase": "preparing",
+      "expectedTaskRevision": 1,
+      "note": "补充航班号，进入准备出发"
+    },
+    {
+      "event": { "eventId": "event-charging-recommended", "type": "user.input", "text": "先检查是否需要补能", "timestamp": "2026-07-22T20:02:00+08:00" },
+      "toolCalls": ["vehicle.get-status", "charging.recommend"],
+      "expectedPhase": "preparing",
+      "expectedTaskRevision": 2,
+      "note": "电量 42%，建议途中补能 10 分钟"
+    },
+    {
+      "event": { "eventId": "event-route-airport", "type": "navigation.started", "routeId": "route-airport-001", "timestamp": "2026-07-22T20:05:00+08:00" },
+      "toolCalls": ["navigation.plan-route", "navigation.start"],
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 3,
+      "note": "开始导航，进入途中"
+    },
+    {
+      "event": { "eventId": "event-vehicle-moving", "type": "vehicle.moving", "speedKph": 30, "timestamp": "2026-07-22T20:05:30+08:00" },
+      "advisory": true,
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 3,
+      "note": "车速传感器事件仅供密度策略参考，不改变任务事实"
+    },
+    {
+      "event": { "eventId": "event-charging-started", "type": "charging.started", "stationId": "station-hongqiao-01", "timestamp": "2026-07-22T20:06:00+08:00" },
+      "toolCalls": ["navigation.update-route"],
+      "statePatch": { "navigation": { "routeId": "route-airport-via-charge-001", "destination": "虹桥机场 T2", "eta": "2026-07-22T20:37:00+08:00", "status": "active" } },
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 4,
+      "note": "接受补能方案，路线临时切换至充电站并重算 ETA"
+    },
+    {
+      "event": { "eventId": "event-flight-in-air", "type": "flight.updated", "flight": { "flightNumber": "MU5102", "status": "in-air", "estimatedArrival": "2026-07-22T20:40:00+08:00", "terminal": "T2" }, "timestamp": "2026-07-22T20:10:00+08:00" },
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 5,
+      "note": "航班起飞，卡片更新为飞行中"
+    },
+    {
+      "event": { "eventId": "event-charging-completed", "type": "charging.completed", "batteryPercent": 78, "timestamp": "2026-07-22T20:18:00+08:00" },
+      "toolCalls": ["vehicle.get-status"],
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 6,
+      "note": "补能完成，恢复前往机场的路线上下文"
+    },
+    {
+      "event": { "eventId": "event-flight-landed", "type": "flight.updated", "flight": { "flightNumber": "MU5102", "status": "landed", "estimatedArrival": "2026-07-22T20:40:00+08:00", "terminal": "T2", "baggageClaim": "12" }, "timestamp": "2026-07-22T20:40:00+08:00" },
+      "toolCalls": ["message.prepare"],
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 7,
+      "note": "航班落地，按授权调度一次接机通知（可见、可撤销）"
+    },
+    {
+      "event": { "eventId": "event-message-sent", "type": "message.sent", "messageId": "MU5102:landing", "timestamp": "2026-07-22T20:41:00+08:00" },
+      "toolCalls": ["message.send"],
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 8,
+      "note": "撤销窗口结束后发送成功，landingNoticeSent 置位，同一落地事件不再发送"
+    },
+    {
+      "event": { "eventId": "event-airport-geofence", "type": "vehicle.entered-airport-geofence", "timestamp": "2026-07-22T20:43:00+08:00" },
+      "expectedPhase": "approaching-airport",
+      "expectedTaskRevision": 9,
+      "note": "进入机场围栏，展示推荐接机点（P2 停车场到达层 3 号门）"
+    },
+    {
+      "event": { "eventId": "event-vehicle-parked", "type": "vehicle.parked", "timestamp": "2026-07-22T20:45:00+08:00" },
+      "toolCalls": ["vehicle.get-status"],
+      "expectedPhase": "waiting-for-passengers",
+      "expectedTaskRevision": 10,
+      "note": "车辆停稳，展示联系入口和乘客状态"
+    },
+    {
+      "event": { "eventId": "event-occupancy-changed", "type": "occupancy.changed", "rearOccupied": true, "timestamp": "2026-07-22T20:54:00+08:00" },
+      "advisory": true,
+      "expectedPhase": "waiting-for-passengers",
+      "expectedTaskRevision": 10,
+      "note": "后排乘员变化只形成建议，须经用户确认才切换阶段"
+    },
+    {
+      "event": { "eventId": "event-passengers-onboard", "type": "user.confirmed-passengers-onboard", "timestamp": "2026-07-22T20:55:00+08:00" },
+      "toolCalls": ["navigation.update-route", "memory.get-preferences"],
+      "statePatch": { "navigation": { "routeId": "route-home-001", "destination": "家", "eta": "2026-07-22T21:35:00+08:00", "status": "active" } },
+      "expectedPhase": "returning-home",
+      "expectedTaskRevision": 11,
+      "note": "用户确认家人上车，切换返程路线并读取授权偏好"
+    },
+    {
+      "event": { "eventId": "event-cabin-profile-applied", "type": "user.input", "text": "应用家庭座舱偏好", "timestamp": "2026-07-22T20:56:00+08:00" },
+      "toolCalls": ["vehicle.apply-cabin-profile", "media.play"],
+      "expectedPhase": "returning-home",
+      "expectedTaskRevision": 11,
+      "note": "后排 25℃ + 豆豆故事，结果可见并提供撤销入口"
+    },
+    {
+      "event": { "eventId": "event-trip-completed", "type": "destination.arrived", "destination": "家", "timestamp": "2026-07-22T21:35:00+08:00" },
+      "toolCalls": ["memory.propose-update"],
+      "expectedPhase": "completed",
+      "expectedTaskRevision": 12,
+      "note": "到家停稳，总结行程并询问是否保存长期偏好"
+    }
+  ]
+}

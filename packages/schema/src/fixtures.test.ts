@@ -9,7 +9,7 @@ describe('airport pickup fixtures', () => {
   it('validates every scenario contract and exercises the reducer/composer', () => {
     const directory = resolve(process.cwd(), 'fixtures/airport-pickup')
     const files = readdirSync(directory).filter((file) => file.endsWith('.json'))
-    expect(files).toHaveLength(12)
+    expect(files).toHaveLength(14)
     for (const file of files) {
       const parsed = scenarioFixtureSchema.safeParse(JSON.parse(readFileSync(resolve(directory, file), 'utf8')))
       expect(parsed.success, file).toBe(true)

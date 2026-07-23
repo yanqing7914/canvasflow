@@ -131,6 +131,10 @@ describe('fixture toolResults contract', () => {
     }
     expect(getVehicleStatus(ctx, { snapshot: 'post-charge' }).data)
       .toEqual(toolData('charging-completed', 'vehicle.get-status'))
+    expect(getVehicleStatus(ctx, { snapshot: 'city-driving' }).data)
+      .toEqual(toolData('approaching-airport', 'vehicle.get-status'))
+    expect(getVehicleStatus(ctx, { snapshot: 'airport-parked' }).data)
+      .toEqual(toolData('waiting-for-passengers', 'vehicle.get-status'))
     expect(getVehicleStatus(ctx, { snapshot: 'rear-occupied' }).data)
       .toEqual(toolData('passengers-onboard', 'vehicle.get-status'))
     expect(getPreferences(ctx, { memberIds: ['mom', 'doubao'], scopes: ['cabin', 'media'] }).data)
