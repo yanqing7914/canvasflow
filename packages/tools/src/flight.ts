@@ -16,12 +16,28 @@ export function getFlightStatus(ctx: ToolContext, input: unknown): ToolResult<Fl
   }
 
   const flightNumber = parsed.data.flightNumber.toUpperCase()
+  const { date } = parsed.data
+
   if (flightNumber === TIMEOUT_FLIGHT_NUMBER) {
     return errorResult(ctx, TOOL, 'PROVIDER_TIMEOUT', '航班数据源超时', true)
   }
+
   const flight = flights[flightNumber]
-  if (!flight) {
-    return errorResult(ctx, TOOL, 'FLIGHT_NOT_FOUND', `未找到航班 ${flightNumber}`, false)
+  if (!flight || flight.date !== date) {
+    return errorResult(ctx, TOOL, 'FLIGHT_NOT_FOUND', `未找到航班 ${flightNumber}（${date}）`, false)
   }
-  return okResult(ctx, TOOL, flightStatusOutputSchema.parse(flight))
+
+  return okResult(
+    ctx,
+    TOOL,
+    flightStatusOutputSchema.parse({
+      flightNumber: flight.flightNumber,
+      status: flight.status,
+      scheduledArrival: flight.scheduledArrival,
+      estimatedArrival: flight.estimatedArrival,
+      terminal: flight.terminal,
+      baggageClaim: flight.baggageClaim,
+      sourceUpdatedAt: flight.sourceUpdatedAt,
+    }),
+  )
 }

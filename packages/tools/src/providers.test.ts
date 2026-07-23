@@ -74,13 +74,21 @@ describe('family.resolve-members', () => {
 })
 
 describe('memory.get-preferences', () => {
-  it('按 scope 过滤偏好字段', () => {
+  it('按 scope 过滤偏好字段，未请求 notification 时不泄露授权标记', () => {
     const result = getPreferences(ctx, { memberIds: ['mom', 'doubao'], scopes: ['media'] })
     expect(result.ok).toBe(true)
     expect(result.data?.members).toEqual([
-      { memberId: 'mom', landingNotificationAuthorized: true },
-      { memberId: 'doubao', mediaTitle: '豆豆故事', landingNotificationAuthorized: false },
+      { memberId: 'mom' },
+      { memberId: 'doubao', mediaTitle: '豆豆故事' },
     ])
+    for (const member of result.data?.members ?? []) {
+      expect(member).not.toHaveProperty('landingNotificationAuthorized')
+    }
+  })
+
+  it('请求 notification scope 时才返回落地通知授权', () => {
+    const result = getPreferences(ctx, { memberIds: ['mom'], scopes: ['notification'] })
+    expect(result.data?.members).toEqual([{ memberId: 'mom', landingNotificationAuthorized: true }])
   })
 
   it('未知成员返回 PREFERENCE_UNAVAILABLE', () => {
@@ -109,6 +117,11 @@ describe('flight.get-status', () => {
   it('MU0000 确定性触发 PROVIDER_TIMEOUT 且可重试', () => {
     const result = getFlightStatus(ctx, { flightNumber: 'MU0000', date: '2026-07-22' })
     expect(result.error).toMatchObject({ code: 'PROVIDER_TIMEOUT', retryable: true })
+  })
+
+  it('日期不匹配时返回 FLIGHT_NOT_FOUND', () => {
+    const result = getFlightStatus(ctx, { flightNumber: 'MU5102', date: '2026-07-23' })
+    expect(result.error).toMatchObject({ code: 'FLIGHT_NOT_FOUND', retryable: false })
   })
 })
 
@@ -176,6 +189,27 @@ describe('charging.recommend', () => {
       reason: '完成往返后预计仍高于安全余量',
       estimatedFinalBatteryPercent: 66,
     })
+  })
+
+  it('相同电量百分比下 remainingRangeKm 会改变补能结论', () => {
+    const lowRange = recommendCharging(ctx, {
+      batteryPercent: 42,
+      remainingRangeKm: 50,
+      outboundDistanceKm: 32,
+      returnDistanceKm: 32,
+      safetyReservePercent: 20,
+    })
+    const highRange = recommendCharging(ctx, {
+      batteryPercent: 42,
+      remainingRangeKm: 300,
+      outboundDistanceKm: 32,
+      returnDistanceKm: 32,
+      safetyReservePercent: 20,
+    })
+    expect(lowRange.data?.recommended).toBe(true)
+    expect(lowRange.data?.estimatedFinalBatteryPercent).toBe(0)
+    expect(highRange.data?.recommended).toBe(false)
+    expect(highRange.data?.estimatedFinalBatteryPercent).toBe(33)
   })
 
   it('缺少输入返回 INSUFFICIENT_INPUT', () => {

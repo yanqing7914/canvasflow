@@ -23,13 +23,20 @@ export function getPreferences(ctx: ToolContext, input: unknown): ToolResult<Get
 
   const members: GetPreferencesOutput['members'] = memberIds.map((memberId) => {
     const record = memberPreferences[memberId]
-    return {
-      memberId,
-      rearTemperatureC: scopes.includes('cabin') ? record.rearTemperatureC : undefined,
-      mediaTitle: scopes.includes('media') ? record.mediaTitle : undefined,
-      homeDestinationId: scopes.includes('address') ? record.homeDestinationId : undefined,
-      landingNotificationAuthorized: record.landingNotificationAuthorized,
+    const member: GetPreferencesOutput['members'][number] = { memberId }
+    if (scopes.includes('cabin') && record.rearTemperatureC !== undefined) {
+      member.rearTemperatureC = record.rearTemperatureC
     }
+    if (scopes.includes('media') && record.mediaTitle !== undefined) {
+      member.mediaTitle = record.mediaTitle
+    }
+    if (scopes.includes('address') && record.homeDestinationId !== undefined) {
+      member.homeDestinationId = record.homeDestinationId
+    }
+    if (scopes.includes('notification')) {
+      member.landingNotificationAuthorized = record.landingNotificationAuthorized
+    }
+    return member
   })
   return okResult(ctx, TOOL, getPreferencesOutputSchema.parse({ members }))
 }

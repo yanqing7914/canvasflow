@@ -57,7 +57,8 @@ export const getPreferencesOutputSchema = z.object({
       rearTemperatureC: z.number().optional(),
       mediaTitle: z.string().optional(),
       homeDestinationId: z.string().optional(),
-      landingNotificationAuthorized: z.boolean(),
+      /** Only present when `notification` is in the requested scopes. */
+      landingNotificationAuthorized: z.boolean().optional(),
     }),
   ),
 })

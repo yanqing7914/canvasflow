@@ -4,10 +4,27 @@ import {
   type ChargingRecommendationOutput,
   type ToolResult,
 } from '@canvasflow/schema'
-import { chargingStation, FIXTURE_CONSUMPTION_PERCENT_PER_KM } from './data'
+import { chargingStation } from './data'
 import { errorResult, okResult, type ToolContext } from './result'
 
 const TOOL = 'charging.recommend'
+
+/**
+ * Estimate remaining battery after a round trip using the vehicle's reported
+ * remainingRangeKm (not a fixed consumption constant). Canonical demo input
+ * (42% / 112 km / 32+32 km) yields exactly 18%, matching the fixture.
+ */
+export function estimateFinalBatteryPercent(
+  batteryPercent: number,
+  remainingRangeKm: number,
+  outboundDistanceKm: number,
+  returnDistanceKm: number,
+): number {
+  const roundTripKm = outboundDistanceKm + returnDistanceKm
+  if (remainingRangeKm <= 0) return 0
+  const remainingAfterTripKm = Math.max(0, remainingRangeKm - roundTripKm)
+  return Math.max(0, Math.round((batteryPercent * remainingAfterTripKm) / remainingRangeKm))
+}
 
 export function recommendCharging(ctx: ToolContext, input: unknown): ToolResult<ChargingRecommendationOutput> {
   const parsed = chargingRecommendationInputSchema.safeParse(input)
@@ -15,11 +32,13 @@ export function recommendCharging(ctx: ToolContext, input: unknown): ToolResult<
     return errorResult(ctx, TOOL, 'INSUFFICIENT_INPUT', '需要电量、续航、往返里程和安全余量', false)
   }
 
-  const { batteryPercent, outboundDistanceKm, returnDistanceKm, safetyReservePercent } = parsed.data
-  const roundTripKm = outboundDistanceKm + returnDistanceKm
-  const estimatedFinalBatteryPercent = Math.max(
-    0,
-    Math.round(batteryPercent - roundTripKm * FIXTURE_CONSUMPTION_PERCENT_PER_KM),
+  const { batteryPercent, remainingRangeKm, outboundDistanceKm, returnDistanceKm, safetyReservePercent } =
+    parsed.data
+  const estimatedFinalBatteryPercent = estimateFinalBatteryPercent(
+    batteryPercent,
+    remainingRangeKm,
+    outboundDistanceKm,
+    returnDistanceKm,
   )
   const recommended = estimatedFinalBatteryPercent < safetyReservePercent
 

@@ -42,9 +42,13 @@ export const memberPreferences: Record<string, MemberPreferenceRecord> = {
 /** Requesting this flight number deterministically simulates PROVIDER_TIMEOUT. */
 export const TIMEOUT_FLIGHT_NUMBER = 'MU0000'
 
-export const flights: Record<string, FlightStatusOutput> = {
+export type FlightRecord = FlightStatusOutput & { date: string }
+
+/** Fixtures are keyed by flight number; `date` must also match the request. */
+export const flights: Record<string, FlightRecord> = {
   MU5102: {
     flightNumber: 'MU5102',
+    date: '2026-07-22',
     status: 'scheduled',
     scheduledArrival: '2026-07-22T20:30:00+08:00',
     estimatedArrival: '2026-07-22T20:40:00+08:00',
@@ -86,9 +90,3 @@ export const chargingStation = {
   suggestedDurationMinutes: 10,
   etaImpactMinutes: 12,
 }
-
-/**
- * Calibrated so the canonical demo input (42% battery, 32 km each way)
- * lands exactly on the fixture expectation of 18% final battery.
- */
-export const FIXTURE_CONSUMPTION_PERCENT_PER_KM = 0.375
