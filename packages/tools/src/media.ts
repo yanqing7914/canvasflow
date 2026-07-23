@@ -30,8 +30,10 @@ export function createMediaPlayer(runtime: SideEffectRuntime) {
 
     // sourceMemberId 表示"以某成员的偏好为依据播放"，必须与该成员存储的偏好一致。
     if (parsed.data.sourceMemberId !== undefined) {
-      const record = runtime.preferences[parsed.data.sourceMemberId]
-      if (!record || record.mediaTitle !== parsed.data.mediaTitle) {
+      if (
+        !Object.hasOwn(runtime.preferences, parsed.data.sourceMemberId) ||
+        runtime.preferences[parsed.data.sourceMemberId].mediaTitle !== parsed.data.mediaTitle
+      ) {
         return errorResult(
           ctx,
           TOOL,

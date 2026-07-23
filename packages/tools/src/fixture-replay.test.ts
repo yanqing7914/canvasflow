@@ -32,7 +32,7 @@ import { getPreferences } from './memory'
 import { autoNotifyAuthorizationId, prepareMessage } from './message'
 import { planRoute } from './navigation'
 import { createSideEffectRuntime } from './idempotency'
-import { createToolRegistry, toolDefinitions, type ToolName } from './registry'
+import { createProviderRegistry, toolDefinitions, type ToolName } from './registry'
 import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
 
@@ -142,7 +142,7 @@ describe('fixture toolResults contract', () => {
   })
 
   it('regenerates side-effect tool results from the fixture providers', () => {
-    const registry = createToolRegistry(createSideEffectRuntime())
+    const registry = createProviderRegistry(createSideEffectRuntime())
     expect(registry['navigation.start'](ctx, { routeId: 'route-airport-001', idempotencyKey: 'nav-start-airport' }).data)
       .toEqual(toolData('route-airport', 'navigation.start'))
     expect(
@@ -186,7 +186,7 @@ type TimelineRun = {
  */
 function replayMainTimeline(): TimelineRun {
   const event = (id: string): AirportPickupEvent => fixtureById.get(id)!.inputEvent
-  const registry = createToolRegistry(createSideEffectRuntime())
+  const registry = createProviderRegistry(createSideEffectRuntime())
 
   let state = fixtureById.get('task-created')!.initialTaskState
   const trace: TimelineRun['trace'] = []

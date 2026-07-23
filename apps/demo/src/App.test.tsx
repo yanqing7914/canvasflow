@@ -54,4 +54,17 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '推进下一事件' }))
     expect(screen.getByText(/taskRevision 1/)).toBeInTheDocument()
   })
+
+  it('renders fallback status banner without a blank screen', () => {
+    render(
+      <App
+        composeContext={{
+          fallback: { title: '界面暂时降级', message: '已切换到安全模板。', level: 'error' },
+        }}
+      />,
+    )
+    expect(screen.getByText('界面暂时降级')).toBeInTheDocument()
+    expect(screen.getByText('已切换到安全模板。')).toBeInTheDocument()
+    expect(screen.getByText('status-banner')).toBeInTheDocument()
+  })
 })

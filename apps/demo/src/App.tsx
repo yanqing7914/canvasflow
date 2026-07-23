@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { applyEvent, createInitialTask, resolveConfirmation } from '@canvasflow/agent'
-import { composePickupSpec } from '@canvasflow/ui'
+import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
 import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
 
 const timeline: AirportPickupEvent[] = [
@@ -32,7 +32,12 @@ function componentSummary(component: ComponentSpec): string {
     case 'charging-recommendation': return component.props.reason
     case 'message-preview': return `${component.props.contactLabel}：${component.props.textPreview}`
     case 'passenger-status': return component.props.meetingPoint ? `${component.props.label} · ${component.props.meetingPoint}` : component.props.label
-    case 'cabin-profile': return `${component.props.temperatureC}°C${component.props.mediaTitle ? ` · ${component.props.mediaTitle}` : ''}`
+    case 'cabin-profile': {
+      const parts: string[] = []
+      if (component.props.temperatureC !== undefined) parts.push(`${component.props.temperatureC}°C`)
+      if (component.props.mediaTitle) parts.push(component.props.mediaTitle)
+      return parts.join(' · ')
+    }
     case 'alert': return component.props.message ?? component.props.title
   }
 }
@@ -52,9 +57,15 @@ function componentTitle(component: ComponentSpec): string {
   }
 }
 
-export default function App({ initialTask = createDemoTask() }: { initialTask?: AirportPickupTaskState }) {
+export default function App({
+  initialTask = createDemoTask(),
+  composeContext = {},
+}: {
+  initialTask?: AirportPickupTaskState
+  composeContext?: ComposerContext
+}) {
   const [task, setTask] = useState<AirportPickupTaskState>(initialTask)
-  const spec = useMemo(() => composePickupSpec(task), [task])
+  const spec = useMemo(() => composePickupSpec(task, composeContext), [task, composeContext])
   const advance = () => {
     const candidate = timeline
       .map((event) => ({ event, next: applyEvent(task, event) }))

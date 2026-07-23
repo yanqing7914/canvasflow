@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { createSideEffectRuntime } from './idempotency'
-import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, sendMessageConfirmationId } from './message'
-import { createToolRegistry } from './registry'
+import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, issueSendMessageConfirmation } from './message'
+import { createProviderRegistry } from './registry'
 import type { ToolContext } from './result'
 
 const ctx: ToolContext = { taskId: 'pickup-001' }
 
 describe('navigation side effects', () => {
   it('start 使用幂等键，重复调用返回同一结果', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const input = { routeId: 'route-airport-001', idempotencyKey: 'pickup-001:start-navigation:route-airport-001' }
     const first = registry['navigation.start'](ctx, input)
     const second = registry['navigation.start'](ctx, input)
@@ -18,7 +18,7 @@ describe('navigation side effects', () => {
   })
 
   it('未知 routeId 返回 ROUTE_EXPIRED', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const result = registry['navigation.start'](ctx, {
       routeId: 'route-missing',
       idempotencyKey: 'pickup-001:start-missing',
@@ -27,7 +27,7 @@ describe('navigation side effects', () => {
   })
 
   it('update-route 可切换到回家路线', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const result = registry['navigation.update-route'](ctx, {
       routeId: 'route-airport-001',
       destination: { id: 'destination-home', name: '家' },
@@ -40,7 +40,7 @@ describe('navigation side effects', () => {
 
 describe('cabin profile side effects', () => {
   it('应用后可撤销，重复撤销不再改变状态', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const applied = registry['vehicle.apply-cabin-profile'](ctx, {
       zone: 'rear',
       temperatureC: 25,
@@ -66,7 +66,7 @@ describe('cabin profile side effects', () => {
   })
 
   it('未授权成员返回 POLICY_DENIED', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const result = registry['vehicle.apply-cabin-profile'](ctx, {
       zone: 'rear',
       temperatureC: 25,
@@ -77,7 +77,7 @@ describe('cabin profile side effects', () => {
   })
 
   it('设置值与来源成员偏好不一致返回 POLICY_DENIED', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const wrongTemperature = registry['vehicle.apply-cabin-profile'](ctx, {
       zone: 'rear',
       temperatureC: 30,
@@ -94,8 +94,24 @@ describe('cabin profile side effects', () => {
     expect(wrongMedia.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
   })
 
+  it('原型属性 memberId（toString/constructor）返回 POLICY_DENIED 且不抛异常', () => {
+    const registry = createProviderRegistry()
+    for (const memberId of ['toString', 'constructor', '__proto__']) {
+      expect(() => {
+        const result = registry['vehicle.apply-cabin-profile'](ctx, {
+          zone: 'rear',
+          temperatureC: 25,
+          sourceMemberIds: [memberId],
+          idempotencyKey: `pickup-001:apply-proto-${memberId}`,
+        })
+        expect(result.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
+        expect(result.ok).toBe(false)
+      }).not.toThrow()
+    }
+  })
+
   it('memory 确认更新后，cabin 按更新后的偏好授权', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const proposed = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 24 } })
     registry['memory.confirm-update'](ctx, {
       proposalId: proposed.data!.proposalId,
@@ -119,7 +135,7 @@ describe('cabin profile side effects', () => {
   })
 
   it('被后续 apply 覆盖的效果不能直接撤销，按逆序撤销可恢复', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const first = registry['vehicle.apply-cabin-profile'](ctx, {
       zone: 'rear',
       temperatureC: 25,
@@ -159,13 +175,13 @@ describe('cabin profile side effects', () => {
 
 describe('media.play', () => {
   it('幂等播放已知媒体', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const input = { mediaTitle: '豆豆故事', idempotencyKey: 'pickup-001:media' }
     expect(registry['media.play'](ctx, input)).toEqual(registry['media.play'](ctx, input))
   })
 
   it('未知媒体返回 MEDIA_UNAVAILABLE', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const result = registry['media.play'](ctx, {
       mediaTitle: '未知专辑',
       idempotencyKey: 'pickup-001:media-missing',
@@ -174,7 +190,7 @@ describe('media.play', () => {
   })
 
   it('sourceMemberId 与该成员偏好一致时才允许播放', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const authorized = registry['media.play'](ctx, {
       mediaTitle: '豆豆故事',
       sourceMemberId: 'doubao',
@@ -185,7 +201,7 @@ describe('media.play', () => {
   })
 
   it('sourceMemberId 未知或与偏好不匹配返回 POLICY_DENIED', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const unknownMember = registry['media.play'](ctx, {
       mediaTitle: '豆豆故事',
       sourceMemberId: 'stranger',
@@ -203,7 +219,7 @@ describe('media.play', () => {
 
 describe('idempotency store isolation', () => {
   it('不同工具复用同一 idempotencyKey 不会串用缓存结果', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const sharedKey = 'pickup-001:shared-key'
     const navigation = registry['navigation.start'](ctx, { routeId: 'route-airport-001', idempotencyKey: sharedKey })
     const media = registry['media.play'](ctx, { mediaTitle: '轻音乐', idempotencyKey: sharedKey })
@@ -217,7 +233,7 @@ describe('idempotency store isolation', () => {
 
 describe('message.send', () => {
   it('同一 idempotencyKey 最多成功发送一次', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const input = {
       contactId: 'contact-mom',
       messageId: 'pickup-001:MU5102:landing',
@@ -232,7 +248,7 @@ describe('message.send', () => {
   })
 
   it('缺少授权返回 AUTHORIZATION_REQUIRED', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const result = registry['message.send'](ctx, {
       contactId: 'contact-mom',
       messageId: 'msg-1',
@@ -243,7 +259,7 @@ describe('message.send', () => {
   })
 
   it('任意非空凭据不再有效，必须是任务绑定的授权或确认', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const arbitraryAuth = registry['message.send'](ctx, {
       contactId: 'contact-mom',
       messageId: 'msg-2',
@@ -271,7 +287,7 @@ describe('message.send', () => {
   })
 
   it('预授权路径要求联系人对应成员开启落地通知授权', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     // FAILING_CONTACT_ID 不属于任何成员，auto-notify 预授权不适用
     const result = registry['message.send'](ctx, {
       contactId: FAILING_CONTACT_ID,
@@ -283,38 +299,56 @@ describe('message.send', () => {
     expect(result.error?.code).toBe('AUTHORIZATION_REQUIRED')
   })
 
-  it('失败联系人返回 SEND_FAILED 且不写入幂等账本', () => {
-    const registry = createToolRegistry()
+  it('失败联系人返回 SEND_FAILED 且不写入幂等账本、不消耗确认', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
     const message = { contactId: FAILING_CONTACT_ID, messageId: 'msg-fail', text: 'hello' }
+    const confirmationId = issueSendMessageConfirmation(runtime, { taskId: 'pickup-001', ...message })
     const input = {
       ...message,
-      confirmationId: sendMessageConfirmationId('pickup-001', message),
+      confirmationId,
       idempotencyKey: 'pickup-001:msg-fail',
     }
     expect(registry['message.send'](ctx, input).error?.code).toBe('SEND_FAILED')
     expect(registry['message.send'](ctx, input).error?.code).toBe('SEND_FAILED')
   })
 
-  it('显式确认凭据绑定到具体消息，换联系人或文案后失效', () => {
-    const registry = createToolRegistry()
+  it('opaque 确认：签发→成功发送→消费；伪造/改 payload/重复消费均失败', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
     const message = { contactId: 'contact-mom', messageId: 'msg-confirm-1', text: '我已到达机场' }
-    const confirmationId = sendMessageConfirmationId('pickup-001', message)
+    const confirmationId = issueSendMessageConfirmation(runtime, { taskId: 'pickup-001', ...message })
+    expect(confirmationId.startsWith('cnf_')).toBe(true)
+    // 不可由调用方从字段确定性算出
+    expect(confirmationId).not.toContain(message.messageId)
+    expect(confirmationId).not.toContain(message.contactId)
 
-    const otherText = registry['message.send'](ctx, {
-      ...message,
-      text: '换一段完全不同的文案',
-      confirmationId,
-      idempotencyKey: 'pickup-001:msg-confirm-other-text',
-    })
-    expect(otherText.error?.code).toBe('AUTHORIZATION_REQUIRED')
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        text: '换一段完全不同的文案',
+        confirmationId,
+        idempotencyKey: 'pickup-001:msg-confirm-other-text',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
 
-    const otherMessageId = registry['message.send'](ctx, {
-      ...message,
-      messageId: 'msg-confirm-2',
-      confirmationId,
-      idempotencyKey: 'pickup-001:msg-confirm-other-id',
-    })
-    expect(otherMessageId.error?.code).toBe('AUTHORIZATION_REQUIRED')
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId: 'cnf_forged_token',
+        idempotencyKey: 'pickup-001:msg-confirm-forged',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+
+    const otherRuntime = createSideEffectRuntime()
+    const otherTaskToken = issueSendMessageConfirmation(otherRuntime, { taskId: 'other-task', ...message })
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId: otherTaskToken,
+        idempotencyKey: 'pickup-001:msg-confirm-cross-task',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
 
     const bound = registry['message.send'](ctx, {
       ...message,
@@ -322,10 +356,19 @@ describe('message.send', () => {
       idempotencyKey: 'pickup-001:msg-confirm-bound',
     })
     expect(bound.ok).toBe(true)
+
+    // 成功后 token 已消费，不能再授权另一次发送
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId,
+        idempotencyKey: 'pickup-001:msg-confirm-replay',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
   })
 
   it('同一 idempotencyKey 换参数不能重放缓存结果', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const sendInput = {
       contactId: 'contact-mom',
       messageId: 'msg-conflict',
@@ -348,7 +391,7 @@ describe('message.send', () => {
 
 describe('memory write side effects', () => {
   it('propose 后 confirm 才写入，confirm 幂等且写入对读取可见', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const proposed = registry['memory.propose-update'](ctx, {
       memberId: 'mom',
       changes: { rearTemperatureC: 26 },
@@ -372,22 +415,42 @@ describe('memory write side effects', () => {
     expect(readBack.data?.members).toEqual([{ memberId: 'mom', rearTemperatureC: 26 }])
   })
 
-  it('确认凭据必须与提案签发的一致', () => {
-    const registry = createToolRegistry()
+  it('确认凭据必须与提案签发的一致，且成功后不可重复消费', () => {
+    const registry = createProviderRegistry()
     const proposed = registry['memory.propose-update'](ctx, {
       memberId: 'mom',
       changes: { rearTemperatureC: 27 },
     })
+    expect(proposed.data!.confirmationId.startsWith('cnf_')).toBe(true)
+    expect(proposed.data!.confirmationId).not.toBe(`${proposed.data!.proposalId}:confirm`)
+
     const wrong = registry['memory.confirm-update'](ctx, {
       proposalId: proposed.data!.proposalId,
       confirmationId: 'confirm-anything',
       idempotencyKey: 'pickup-001:confirm-wrong-token',
     })
     expect(wrong.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', retryable: false })
+
+    const first = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-once',
+    })
+    expect(first.ok).toBe(true)
+
+    // 不同幂等键再次出示同一 token：token 已消费，不能再授权
+    const replay = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-replay-token',
+    })
+    // 提案已 confirmed，同 confirmationId 匹配时允许返回已应用结果（不二次写入）
+    expect(replay.ok).toBe(true)
+    expect(replay.data?.applied).toEqual({ rearTemperatureC: 27 })
   })
 
   it('相同变更幂等返回同一提案，不同变更签发新版本并使旧提案失效', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const first = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 26 } })
     const repeated = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 26 } })
     expect(repeated.data?.proposalId).toBe(first.data!.proposalId)
@@ -415,7 +478,7 @@ describe('memory write side effects', () => {
   it('过期提案返回 PROPOSAL_EXPIRED', () => {
     let now = Date.parse('2026-07-22T12:00:00+08:00')
     const runtime = createSideEffectRuntime(() => now)
-    const registry = createToolRegistry(runtime)
+    const registry = createProviderRegistry(runtime)
     const proposed = registry['memory.propose-update'](ctx, {
       memberId: 'mom',
       changes: { mediaTitle: '轻音乐' },
@@ -430,7 +493,7 @@ describe('memory write side effects', () => {
   })
 
   it('非白名单字段不能进入提案', () => {
-    const registry = createToolRegistry()
+    const registry = createProviderRegistry()
     const result = registry['memory.propose-update'](ctx, {
       memberId: 'mom',
       changes: { secretPhone: '123' },

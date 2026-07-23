@@ -57,11 +57,16 @@ export const flights: Record<string, FlightRecord> = {
   },
 }
 
+/** Canonical demo origin used by airport-pickup fixtures (fictional Shanghai CBD). */
+export const DEMO_ORIGIN = { latitude: 31.23, longitude: 121.47 } as const
+
 /**
- * Fixture routes keyed by destination, optional via waypoints, and preference flags.
+ * Fixture routes keyed by origin, destination, optional via waypoints, and preference flags.
  * Requests that do not match a key must fail explicitly — never silently ignore constraints.
  */
 export type RouteFixtureKey = {
+  originLatitude: number
+  originLongitude: number
   destinationId: string
   viaIds: string[]
   avoidHighway: boolean
@@ -71,11 +76,19 @@ export type RouteFixtureKey = {
 export function routeFixtureKey(key: RouteFixtureKey): string {
   // Via order matters: A→B and B→A are different routes and must not collide.
   const via = key.viaIds.join(',') || '-'
-  return `${key.destinationId}|via=${via}|hw=${key.avoidHighway ? 1 : 0}|toll=${key.avoidTolls ? 1 : 0}`
+  return `origin=${key.originLatitude},${key.originLongitude}|${key.destinationId}|via=${via}|hw=${key.avoidHighway ? 1 : 0}|toll=${key.avoidTolls ? 1 : 0}`
+}
+
+function demoRouteKey(partial: Omit<RouteFixtureKey, 'originLatitude' | 'originLongitude'>): string {
+  return routeFixtureKey({
+    originLatitude: DEMO_ORIGIN.latitude,
+    originLongitude: DEMO_ORIGIN.longitude,
+    ...partial,
+  })
 }
 
 export const routes: Record<string, RoutePlanOutput> = {
-  [routeFixtureKey({
+  [demoRouteKey({
     destinationId: 'destination-hongqiao-t2',
     viaIds: [],
     avoidHighway: false,
@@ -87,7 +100,7 @@ export const routes: Record<string, RoutePlanOutput> = {
     arrivalTime: '2026-07-22T20:25:00+08:00',
     estimatedBatteryAtArrival: 27,
   },
-  [routeFixtureKey({
+  [demoRouteKey({
     destinationId: 'destination-hongqiao-t2',
     viaIds: ['station-hongqiao-01'],
     avoidHighway: false,
@@ -99,7 +112,7 @@ export const routes: Record<string, RoutePlanOutput> = {
     arrivalTime: '2026-07-22T20:37:00+08:00',
     estimatedBatteryAtArrival: 55,
   },
-  [routeFixtureKey({
+  [demoRouteKey({
     destinationId: 'destination-home',
     viaIds: [],
     avoidHighway: false,
