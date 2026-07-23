@@ -4,7 +4,7 @@ import { applyEvent, planEffects } from '@canvasflow/agent'
 import { composeFallbackSpec, composePickupSpec } from '@canvasflow/ui'
 import { getFlightStatus } from './flight'
 import { planRoute } from './navigation'
-import { FAILING_CONTACT_ID } from './message'
+import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, sendMessageConfirmationId } from './message'
 import { createSideEffectRuntime } from './idempotency'
 import { createToolRegistry } from './registry'
 import type { ToolContext } from './result'
@@ -61,7 +61,7 @@ describe('重复航班落地事件：消息重复发送率 0%', () => {
       contactId: 'contact-mom',
       messageId: 'pickup-001:MU5102:landing',
       text: '我已到达机场接机点，航班 MU5102，预计 20:40 会合。',
-      authorizationId: 'auth-landing-notice',
+      authorizationId: autoNotifyAuthorizationId('pickup-001'),
       idempotencyKey: scheduled.message.idempotencyKey!,
     }
     const firstSend = registry['message.send'](ctx, sendInput)
@@ -100,7 +100,7 @@ describe('message.failed：不自动重试，只允许用户显式重试', () =>
       contactId: FAILING_CONTACT_ID,
       messageId: 'pickup-001:MU5102:landing',
       text: '我已到达机场接机点。',
-      confirmationId: 'user-retry-1',
+      confirmationId: sendMessageConfirmationId('pickup-001'),
       idempotencyKey: 'pickup-001:MU5102:landing:attempt-1',
     }
     expect(registry['message.send'](ctx, failingInput).error?.code).toBe('SEND_FAILED')
@@ -108,7 +108,6 @@ describe('message.failed：不自动重试，只允许用户显式重试', () =>
     const retryInput = {
       ...failingInput,
       contactId: 'contact-mom',
-      confirmationId: 'user-retry-2',
       idempotencyKey: 'pickup-001:MU5102:landing:attempt-2',
     }
     const retried = registry['message.send'](ctx, retryInput)
