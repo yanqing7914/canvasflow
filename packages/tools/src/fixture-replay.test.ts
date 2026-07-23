@@ -29,7 +29,7 @@ import { recommendCharging } from './charging'
 import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
 import { getPreferences } from './memory'
-import { prepareMessage } from './message'
+import { autoNotifyAuthorizationId, prepareMessage } from './message'
 import { planRoute } from './navigation'
 import { createSideEffectRuntime } from './idempotency'
 import { createToolRegistry, toolDefinitions, type ToolName } from './registry'
@@ -234,7 +234,7 @@ function replayMainTimeline(): TimelineRun {
     contactId: 'contact-mom',
     messageId: prepared.data!.messageId,
     text: prepared.data!.text,
-    authorizationId: 'auth-landing-notice',
+    authorizationId: autoNotifyAuthorizationId(state.taskId),
     idempotencyKey: state.message.idempotencyKey!,
   }
   const firstSend = registry['message.send'](ctx, sendInput)

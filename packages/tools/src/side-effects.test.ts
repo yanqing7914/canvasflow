@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSideEffectRuntime } from './idempotency'
-import { FAILING_CONTACT_ID } from './message'
+import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, sendMessageConfirmationId } from './message'
 import { createToolRegistry } from './registry'
 import type { ToolContext } from './result'
 
@@ -75,6 +75,86 @@ describe('cabin profile side effects', () => {
     })
     expect(result.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
   })
+
+  it('设置值与来源成员偏好不一致返回 POLICY_DENIED', () => {
+    const registry = createToolRegistry()
+    const wrongTemperature = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      temperatureC: 30,
+      sourceMemberIds: ['mom'],
+      idempotencyKey: 'pickup-001:apply-wrong-temp',
+    })
+    expect(wrongTemperature.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
+    const wrongMedia = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      mediaTitle: '轻音乐',
+      sourceMemberIds: ['doubao'],
+      idempotencyKey: 'pickup-001:apply-wrong-media',
+    })
+    expect(wrongMedia.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
+  })
+
+  it('memory 确认更新后，cabin 按更新后的偏好授权', () => {
+    const registry = createToolRegistry()
+    const proposed = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 24 } })
+    registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-then-cabin',
+    })
+    const applied = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      temperatureC: 24,
+      sourceMemberIds: ['mom'],
+      idempotencyKey: 'pickup-001:apply-after-update',
+    })
+    expect(applied.ok).toBe(true)
+    const staleValue = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      temperatureC: 25,
+      sourceMemberIds: ['mom'],
+      idempotencyKey: 'pickup-001:apply-stale-value',
+    })
+    expect(staleValue.error?.code).toBe('POLICY_DENIED')
+  })
+
+  it('被后续 apply 覆盖的效果不能直接撤销，按逆序撤销可恢复', () => {
+    const registry = createToolRegistry()
+    const first = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      temperatureC: 25,
+      sourceMemberIds: ['mom'],
+      idempotencyKey: 'pickup-001:apply-a',
+    })
+    const second = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      mediaTitle: '豆豆故事',
+      sourceMemberIds: ['doubao'],
+      idempotencyKey: 'pickup-001:apply-b',
+    })
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+
+    // A 已被 B 覆盖，直接撤销 A 会丢掉 B 的设置
+    const revertStale = registry['vehicle.revert-cabin-profile'](ctx, {
+      effectId: first.data!.effectId,
+      idempotencyKey: 'pickup-001:revert-a-early',
+    })
+    expect(revertStale.error?.code).toBe('APPLY_FAILED')
+
+    // 逆序撤销：先 B 后 A，恢复到初始状态
+    const revertB = registry['vehicle.revert-cabin-profile'](ctx, {
+      effectId: second.data!.effectId,
+      idempotencyKey: 'pickup-001:revert-b',
+    })
+    expect(revertB.ok).toBe(true)
+    const revertA = registry['vehicle.revert-cabin-profile'](ctx, {
+      effectId: first.data!.effectId,
+      idempotencyKey: 'pickup-001:revert-a',
+    })
+    expect(revertA.ok).toBe(true)
+    expect(revertA.data?.current.temperatureC).toBe(22)
+  })
 })
 
 describe('media.play', () => {
@@ -142,7 +222,7 @@ describe('message.send', () => {
       contactId: 'contact-mom',
       messageId: 'pickup-001:MU5102:landing',
       text: '我已到达机场接机点',
-      authorizationId: 'auth-landing-once',
+      authorizationId: autoNotifyAuthorizationId('pickup-001'),
       idempotencyKey: 'pickup-001:MU5102:landing',
     }
     const first = registry['message.send'](ctx, input)
@@ -162,13 +242,54 @@ describe('message.send', () => {
     expect(result.error).toMatchObject({ code: 'AUTHORIZATION_REQUIRED', retryable: false })
   })
 
+  it('任意非空凭据不再有效，必须是任务绑定的授权或确认', () => {
+    const registry = createToolRegistry()
+    const arbitraryAuth = registry['message.send'](ctx, {
+      contactId: 'contact-mom',
+      messageId: 'msg-2',
+      text: 'hello',
+      authorizationId: 'auth-anything',
+      idempotencyKey: 'pickup-001:msg-bad-auth',
+    })
+    expect(arbitraryAuth.error?.code).toBe('AUTHORIZATION_REQUIRED')
+    const arbitraryConfirm = registry['message.send'](ctx, {
+      contactId: 'contact-mom',
+      messageId: 'msg-3',
+      text: 'hello',
+      confirmationId: 'confirm-anything',
+      idempotencyKey: 'pickup-001:msg-bad-confirm',
+    })
+    expect(arbitraryConfirm.error?.code).toBe('AUTHORIZATION_REQUIRED')
+    const wrongTask = registry['message.send'](ctx, {
+      contactId: 'contact-mom',
+      messageId: 'msg-4',
+      text: 'hello',
+      authorizationId: autoNotifyAuthorizationId('other-task'),
+      idempotencyKey: 'pickup-001:msg-wrong-task',
+    })
+    expect(wrongTask.error?.code).toBe('AUTHORIZATION_REQUIRED')
+  })
+
+  it('预授权路径要求联系人对应成员开启落地通知授权', () => {
+    const registry = createToolRegistry()
+    // FAILING_CONTACT_ID 不属于任何成员，auto-notify 预授权不适用
+    const result = registry['message.send'](ctx, {
+      contactId: FAILING_CONTACT_ID,
+      messageId: 'msg-5',
+      text: 'hello',
+      authorizationId: autoNotifyAuthorizationId('pickup-001'),
+      idempotencyKey: 'pickup-001:msg-auto-unknown',
+    })
+    expect(result.error?.code).toBe('AUTHORIZATION_REQUIRED')
+  })
+
   it('失败联系人返回 SEND_FAILED 且不写入幂等账本', () => {
     const registry = createToolRegistry()
     const input = {
       contactId: FAILING_CONTACT_ID,
       messageId: 'msg-fail',
       text: 'hello',
-      authorizationId: 'auth-1',
+      confirmationId: sendMessageConfirmationId('pickup-001'),
       idempotencyKey: 'pickup-001:msg-fail',
     }
     expect(registry['message.send'](ctx, input).error?.code).toBe('SEND_FAILED')
@@ -177,7 +298,7 @@ describe('message.send', () => {
 })
 
 describe('memory write side effects', () => {
-  it('propose 后 confirm 才写入，且 confirm 幂等', () => {
+  it('propose 后 confirm 才写入，confirm 幂等且写入对读取可见', () => {
     const registry = createToolRegistry()
     const proposed = registry['memory.propose-update'](ctx, {
       memberId: 'mom',
@@ -188,7 +309,7 @@ describe('memory write side effects', () => {
 
     const confirmInput = {
       proposalId: proposed.data!.proposalId,
-      confirmationId: 'confirm-save-memory',
+      confirmationId: proposed.data!.confirmationId,
       idempotencyKey: 'pickup-001:save-memory:confirm-001',
     }
     const first = registry['memory.confirm-update'](ctx, confirmInput)
@@ -196,6 +317,50 @@ describe('memory write side effects', () => {
     expect(first.ok).toBe(true)
     expect(second).toEqual(first)
     expect(first.data?.applied).toEqual({ rearTemperatureC: 26 })
+
+    // 同一 registry 的读取工具必须能看到确认后的写入
+    const readBack = registry['memory.get-preferences'](ctx, { memberIds: ['mom'], scopes: ['cabin'] })
+    expect(readBack.data?.members).toEqual([{ memberId: 'mom', rearTemperatureC: 26 }])
+  })
+
+  it('确认凭据必须与提案签发的一致', () => {
+    const registry = createToolRegistry()
+    const proposed = registry['memory.propose-update'](ctx, {
+      memberId: 'mom',
+      changes: { rearTemperatureC: 27 },
+    })
+    const wrong = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: 'confirm-anything',
+      idempotencyKey: 'pickup-001:confirm-wrong-token',
+    })
+    expect(wrong.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', retryable: false })
+  })
+
+  it('相同变更幂等返回同一提案，不同变更签发新版本并使旧提案失效', () => {
+    const registry = createToolRegistry()
+    const first = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 26 } })
+    const repeated = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 26 } })
+    expect(repeated.data?.proposalId).toBe(first.data!.proposalId)
+
+    const superseding = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 28 } })
+    expect(superseding.data?.proposalId).not.toBe(first.data!.proposalId)
+
+    // 被取代的旧提案不能再确认
+    const staleConfirm = registry['memory.confirm-update'](ctx, {
+      proposalId: first.data!.proposalId,
+      confirmationId: first.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-stale',
+    })
+    expect(staleConfirm.error?.code).toBe('PROPOSAL_EXPIRED')
+
+    const confirmed = registry['memory.confirm-update'](ctx, {
+      proposalId: superseding.data!.proposalId,
+      confirmationId: superseding.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-superseding',
+    })
+    expect(confirmed.ok).toBe(true)
+    expect(confirmed.data?.applied).toEqual({ rearTemperatureC: 28 })
   })
 
   it('过期提案返回 PROPOSAL_EXPIRED', () => {
@@ -209,7 +374,7 @@ describe('memory write side effects', () => {
     now += 31 * 60 * 1000
     const confirmed = registry['memory.confirm-update'](ctx, {
       proposalId: proposed.data!.proposalId,
-      confirmationId: 'confirm-late',
+      confirmationId: proposed.data!.confirmationId,
       idempotencyKey: 'pickup-001:save-late',
     })
     expect(confirmed.error).toMatchObject({ code: 'PROPOSAL_EXPIRED', retryable: false })

@@ -17,6 +17,16 @@ const SEND = 'message.send'
 /** Fixture contact that deterministically fails send. */
 export const FAILING_CONTACT_ID = 'contact-fail'
 
+/** Task-scoped pre-authorization credential for the automatic landing notice. */
+export function autoNotifyAuthorizationId(taskId: string): string {
+  return `${taskId}:auto-notify`
+}
+
+/** Task-scoped user-confirmation credential for an explicit send / retry. */
+export function sendMessageConfirmationId(taskId: string): string {
+  return `${taskId}:send-message`
+}
+
 export function prepareMessage(ctx: ToolContext, input: unknown): ToolResult<MessagePrepareOutput> {
   const parsed = messagePrepareInputSchema.safeParse(input)
   if (!parsed.success) {
@@ -52,8 +62,15 @@ export function createMessageSender(runtime: SideEffectRuntime) {
     const cached = runtime.idempotency.get<MessageSendOutput>(SEND, parsed.data.idempotencyKey)
     if (cached) return cached
 
-    if (!parsed.data.authorizationId && !parsed.data.confirmationId) {
-      return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要预授权或本次确认', false)
+    // 凭据必须与任务绑定：预授权路径还要求联系人对应成员开启了落地通知授权。
+    const member = familyMembers.find((candidate) => candidate.contactId === parsed.data.contactId)
+    const autoNotifyGranted =
+      parsed.data.authorizationId === autoNotifyAuthorizationId(ctx.taskId) &&
+      member !== undefined &&
+      runtime.preferences[member.memberId]?.landingNotificationAuthorized === true
+    const userConfirmed = parsed.data.confirmationId === sendMessageConfirmationId(ctx.taskId)
+    if (!autoNotifyGranted && !userConfirmed) {
+      return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要任务绑定的预授权或本次确认', false)
     }
 
     if (parsed.data.contactId === FAILING_CONTACT_ID) {
