@@ -48,16 +48,18 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
       }
       break
     case 'navigation.started':
-      if (next.phase === 'preparing') next.phase = 'driving-to-airport'
-      next.navigation = { routeId: event.routeId, destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' }
+      if (next.phase === 'preparing') {
+        next.phase = 'driving-to-airport'
+        next.navigation = { routeId: event.routeId, destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' }
+      }
       break
     case 'vehicle.entered-airport-geofence': if (next.phase === 'driving-to-airport') next.phase = 'approaching-airport'; break
     case 'vehicle.parked': if (next.phase === 'approaching-airport') next.phase = 'waiting-for-passengers'; break
     case 'user.confirmed-passengers-onboard': if (next.phase === 'waiting-for-passengers') { next.passengers.confirmedOnboard = true; next.phase = 'returning-home' } break
     case 'destination.arrived': if (next.phase === 'returning-home') { next.phase = 'completed'; next.navigation = next.navigation ? { ...next.navigation, destination: event.destination, status: 'arrived' } : undefined } break
-    case 'charging.started': next.charging.status = 'active'; break
-    case 'charging.completed': next.charging.status = 'completed'; break
-    case 'charging.cancelled': next.charging = { ...next.charging, accepted: false, status: 'none' }; break
+    case 'charging.started': if (next.phase === 'driving-to-airport' && next.charging.status === 'planned') next.charging.status = 'active'; break
+    case 'charging.completed': if (next.charging.status === 'active') next.charging.status = 'completed'; break
+    case 'charging.cancelled': if (next.charging.status === 'planned' || next.charging.status === 'active') next.charging = { ...next.charging, accepted: false, status: 'none' }; break
     case 'user.cancelled-task': next.phase = 'cancelled'; break
     default: break
   }

@@ -41,4 +41,11 @@ describe('airport pickup task engine', () => {
     expect(planEffects(state, { eventId: 'onboard', type: 'user.confirmed-passengers-onboard', timestamp: state.updatedAt }, {})).toEqual([])
     expect(planEffects(state, { eventId: 'arrived', type: 'destination.arrived', destination: '家', timestamp: state.updatedAt }, {})).toEqual([])
   })
+
+  it('does not reapply cabin preferences for repeated passenger confirmation', () => {
+    const state = { ...createInitialTask(), phase: 'returning-home' as const, passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true } }
+    const repeated = { eventId: 'onboard-again', type: 'user.confirmed-passengers-onboard' as const, timestamp: state.updatedAt }
+    expect(planEffects(state, repeated, { 'memory.get-preferences': {} })).toEqual([])
+    expect(applyEvent(state, repeated).taskRevision).toBe(state.taskRevision)
+  })
 })

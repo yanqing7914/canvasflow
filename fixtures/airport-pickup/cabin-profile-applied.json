@@ -1,6 +1,6 @@
 {
   "id": "cabin-profile-applied", "title": "应用已授权座舱偏好", "mode": "fixture",
-  "inputEvent": { "eventId": "event-cabin-profile-applied", "type": "user.confirmed-passengers-onboard", "timestamp": "2026-07-22T20:56:00+08:00" },
+  "inputEvent": { "eventId": "event-cabin-profile-applied", "type": "user.input", "text": "应用家庭座舱偏好", "timestamp": "2026-07-22T20:56:00+08:00" },
   "initialTaskState": { "taskId": "pickup-001", "surfaceId": "airport-pickup-main", "taskRevision": 6, "uiRevision": 6, "phase": "returning-home", "passengers": { "memberIds": ["mom", "doubao"], "names": ["妈妈", "豆豆"], "confirmedOnboard": true }, "charging": { "recommended": false, "accepted": false, "status": "none" }, "message": { "autoNotifyAuthorized": true, "status": "sent", "landingNoticeSent": true }, "processedEventIds": [], "updatedAt": "2026-07-22T20:55:00+08:00" },
   "toolResults": { "memory.get-preferences": { "ok": true, "temperatureC": 25, "mediaTitle": "豆豆故事" } },
   "expectedTaskState": { "taskId": "pickup-001", "surfaceId": "airport-pickup-main", "taskRevision": 6, "uiRevision": 6, "phase": "returning-home", "passengers": { "memberIds": ["mom", "doubao"], "names": ["妈妈", "豆豆"], "confirmedOnboard": true }, "charging": { "recommended": false, "accepted": false, "status": "none" }, "message": { "autoNotifyAuthorized": true, "status": "sent", "landingNoticeSent": true }, "processedEventIds": ["event-cabin-profile-applied"], "updatedAt": "2026-07-22T20:56:00+08:00" },
