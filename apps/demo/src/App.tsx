@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { applyEvent, createInitialTask, resolveConfirmation } from '@canvasflow/agent'
-import { createProviderRegistry, createSideEffectRuntime, issueSendMessageConfirmation, prepareMessage } from '@canvasflow/tools'
+import { createProviderRegistry, createSideEffectRuntime, familyMembers, issueSendMessageConfirmation, prepareMessage } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
 import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
 
@@ -84,9 +84,13 @@ export default function App({
     if (actionId === 'retry-landing-message') {
       setTask((current) => {
         if (current.message.status !== 'failed' || !current.flight) return current
+        const contactId = current.passengers.memberIds
+          .map((memberId) => familyMembers.find((member) => member.memberId === memberId)?.contactId)
+          .find((id): id is string => typeof id === 'string')
+        if (!contactId) return current
         const ctx = { taskId: current.taskId }
         const prepared = prepareMessage(ctx, {
-          contactId: 'contact-mom',
+          contactId,
           flightNumber: current.flight.flightNumber,
           eta: '20:40',
         })
