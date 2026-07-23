@@ -78,6 +78,8 @@ export type MemoryProposalRecord = {
 /** Mutable fixture runtime shared by side-effect providers in one registry. */
 export type SideEffectRuntime = {
   idempotency: IdempotencyStore
+  /** Route IDs successfully returned by plan-route / update-route for each task. */
+  plannedRouteIdsByTask: Map<string, Set<string>>
   cabinEffects: Map<string, CabinEffectRecord>
   cabinCurrent: CabinProfileValues
   memoryProposals: Map<string, MemoryProposalRecord>
@@ -94,6 +96,7 @@ export function createSideEffectRuntime(nowMs: () => number = () => Date.parse('
   }
   return {
     idempotency: new IdempotencyStore(),
+    plannedRouteIdsByTask: new Map(),
     cabinEffects: new Map(),
     cabinCurrent: { temperatureC: 22, fanLevel: 2 },
     memoryProposals: new Map(),
