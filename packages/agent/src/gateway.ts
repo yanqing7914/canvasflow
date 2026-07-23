@@ -14,6 +14,7 @@ import {
   type UISpec,
 } from '@canvasflow/schema'
 import { applyEvent, createInitialTask, resolveConfirmation } from './index'
+import { normalizeFlightNumber } from './flight-number'
 import { composeAgentSpec } from './composer'
 import { planEffects } from './effects'
 import { MemoryTaskStore, type StoredTask, type TaskStore } from './store'
@@ -56,12 +57,13 @@ export class AgentGateway {
     if (existing) return this.#response(request.clientRequestId, existing, [], performance.now() - startedAt)
     const taskId = `pickup-${this.#createId()}`
     const timestamp = this.#now()
+    const flightNumber = normalizeFlightNumber(request.input.text)
     let task = createInitialTask(taskId, timestamp)
     task = { ...task, passengers: extractPassengers(request.input.text) }
     task = applyEvent(task, {
       eventId: `${request.clientRequestId}:input`,
       type: 'user.input',
-      text: request.input.text,
+      text: flightNumber ?? request.input.text,
       timestamp,
     })
     const stored = this.#store.create(this.#publish(task), request.clientRequestId)
@@ -155,7 +157,7 @@ export class AgentGateway {
       throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'The save-memory confirmation has expired', false, current)
     }
 
-    // The reducer only clears the pending confirmation; neither decision writes memory in this slice.
+    // Fixture mode only: both decisions close the prompt without writing long-term memory.
     const resolved = resolveConfirmation(current.task, confirmationId)
     const stored = this.#store.save(this.#publish({ ...resolved, updatedAt: this.#eventTimestamp(current.task.updatedAt) }))
     const effects: AgentResponse['effects'] = []

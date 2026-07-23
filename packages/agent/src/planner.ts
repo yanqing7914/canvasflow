@@ -1,4 +1,5 @@
 import type { AirportPickupEvent, AirportPickupTaskState } from '@canvasflow/schema'
+import { normalizeFlightNumber } from './flight-number'
 
 export type PlannerIntent =
   | 'create-airport-pickup'
@@ -50,7 +51,7 @@ export function planAirportPickup(input: PlannerInput): Plan {
   const text = input.text.trim()
   const compactText = text.replace(/\s+/g, '')
   const state = input.state
-  const flightNumber = extractFlightNumber(text)
+  const flightNumber = normalizeFlightNumber(text)
   const passengers = extractPassengers(text)
   const eventBase = {
     eventId: input.eventId ?? `planner-${stableHash(compactText || 'empty')}`,
@@ -152,11 +153,6 @@ export function planAirportPickup(input: PlannerInput): Plan {
     proposedEvents: [],
     assistantText: '我还不能确定你的接机安排，请换一种说法。',
   }
-}
-
-function extractFlightNumber(text: string): string | undefined {
-  const match = text.match(/MU\s*[- ]?\s*(\d{4})/i)
-  return match ? `MU${match[1]}` : undefined
 }
 
 function extractPassengers(text: string): AirportPickupTaskState['passengers'] | undefined {

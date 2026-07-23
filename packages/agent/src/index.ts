@@ -4,8 +4,10 @@ import {
   type AirportPickupEvent,
   type AirportPickupTaskState,
 } from '@canvasflow/schema'
+import { normalizeFlightNumber } from './flight-number'
 
 export * from './effects'
+export * from './flight-number'
 export * from './composer'
 export * from './gateway'
 export * from './planner'
@@ -40,8 +42,11 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
 
   switch (event.type) {
     case 'user.input':
-      handled = /MU\d+/i.test(event.text) || /机场|接妈妈|接豆豆|补能|充电|座舱|偏好|温度|媒体/.test(event.text)
-      if (/MU\d+/i.test(event.text)) next.flight = { flightNumber: event.text.match(/MU\d+/i)?.[0].toUpperCase() ?? event.text, status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
+      {
+        const flightNumber = normalizeFlightNumber(event.text)
+        handled = flightNumber !== undefined || /机场|接妈妈|接豆豆|补能|充电|座舱|偏好|温度|媒体/.test(event.text)
+        if (flightNumber) next.flight = { flightNumber, status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
+      }
       if (/补能|充电/.test(event.text)) next.charging = { ...next.charging, recommended: true, status: 'planned' }
       if (next.flight && next.passengers.names.length > 0 && next.phase === 'collecting-information') next.phase = 'preparing'
       break

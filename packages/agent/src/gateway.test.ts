@@ -37,6 +37,26 @@ describe('AgentGateway', () => {
     expect(gateway.getTask(created.task.taskId).task).toEqual(created.task)
   })
 
+  it.each([
+    ['MU5102', 'MU5102'],
+    ['MU 5102', 'MU5102'],
+    ['MU-5102', 'MU5102'],
+    ['mu 5102', 'MU5102'],
+  ])('normalizes %s in the initial task request', (input, expectedFlightNumber) => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest(`我现在要去机场接妈妈和豆豆，航班 ${input}`))
+
+    expect(created.task.flight?.flightNumber).toBe(expectedFlightNumber)
+    expect(created.task.phase).toBe('preparing')
+  })
+
+  it.each(['MU', 'MU51', '接机航班是 5102'])('does not create a flight from invalid input %s', (input) => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest(`我现在要去机场接妈妈和豆豆，${input}`))
+
+    expect(created.task.flight).toBeUndefined()
+  })
+
   it('returns the original task for a retried create request', () => {
     const gateway = createGateway()
     const first = gateway.createTask(createRequest())
@@ -161,7 +181,7 @@ describe('AgentGateway', () => {
     )
   })
 
-  it('clears a current save-memory confirmation for accept and reject without effects', () => {
+  it('clears a current save-memory confirmation for accept and reject without effects in Fixture mode', () => {
     const acceptGateway = createGateway()
     const accepted = completeTask(acceptGateway)
     const acceptRequest = {

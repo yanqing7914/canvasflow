@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createInitialTask } from './index'
+import { applyEvent, createInitialTask } from './index'
 import { Planner, planAirportPickup } from './planner'
 
 const timestamp = '2026-07-22T20:00:00+08:00'
@@ -31,6 +31,28 @@ describe('airport pickup Planner', () => {
       missingSlots: [],
       proposedEvents: [{ type: 'user.input', text: '航班是 mu 5102' }],
     })
+  })
+
+  it.each(['MU 5102', 'MU-5102', 'mu 5102'])('keeps %s consistent through Planner, event, and reducer', (input) => {
+    const state = {
+      ...createInitialTask('pickup-001', timestamp),
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+    }
+    const plan = planAirportPickup({ text: `航班是 ${input}`, state, eventId: `flight-${input}`, timestamp })
+    const event = plan.proposedEvents[0]
+
+    expect(plan.slotUpdates.flightNumber).toBe('MU5102')
+    expect(event).toMatchObject({ type: 'user.input' })
+    expect(applyEvent(state, event!).flight?.flightNumber).toBe('MU5102')
+  })
+
+  it.each(['MU', 'MU51', '航班是 5102'])('does not propose a flight for invalid input %s', (input) => {
+    const state = createInitialTask('pickup-001', timestamp)
+    const plan = planAirportPickup({ text: input, state, eventId: `invalid-${input}`, timestamp })
+
+    expect(plan.slotUpdates.flightNumber).toBeUndefined()
+    expect(plan.proposedEvents).toEqual([])
+    expect(applyEvent(state, { eventId: `reducer-${input}`, type: 'user.input', text: input, timestamp }).flight).toBeUndefined()
   })
 
   it('proposes a navigation event without applying it', () => {
