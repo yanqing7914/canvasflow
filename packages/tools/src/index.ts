@@ -1,4 +1,5 @@
 export * from './charging'
+export * from './compat'
 export * from './data'
 export * from './family'
 export * from './flight'
