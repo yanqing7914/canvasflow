@@ -16,8 +16,13 @@ export function planEffects(state: AirportPickupTaskState, event: AirportPickupE
   return []
 }
 
-function isSuccessfulPreferences(value: unknown): value is { ok: true; data: { temperatureC: number; mediaTitle?: string } } {
+/** Matches the memory.get-preferences output contract: { members: [{ rearTemperatureC?, mediaTitle? }] }. */
+function isSuccessfulPreferences(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return false
   const data = (value as { data?: unknown }).data
-  return typeof data === 'object' && data !== null && typeof (data as { temperatureC?: unknown }).temperatureC === 'number'
+  if (typeof data !== 'object' || data === null) return false
+  const members = (data as { members?: unknown }).members
+  return Array.isArray(members) && members.some(
+    (member) => typeof (member as { rearTemperatureC?: unknown } | null)?.rearTemperatureC === 'number',
+  )
 }
