@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyEvent, createInitialTask, planEffects } from './index'
+import { applyEvent, createInitialTask, planEffects, resolveConfirmation } from './index'
 
 describe('airport pickup task engine', () => {
   it('ignores duplicate events and advances through the demo phases', () => {
@@ -56,5 +56,13 @@ describe('airport pickup task engine', () => {
     expect(ignored.processedEventIds).not.toContain(event.eventId)
     const preparing = { ...ignored, phase: 'preparing' as const }
     expect(applyEvent(preparing, event).phase).toBe('driving-to-airport')
+  })
+
+  it('records message send outcomes and confirmation resolution', () => {
+    const scheduled = { ...createInitialTask(), message: { ...createInitialTask().message, status: 'scheduled' as const, pendingMessageId: 'MU5102:landing' } }
+    const sent = applyEvent(scheduled, { eventId: 'sent', type: 'message.sent', messageId: 'MU5102:landing', timestamp: '2026-07-22T20:41:00+08:00' })
+    expect(sent.message).toMatchObject({ status: 'sent', landingNoticeSent: true })
+    const completed = { ...sent, phase: 'completed' as const, pendingConfirmation: { confirmationId: 'pickup-001:save-memory', action: 'save-memory' as const } }
+    expect(resolveConfirmation(completed, 'pickup-001:save-memory').pendingConfirmation).toBeUndefined()
   })
 })

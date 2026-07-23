@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { applyEvent, createInitialTask } from '@canvasflow/agent'
+import { applyEvent, createInitialTask, resolveConfirmation } from '@canvasflow/agent'
 import { composePickupSpec } from '@canvasflow/ui'
 import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
 
@@ -43,7 +43,7 @@ export default function App() {
   }
   const handleAction = (actionId: string) => {
     if (actionId === 'save-trip-preferences') {
-      setTask((current) => ({ ...current, pendingConfirmation: undefined }))
+      setTask((current) => resolveConfirmation(current, `${current.taskId}:save-memory`))
     }
   }
 

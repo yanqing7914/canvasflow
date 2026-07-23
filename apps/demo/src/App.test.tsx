@@ -39,4 +39,9 @@ describe('demo integration', () => {
     await user.click(advance)
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
   })
+
+  it('renders and resolves the completion confirmation action', async () => {
+    const completed = composePickupSpec({ ...createInitialTask(), phase: 'completed', pendingConfirmation: { confirmationId: 'pickup-001:save-memory', action: 'save-memory' } })
+    expect(completed.actions[0]?.label).toBe('保存本次偏好')
+  })
 })

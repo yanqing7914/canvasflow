@@ -84,6 +84,8 @@ export const airportPickupEventSchema = z.discriminatedUnion('type', [
   eventBase.extend({ type: z.literal('destination.arrived'), destination: z.string() }),
   eventBase.extend({ type: z.literal('user.cancelled-task'), reason: z.string().optional() }),
   eventBase.extend({ type: z.literal('provider.timeout'), provider: z.string() }),
+  eventBase.extend({ type: z.literal('message.sent'), messageId: z.string() }),
+  eventBase.extend({ type: z.literal('message.failed'), messageId: z.string(), errorCode: z.string() }),
 ])
 
 export type AirportPickupPhase = z.infer<typeof airportPickupPhaseSchema>

@@ -56,12 +56,14 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'vehicle.entered-airport-geofence': if (next.phase === 'driving-to-airport') next.phase = 'approaching-airport'; break
     case 'vehicle.parked': if (next.phase === 'approaching-airport') next.phase = 'waiting-for-passengers'; break
     case 'user.confirmed-passengers-onboard': if (next.phase === 'waiting-for-passengers') { next.passengers.confirmedOnboard = true; next.phase = 'returning-home' } break
-    case 'destination.arrived': if (next.phase === 'returning-home') { next.phase = 'completed'; next.navigation = next.navigation ? { ...next.navigation, destination: event.destination, status: 'arrived' } : undefined } break
+    case 'destination.arrived': if (next.phase === 'returning-home') { next.phase = 'completed'; next.navigation = next.navigation ? { ...next.navigation, destination: event.destination, status: 'arrived' } : undefined; next.pendingConfirmation = { confirmationId: `${next.taskId}:save-memory`, action: 'save-memory' } } break
     case 'charging.started': if (next.phase === 'driving-to-airport' && next.charging.status === 'planned') next.charging.status = 'active'; break
     case 'charging.completed': if (next.charging.status === 'active') next.charging.status = 'completed'; break
     case 'charging.cancelled': if (next.charging.status === 'planned' || next.charging.status === 'active') next.charging = { ...next.charging, accepted: false, status: 'none' }; break
     case 'user.cancelled-task': next.phase = 'cancelled'; break
     case 'provider.timeout': handled = true; break
+    case 'message.sent': if (next.message.pendingMessageId === event.messageId) { next.message.status = 'sent'; next.message.landingNoticeSent = true; next.message.sentAt = event.timestamp; next.message.pendingMessageId = undefined } break
+    case 'message.failed': if (next.message.pendingMessageId === event.messageId) { next.message.status = 'failed'; next.message.pendingMessageId = undefined } break
     default: break
   }
   const afterFacts = taskFacts(next)
@@ -71,4 +73,9 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     next.updatedAt = event.timestamp
   }
   return airportPickupTaskStateSchema.parse(next)
+}
+
+export function resolveConfirmation(state: AirportPickupTaskState, confirmationId: string): AirportPickupTaskState {
+  if (state.pendingConfirmation?.confirmationId !== confirmationId) return state
+  return airportPickupTaskStateSchema.parse({ ...state, pendingConfirmation: undefined, taskRevision: state.taskRevision + 1 })
 }
