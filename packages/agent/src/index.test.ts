@@ -104,7 +104,7 @@ describe('airport pickup task engine', () => {
     expect(applyEvent(state, event)).toEqual(state)
   })
 
-  it('plans cabin apply from memory.get-preferences members shape', () => {
+  it('plans cabin apply from members shape and rejects media-only or flat payloads', () => {
     const state = {
       ...createInitialTask(),
       phase: 'returning-home' as const,
