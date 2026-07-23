@@ -16,7 +16,7 @@ export function getPreferences(ctx: ToolContext, input: unknown): ToolResult<Get
   }
 
   const { memberIds, scopes } = parsed.data
-  const unknownIds = memberIds.filter((memberId) => !(memberId in memberPreferences))
+  const unknownIds = memberIds.filter((memberId) => !Object.hasOwn(memberPreferences, memberId))
   if (unknownIds.length > 0) {
     return errorResult(ctx, TOOL, 'PREFERENCE_UNAVAILABLE', `无可用偏好：${unknownIds.join('、')}`, false)
   }

@@ -97,6 +97,14 @@ describe('memory.get-preferences', () => {
     const result = getPreferences(ctx, { memberIds: ['stranger'], scopes: ['cabin'] })
     expect(result.error).toMatchObject({ code: 'PREFERENCE_UNAVAILABLE', retryable: false })
   })
+
+  it('拒绝原型属性名作为 memberId，不抛异常', () => {
+    for (const memberId of ['toString', 'constructor', '__proto__']) {
+      const result = getPreferences(ctx, { memberIds: [memberId], scopes: ['cabin'] })
+      expect(result.ok, memberId).toBe(false)
+      expect(result.error, memberId).toMatchObject({ code: 'PREFERENCE_UNAVAILABLE', retryable: false })
+    }
+  })
 })
 
 describe('flight.get-status', () => {
@@ -251,6 +259,15 @@ describe('vehicle.get-status', () => {
   it('未知快照返回 VEHICLE_STATE_UNAVAILABLE', () => {
     const result = getVehicleStatus(ctx, { snapshot: 'flying' })
     expect(result.error).toMatchObject({ code: 'VEHICLE_STATE_UNAVAILABLE', retryable: false })
+  })
+
+  it('拒绝原型属性名作为 snapshot，不抛异常', () => {
+    for (const snapshot of ['toString', 'constructor', '__proto__']) {
+      expect(() => getVehicleStatus(ctx, { snapshot })).not.toThrow()
+      const result = getVehicleStatus(ctx, { snapshot })
+      expect(result.ok, snapshot).toBe(false)
+      expect(result.error, snapshot).toMatchObject({ code: 'VEHICLE_STATE_UNAVAILABLE', retryable: false })
+    }
   })
 })
 
