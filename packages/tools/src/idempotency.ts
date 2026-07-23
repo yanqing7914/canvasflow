@@ -82,9 +82,12 @@ export type SideEffectRuntime = {
 }
 
 export function createSideEffectRuntime(nowMs: () => number = () => Date.parse('2026-07-22T12:00:00+08:00')): SideEffectRuntime {
-  const preferences = Object.fromEntries(
-    Object.entries(memberPreferences).map(([memberId, record]) => [memberId, { ...record }]),
-  )
+  // Null-prototype map so `in` / accidental prototype lookups cannot treat
+  // Object.prototype keys as family members.
+  const preferences = Object.create(null) as Record<string, MemberPreferenceRecord>
+  for (const [memberId, record] of Object.entries(memberPreferences)) {
+    preferences[memberId] = { ...record }
+  }
   return {
     idempotency: new IdempotencyStore(),
     cabinEffects: new Map(),

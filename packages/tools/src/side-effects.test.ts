@@ -94,6 +94,22 @@ describe('cabin profile side effects', () => {
     expect(wrongMedia.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
   })
 
+  it('原型属性 memberId（toString/constructor）返回 POLICY_DENIED 且不抛异常', () => {
+    const registry = createProviderRegistry()
+    for (const memberId of ['toString', 'constructor', '__proto__']) {
+      expect(() => {
+        const result = registry['vehicle.apply-cabin-profile'](ctx, {
+          zone: 'rear',
+          temperatureC: 25,
+          sourceMemberIds: [memberId],
+          idempotencyKey: `pickup-001:apply-proto-${memberId}`,
+        })
+        expect(result.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
+        expect(result.ok).toBe(false)
+      }).not.toThrow()
+    }
+  })
+
   it('memory 确认更新后，cabin 按更新后的偏好授权', () => {
     const registry = createProviderRegistry()
     const proposed = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 24 } })

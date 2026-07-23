@@ -124,15 +124,11 @@ export const toolDefinitions = {
 
 export type ToolName = keyof typeof toolDefinitions
 
-export type ToolHandler = (ctx: ToolContext, input?: unknown) => ToolResult<unknown>
-
 /**
  * Provider registry: every handler takes `(ctx, input)` and returns a contract
  * `ToolResult`. Prefer this over the legacy `createToolRegistry`.
  */
-export function createProviderRegistry(
-  runtime: SideEffectRuntime = createSideEffectRuntime(),
-): Record<ToolName, ToolHandler> {
+export function createProviderRegistry(runtime: SideEffectRuntime = createSideEffectRuntime()) {
   const navigation = createNavigationSideEffects(runtime)
   const cabin = createCabinProfileTools(runtime)
   const memoryWrite = createMemoryWriteTools(runtime)
@@ -156,7 +152,7 @@ export function createProviderRegistry(
     'media.play': playMedia,
     'message.prepare': prepareMessage,
     'message.send': sendMessage,
-  }
+  } as const satisfies Record<ToolName, (ctx: ToolContext, input?: unknown) => ToolResult<unknown>>
 }
 
 /**

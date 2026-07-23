@@ -37,10 +37,10 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, PROPOSE, 'INVALID_ARGUMENT', '需要 memberId 和 changes', false)
     }
 
-    const record = runtime.preferences[parsed.data.memberId]
-    if (!record) {
+    if (!Object.hasOwn(runtime.preferences, parsed.data.memberId)) {
       return errorResult(ctx, PROPOSE, 'PREFERENCE_UNAVAILABLE', `无可用偏好：${parsed.data.memberId}`, false)
     }
+    const record = runtime.preferences[parsed.data.memberId]
 
     const changes = pickWhitelist(parsed.data.changes as Record<string, unknown>)
     if (Object.keys(changes).length === 0) {
