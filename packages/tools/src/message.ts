@@ -7,7 +7,7 @@ import {
   type MessageSendOutput,
   type ToolResult,
 } from '@canvasflow/schema'
-import { familyMembers } from './data'
+import { familyMembers, memberPreferences } from './data'
 import type { MessageSendBinding, SideEffectRuntime } from './idempotency'
 import { errorResult, FIXTURE_GENERATED_AT, okResult, type ToolContext } from './result'
 
@@ -20,6 +20,20 @@ export const FAILING_CONTACT_ID = 'contact-fail'
 /** Task-scoped pre-authorization credential for the automatic landing notice. */
 export function autoNotifyAuthorizationId(taskId: string): string {
   return `${taskId}:auto-notify`
+}
+
+/**
+ * Resolve the landing-notification recipient for a task: first passenger who
+ * has both a contactId and landingNotificationAuthorized preference.
+ */
+export function resolveAuthorizedLandingContact(memberIds: string[]): string | undefined {
+  for (const memberId of memberIds) {
+    if (!Object.hasOwn(memberPreferences, memberId)) continue
+    if (memberPreferences[memberId].landingNotificationAuthorized !== true) continue
+    const contactId = familyMembers.find((member) => member.memberId === memberId)?.contactId
+    if (contactId) return contactId
+  }
+  return undefined
 }
 
 /** Issue an opaque, one-time confirmation for an explicit send / retry. */
@@ -59,8 +73,14 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '需要 contactId、messageId、text 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<MessageSendOutput>(SEND, parsed.data.idempotencyKey, parsed.data)
-    if (cached.kind === 'hit') return cached.result
+    const cached = runtime.idempotency.get<MessageSendOutput>(ctx.taskId, SEND, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') {
+      // Ledger is task-scoped; still refuse a hit whose stored meta belongs elsewhere.
+      if (cached.result.meta.taskId !== ctx.taskId) {
+        return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '幂等结果与当前任务不匹配', false)
+      }
+      return cached.result
+    }
     if (cached.kind === 'conflict') {
       return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
     }
@@ -75,12 +95,15 @@ export function createMessageSender(runtime: SideEffectRuntime) {
     // 凭据必须与任务绑定：预授权路径还要求联系人对应成员开启了落地通知授权；
     // 显式确认路径使用 runtime 签发的一次性 opaque token，绑定到具体消息。
     const member = familyMembers.find((candidate) => candidate.contactId === parsed.data.contactId)
-    const autoNotifyGranted =
-      parsed.data.authorizationId === autoNotifyAuthorizationId(ctx.taskId) &&
+    const memberAuthorized =
       member !== undefined &&
+      Object.hasOwn(runtime.preferences, member.memberId) &&
       runtime.preferences[member.memberId]?.landingNotificationAuthorized === true
+    const autoNotifyGranted =
+      parsed.data.authorizationId === autoNotifyAuthorizationId(ctx.taskId) && memberAuthorized
     const confirmationValid =
       parsed.data.confirmationId !== undefined &&
+      (memberAuthorized || parsed.data.contactId === FAILING_CONTACT_ID) &&
       runtime.confirmations.matchesSendMessageConfirmation(parsed.data.confirmationId, binding)
     if (!autoNotifyGranted && !confirmationValid) {
       return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要任务绑定的预授权或本次确认', false)
@@ -111,7 +134,7 @@ export function createMessageSender(runtime: SideEffectRuntime) {
         sentAt: FIXTURE_GENERATED_AT,
       }),
     )
-    runtime.idempotency.set(SEND, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, SEND, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 }

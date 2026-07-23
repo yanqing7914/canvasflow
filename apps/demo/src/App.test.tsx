@@ -102,7 +102,12 @@ describe('demo integration', () => {
           passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
           flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
           navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
-          message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
+          message: {
+            autoNotifyAuthorized: true,
+            status: 'failed',
+            landingNoticeSent: false,
+            pendingContactId: 'contact-mom',
+          },
           updatedAt: '2026-07-22T20:41:00+08:00',
         }}
       />,
@@ -111,5 +116,24 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '重试发送' }))
     expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
+  })
+
+  it('does not retry landing notify when no authorized contact remains', async () => {
+    const user = userEvent.setup()
+    render(
+      <App
+        initialTask={{
+          ...createInitialTask(),
+          phase: 'driving-to-airport',
+          passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
+          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
+          updatedAt: '2026-07-22T20:41:00+08:00',
+        }}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: '重试发送' }))
+    // No authorized contact → handler no-ops; retry action remains.
+    expect(screen.getByRole('button', { name: '重试发送' })).toBeInTheDocument()
   })
 })

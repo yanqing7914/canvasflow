@@ -28,7 +28,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', '需要 zone、sourceMemberIds 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<ApplyCabinProfileOutput>(APPLY, parsed.data.idempotencyKey, parsed.data)
+    const cached = runtime.idempotency.get<ApplyCabinProfileOutput>(ctx.taskId, APPLY, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
@@ -88,7 +88,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
         reversible: true,
       }),
     )
-    runtime.idempotency.set(APPLY, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, APPLY, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 
@@ -98,7 +98,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, REVERT, 'INVALID_ARGUMENT', '需要 effectId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<RevertCabinProfileOutput>(REVERT, parsed.data.idempotencyKey, parsed.data)
+    const cached = runtime.idempotency.get<RevertCabinProfileOutput>(ctx.taskId, REVERT, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, REVERT, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
@@ -129,7 +129,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
         current: cloneProfile(runtime.cabinCurrent),
       }),
     )
-    runtime.idempotency.set(REVERT, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, REVERT, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 
