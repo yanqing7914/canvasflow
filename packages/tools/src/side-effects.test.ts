@@ -229,6 +229,41 @@ describe('idempotency store isolation', () => {
     expect(media.meta.tool).toBe('media.play')
     expect(media.data).toMatchObject({ title: '轻音乐', status: 'playing' })
   })
+
+  it('不同 taskId 复用同一 idempotencyKey 不会串用缓存结果', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const sharedKey = 'shared-across-tasks'
+    const input = { routeId: 'route-airport-001', idempotencyKey: sharedKey }
+    const first = registry['navigation.start']({ taskId: 'pickup-001' }, input)
+    const other = registry['navigation.start']({ taskId: 'pickup-002' }, input)
+    expect(first.ok).toBe(true)
+    expect(other.ok).toBe(true)
+    expect(other).not.toBe(first)
+    expect(other.data?.navigationId).toContain('pickup-002')
+    expect(first.data?.navigationId).toContain('pickup-001')
+  })
+
+  it('message.send 跨 task 复用 idempotencyKey 不会命中他任务缓存', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const payload = {
+      contactId: 'contact-mom',
+      messageId: 'shared-msg',
+      text: 'hello',
+      authorizationId: autoNotifyAuthorizationId('pickup-001'),
+      idempotencyKey: 'shared-send-key',
+    }
+    const first = registry['message.send']({ taskId: 'pickup-001' }, payload)
+    expect(first.ok).toBe(true)
+    const other = registry['message.send'](
+      { taskId: 'pickup-002' },
+      { ...payload, authorizationId: autoNotifyAuthorizationId('pickup-002') },
+    )
+    expect(other.ok).toBe(true)
+    expect(other).not.toBe(first)
+    expect(other.meta.taskId).toBe('pickup-002')
+  })
 })
 
 describe('message.send', () => {

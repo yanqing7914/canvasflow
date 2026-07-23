@@ -59,7 +59,7 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
       return errorResult(ctx, START, 'INVALID_ARGUMENT', '需要 routeId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<NavigationStartOutput>(START, parsed.data.idempotencyKey, parsed.data)
+    const cached = runtime.idempotency.get<NavigationStartOutput>(ctx.taskId, START, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, START, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
@@ -78,7 +78,7 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
         status: 'active',
       }),
     )
-    runtime.idempotency.set(START, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, START, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 
@@ -88,7 +88,7 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
       return errorResult(ctx, UPDATE, 'INVALID_ARGUMENT', '需要 routeId、destination 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<NavigationUpdateRouteOutput>(UPDATE, parsed.data.idempotencyKey, parsed.data)
+    const cached = runtime.idempotency.get<NavigationUpdateRouteOutput>(ctx.taskId, UPDATE, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, UPDATE, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
@@ -123,7 +123,7 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
         status: 'active',
       }),
     )
-    runtime.idempotency.set(UPDATE, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, UPDATE, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 
