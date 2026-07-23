@@ -18,8 +18,11 @@ export function createMediaPlayer(runtime: SideEffectRuntime) {
       return errorResult(ctx, TOOL, 'INVALID_ARGUMENT', '需要 mediaTitle 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<MediaPlayOutput>(TOOL, parsed.data.idempotencyKey)
-    if (cached) return cached
+    const cached = runtime.idempotency.get<MediaPlayOutput>(TOOL, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, TOOL, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
 
     if (!AVAILABLE_MEDIA_TITLES.has(parsed.data.mediaTitle)) {
       return errorResult(ctx, TOOL, 'MEDIA_UNAVAILABLE', `媒体不可用：${parsed.data.mediaTitle}`, false)
@@ -49,7 +52,7 @@ export function createMediaPlayer(runtime: SideEffectRuntime) {
         reversible: true,
       }),
     )
-    runtime.idempotency.set(TOOL, parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(TOOL, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 }

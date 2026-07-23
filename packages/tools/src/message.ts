@@ -22,9 +22,27 @@ export function autoNotifyAuthorizationId(taskId: string): string {
   return `${taskId}:auto-notify`
 }
 
-/** Task-scoped user-confirmation credential for an explicit send / retry. */
-export function sendMessageConfirmationId(taskId: string): string {
-  return `${taskId}:send-message`
+/** Deterministic FNV-1a hash so the confirmation credential covers the exact text. */
+function textDigest(text: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193) >>> 0
+  }
+  return hash.toString(16).padStart(8, '0')
+}
+
+/**
+ * User-confirmation credential for an explicit send / retry. It is bound to
+ * the task and to the exact message the user saw in the preview (contact,
+ * message identity and text), so one confirmation cannot authorize sending a
+ * different message or contacting someone else.
+ */
+export function sendMessageConfirmationId(
+  taskId: string,
+  message: { contactId: string; messageId: string; text: string },
+): string {
+  return `${taskId}:send-message:${message.contactId}:${message.messageId}:${textDigest(message.text)}`
 }
 
 export function prepareMessage(ctx: ToolContext, input: unknown): ToolResult<MessagePrepareOutput> {
@@ -59,16 +77,26 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '需要 contactId、messageId、text 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<MessageSendOutput>(SEND, parsed.data.idempotencyKey)
-    if (cached) return cached
+    const cached = runtime.idempotency.get<MessageSendOutput>(SEND, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
 
-    // 凭据必须与任务绑定：预授权路径还要求联系人对应成员开启了落地通知授权。
+    // 凭据必须与任务绑定：预授权路径还要求联系人对应成员开启了落地通知授权；
+    // 显式确认路径的凭据绑定到具体联系人、消息与文案，不能复用于其他消息。
     const member = familyMembers.find((candidate) => candidate.contactId === parsed.data.contactId)
     const autoNotifyGranted =
       parsed.data.authorizationId === autoNotifyAuthorizationId(ctx.taskId) &&
       member !== undefined &&
       runtime.preferences[member.memberId]?.landingNotificationAuthorized === true
-    const userConfirmed = parsed.data.confirmationId === sendMessageConfirmationId(ctx.taskId)
+    const userConfirmed =
+      parsed.data.confirmationId ===
+      sendMessageConfirmationId(ctx.taskId, {
+        contactId: parsed.data.contactId,
+        messageId: parsed.data.messageId,
+        text: parsed.data.text,
+      })
     if (!autoNotifyGranted && !userConfirmed) {
       return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要任务绑定的预授权或本次确认', false)
     }
@@ -93,7 +121,7 @@ export function createMessageSender(runtime: SideEffectRuntime) {
         sentAt: FIXTURE_GENERATED_AT,
       }),
     )
-    runtime.idempotency.set(SEND, parsed.data.idempotencyKey, result)
+    runtime.idempotency.set(SEND, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 }

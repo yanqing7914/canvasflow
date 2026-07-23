@@ -1,21 +1,49 @@
 import type { ToolResult } from '@canvasflow/schema'
 import { memberPreferences, type MemberPreferenceRecord } from './data'
 
+/** Deterministic fingerprint of a tool input: JSON with recursively sorted keys. */
+export function canonicalFingerprint(value: unknown): string {
+  return JSON.stringify(sortValue(value))
+}
+
+function sortValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortValue)
+  if (value !== null && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return Object.fromEntries(Object.keys(record).sort().map((key) => [key, sortValue(record[key])]))
+  }
+  return value
+}
+
+export type IdempotencyLookup<T> =
+  | { kind: 'miss' }
+  | { kind: 'hit'; result: ToolResult<T> }
+  | { kind: 'conflict' }
+
 /**
  * In-memory idempotency ledger for fixture/mock side effects.
- * Duplicate keys return the original ToolResult and do not re-run the effect.
+ * Duplicate keys with the same request fingerprint return the original
+ * ToolResult and do not re-run the effect; the same key with a different
+ * request payload is a caller bug and is reported as a conflict instead of
+ * silently replaying a success that belongs to another request.
  * Entries are namespaced per tool so reusing one idempotencyKey across
  * different tools can never return a cached result of the wrong type.
  */
 export class IdempotencyStore {
-  private readonly results = new Map<string, ToolResult<unknown>>()
+  private readonly results = new Map<string, { fingerprint: string; result: ToolResult<unknown> }>()
 
-  get<T>(tool: string, idempotencyKey: string): ToolResult<T> | undefined {
-    return this.results.get(`${tool}\u0000${idempotencyKey}`) as ToolResult<T> | undefined
+  get<T>(tool: string, idempotencyKey: string, input: unknown): IdempotencyLookup<T> {
+    const entry = this.results.get(`${tool}\u0000${idempotencyKey}`)
+    if (!entry) return { kind: 'miss' }
+    if (entry.fingerprint !== canonicalFingerprint(input)) return { kind: 'conflict' }
+    return { kind: 'hit', result: entry.result as ToolResult<T> }
   }
 
-  set<T>(tool: string, idempotencyKey: string, result: ToolResult<T>): void {
-    this.results.set(`${tool}\u0000${idempotencyKey}`, result as ToolResult<unknown>)
+  set<T>(tool: string, idempotencyKey: string, input: unknown, result: ToolResult<T>): void {
+    this.results.set(`${tool}\u0000${idempotencyKey}`, {
+      fingerprint: canonicalFingerprint(input),
+      result: result as ToolResult<unknown>,
+    })
   }
 }
 
