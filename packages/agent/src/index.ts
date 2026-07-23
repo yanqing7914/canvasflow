@@ -41,7 +41,7 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
       break
     case 'flight.updated':
       next.flight = event.flight
-      if (event.flight.status === 'landed' && next.message.autoNotifyAuthorized && !next.message.landingNoticeSent && next.message.status === 'idle') {
+      if (next.phase === 'driving-to-airport' && event.flight.status === 'landed' && next.message.autoNotifyAuthorized && !next.message.landingNoticeSent && next.message.status === 'idle') {
         next.message.status = 'scheduled'
         next.message.pendingMessageId = `${event.flight.flightNumber}:landing`
         next.message.idempotencyKey = `${next.taskId}:${event.flight.flightNumber}:landing`

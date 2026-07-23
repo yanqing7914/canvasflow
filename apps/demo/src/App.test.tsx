@@ -41,7 +41,10 @@ describe('demo integration', () => {
   })
 
   it('renders and resolves the completion confirmation action', async () => {
-    const completed = composePickupSpec({ ...createInitialTask(), phase: 'completed', pendingConfirmation: { confirmationId: 'pickup-001:save-memory', action: 'save-memory' } })
-    expect(completed.actions[0]?.label).toBe('保存本次偏好')
+    const user = userEvent.setup()
+    render(<App initialTask={{ ...createInitialTask(), phase: 'completed', pendingConfirmation: { confirmationId: 'pickup-001:save-memory', action: 'save-memory' } }} />)
+    const save = screen.getByRole('button', { name: '保存本次偏好' })
+    await user.click(save)
+    expect(screen.queryByRole('button', { name: '保存本次偏好' })).not.toBeInTheDocument()
   })
 })

@@ -34,8 +34,8 @@ function componentTitle(component: ComponentSpec): string {
   return component.type === 'pickup-overview' ? component.props.phaseLabel : '任务进度'
 }
 
-export default function App() {
-  const [task, setTask] = useState<AirportPickupTaskState>(createDemoTask)
+export default function App({ initialTask = createDemoTask() }: { initialTask?: AirportPickupTaskState }) {
+  const [task, setTask] = useState<AirportPickupTaskState>(initialTask)
   const spec = useMemo(() => composePickupSpec(task), [task])
   const advance = () => {
     const event = timeline.find((candidate) => !task.processedEventIds.includes(candidate.eventId))

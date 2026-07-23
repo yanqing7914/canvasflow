@@ -13,6 +13,8 @@ export function planEffects(state: AirportPickupTaskState, event: AirportPickupE
   return []
 }
 
-function isSuccessfulPreferences(value: unknown): value is { ok: true; temperatureC: number; mediaTitle?: string } {
-  return typeof value === 'object' && value !== null && (value as { ok?: unknown }).ok === true && typeof (value as { temperatureC?: unknown }).temperatureC === 'number'
+function isSuccessfulPreferences(value: unknown): value is { ok: true; data: { temperatureC: number; mediaTitle?: string } } {
+  if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return false
+  const data = (value as { data?: unknown }).data
+  return typeof data === 'object' && data !== null && typeof (data as { temperatureC?: unknown }).temperatureC === 'number'
 }

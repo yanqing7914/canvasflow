@@ -43,7 +43,7 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     requiresConfirm = task.pendingConfirmation?.action === 'save-memory'
     actions = requiresConfirm ? [{ id: 'save-trip-preferences', label: '保存本次偏好', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } }] : []
   }
-  else if (successfulPreferences(context.toolResults?.['memory.get-preferences'])) { const preferences = context.toolResults!['memory.get-preferences'] as { temperatureC: number; mediaTitle?: string }; title = '已应用家庭偏好'; density = 'compact'; components = [{ id: 'cabin-profile', type: 'cabin-profile', props: { zone: 'rear', temperatureC: preferences.temperatureC, mediaTitle: preferences.mediaTitle, appliedFromMemory: true, reversible: true } }] }
+  else if (successfulPreferences(context.toolResults?.['memory.get-preferences'])) { const preferences = (context.toolResults!['memory.get-preferences'] as { data: { temperatureC: number; mediaTitle?: string } }).data; title = '已应用家庭偏好'; density = 'compact'; components = [{ id: 'cabin-profile', type: 'cabin-profile', props: { zone: 'rear', temperatureC: preferences.temperatureC, mediaTitle: preferences.mediaTitle, appliedFromMemory: true, reversible: true } }] }
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
   else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
   else if (task.charging.status === 'completed') { density = 'compact'; components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: false, reason: '补能完成，已恢复机场路线', currentBatteryPercent: 78, estimatedFinalBatteryPercent: 42 } }] }
@@ -58,8 +58,10 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   })
 }
 
-function successfulPreferences(value: unknown): value is { ok: true; temperatureC: number; mediaTitle?: string } {
-  return typeof value === 'object' && value !== null && (value as { ok?: unknown }).ok === true && typeof (value as { temperatureC?: unknown }).temperatureC === 'number'
+function successfulPreferences(value: unknown): value is { ok: true; data: { temperatureC: number; mediaTitle?: string } } {
+  if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return false
+  const data = (value as { data?: unknown }).data
+  return typeof data === 'object' && data !== null && typeof (data as { temperatureC?: unknown }).temperatureC === 'number'
 }
 
 export function composeFallbackSpec(task: AirportPickupTaskState, title: string, message?: string, level: 'warning' | 'error' = 'warning'): UISpec {

@@ -65,4 +65,11 @@ describe('airport pickup task engine', () => {
     const completed = { ...sent, phase: 'completed' as const, pendingConfirmation: { confirmationId: 'pickup-001:save-memory', action: 'save-memory' as const } }
     expect(resolveConfirmation(completed, 'pickup-001:save-memory').pendingConfirmation).toBeUndefined()
   })
+
+  it('does not schedule landing notifications before driving', () => {
+    const event = { eventId: 'early-landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:00:00+08:00' }
+    const next = applyEvent(createInitialTask(), event)
+    expect(next.message.status).toBe('idle')
+    expect(planEffects(createInitialTask(), event, {})).toEqual([])
+  })
 })
