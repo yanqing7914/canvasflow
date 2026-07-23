@@ -135,5 +135,12 @@ describe('airport pickup task engine', () => {
     expect(planEffects(state, event, {
       'memory.get-preferences': { ok: true, data: { temperatureC: 25 }, error: null },
     })).toEqual([])
+    expect(planEffects(state, event, {
+      'memory.get-preferences': {
+        ok: true,
+        data: { members: [{ memberId: 'doubao', mediaTitle: '豆豆故事' }] },
+        error: null,
+      },
+    })).toEqual([])
   })
 })
