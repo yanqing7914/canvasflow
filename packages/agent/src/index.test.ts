@@ -72,4 +72,11 @@ describe('airport pickup task engine', () => {
     expect(next.message.status).toBe('idle')
     expect(planEffects(createInitialTask(), event, {})).toEqual([])
   })
+
+  it('rejects stale provider updates delivered after newer state', () => {
+    const driving = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:30:00+08:00' }
+    const landed = applyEvent(driving, { eventId: 'landed-new', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' })
+    const stale = applyEvent(landed, { eventId: 'in-air-old', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:35:00+08:00' })
+    expect(stale).toEqual(landed)
+  })
 })

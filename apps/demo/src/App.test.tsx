@@ -47,4 +47,11 @@ describe('demo integration', () => {
     await user.click(save)
     expect(screen.queryByRole('button', { name: '保存本次偏好' })).not.toBeInTheDocument()
   })
+
+  it('skips timeline events that are invalid for an injected phase', async () => {
+    const user = userEvent.setup()
+    render(<App initialTask={{ ...createInitialTask(), phase: 'driving-to-airport', updatedAt: '2026-07-22T20:30:00+08:00' }} />)
+    await user.click(screen.getByRole('button', { name: '推进下一事件' }))
+    expect(screen.getByText(/taskRevision 1/)).toBeInTheDocument()
+  })
 })

@@ -28,6 +28,7 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
   const event = airportPickupEventSchema.parse(input)
   if (state.processedEventIds.includes(event.eventId)) return state
   if (state.phase === 'completed' || state.phase === 'cancelled') return state
+  if (Date.parse(event.timestamp) < Date.parse(state.updatedAt)) return state
   const next = structuredClone(state)
   const beforeFacts = taskFacts(state)
   let handled = false

@@ -38,7 +38,11 @@ export default function App({ initialTask = createDemoTask() }: { initialTask?: 
   const [task, setTask] = useState<AirportPickupTaskState>(initialTask)
   const spec = useMemo(() => composePickupSpec(task), [task])
   const advance = () => {
-    const event = timeline.find((candidate) => !task.processedEventIds.includes(candidate.eventId))
+    const event = timeline.find((candidate) => {
+      if (task.processedEventIds.includes(candidate.eventId)) return false
+      const candidateState = applyEvent(task, candidate)
+      return candidateState.processedEventIds.includes(candidate.eventId)
+    })
     if (event) setTask((current) => applyEvent(current, event))
   }
   const handleAction = (actionId: string) => {
