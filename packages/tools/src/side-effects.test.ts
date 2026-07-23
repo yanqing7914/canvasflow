@@ -415,6 +415,16 @@ describe('memory write side effects', () => {
     expect(readBack.data?.members).toEqual([{ memberId: 'mom', rearTemperatureC: 26 }])
   })
 
+  it('拒绝包含未知字段的 preference changes（strict schema）', () => {
+    const registry = createProviderRegistry()
+    const result = registry['memory.propose-update'](ctx, {
+      memberId: 'mom',
+      changes: { rearTemperatureC: 26, secretPhone: '13800000000' },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.error?.code).toBe('INVALID_ARGUMENT')
+  })
+
   it('确认凭据必须与提案签发的一致，且成功后不可重复消费', () => {
     const registry = createProviderRegistry()
     const proposed = registry['memory.propose-update'](ctx, {

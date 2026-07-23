@@ -35,6 +35,7 @@ function componentSummary(component: ComponentSpec): string {
     case 'cabin-profile': {
       const parts: string[] = []
       if (component.props.temperatureC !== undefined) parts.push(`${component.props.temperatureC}°C`)
+      if (component.props.fanLevel !== undefined) parts.push(`风速 ${component.props.fanLevel}`)
       if (component.props.mediaTitle) parts.push(component.props.mediaTitle)
       return parts.join(' · ')
     }

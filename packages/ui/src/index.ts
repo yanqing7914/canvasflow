@@ -44,18 +44,29 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     actions = requiresConfirm ? [{ id: 'save-trip-preferences', label: '保存本次偏好', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } }] : []
   }
   else if (successfulPreferences(context.toolResults?.['memory.get-preferences'])) {
-    const members = (context.toolResults!['memory.get-preferences'] as { data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string }> } }).data.members
+    const members = (context.toolResults!['memory.get-preferences'] as {
+      data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string; fanLevel?: number }> }
+    }).data.members
     const temperatureC = members.find((member) => typeof member.rearTemperatureC === 'number')?.rearTemperatureC
     const mediaTitle = members.find((member) => typeof member.mediaTitle === 'string')?.mediaTitle
+    const fanLevel = members.find((member) => typeof member.fanLevel === 'number')?.fanLevel
     title = '已应用家庭偏好'
     density = 'compact'
-    const cabinProps: { zone: 'rear'; appliedFromMemory: true; reversible: true; temperatureC?: number; mediaTitle?: string } = {
+    const cabinProps: {
+      zone: 'rear'
+      appliedFromMemory: true
+      reversible: true
+      temperatureC?: number
+      mediaTitle?: string
+      fanLevel?: number
+    } = {
       zone: 'rear',
       appliedFromMemory: true,
       reversible: true,
     }
     if (temperatureC !== undefined) cabinProps.temperatureC = temperatureC
     if (mediaTitle !== undefined) cabinProps.mediaTitle = mediaTitle
+    if (fanLevel !== undefined) cabinProps.fanLevel = fanLevel
     components = [{ id: 'cabin-profile', type: 'cabin-profile', props: cabinProps }]
   }
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
@@ -80,12 +91,9 @@ function successfulPreferences(value: unknown): boolean {
   const members = (data as { members?: unknown }).members
   return Array.isArray(members) && members.some((member) => {
     if (typeof member !== 'object' || member === null) return false
-    const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown; fanLevel?: unknown }
-    return (
-      typeof record.rearTemperatureC === 'number' ||
-      typeof record.mediaTitle === 'string' ||
-      typeof record.fanLevel === 'number'
-    )
+    const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown }
+    // memory.get-preferences does not emit fanLevel; only temperature/media count.
+    return typeof record.rearTemperatureC === 'number' || typeof record.mediaTitle === 'string'
   })
 }
 
