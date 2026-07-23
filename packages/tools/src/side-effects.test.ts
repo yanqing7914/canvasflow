@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createSideEffectRuntime } from './idempotency'
-import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, sendMessageConfirmationId } from './message'
+import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, issueSendMessageConfirmation } from './message'
 import { createProviderRegistry } from './registry'
 import type { ToolContext } from './result'
 
@@ -299,38 +299,56 @@ describe('message.send', () => {
     expect(result.error?.code).toBe('AUTHORIZATION_REQUIRED')
   })
 
-  it('失败联系人返回 SEND_FAILED 且不写入幂等账本', () => {
-    const registry = createProviderRegistry()
+  it('失败联系人返回 SEND_FAILED 且不写入幂等账本、不消耗确认', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
     const message = { contactId: FAILING_CONTACT_ID, messageId: 'msg-fail', text: 'hello' }
+    const confirmationId = issueSendMessageConfirmation(runtime, { taskId: 'pickup-001', ...message })
     const input = {
       ...message,
-      confirmationId: sendMessageConfirmationId('pickup-001', message),
+      confirmationId,
       idempotencyKey: 'pickup-001:msg-fail',
     }
     expect(registry['message.send'](ctx, input).error?.code).toBe('SEND_FAILED')
     expect(registry['message.send'](ctx, input).error?.code).toBe('SEND_FAILED')
   })
 
-  it('显式确认凭据绑定到具体消息，换联系人或文案后失效', () => {
-    const registry = createProviderRegistry()
+  it('opaque 确认：签发→成功发送→消费；伪造/改 payload/重复消费均失败', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
     const message = { contactId: 'contact-mom', messageId: 'msg-confirm-1', text: '我已到达机场' }
-    const confirmationId = sendMessageConfirmationId('pickup-001', message)
+    const confirmationId = issueSendMessageConfirmation(runtime, { taskId: 'pickup-001', ...message })
+    expect(confirmationId.startsWith('cnf_')).toBe(true)
+    // 不可由调用方从字段确定性算出
+    expect(confirmationId).not.toContain(message.messageId)
+    expect(confirmationId).not.toContain(message.contactId)
 
-    const otherText = registry['message.send'](ctx, {
-      ...message,
-      text: '换一段完全不同的文案',
-      confirmationId,
-      idempotencyKey: 'pickup-001:msg-confirm-other-text',
-    })
-    expect(otherText.error?.code).toBe('AUTHORIZATION_REQUIRED')
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        text: '换一段完全不同的文案',
+        confirmationId,
+        idempotencyKey: 'pickup-001:msg-confirm-other-text',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
 
-    const otherMessageId = registry['message.send'](ctx, {
-      ...message,
-      messageId: 'msg-confirm-2',
-      confirmationId,
-      idempotencyKey: 'pickup-001:msg-confirm-other-id',
-    })
-    expect(otherMessageId.error?.code).toBe('AUTHORIZATION_REQUIRED')
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId: 'cnf_forged_token',
+        idempotencyKey: 'pickup-001:msg-confirm-forged',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+
+    const otherRuntime = createSideEffectRuntime()
+    const otherTaskToken = issueSendMessageConfirmation(otherRuntime, { taskId: 'other-task', ...message })
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId: otherTaskToken,
+        idempotencyKey: 'pickup-001:msg-confirm-cross-task',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
 
     const bound = registry['message.send'](ctx, {
       ...message,
@@ -338,6 +356,15 @@ describe('message.send', () => {
       idempotencyKey: 'pickup-001:msg-confirm-bound',
     })
     expect(bound.ok).toBe(true)
+
+    // 成功后 token 已消费，不能再授权另一次发送
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId,
+        idempotencyKey: 'pickup-001:msg-confirm-replay',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
   })
 
   it('同一 idempotencyKey 换参数不能重放缓存结果', () => {
@@ -388,18 +415,38 @@ describe('memory write side effects', () => {
     expect(readBack.data?.members).toEqual([{ memberId: 'mom', rearTemperatureC: 26 }])
   })
 
-  it('确认凭据必须与提案签发的一致', () => {
+  it('确认凭据必须与提案签发的一致，且成功后不可重复消费', () => {
     const registry = createProviderRegistry()
     const proposed = registry['memory.propose-update'](ctx, {
       memberId: 'mom',
       changes: { rearTemperatureC: 27 },
     })
+    expect(proposed.data!.confirmationId.startsWith('cnf_')).toBe(true)
+    expect(proposed.data!.confirmationId).not.toBe(`${proposed.data!.proposalId}:confirm`)
+
     const wrong = registry['memory.confirm-update'](ctx, {
       proposalId: proposed.data!.proposalId,
       confirmationId: 'confirm-anything',
       idempotencyKey: 'pickup-001:confirm-wrong-token',
     })
     expect(wrong.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', retryable: false })
+
+    const first = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-once',
+    })
+    expect(first.ok).toBe(true)
+
+    // 不同幂等键再次出示同一 token：token 已消费，不能再授权
+    const replay = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-replay-token',
+    })
+    // 提案已 confirmed，同 confirmationId 匹配时允许返回已应用结果（不二次写入）
+    expect(replay.ok).toBe(true)
+    expect(replay.data?.applied).toEqual({ rearTemperatureC: 27 })
   })
 
   it('相同变更幂等返回同一提案，不同变更签发新版本并使旧提案失效', () => {
