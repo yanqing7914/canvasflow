@@ -1,33 +1,25 @@
 # CanvasFlow
 
-CanvasFlow is a generative UI prototype for the Auto-Link company competition.
+CanvasFlow is an agent-driven generative UI workbench for turning a user goal into a reviewable, executable interface. The repository is a small npm workspace monorepo initialized around the airport pickup POC.
 
-The repository is set up for a three-person, agent-assisted workflow:
+## Repository layout
 
-- Normal implementation pull requests target `dev`; the owner promotes `dev` to `main` for a release.
-- CI runs linting, type checking, tests, and production builds.
-- `CODEOWNERS` requests review from the repository owner by default.
-- PRs include an agent / Codex review checklist.
-- Same-repository PRs can trigger automated Codex review when repository secrets are configured.
+- `packages/schema`: the only cross-package contract for TaskState, events, tools, and UISpec.
+- `packages/agent`: deterministic task engine with event idempotency and phase transitions.
+- `packages/tools`: fixture Provider registry and validated tool results.
+- `packages/ui`: deterministic UISpec Composer and schema-safe UI projection.
+- `apps/demo`: 1920 x 720-oriented fixture event console for stepping through the same task card.
+- `fixtures/airport-pickup`: twelve self-contained scenario contracts for Agent, tools, and UI tests.
 
-## Getting Started
+## Development
 
 ```bash
 npm install
 npm run dev
-```
-
-## Quality Gate
-
-Run these commands before requesting review:
-
-```bash
 npm run lint
 npm run typecheck
 npm test
 npm run build
 ```
 
-## Collaboration
-
-The upstream repository stays private. Teammates keep their normal `Write` access, push short-lived branches to the shared repository, and open PRs into `dev`. The owner reviews and merges those PRs, then promotes `dev` to `main`. GitHub Free cannot enforce branch protection on a private repository, so direct pushes to `dev` and `main` are prohibited by team convention and checked by CI where possible.
+The demo starts in Fixture mode. It intentionally has no model key, vehicle credential, or live provider dependency. Future live integrations must keep the same Schema and Provider contracts.

@@ -1,0 +1,18 @@
+:root { color: #eef5ef; background: #07110e; font-family: "Avenir Next", "Gill Sans", sans-serif; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; min-width: 320px; min-height: 100vh; }
+button { border: 0; border-radius: 999px; background: #f5b83d; color: #15130d; cursor: pointer; font: inherit; font-weight: 800; padding: 0.9rem 1.25rem; }
+button:disabled { cursor: default; opacity: 0.45; }
+.demo-shell { min-height: 100vh; padding: clamp(1.5rem, 4vw, 4rem); background: radial-gradient(circle at 12% 8%, #214d3c 0, transparent 30%), linear-gradient(135deg, #07110e, #0e201a 65%, #15180d); }
+header { max-width: 900px; }
+.eyebrow, .label, .tag { color: #f5b83d; font-size: 0.72rem; font-weight: 900; letter-spacing: 0.14em; text-transform: uppercase; }
+h1 { font-family: Georgia, serif; font-size: clamp(2.8rem, 7vw, 6rem); line-height: 0.92; margin: 0.5rem 0 1rem; }
+header p { color: #b8c8bf; }
+.console { align-items: center; background: rgba(238,245,239,0.08); border: 1px solid rgba(238,245,239,0.14); display: flex; gap: 2rem; justify-content: space-between; margin: 3rem 0 1rem; padding: 1.2rem; }
+.console div { display: grid; gap: 0.25rem; }
+.console small { color: #8fa399; }
+.cards { display: grid; gap: 1rem; grid-template-columns: 1.3fr 0.7fr; }
+.cards article { background: #eef5ef; color: #102019; min-height: 240px; padding: 1.5rem; }
+.cards h2 { font-family: Georgia, serif; font-size: 2rem; }
+.cards p { color: #42554b; line-height: 1.7; }
+@media (max-width: 720px) { .console { align-items: stretch; flex-direction: column; } .cards { grid-template-columns: 1fr; } }

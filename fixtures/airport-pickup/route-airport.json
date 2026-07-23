@@ -1,0 +1,11 @@
+{
+  "id": "route-airport",
+  "title": "规划机场路线",
+  "mode": "fixture",
+  "inputEvent": { "eventId": "event-route-airport", "type": "navigation.started", "routeId": "route-airport-001", "timestamp": "2026-07-22T20:05:00+08:00" },
+  "initialTaskState": { "taskId": "pickup-001", "surfaceId": "airport-pickup-main", "taskRevision": 1, "uiRevision": 1, "phase": "preparing", "passengers": { "memberIds": ["mom", "doubao"], "names": ["妈妈", "豆豆"], "confirmedOnboard": false }, "charging": { "recommended": true, "accepted": false, "status": "planned" }, "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false }, "processedEventIds": [], "updatedAt": "2026-07-22T20:04:00+08:00" },
+  "toolResults": { "navigation.plan-route": { "ok": true, "routeId": "route-airport-001", "distanceKm": 32 } },
+  "expectedTaskState": { "taskId": "pickup-001", "surfaceId": "airport-pickup-main", "taskRevision": 2, "uiRevision": 1, "phase": "driving-to-airport", "passengers": { "memberIds": ["mom", "doubao"], "names": ["妈妈", "豆豆"], "confirmedOnboard": false }, "navigation": { "routeId": "route-airport-001", "destination": "虹桥机场 T2", "eta": "2026-07-22T20:25:00+08:00", "status": "active" }, "charging": { "recommended": true, "accepted": false, "status": "planned" }, "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false }, "processedEventIds": ["event-route-airport"], "updatedAt": "2026-07-22T20:05:00+08:00" },
+  "expectedUISpec": { "version": "1.0", "taskId": "pickup-001", "surfaceId": "airport-pickup-main", "taskRevision": 2, "uiRevision": 2, "phase": "driving-to-airport", "title": "去虹桥机场接妈妈和豆豆", "presentation": { "mode": "replace", "density": "compact", "theme": "dark", "priority": "normal" }, "layout": { "type": "stack", "gap": "md", "slots": { "main": ["navigation-summary"] } }, "components": [{ "id": "navigation-summary", "type": "navigation-summary", "props": { "routeId": "route-airport-001", "destination": "虹桥机场 T2", "eta": "2026-07-22T20:25:00+08:00", "distanceKm": 32, "estimatedBatteryAtArrival": 27 } }], "actions": [], "meta": { "generatedBy": "composer", "sourceTaskRevision": 2, "requiresConfirm": false, "generatedAt": "2026-07-22T20:05:00+08:00", "traceId": "trace-route-airport" } },
+  "expectedEffects": [{ "type": "navigation.start", "status": "succeeded", "tool": "navigation.start" }]
+}
