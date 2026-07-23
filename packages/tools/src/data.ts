@@ -57,15 +57,53 @@ export const flights: Record<string, FlightRecord> = {
   },
 }
 
+/**
+ * Fixture routes keyed by destination, optional via waypoints, and preference flags.
+ * Requests that do not match a key must fail explicitly — never silently ignore constraints.
+ */
+export type RouteFixtureKey = {
+  destinationId: string
+  viaIds: string[]
+  avoidHighway: boolean
+  avoidTolls: boolean
+}
+
+export function routeFixtureKey(key: RouteFixtureKey): string {
+  const via = key.viaIds.slice().sort().join(',') || '-'
+  return `${key.destinationId}|via=${via}|hw=${key.avoidHighway ? 1 : 0}|toll=${key.avoidTolls ? 1 : 0}`
+}
+
 export const routes: Record<string, RoutePlanOutput> = {
-  'destination-hongqiao-t2': {
+  [routeFixtureKey({
+    destinationId: 'destination-hongqiao-t2',
+    viaIds: [],
+    avoidHighway: false,
+    avoidTolls: false,
+  })]: {
     routeId: 'route-airport-001',
     distanceKm: 32,
     durationMinutes: 20,
     arrivalTime: '2026-07-22T20:25:00+08:00',
     estimatedBatteryAtArrival: 27,
   },
-  'destination-home': {
+  [routeFixtureKey({
+    destinationId: 'destination-hongqiao-t2',
+    viaIds: ['station-hongqiao-01'],
+    avoidHighway: false,
+    avoidTolls: false,
+  })]: {
+    routeId: 'route-airport-via-charge-001',
+    distanceKm: 38,
+    durationMinutes: 32,
+    arrivalTime: '2026-07-22T20:37:00+08:00',
+    estimatedBatteryAtArrival: 55,
+  },
+  [routeFixtureKey({
+    destinationId: 'destination-home',
+    viaIds: [],
+    avoidHighway: false,
+    avoidTolls: false,
+  })]: {
     routeId: 'route-home-001',
     distanceKm: 32,
     durationMinutes: 40,

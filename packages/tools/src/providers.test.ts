@@ -126,6 +126,9 @@ describe('flight.get-status', () => {
 })
 
 describe('navigation.plan-route', () => {
+  const origin = { latitude: 31.23, longitude: 121.47 }
+  const airport = { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' }
+
   it('机场路线与 route-airport Fixture 一致', () => {
     const result = planRoute(ctx, canonicalInputs['navigation.plan-route'])
     expect(result.data).toEqual({
@@ -137,12 +140,44 @@ describe('navigation.plan-route', () => {
     })
   })
 
+  it('支持途经已知充电站的机场路线', () => {
+    const result = planRoute(ctx, {
+      origin,
+      destination: airport,
+      via: [{ id: 'station-hongqiao-01', name: '虹桥补能站' }],
+    })
+    expect(result.ok).toBe(true)
+    expect(result.data?.routeId).toBe('route-airport-via-charge-001')
+  })
+
   it('未知目的地返回 ROUTE_NOT_FOUND', () => {
     const result = planRoute(ctx, {
       origin: { latitude: 0, longitude: 0 },
       destination: { id: 'destination-mars', name: '火星' },
     })
     expect(result.error).toMatchObject({ code: 'ROUTE_NOT_FOUND', retryable: false })
+  })
+
+  it('不支持的避让约束显式失败，不静默返回默认路线', () => {
+    const result = planRoute(ctx, {
+      origin,
+      destination: airport,
+      preferences: { avoidHighway: true },
+    })
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatchObject({ code: 'ROUTE_NOT_FOUND', retryable: false })
+    expect(result.error?.message).toContain('avoidHighway')
+  })
+
+  it('未知 via 点显式失败，不静默忽略', () => {
+    const result = planRoute(ctx, {
+      origin,
+      destination: airport,
+      via: [{ id: 'station-unknown', name: '未知站' }],
+    })
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatchObject({ code: 'ROUTE_NOT_FOUND', retryable: false })
+    expect(result.error?.message).toContain('station-unknown')
   })
 })
 
