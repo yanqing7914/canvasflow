@@ -34,8 +34,15 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   let title = task.passengers.names.length > 0 ? `去${airport}接${task.passengers.names.join('和')}` : '机场接人任务'
   let density: UISpec['presentation']['density'] = 'full'
   let priority: UISpec['presentation']['priority'] = 'normal'
+  let requiresConfirm = false
+  let actions: UISpec['actions'] = []
   if (task.phase === 'collecting-information') components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '请补充航班号' } }]
-  else if (task.phase === 'completed') { title = '接机任务已完成'; components = [components[1]] }
+  else if (task.phase === 'completed') {
+    title = '接机任务已完成'
+    components = [components[1]]
+    requiresConfirm = true
+    actions = [{ id: 'save-trip-preferences', label: '保存本次偏好', style: 'primary', event: { type: 'confirmation', confirmationId: `${task.taskId}:save-memory`, decision: 'accept' } }]
+  }
   else if ('memory.get-preferences' in (context.toolResults ?? {})) { title = '已应用家庭偏好'; density = 'compact'; components = [{ id: 'cabin-profile', type: 'cabin-profile', props: { zone: 'rear', temperatureC: 25, mediaTitle: '豆豆故事', appliedFromMemory: true, reversible: true } }] }
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
   else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
@@ -46,8 +53,8 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,
     phase: task.phase, title, presentation: { mode: 'replace', density, theme: 'dark', priority },
-    layout: { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } }, components, actions: [],
-    meta: { generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm: false, generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${nextUiRevision}` },
+    layout: { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } }, components, actions,
+    meta: { generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm, generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${nextUiRevision}` },
   })
 }
 

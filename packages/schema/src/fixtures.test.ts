@@ -29,6 +29,8 @@ describe('airport pickup fixtures', () => {
         title: parsed.data.expectedUISpec.title,
         presentation: parsed.data.expectedUISpec.presentation,
         components: parsed.data.expectedUISpec.components,
+        actions: parsed.data.expectedUISpec.actions,
+        meta: { requiresConfirm: parsed.data.expectedUISpec.meta.requiresConfirm },
       })
       if (file === 'provider-timeout.json') {
         expect(composeFallbackSpec(afterEvent, '航班数据暂时不可用', '正在使用最近缓存，可稍后重试。'), file)
