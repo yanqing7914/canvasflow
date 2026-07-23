@@ -79,6 +79,14 @@ describe('airport pickup Planner', () => {
     })
   })
 
+  it.each(['先去充电', '先去补能'])('persists accepted charging when applying %s', (text) => {
+    const state = createInitialTask('pickup-001', timestamp)
+    const plan = planAirportPickup({ text, state, eventId: `charging-${text}`, timestamp })
+    const next = applyEvent(state, plan.proposedEvents[0]!)
+
+    expect(next.charging).toMatchObject({ recommended: true, accepted: true, status: 'planned' })
+  })
+
   it.each(['已经接到她们', '家人上车'])('maps %s to the onboard domain event', (text) => {
     const state = { ...createInitialTask('pickup-001', timestamp), phase: 'waiting-for-passengers' as const }
     expect(planAirportPickup({ text, state, eventId: 'onboard-1', timestamp })).toMatchObject({

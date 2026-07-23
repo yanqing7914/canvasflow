@@ -18,25 +18,25 @@ export interface TaskStore {
   getByClientRequestId(clientRequestId: string): StoredTask | undefined
   getEventResult(taskId: string, eventId: string): StoredEventResult | undefined
   recordEventResult(taskId: string, eventId: string, result: StoredEventResult): void
-  getIdempotencyResult(taskId: string, idempotencyKey: string): StoredIdempotencyResult | undefined
-  recordIdempotencyResult(taskId: string, idempotencyKey: string, result: StoredIdempotencyResult): void
+  getIdempotencyResult(taskId: string, operation: string, idempotencyKey: string): StoredIdempotencyResult | undefined
+  recordIdempotencyResult(taskId: string, operation: string, idempotencyKey: string, result: StoredIdempotencyResult): void
   save(value: StoredTask): StoredTask
   clear(): void
 }
 
 export class MemoryTaskStore implements TaskStore {
   readonly #tasks = new Map<string, StoredTask>()
-  readonly #taskIdsByClientRequestId = new Map<string, string>()
+  readonly #createResults = new Map<string, StoredTask>()
   readonly #eventResults = new Map<string, StoredEventResult>()
   readonly #idempotencyResults = new Map<string, StoredIdempotencyResult>()
 
   create(value: StoredTask, clientRequestId?: string): StoredTask {
     if (this.#tasks.has(value.task.taskId)) throw new Error(`Task already exists: ${value.task.taskId}`)
-    if (clientRequestId && this.#taskIdsByClientRequestId.has(clientRequestId)) {
+    if (clientRequestId && this.#createResults.has(clientRequestId)) {
       throw new Error(`Request already exists: ${clientRequestId}`)
     }
     const stored = this.save(value)
-    if (clientRequestId) this.#taskIdsByClientRequestId.set(clientRequestId, value.task.taskId)
+    if (clientRequestId) this.#createResults.set(clientRequestId, structuredClone(stored))
     return stored
   }
 
@@ -46,8 +46,8 @@ export class MemoryTaskStore implements TaskStore {
   }
 
   getByClientRequestId(clientRequestId: string): StoredTask | undefined {
-    const taskId = this.#taskIdsByClientRequestId.get(clientRequestId)
-    return taskId ? this.get(taskId) : undefined
+    const result = this.#createResults.get(clientRequestId)
+    return result ? structuredClone(result) : undefined
   }
 
   getEventResult(taskId: string, eventId: string): StoredEventResult | undefined {
@@ -59,13 +59,13 @@ export class MemoryTaskStore implements TaskStore {
     this.#eventResults.set(`${taskId}:${eventId}`, structuredClone(result))
   }
 
-  getIdempotencyResult(taskId: string, idempotencyKey: string): StoredIdempotencyResult | undefined {
-    const result = this.#idempotencyResults.get(`${taskId}:${idempotencyKey}`)
+  getIdempotencyResult(taskId: string, operation: string, idempotencyKey: string): StoredIdempotencyResult | undefined {
+    const result = this.#idempotencyResults.get(`${taskId}:${operation}:${idempotencyKey}`)
     return result ? structuredClone(result) : undefined
   }
 
-  recordIdempotencyResult(taskId: string, idempotencyKey: string, result: StoredIdempotencyResult): void {
-    this.#idempotencyResults.set(`${taskId}:${idempotencyKey}`, structuredClone(result))
+  recordIdempotencyResult(taskId: string, operation: string, idempotencyKey: string, result: StoredIdempotencyResult): void {
+    this.#idempotencyResults.set(`${taskId}:${operation}:${idempotencyKey}`, structuredClone(result))
   }
 
   save(value: StoredTask): StoredTask {
@@ -76,7 +76,7 @@ export class MemoryTaskStore implements TaskStore {
 
   clear(): void {
     this.#tasks.clear()
-    this.#taskIdsByClientRequestId.clear()
+    this.#createResults.clear()
     this.#eventResults.clear()
     this.#idempotencyResults.clear()
   }

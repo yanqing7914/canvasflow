@@ -24,6 +24,10 @@ export function composeAgentSpec(task: AirportPickupTaskState): UISpec {
 
   if (task.phase === 'collecting-information') {
     components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '请补充航班号' } }]
+  } else if (task.phase === 'cancelled') {
+    title = '接机任务已取消'
+    priority = 'high'
+    components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'warning', title: '接机任务已取消' } }]
   } else if (task.phase === 'completed') {
     title = '接机任务已完成'
     components = [progress]

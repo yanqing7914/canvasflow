@@ -60,10 +60,16 @@ describe('AgentGateway', () => {
   it('returns the original task for a retried create request', () => {
     const gateway = createGateway()
     const first = gateway.createTask(createRequest())
+    gateway.submitEvent(first.task.taskId, {
+      clientRequestId: 'client-flight',
+      expectedTaskRevision: first.task.taskRevision,
+      event: { eventId: 'flight-number', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
     const retry = gateway.createTask(createRequest())
 
     expect(retry.task).toEqual(first.task)
     expect(retry.ui).toEqual(first.ui)
+    expect(retry.task.taskRevision).toBe(0)
   })
 
   it('accepts an event at the expected revision and publishes a new UI', () => {
@@ -201,6 +207,12 @@ describe('AgentGateway', () => {
     expect(acceptedRetry.task).toEqual(acceptedResult.task)
     expect(acceptedRetry.ui).toEqual(acceptedResult.ui)
 
+    expect(() => acceptGateway.submitConfirmation(accepted.taskId, 'pickup-001:save-memory', {
+      ...acceptRequest,
+      clientRequestId: 'client-save-memory-reject-after-accept',
+      decision: 'reject',
+    })).toThrowError(expect.objectContaining({ code: 'TASK_REVISION_CONFLICT' }))
+
     const rejectGateway = createGateway()
     const rejected = completeTask(rejectGateway)
     const rejectedResult = rejectGateway.submitConfirmation(rejected.taskId, 'pickup-001:save-memory', {
@@ -212,6 +224,20 @@ describe('AgentGateway', () => {
 
     expect(rejectedResult.task).toMatchObject({ taskRevision: rejected.taskRevision + 1, pendingConfirmation: undefined })
     expect(rejectedResult.effects).toEqual([])
+  })
+
+  it('does not reuse an action result for a confirmation with the same idempotency key', () => {
+    const gateway = createGateway()
+    const completed = completeTask(gateway, 'shared-idempotency-key')
+
+    const confirmed = gateway.submitConfirmation(completed.taskId, 'pickup-001:save-memory', {
+      clientRequestId: 'client-save-memory',
+      expectedTaskRevision: completed.taskRevision,
+      decision: 'accept',
+      idempotencyKey: 'shared-idempotency-key',
+    })
+
+    expect(confirmed.task).toMatchObject({ taskRevision: completed.taskRevision + 1, pendingConfirmation: undefined })
   })
 
   it('requires a current save-memory confirmation', () => {
@@ -245,7 +271,7 @@ describe('AgentGateway', () => {
   })
 })
 
-function completeTask(gateway: AgentGateway) {
+function completeTask(gateway: AgentGateway, navigationIdempotencyKey = 'start-navigation-001') {
   const created = gateway.createTask(createRequest())
   const prepared = gateway.submitEvent(created.task.taskId, {
     clientRequestId: 'client-flight', expectedTaskRevision: 0,
@@ -253,7 +279,7 @@ function completeTask(gateway: AgentGateway) {
   })
   const started = gateway.submitAction(created.task.taskId, {
     clientRequestId: 'client-start-navigation', expectedTaskRevision: prepared.task.taskRevision,
-    expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'flight-status', idempotencyKey: 'start-navigation-001',
+    expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'flight-status', idempotencyKey: navigationIdempotencyKey,
   })
   const approaching = gateway.submitEvent(created.task.taskId, {
     clientRequestId: 'client-geofence', expectedTaskRevision: started.task.taskRevision,

@@ -110,7 +110,8 @@ export class AgentGateway {
     const startedAt = performance.now()
     const request = submitActionRequestSchema.parse(input)
     const current = this.#requireTask(taskId)
-    const previous = this.#store.getIdempotencyResult(taskId, request.idempotencyKey)
+    const operation = `action:${request.actionId}:${request.componentId}`
+    const previous = this.#store.getIdempotencyResult(taskId, operation, request.idempotencyKey)
     if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
     this.#assertRevisions(current, request.expectedTaskRevision, request.expectedUiRevision)
 
@@ -137,7 +138,7 @@ export class AgentGateway {
     const next = applyEvent(current.task, event)
     const stored = next === current.task ? current : this.#store.save(this.#publish(next))
     const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${event.eventId}:${index}` }))
-    this.#store.recordIdempotencyResult(taskId, request.idempotencyKey, { stored, effects: effectRecords })
+    this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: effectRecords })
     return this.#response(request.clientRequestId, stored, effectRecords, performance.now() - startedAt)
   }
 
@@ -145,7 +146,8 @@ export class AgentGateway {
     const startedAt = performance.now()
     const request = submitConfirmationRequestSchema.parse(input)
     const current = this.#requireTask(taskId)
-    const previous = this.#store.getIdempotencyResult(taskId, request.idempotencyKey)
+    const operation = `confirmation:${confirmationId}:${request.decision}`
+    const previous = this.#store.getIdempotencyResult(taskId, operation, request.idempotencyKey)
     if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
     this.#assertRevisions(current, request.expectedTaskRevision)
 
@@ -161,7 +163,7 @@ export class AgentGateway {
     const resolved = resolveConfirmation(current.task, confirmationId)
     const stored = this.#store.save(this.#publish({ ...resolved, updatedAt: this.#eventTimestamp(current.task.updatedAt) }))
     const effects: AgentResponse['effects'] = []
-    this.#store.recordIdempotencyResult(taskId, request.idempotencyKey, { stored, effects })
+    this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
 

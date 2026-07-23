@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { composeAgentSpec } from './composer'
-import { createInitialTask } from './index'
+import { applyEvent, createInitialTask } from './index'
 
 const timestamp = '2026-07-22T20:00:00+08:00'
 
@@ -29,6 +29,21 @@ describe('Agent UISpec composer', () => {
     expect(composeAgentSpec(task)).toMatchObject({
       meta: { requiresConfirm: true },
       actions: [{ event: { type: 'confirmation', confirmationId: 'pickup-001:save-memory', decision: 'accept' } }],
+    })
+  })
+
+  it('does not retain a landing notification after task cancellation', () => {
+    const scheduled = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      message: { ...createInitialTask().message, status: 'scheduled' as const, pendingMessageId: 'MU5102:landing' },
+    }
+    const cancelled = applyEvent(scheduled, { eventId: 'cancel', type: 'user.cancelled-task', timestamp: '2026-07-22T20:01:00+08:00' })
+
+    expect(cancelled.message).toMatchObject({ status: 'cancelled', pendingMessageId: undefined })
+    expect(composeAgentSpec(cancelled)).toMatchObject({
+      title: '接机任务已取消',
+      components: [{ type: 'status-banner', props: { title: '接机任务已取消' } }],
     })
   })
 })
