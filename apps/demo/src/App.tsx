@@ -26,12 +26,30 @@ function componentSummary(component: ComponentSpec): string {
   switch (component.type) {
     case 'pickup-overview': return `${component.props.passengers.join('、')} · ${component.props.flightNumber} · ${component.props.airport} ${component.props.terminal}`
     case 'task-progress': return component.props.steps.map((step) => `${step.label} ${step.status}`).join(' / ')
-    default: return component.type
+    case 'status-banner': return component.props.message ?? component.props.title
+    case 'flight-status': return `${component.props.flightNumber} · ${component.props.status} · ${component.props.terminal}`
+    case 'navigation-summary': return `${component.props.destination} · ETA ${component.props.eta}`
+    case 'charging-recommendation': return component.props.reason
+    case 'message-preview': return `${component.props.contactLabel}：${component.props.textPreview}`
+    case 'passenger-status': return component.props.meetingPoint ? `${component.props.label} · ${component.props.meetingPoint}` : component.props.label
+    case 'cabin-profile': return `${component.props.temperatureC}°C${component.props.mediaTitle ? ` · ${component.props.mediaTitle}` : ''}`
+    case 'alert': return component.props.message ?? component.props.title
   }
 }
 
 function componentTitle(component: ComponentSpec): string {
-  return component.type === 'pickup-overview' ? component.props.phaseLabel : '任务进度'
+  switch (component.type) {
+    case 'pickup-overview': return component.props.phaseLabel
+    case 'status-banner': return component.props.title
+    case 'flight-status': return '航班状态'
+    case 'navigation-summary': return '导航路线'
+    case 'charging-recommendation': return '补能建议'
+    case 'message-preview': return '落地通知'
+    case 'passenger-status': return '乘客状态'
+    case 'cabin-profile': return '家庭座舱偏好'
+    case 'task-progress': return '任务进度'
+    case 'alert': return component.props.title
+  }
 }
 
 export default function App({ initialTask = createDemoTask() }: { initialTask?: AirportPickupTaskState }) {

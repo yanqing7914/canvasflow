@@ -81,7 +81,7 @@ describe('airport pickup task engine', () => {
   })
 
   it('does not plan effects for stale events', () => {
-    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:40:00+08:00' }
+    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:40:00+08:00', flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' } }
     const stale = { eventId: 'stale-landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:35:00+08:00' }
     expect(planEffects(state, stale, {})).toEqual([])
   })
@@ -96,5 +96,11 @@ describe('airport pickup task engine', () => {
     const state = createInitialTask()
     const ignored = applyEvent(state, { eventId: 'small-talk', type: 'user.input', text: '今天天气不错', timestamp: '2026-07-22T12:30:00+08:00' })
     expect(ignored).toEqual(state)
+  })
+
+  it('rejects conflicting provider updates at the same timestamp', () => {
+    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:40:00+08:00', flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' } }
+    const event = { eventId: 'same-time', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'in-air' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: state.updatedAt }
+    expect(applyEvent(state, event)).toEqual(state)
   })
 })
