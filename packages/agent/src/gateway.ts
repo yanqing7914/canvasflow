@@ -82,6 +82,9 @@ export class AgentGateway {
     const current = this.#requireTask(taskId)
     const previous = this.#store.getEventResult(taskId, request.event.eventId)
     if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
+    if (request.event.type === 'navigation.started') {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation must be started through a registered action', false, current)
+    }
     if (request.expectedTaskRevision !== current.task.taskRevision) {
       throw new AgentGatewayError(
         'TASK_REVISION_CONFLICT',
@@ -134,10 +137,7 @@ export class AgentGateway {
       routeId: `route-airport-${current.task.taskId}`,
       timestamp,
     }
-    const effects = planEffects(current.task, event, {})
-    const next = applyEvent(current.task, event)
-    const stored = next === current.task ? current : this.#store.save(this.#publish(next))
-    const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${event.eventId}:${index}` }))
+    const { stored, effectRecords } = this.#applyAuthorizedEvent(current, event)
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: effectRecords })
     return this.#response(request.clientRequestId, stored, effectRecords, performance.now() - startedAt)
   }
@@ -187,6 +187,14 @@ export class AgentGateway {
         }
       : ui
     return { task: { ...task, uiRevision: publishedUi.uiRevision }, ui: publishedUi }
+  }
+
+  #applyAuthorizedEvent(current: StoredTask, event: Parameters<typeof applyEvent>[1]): { stored: StoredTask; effectRecords: AgentResponse['effects'] } {
+    const effects = planEffects(current.task, event, {})
+    const next = applyEvent(current.task, event)
+    const stored = next === current.task ? current : this.#store.save(this.#publish(next))
+    const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${event.eventId}:${index}` }))
+    return { stored, effectRecords }
   }
 
   #assertRevisions(current: StoredTask, expectedTaskRevision: number, expectedUiRevision?: number): void {

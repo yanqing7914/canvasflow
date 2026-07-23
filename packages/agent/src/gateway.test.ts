@@ -187,6 +187,26 @@ describe('AgentGateway', () => {
     )
   })
 
+  it('rejects externally submitted navigation events', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest())
+    const prepared = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'flight-number', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(() => gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-bypass-navigation',
+      expectedTaskRevision: prepared.task.taskRevision,
+      event: { eventId: 'bypass-navigation', type: 'navigation.started', routeId: 'untrusted-route', timestamp: '2026-07-22T12:02:00+08:00' },
+    })).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }))
+
+    const current = gateway.getTask(created.task.taskId).task
+    expect(current).toMatchObject({ phase: 'preparing', taskRevision: prepared.task.taskRevision })
+    expect(current.navigation).toBeUndefined()
+  })
+
   it('clears a current save-memory confirmation for accept and reject without effects in Fixture mode', () => {
     const acceptGateway = createGateway()
     const accepted = completeTask(acceptGateway)
