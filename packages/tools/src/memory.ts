@@ -22,7 +22,7 @@ export function createPreferenceReader(preferences: Record<string, MemberPrefere
     }
 
     const { memberIds, scopes } = parsed.data
-    const unknownIds = memberIds.filter((memberId) => !(memberId in preferences))
+    const unknownIds = memberIds.filter((memberId) => !Object.hasOwn(preferences, memberId))
     if (unknownIds.length > 0) {
       return errorResult(ctx, TOOL, 'PREFERENCE_UNAVAILABLE', `无可用偏好：${unknownIds.join('、')}`, false)
     }
