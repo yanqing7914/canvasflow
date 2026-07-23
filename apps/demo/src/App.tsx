@@ -1,7 +1,11 @@
 import { useMemo, useState } from 'react'
 import { applyEvent, createInitialTask, resolveConfirmation } from '@canvasflow/agent'
+import { createProviderRegistry, createSideEffectRuntime, issueSendMessageConfirmation, prepareMessage } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
 import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
+
+const demoRuntime = createSideEffectRuntime()
+const demoRegistry = createProviderRegistry(demoRuntime)
 
 const timeline: AirportPickupEvent[] = [
   { eventId: 'start-navigation', type: 'navigation.started', routeId: 'route-airport-001', timestamp: '2026-07-22T20:05:00+08:00' },
@@ -75,6 +79,58 @@ export default function App({
   const handleAction = (actionId: string) => {
     if (actionId === 'save-trip-preferences') {
       setTask((current) => resolveConfirmation(current, `${current.taskId}:save-memory`))
+      return
+    }
+    if (actionId === 'retry-landing-message') {
+      setTask((current) => {
+        if (current.message.status !== 'failed' || !current.flight) return current
+        const ctx = { taskId: current.taskId }
+        const prepared = prepareMessage(ctx, {
+          contactId: 'contact-mom',
+          flightNumber: current.flight.flightNumber,
+          eta: '20:40',
+        })
+        if (!prepared.ok || !prepared.data) return current
+
+        const pendingMessageId = `${current.flight.flightNumber}:landing`
+        const armed: AirportPickupTaskState = {
+          ...current,
+          message: {
+            ...current.message,
+            status: 'scheduled',
+            pendingMessageId,
+            idempotencyKey: prepared.data.messageId,
+            landingNoticeSent: false,
+          },
+        }
+        const binding = {
+          taskId: current.taskId,
+          contactId: prepared.data.contactId,
+          messageId: prepared.data.messageId,
+          text: prepared.data.text,
+        }
+        const confirmationId = issueSendMessageConfirmation(demoRuntime, binding)
+        const sent = demoRegistry['message.send'](ctx, {
+          ...binding,
+          confirmationId,
+          idempotencyKey: `${prepared.data.messageId}:retry`,
+        })
+        if (!sent.ok) {
+          return applyEvent(armed, {
+            eventId: `retry-failed-${current.taskRevision}`,
+            type: 'message.failed',
+            messageId: pendingMessageId,
+            errorCode: sent.error?.code ?? 'SEND_FAILED',
+            timestamp: '2026-07-22T20:42:00+08:00',
+          })
+        }
+        return applyEvent(armed, {
+          eventId: `retry-sent-${current.taskRevision}`,
+          type: 'message.sent',
+          messageId: pendingMessageId,
+          timestamp: '2026-07-22T20:42:00+08:00',
+        })
+      })
     }
   }
 

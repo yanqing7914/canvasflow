@@ -128,4 +128,37 @@ describe('airport pickup task engine', () => {
       { type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
     ])
   })
+
+  it('plans cabin apply from memory.get-preferences members shape', () => {
+    const state = {
+      ...createInitialTask(),
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: true },
+      updatedAt: '2026-07-22T20:55:00+08:00',
+    }
+    const event = {
+      eventId: 'apply-cabin',
+      type: 'user.input' as const,
+      text: '应用家庭座舱偏好',
+      timestamp: '2026-07-22T20:56:00+08:00',
+    }
+    const toolResults = {
+      'memory.get-preferences': {
+        ok: true,
+        data: {
+          members: [
+            { memberId: 'mom', rearTemperatureC: 25 },
+            { memberId: 'doubao', mediaTitle: '豆豆故事' },
+          ],
+        },
+        error: null,
+      },
+    }
+    expect(planEffects(state, event, toolResults)).toEqual([
+      { type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
+    ])
+    expect(planEffects(state, event, {
+      'memory.get-preferences': { ok: true, data: { temperatureC: 25 }, error: null },
+    })).toEqual([])
+  })
 })
