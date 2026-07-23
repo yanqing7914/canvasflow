@@ -1,9 +1,11 @@
-import type { ToolDefinition } from '@canvasflow/schema'
+import type { ToolDefinition, ToolResult } from '@canvasflow/schema'
+import { getFixtureChargingRecommendation, getFixtureFlightStatus } from './compat'
 import { recommendCharging } from './charging'
 import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
 import { getPreferences } from './memory'
 import { planRoute } from './navigation'
+import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
 
 /** Risk levels and timeouts follow the P0 table in the tool contract. */
@@ -54,7 +56,13 @@ export const toolDefinitions = {
 
 export type ToolName = keyof typeof toolDefinitions
 
-export function createToolRegistry() {
+export type ToolHandler = (ctx: ToolContext, input?: unknown) => ToolResult<unknown>
+
+/**
+ * New provider registry: every handler takes `(ctx, input)` and returns a
+ * contract `ToolResult`. Prefer this over the legacy `createToolRegistry`.
+ */
+export function createProviderRegistry(): Record<ToolName, ToolHandler> {
   return {
     'family.resolve-members': resolveMembers,
     'memory.get-preferences': getPreferences,
@@ -62,5 +70,24 @@ export function createToolRegistry() {
     'navigation.plan-route': planRoute,
     'vehicle.get-status': getVehicleStatus,
     'charging.recommend': recommendCharging,
-  } as const satisfies Record<ToolName, unknown>
+  }
 }
+
+/**
+ * Legacy registry that shipped on `dev`: handlers take a bare `taskId` string
+ * and return the canonical demo fixture for that tool. Kept so existing
+ * callers of `createToolRegistry()['flight.get-status']('task-id')` keep
+ * working. New code should use `createProviderRegistry()`.
+ *
+ * @deprecated Use {@link createProviderRegistry} with a ToolContext.
+ */
+export function createToolRegistry() {
+  return {
+    'flight.get-status': getFixtureFlightStatus,
+    'charging.recommend': getFixtureChargingRecommendation,
+  } as const
+}
+
+/** @deprecated Alias kept for clarity in migration notes. */
+export type LegacyToolRegistry = ReturnType<typeof createToolRegistry>
+export type ProviderRegistry = ReturnType<typeof createProviderRegistry>

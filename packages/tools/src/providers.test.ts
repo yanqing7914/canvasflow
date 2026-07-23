@@ -7,7 +7,8 @@ import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
 import { getPreferences } from './memory'
 import { planRoute } from './navigation'
-import { createToolRegistry, toolDefinitions, type ToolName } from './registry'
+import { DEMO_ORIGIN } from './data'
+import { createProviderRegistry, createToolRegistry, toolDefinitions, type ToolName } from './registry'
 import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
 
@@ -18,7 +19,7 @@ const canonicalInputs: Record<ToolName, unknown> = {
   'memory.get-preferences': { memberIds: ['mom', 'doubao'], scopes: ['cabin', 'media', 'address', 'notification'] },
   'flight.get-status': { flightNumber: 'MU5102', date: '2026-07-22' },
   'navigation.plan-route': {
-    origin: { latitude: 31.23, longitude: 121.47 },
+    origin: { ...DEMO_ORIGIN },
     destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
   },
   'vehicle.get-status': undefined,
@@ -31,10 +32,10 @@ const canonicalInputs: Record<ToolName, unknown> = {
   },
 }
 
-describe('tool registry', () => {
+describe('provider registry (ctx, input)', () => {
   it('每个 P0 只读工具对同样输入返回完全相同、Schema 合法的结果', () => {
-    const registry = createToolRegistry()
-    for (const name of Object.keys(registry) as ToolName[]) {
+    const registry = createProviderRegistry()
+    for (const name of Object.keys(toolDefinitions) as ToolName[]) {
       const first = registry[name](ctx, canonicalInputs[name] as never)
       const second = registry[name](ctx, canonicalInputs[name] as never)
       expect(second).toEqual(first)
@@ -127,7 +128,7 @@ describe('flight.get-status', () => {
 })
 
 describe('navigation.plan-route', () => {
-  const origin = { latitude: 31.23, longitude: 121.47 }
+  const origin = { ...DEMO_ORIGIN }
   const airport = { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' }
 
   it('机场路线与 route-airport Fixture 一致', () => {
@@ -203,6 +204,36 @@ describe('navigation.plan-route', () => {
     expect(reversed.ok).toBe(false)
     expect(forward.error?.message).toContain('station-hongqiao-01,station-unknown')
     expect(reversed.error?.message).toContain('station-unknown,station-hongqiao-01')
+  })
+
+  it('已支持的 origin 返回预期路线；不支持的 origin 返回 ROUTE_NOT_FOUND', () => {
+    const supported = planRoute(ctx, { origin, destination: airport })
+    expect(supported.ok).toBe(true)
+    expect(supported.data?.routeId).toBe('route-airport-001')
+
+    const unsupported = planRoute(ctx, {
+      origin: { latitude: 0, longitude: 0 },
+      destination: airport,
+    })
+    expect(unsupported.ok).toBe(false)
+    expect(unsupported.error).toMatchObject({ code: 'ROUTE_NOT_FOUND', retryable: false })
+    expect(unsupported.error?.message).toContain('origin=0,0')
+  })
+
+  it('不同 origin 不会命中同一个错误 fixture', () => {
+    const otherOrigin = planRoute(ctx, {
+      origin: { latitude: 31.24, longitude: 121.48 },
+      destination: airport,
+    })
+    const zeroOrigin = planRoute(ctx, {
+      origin: { latitude: 0, longitude: 0 },
+      destination: airport,
+    })
+    expect(otherOrigin.ok).toBe(false)
+    expect(zeroOrigin.ok).toBe(false)
+    expect(otherOrigin.error?.message).not.toEqual(zeroOrigin.error?.message)
+    expect(otherOrigin.error?.message).toContain('origin=31.24,121.48')
+    expect(zeroOrigin.error?.message).toContain('origin=0,0')
   })
 })
 
@@ -289,5 +320,26 @@ describe('deprecated compat wrappers', () => {
     expect(charging).toEqual(recommendCharging(ctx, canonicalInputs['charging.recommend']))
     expect(charging.ok).toBe(true)
     expect(charging.data).toMatchObject({ recommended: true, estimatedFinalBatteryPercent: 18 })
+  })
+})
+
+describe('legacy createToolRegistry (taskId-only handlers)', () => {
+  it('保留旧调用形态 createToolRegistry()[tool](taskId)', () => {
+    const legacy = createToolRegistry()
+    const flight = legacy['flight.get-status']('pickup-001')
+    const charging = legacy['charging.recommend']('pickup-001')
+    expect(flight).toEqual(getFixtureFlightStatus('pickup-001'))
+    expect(charging).toEqual(getFixtureChargingRecommendation('pickup-001'))
+    expect(flight.ok).toBe(true)
+    expect(charging.ok).toBe(true)
+  })
+
+  it('旧 registry 不会把 taskId 当成 ctx 静默返回 invalid input', () => {
+    const legacy = createToolRegistry()
+    // 旧签名只有一个 string 参数；若误把 handler 换成 (ctx, input)，
+    // 传入 'pickup-001' 会被当成非法 ctx 并返回 INVALID_ARGUMENT。
+    const flight = legacy['flight.get-status']('pickup-001')
+    expect(flight.error).toBeNull()
+    expect(flight.data).toMatchObject({ flightNumber: 'MU5102', status: 'scheduled' })
   })
 })

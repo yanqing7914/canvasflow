@@ -5,8 +5,8 @@ import { getFlightStatus } from './flight'
 /**
  * Compatibility wrappers for the pre-provider fixture API that shipped on dev.
  * They delegate to the real providers with the canonical demo inputs so legacy
- * callers keep working. Remove once all consumers use createToolRegistry with
- * a ToolContext.
+ * callers keep working. Prefer `createProviderRegistry()` for new code; the
+ * legacy `createToolRegistry()` continues to expose these taskId-only handlers.
  */
 
 /** @deprecated Use `getFlightStatus(ctx, { flightNumber, date })` instead. */
