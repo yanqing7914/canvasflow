@@ -1,14 +1,33 @@
 import { describe, expect, it } from 'vitest'
+import { DEMO_ORIGIN } from './data'
 import { createSideEffectRuntime } from './idempotency'
 import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, issueSendMessageConfirmation } from './message'
-import { createProviderRegistry } from './registry'
+import { createProviderRegistry, type ProviderRegistry } from './registry'
 import type { ToolContext } from './result'
 
 const ctx: ToolContext = { taskId: 'pickup-001' }
 
+const airportPlanInput = {
+  origin: { ...DEMO_ORIGIN },
+  destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+}
+
+const homePlanInput = {
+  origin: { ...DEMO_ORIGIN },
+  destination: { id: 'destination-home', name: '家' },
+}
+
+function planAirportRoute(registry: ProviderRegistry, taskCtx: ToolContext = ctx) {
+  const planned = registry['navigation.plan-route'](taskCtx, airportPlanInput)
+  expect(planned.ok).toBe(true)
+  expect(planned.data?.routeId).toBe('route-airport-001')
+  return planned
+}
+
 describe('navigation side effects', () => {
   it('start 使用幂等键，重复调用返回同一结果', () => {
     const registry = createProviderRegistry()
+    planAirportRoute(registry)
     const input = { routeId: 'route-airport-001', idempotencyKey: 'pickup-001:start-navigation:route-airport-001' }
     const first = registry['navigation.start'](ctx, input)
     const second = registry['navigation.start'](ctx, input)
@@ -26,8 +45,37 @@ describe('navigation side effects', () => {
     expect(result.error).toMatchObject({ code: 'ROUTE_EXPIRED', retryable: false })
   })
 
+  it('未在本任务规划的已知 routeId 不能 start', () => {
+    const registry = createProviderRegistry()
+    const result = registry['navigation.start'](ctx, {
+      routeId: 'route-airport-001',
+      idempotencyKey: 'pickup-001:start-unplanned',
+    })
+    expect(result.error).toMatchObject({ code: 'ROUTE_EXPIRED', retryable: false })
+    expect(result.error?.message).toContain('尚未在本任务中规划或确认')
+  })
+
+  it('本任务 plan-route 后可以 start；其他任务的规划不共享', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    planAirportRoute(registry, { taskId: 'pickup-001' })
+    const otherTask = registry['navigation.start'](
+      { taskId: 'pickup-002' },
+      { routeId: 'route-airport-001', idempotencyKey: 'pickup-002:start-unplanned' },
+    )
+    expect(otherTask.error).toMatchObject({ code: 'ROUTE_EXPIRED', retryable: false })
+
+    const started = registry['navigation.start'](
+      { taskId: 'pickup-001' },
+      { routeId: 'route-airport-001', idempotencyKey: 'pickup-001:start-planned' },
+    )
+    expect(started.ok).toBe(true)
+    expect(started.data).toMatchObject({ routeId: 'route-airport-001', status: 'active' })
+  })
+
   it('update-route 可切换到回家路线', () => {
     const registry = createProviderRegistry()
+    planAirportRoute(registry)
     const result = registry['navigation.update-route'](ctx, {
       routeId: 'route-airport-001',
       destination: { id: 'destination-home', name: '家' },
@@ -220,6 +268,7 @@ describe('media.play', () => {
 describe('idempotency store isolation', () => {
   it('不同工具复用同一 idempotencyKey 不会串用缓存结果', () => {
     const registry = createProviderRegistry()
+    planAirportRoute(registry)
     const sharedKey = 'pickup-001:shared-key'
     const navigation = registry['navigation.start'](ctx, { routeId: 'route-airport-001', idempotencyKey: sharedKey })
     const media = registry['media.play'](ctx, { mediaTitle: '轻音乐', idempotencyKey: sharedKey })
@@ -235,6 +284,8 @@ describe('idempotency store isolation', () => {
     const registry = createProviderRegistry(runtime)
     const sharedKey = 'shared-across-tasks'
     const input = { routeId: 'route-airport-001', idempotencyKey: sharedKey }
+    planAirportRoute(registry, { taskId: 'pickup-001' })
+    planAirportRoute(registry, { taskId: 'pickup-002' })
     const first = registry['navigation.start']({ taskId: 'pickup-001' }, input)
     const other = registry['navigation.start']({ taskId: 'pickup-002' }, input)
     expect(first.ok).toBe(true)
@@ -417,6 +468,8 @@ describe('message.send', () => {
     expect(conflict.error).toMatchObject({ code: 'INVALID_ARGUMENT', retryable: false })
 
     // 其他副作用工具同样受保护（以 navigation.start 为代表）
+    planAirportRoute(registry)
+    expect(registry['navigation.plan-route'](ctx, homePlanInput).ok).toBe(true)
     const started = registry['navigation.start'](ctx, { routeId: 'route-airport-001', idempotencyKey: 'nav-conflict' })
     expect(started.ok).toBe(true)
     const navConflict = registry['navigation.start'](ctx, { routeId: 'route-home-001', idempotencyKey: 'nav-conflict' })
@@ -492,6 +545,31 @@ describe('memory write side effects', () => {
     // 提案已 confirmed，同 confirmationId 匹配时允许返回已应用结果（不二次写入）
     expect(replay.ok).toBe(true)
     expect(replay.data?.applied).toEqual({ rearTemperatureC: 27 })
+  })
+
+  it('已确认提案的 token 不能被其他 task 复用为确认成功', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const proposed = registry['memory.propose-update'](ctx, {
+      memberId: 'mom',
+      changes: { rearTemperatureC: 29 },
+    })
+    const confirmed = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-for-task-a',
+    })
+    expect(confirmed.ok).toBe(true)
+
+    const otherTask = registry['memory.confirm-update'](
+      { taskId: 'pickup-002' },
+      {
+        proposalId: proposed.data!.proposalId,
+        confirmationId: proposed.data!.confirmationId,
+        idempotencyKey: 'pickup-002:confirm-stolen-token',
+      },
+    )
+    expect(otherTask.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', retryable: false })
   })
 
   it('相同变更幂等返回同一提案，不同变更签发新版本并使旧提案失效', () => {

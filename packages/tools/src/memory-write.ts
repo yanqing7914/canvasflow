@@ -86,6 +86,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     })
     runtime.memoryProposals.set(proposalId, {
       proposalId,
+      taskId: ctx.taskId,
       memberId: parsed.data.memberId,
       before,
       after,
@@ -122,10 +123,11 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案已过期：${parsed.data.proposalId}`, false)
     }
 
-    // Opaque token must match the proposal and be unspent for the first apply.
-    // Validate before idempotency hit so a cached success cannot skip confirmation.
-    if (parsed.data.confirmationId !== proposal.confirmationId) {
-      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案不匹配', false)
+    // Opaque token must match the proposal and stay on the issuing task for every
+    // request — including post-confirm replays — so another task cannot present
+    // a spent token and claim the applied result as its own authorization.
+    if (proposal.taskId !== ctx.taskId || parsed.data.confirmationId !== proposal.confirmationId) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案或当前任务不匹配', false)
     }
     if (
       !proposal.confirmed &&
