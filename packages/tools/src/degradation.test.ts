@@ -283,6 +283,15 @@ describe('charging.completed：保留机场路线上下文；直达切回由 Pla
     expect(completed.charging.status).toBe('completed')
     expect(completed.navigation?.routeId).toBe('route-airport-via-charge-001')
 
+    // update-route only accepts routes previously planned for this task.
+    const viaPlanned = registry['navigation.plan-route'](ctx, {
+      origin: { latitude: 31.23, longitude: 121.47 },
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      via: [{ id: 'station-hongqiao-01', name: '虹桥超充站' }],
+    })
+    expect(viaPlanned.ok).toBe(true)
+    expect(viaPlanned.data?.routeId).toBe('route-airport-via-charge-001')
+
     const resumed = registry['navigation.update-route'](ctx, {
       routeId: completed.navigation!.routeId,
       destination: { id: 'destination-hongqiao-t2', name: completed.navigation!.destination },

@@ -114,6 +114,11 @@ describe('demo integration', () => {
     )
     expect(screen.getByRole('button', { name: '重试发送' })).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '重试发送' }))
+    // First click only arms an opaque confirmation; send waits for explicit accept.
+    expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '确认发送' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '确认发送' }))
+    expect(screen.queryByRole('button', { name: '确认发送' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
   })

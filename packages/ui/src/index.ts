@@ -49,7 +49,10 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     density = 'minimal'
     priority = 'high'
     components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'failed', cancellable: false } }]
-    actions = [{ id: 'retry-landing-message', label: '重试发送', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-landing-message` } }]
+    actions =
+      task.pendingConfirmation?.action === 'send-message'
+        ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
+        : [{ id: 'retry-landing-message', label: '重试发送', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-landing-message` } }]
   }
   else if (
     task.charging.status === 'completed' &&
