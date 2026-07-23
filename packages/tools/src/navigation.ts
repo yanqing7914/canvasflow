@@ -52,7 +52,28 @@ export function planRoute(ctx: ToolContext, input: unknown): ToolResult<RoutePla
   return okResult(ctx, PLAN, routePlanOutputSchema.parse(route))
 }
 
+function rememberPlannedRoute(runtime: SideEffectRuntime, taskId: string, routeId: string): void {
+  let planned = runtime.plannedRouteIdsByTask.get(taskId)
+  if (!planned) {
+    planned = new Set()
+    runtime.plannedRouteIdsByTask.set(taskId, planned)
+  }
+  planned.add(routeId)
+}
+
+function isRoutePlannedForTask(runtime: SideEffectRuntime, taskId: string, routeId: string): boolean {
+  return runtime.plannedRouteIdsByTask.get(taskId)?.has(routeId) === true
+}
+
 export function createNavigationSideEffects(runtime: SideEffectRuntime) {
+  function planRouteForTask(ctx: ToolContext, input: unknown): ToolResult<RoutePlanOutput> {
+    const result = planRoute(ctx, input)
+    if (result.ok && result.data) {
+      rememberPlannedRoute(runtime, ctx.taskId, result.data.routeId)
+    }
+    return result
+  }
+
   function startNavigation(ctx: ToolContext, input: unknown): ToolResult<NavigationStartOutput> {
     const parsed = navigationStartInputSchema.safeParse(input)
     if (!parsed.success) {
@@ -67,6 +88,17 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
 
     if (!knownRouteIds.has(parsed.data.routeId)) {
       return errorResult(ctx, START, 'ROUTE_EXPIRED', `路线已失效或不存在：${parsed.data.routeId}`, false)
+    }
+
+    // 仅允许启动本任务已 plan-route（或 update-route）确认过的路线，避免凭 fixture ID 直接开导航。
+    if (!isRoutePlannedForTask(runtime, ctx.taskId, parsed.data.routeId)) {
+      return errorResult(
+        ctx,
+        START,
+        'ROUTE_EXPIRED',
+        `路线尚未在本任务中规划或确认：${parsed.data.routeId}`,
+        false,
+      )
     }
 
     const result = okResult(
@@ -98,6 +130,16 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
       return errorResult(ctx, UPDATE, 'ROUTE_EXPIRED', `路线已失效或不存在：${parsed.data.routeId}`, false)
     }
 
+    if (!isRoutePlannedForTask(runtime, ctx.taskId, parsed.data.routeId)) {
+      return errorResult(
+        ctx,
+        UPDATE,
+        'ROUTE_EXPIRED',
+        `路线尚未在本任务中规划或确认：${parsed.data.routeId}`,
+        false,
+      )
+    }
+
     const planned = planRoute(ctx, {
       origin: { latitude: DEMO_ORIGIN.latitude, longitude: DEMO_ORIGIN.longitude },
       destination: parsed.data.destination,
@@ -113,6 +155,8 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
       )
     }
 
+    rememberPlannedRoute(runtime, ctx.taskId, planned.data.routeId)
+
     const result = okResult(
       ctx,
       UPDATE,
@@ -127,5 +171,5 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
     return result
   }
 
-  return { startNavigation, updateRoute }
+  return { planRoute: planRouteForTask, startNavigation, updateRoute }
 }

@@ -154,5 +154,5 @@ export const chargingStation = {
   etaImpactMinutes: 12,
 }
 
-/** Planned route IDs that navigation.start / update-route may activate. */
+/** Fixture catalog of route IDs. Activation still requires a task-scoped plan. */
 export const knownRouteIds = new Set(Object.values(routes).map((route) => route.routeId))
