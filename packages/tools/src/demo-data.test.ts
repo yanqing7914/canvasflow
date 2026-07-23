@@ -135,10 +135,14 @@ describe('vehicle density-control snapshots', () => {
 })
 
 describe('recommended meeting points', () => {
-  it('covers the demo flight terminal with a display-only pickup point', () => {
-    const meetingPoint = recommendedMeetingPoints[flights.MU5102.terminal]
-    expect(meetingPoint).toBeDefined()
-    expect(meetingPoint.terminal).toBe(flights.MU5102.terminal)
-    expect(meetingPoint.walkMinutes).toBeGreaterThan(0)
+  it('covers the demo flight terminal and the delayed-terminal alternate', () => {
+    const primary = recommendedMeetingPoints[flights.MU5102.terminal]
+    expect(primary).toBeDefined()
+    expect(primary.terminal).toBe(flights.MU5102.terminal)
+    expect(primary.walkMinutes).toBeGreaterThan(0)
+
+    const delayedTerminal = recommendedMeetingPoints[flights.MU5103.terminal]
+    expect(delayedTerminal).toBeDefined()
+    expect(delayedTerminal.terminal).toBe('T1')
   })
 })

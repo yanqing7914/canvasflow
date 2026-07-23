@@ -10,7 +10,7 @@ import {
   type RoutePlanOutput,
   type ToolResult,
 } from '@canvasflow/schema'
-import { knownRouteIds, routeFixtureKey, routes } from './data'
+import { knownRouteIds, routeFixtureKey, routes, TIMEOUT_DESTINATION_ID } from './data'
 import type { SideEffectRuntime } from './idempotency'
 import { errorResult, okResult, type ToolContext } from './result'
 
@@ -25,6 +25,10 @@ export function planRoute(ctx: ToolContext, input: unknown): ToolResult<RoutePla
   }
 
   const { destination, via, preferences } = parsed.data
+  if (destination.id === TIMEOUT_DESTINATION_ID) {
+    return errorResult(ctx, PLAN, 'PROVIDER_TIMEOUT', '路线数据源超时', true)
+  }
+
   const key = routeFixtureKey({
     destinationId: destination.id,
     viaIds: (via ?? []).map((point) => point.id),

@@ -164,9 +164,16 @@ describe('fixture toolResults contract', () => {
   })
 
   it('keeps hand-authored provider pushes consistent with the flight timeline', () => {
-    // in-air / landed 表示 provider 在时间线上的推送，静态 fixture 数据无法重放，只校验关键字段。
+    // in-air / landed / delayed / cancelled 表示 provider 在时间线上的推送，静态主航班数据无法重放，只校验关键字段。
     expect(toolData('flight-in-air', 'flight.get-status')).toMatchObject({ flightNumber: 'MU5102', status: 'in-air' })
     expect(toolData('flight-landed', 'flight.get-status')).toMatchObject({ flightNumber: 'MU5102', status: 'landed', baggageClaim: '12' })
+    expect(toolData('flight-delayed', 'flight.get-status')).toMatchObject({
+      flightNumber: 'MU5102',
+      status: 'delayed',
+      terminal: 'T1',
+      estimatedArrival: '2026-07-22T21:10:00+08:00',
+    })
+    expect(toolData('flight-cancelled', 'flight.get-status')).toMatchObject({ flightNumber: 'MU5102', status: 'cancelled' })
     const timeout = fixtureById.get('provider-timeout')!.toolResults['flight.get-status'] as { error: unknown }
     expect(timeout.error).toEqual(getFlightStatus(ctx, { flightNumber: 'MU0000', date: '2026-07-22' }).error)
   })

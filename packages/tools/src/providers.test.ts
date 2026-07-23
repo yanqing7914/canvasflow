@@ -136,6 +136,20 @@ describe('flight.get-status', () => {
     const result = getFlightStatus(ctx, { flightNumber: 'MU5102', date: '2026-07-23' })
     expect(result.error).toMatchObject({ code: 'FLIGHT_NOT_FOUND', retryable: false })
   })
+
+  it('MU5103 / MU5104 分别返回延误与取消状态', () => {
+    expect(getFlightStatus(ctx, { flightNumber: 'MU5103', date: '2026-07-22' }).data).toMatchObject({
+      flightNumber: 'MU5103',
+      status: 'delayed',
+      terminal: 'T1',
+      estimatedArrival: '2026-07-22T21:10:00+08:00',
+    })
+    expect(getFlightStatus(ctx, { flightNumber: 'MU5104', date: '2026-07-22' }).data).toMatchObject({
+      flightNumber: 'MU5104',
+      status: 'cancelled',
+      terminal: 'T2',
+    })
+  })
 })
 
 describe('navigation.plan-route', () => {
@@ -171,15 +185,48 @@ describe('navigation.plan-route', () => {
     expect(result.error).toMatchObject({ code: 'ROUTE_NOT_FOUND', retryable: false })
   })
 
-  it('不支持的避让约束显式失败，不静默返回默认路线', () => {
+  it('avoidHighway 命中拥堵备选路线，不静默退回默认直达', () => {
     const result = planRoute(ctx, {
       origin,
       destination: airport,
       preferences: { avoidHighway: true },
     })
+    expect(result.ok).toBe(true)
+    expect(result.data).toMatchObject({
+      routeId: 'route-airport-avoid-hw-001',
+      durationMinutes: 28,
+    })
+    // 默认直达与避高路线必须是两条不同路线
+    expect(planRoute(ctx, { origin, destination: airport }).data?.routeId).toBe('route-airport-001')
+  })
+
+  it('不支持的避让组合显式失败，不静默返回默认路线', () => {
+    const result = planRoute(ctx, {
+      origin,
+      destination: airport,
+      preferences: { avoidHighway: true, avoidTolls: true },
+    })
     expect(result.ok).toBe(false)
     expect(result.error).toMatchObject({ code: 'ROUTE_NOT_FOUND', retryable: false })
-    expect(result.error?.message).toContain('avoidHighway')
+    expect(result.error?.message).toContain('avoidTolls')
+  })
+
+  it('destination-timeout 确定性触发 PROVIDER_TIMEOUT 且可重试', () => {
+    const result = planRoute(ctx, {
+      origin,
+      destination: { id: 'destination-timeout', name: '超时目的地' },
+    })
+    expect(result.error).toMatchObject({ code: 'PROVIDER_TIMEOUT', retryable: true })
+  })
+
+  it('外环绕行 via 命中拥堵改线路线', () => {
+    const result = planRoute(ctx, {
+      origin,
+      destination: airport,
+      via: [{ id: 'via-ring-road-01', name: '外环快速路' }],
+    })
+    expect(result.ok).toBe(true)
+    expect(result.data?.routeId).toBe('route-airport-bypass-001')
   })
 
   it('未知 via 点显式失败，不静默忽略', () => {
