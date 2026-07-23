@@ -8,7 +8,7 @@ import {
   type ToolResult,
 } from '@canvasflow/schema'
 import { familyMembers } from './data'
-import type { SideEffectRuntime } from './idempotency'
+import type { MessageSendBinding, SideEffectRuntime } from './idempotency'
 import { errorResult, FIXTURE_GENERATED_AT, okResult, type ToolContext } from './result'
 
 const PREPARE = 'message.prepare'
@@ -22,27 +22,9 @@ export function autoNotifyAuthorizationId(taskId: string): string {
   return `${taskId}:auto-notify`
 }
 
-/** Deterministic FNV-1a hash so the confirmation credential covers the exact text. */
-function textDigest(text: string): string {
-  let hash = 0x811c9dc5
-  for (let index = 0; index < text.length; index += 1) {
-    hash ^= text.charCodeAt(index)
-    hash = Math.imul(hash, 0x01000193) >>> 0
-  }
-  return hash.toString(16).padStart(8, '0')
-}
-
-/**
- * User-confirmation credential for an explicit send / retry. It is bound to
- * the task and to the exact message the user saw in the preview (contact,
- * message identity and text), so one confirmation cannot authorize sending a
- * different message or contacting someone else.
- */
-export function sendMessageConfirmationId(
-  taskId: string,
-  message: { contactId: string; messageId: string; text: string },
-): string {
-  return `${taskId}:send-message:${message.contactId}:${message.messageId}:${textDigest(message.text)}`
+/** Issue an opaque, one-time confirmation for an explicit send / retry. */
+export function issueSendMessageConfirmation(runtime: SideEffectRuntime, binding: MessageSendBinding): string {
+  return runtime.confirmations.issueSendMessageConfirmation(binding)
 }
 
 export function prepareMessage(ctx: ToolContext, input: unknown): ToolResult<MessagePrepareOutput> {
@@ -83,33 +65,41 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
     }
 
+    const binding: MessageSendBinding = {
+      taskId: ctx.taskId,
+      contactId: parsed.data.contactId,
+      messageId: parsed.data.messageId,
+      text: parsed.data.text,
+    }
+
     // 凭据必须与任务绑定：预授权路径还要求联系人对应成员开启了落地通知授权；
-    // 显式确认路径的凭据绑定到具体联系人、消息与文案，不能复用于其他消息。
+    // 显式确认路径使用 runtime 签发的一次性 opaque token，绑定到具体消息。
     const member = familyMembers.find((candidate) => candidate.contactId === parsed.data.contactId)
     const autoNotifyGranted =
       parsed.data.authorizationId === autoNotifyAuthorizationId(ctx.taskId) &&
       member !== undefined &&
       runtime.preferences[member.memberId]?.landingNotificationAuthorized === true
-    const userConfirmed =
-      parsed.data.confirmationId ===
-      sendMessageConfirmationId(ctx.taskId, {
-        contactId: parsed.data.contactId,
-        messageId: parsed.data.messageId,
-        text: parsed.data.text,
-      })
-    if (!autoNotifyGranted && !userConfirmed) {
+    const confirmationValid =
+      parsed.data.confirmationId !== undefined &&
+      runtime.confirmations.matchesSendMessageConfirmation(parsed.data.confirmationId, binding)
+    if (!autoNotifyGranted && !confirmationValid) {
       return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要任务绑定的预授权或本次确认', false)
     }
 
     if (parsed.data.contactId === FAILING_CONTACT_ID) {
-      const failed = errorResult<MessageSendOutput>(ctx, SEND, 'SEND_FAILED', '消息发送失败', false)
-      // Do not cache failures — contract: no auto-retry, but user may retry with a new key.
-      return failed
+      // Do not cache failures and do not consume the confirmation — caller may retry.
+      return errorResult<MessageSendOutput>(ctx, SEND, 'SEND_FAILED', '消息发送失败', false)
     }
 
-    const known = familyMembers.some((member) => member.contactId === parsed.data.contactId)
+    const known = familyMembers.some((entry) => entry.contactId === parsed.data.contactId)
     if (!known) {
       return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', `联系人未授权：${parsed.data.contactId}`, false)
+    }
+
+    if (!autoNotifyGranted) {
+      if (!runtime.confirmations.consumeSendMessageConfirmation(parsed.data.confirmationId!, binding)) {
+        return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要任务绑定的预授权或本次确认', false)
+      }
     }
 
     const result = okResult(

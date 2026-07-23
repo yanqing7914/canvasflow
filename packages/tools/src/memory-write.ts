@@ -37,10 +37,10 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, PROPOSE, 'INVALID_ARGUMENT', '需要 memberId 和 changes', false)
     }
 
-    const record = runtime.preferences[parsed.data.memberId]
-    if (!record) {
+    if (!Object.hasOwn(runtime.preferences, parsed.data.memberId)) {
       return errorResult(ctx, PROPOSE, 'PREFERENCE_UNAVAILABLE', `无可用偏好：${parsed.data.memberId}`, false)
     }
+    const record = runtime.preferences[parsed.data.memberId]
 
     const changes = pickWhitelist(parsed.data.changes as Record<string, unknown>)
     if (Object.keys(changes).length === 0) {
@@ -80,7 +80,10 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     }
 
     const proposalId = related.length === 0 ? baseId : `${baseId}:v${related.length + 1}`
-    const confirmationId = `${proposalId}:confirm`
+    const confirmationId = runtime.confirmations.issueMemoryConfirmation({
+      taskId: ctx.taskId,
+      proposalId,
+    })
     runtime.memoryProposals.set(proposalId, {
       proposalId,
       memberId: parsed.data.memberId,
@@ -125,12 +128,20 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案已过期：${parsed.data.proposalId}`, false)
     }
 
-    // 确认凭据必须与提案签发的凭据一致，任意非空字符串不再有效。
+    // Opaque token must match the proposal and be unspent for the first apply.
     if (parsed.data.confirmationId !== proposal.confirmationId) {
       return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案不匹配', false)
     }
 
     if (!proposal.confirmed) {
+      if (
+        !runtime.confirmations.consumeMemoryConfirmation(parsed.data.confirmationId, {
+          taskId: ctx.taskId,
+          proposalId: proposal.proposalId,
+        })
+      ) {
+        return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据无效或已使用', false)
+      }
       const record = runtime.preferences[proposal.memberId]
       Object.assign(record, proposal.after)
       proposal.confirmed = true

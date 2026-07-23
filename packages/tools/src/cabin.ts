@@ -35,7 +35,10 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
     }
 
     // 授权基于 runtime 的可变偏好副本，与 memory.confirm-update 的写入保持一致。
-    const unknownMembers = parsed.data.sourceMemberIds.filter((memberId) => !(memberId in runtime.preferences))
+    // 必须用 own-property 判断：普通对象上的 `in` 会把 toString/constructor 等原型键误判为成员。
+    const unknownMembers = parsed.data.sourceMemberIds.filter(
+      (memberId) => !Object.hasOwn(runtime.preferences, memberId),
+    )
     if (unknownMembers.length > 0) {
       return errorResult(ctx, APPLY, 'POLICY_DENIED', `未授权成员：${unknownMembers.join('、')}`, false)
     }

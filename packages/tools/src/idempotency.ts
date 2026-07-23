@@ -65,15 +65,95 @@ export type MemoryProposalRecord = {
   memberId: string
   before: Record<string, unknown>
   after: Record<string, unknown>
-  /** Credential that memory.confirm-update must present to apply this proposal. */
+  /** Opaque credential that memory.confirm-update must present to apply this proposal. */
   confirmationId: string
   confirmed: boolean
   expiresAtMs: number
 }
 
+export type MessageSendBinding = {
+  taskId: string
+  contactId: string
+  messageId: string
+  text: string
+}
+
+export type MemoryConfirmBinding = {
+  taskId: string
+  proposalId: string
+}
+
+type ConfirmationRecord =
+  | { kind: 'send-message'; binding: MessageSendBinding; consumed: boolean }
+  | { kind: 'confirm-memory'; binding: MemoryConfirmBinding; consumed: boolean }
+
+/**
+ * Opaque, runtime-issued confirmation tokens. Callers cannot compute a valid
+ * token from task/message fields; they must obtain one via issue* and present
+ * it once. Successful consumption marks the token spent.
+ */
+export class ConfirmationStore {
+  private readonly grants = new Map<string, ConfirmationRecord>()
+  private counter = 0
+
+  private mint(): string {
+    this.counter += 1
+    const entropy = typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    return `cnf_${this.counter}_${entropy}`
+  }
+
+  issueSendMessageConfirmation(binding: MessageSendBinding): string {
+    const confirmationId = this.mint()
+    this.grants.set(confirmationId, { kind: 'send-message', binding: { ...binding }, consumed: false })
+    return confirmationId
+  }
+
+  issueMemoryConfirmation(binding: MemoryConfirmBinding): string {
+    const confirmationId = this.mint()
+    this.grants.set(confirmationId, { kind: 'confirm-memory', binding: { ...binding }, consumed: false })
+    return confirmationId
+  }
+
+  matchesSendMessageConfirmation(confirmationId: string, binding: MessageSendBinding): boolean {
+    const grant = this.grants.get(confirmationId)
+    if (!grant || grant.kind !== 'send-message' || grant.consumed) return false
+    return (
+      grant.binding.taskId === binding.taskId &&
+      grant.binding.contactId === binding.contactId &&
+      grant.binding.messageId === binding.messageId &&
+      grant.binding.text === binding.text
+    )
+  }
+
+  /**
+   * Validates and consumes a send-message confirmation. Returns false for
+   * unknown, wrong-kind, already-consumed, or binding-mismatched tokens.
+   */
+  consumeSendMessageConfirmation(confirmationId: string, binding: MessageSendBinding): boolean {
+    if (!this.matchesSendMessageConfirmation(confirmationId, binding)) return false
+    this.grants.get(confirmationId)!.consumed = true
+    return true
+  }
+
+  matchesMemoryConfirmation(confirmationId: string, binding: MemoryConfirmBinding): boolean {
+    const grant = this.grants.get(confirmationId)
+    if (!grant || grant.kind !== 'confirm-memory' || grant.consumed) return false
+    return grant.binding.taskId === binding.taskId && grant.binding.proposalId === binding.proposalId
+  }
+
+  consumeMemoryConfirmation(confirmationId: string, binding: MemoryConfirmBinding): boolean {
+    if (!this.matchesMemoryConfirmation(confirmationId, binding)) return false
+    this.grants.get(confirmationId)!.consumed = true
+    return true
+  }
+}
+
 /** Mutable fixture runtime shared by side-effect providers in one registry. */
 export type SideEffectRuntime = {
   idempotency: IdempotencyStore
+  confirmations: ConfirmationStore
   cabinEffects: Map<string, CabinEffectRecord>
   cabinCurrent: CabinProfileValues
   memoryProposals: Map<string, MemoryProposalRecord>
@@ -82,11 +162,15 @@ export type SideEffectRuntime = {
 }
 
 export function createSideEffectRuntime(nowMs: () => number = () => Date.parse('2026-07-22T12:00:00+08:00')): SideEffectRuntime {
-  const preferences = Object.fromEntries(
-    Object.entries(memberPreferences).map(([memberId, record]) => [memberId, { ...record }]),
-  )
+  // Null-prototype map so `in` / accidental prototype lookups cannot treat
+  // Object.prototype keys as family members.
+  const preferences = Object.create(null) as Record<string, MemberPreferenceRecord>
+  for (const [memberId, record] of Object.entries(memberPreferences)) {
+    preferences[memberId] = { ...record }
+  }
   return {
     idempotency: new IdempotencyStore(),
+    confirmations: new ConfirmationStore(),
     cabinEffects: new Map(),
     cabinCurrent: { temperatureC: 22, fanLevel: 2 },
     memoryProposals: new Map(),
