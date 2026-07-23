@@ -69,7 +69,8 @@ export type RouteFixtureKey = {
 }
 
 export function routeFixtureKey(key: RouteFixtureKey): string {
-  const via = key.viaIds.slice().sort().join(',') || '-'
+  // Via order matters: A→B and B→A are different routes and must not collide.
+  const via = key.viaIds.join(',') || '-'
   return `${key.destinationId}|via=${via}|hw=${key.avoidHighway ? 1 : 0}|toll=${key.avoidTolls ? 1 : 0}`
 }
 

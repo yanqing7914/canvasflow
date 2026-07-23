@@ -180,6 +180,30 @@ describe('navigation.plan-route', () => {
     expect(result.error).toMatchObject({ code: 'ROUTE_NOT_FOUND', retryable: false })
     expect(result.error?.message).toContain('station-unknown')
   })
+
+  it('via 顺序有意义：颠倒顺序不会命中同一条路线', () => {
+    const forward = planRoute(ctx, {
+      origin,
+      destination: airport,
+      via: [
+        { id: 'station-hongqiao-01', name: '虹桥补能站' },
+        { id: 'station-unknown', name: '未知站' },
+      ],
+    })
+    const reversed = planRoute(ctx, {
+      origin,
+      destination: airport,
+      via: [
+        { id: 'station-unknown', name: '未知站' },
+        { id: 'station-hongqiao-01', name: '虹桥补能站' },
+      ],
+    })
+    // fixture 未定义任何多途经点排列，两个方向都必须显式失败，且互不折叠
+    expect(forward.ok).toBe(false)
+    expect(reversed.ok).toBe(false)
+    expect(forward.error?.message).toContain('station-hongqiao-01,station-unknown')
+    expect(reversed.error?.message).toContain('station-unknown,station-hongqiao-01')
+  })
 })
 
 describe('vehicle.get-status', () => {
