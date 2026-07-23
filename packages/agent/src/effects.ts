@@ -4,6 +4,8 @@ export type PlannedEffect = { type: string; status: 'planned' | 'pending-confirm
 
 export function planEffects(state: AirportPickupTaskState, event: AirportPickupEvent, toolResults: Record<string, unknown>): PlannedEffect[] {
   if (state.processedEventIds.includes(event.eventId)) return []
+  if (state.phase === 'completed' || state.phase === 'cancelled') return []
+  if (Date.parse(event.timestamp) < Date.parse(state.updatedAt)) return []
   if (event.type === 'navigation.started' && state.phase === 'preparing') return [{ type: 'navigation.start', status: 'succeeded', tool: 'navigation.start' }]
   if (event.type === 'flight.updated' && state.phase === 'driving-to-airport' && event.flight.status === 'landed' && state.message.autoNotifyAuthorized && !state.message.landingNoticeSent && state.message.status === 'idle') return [{ type: 'message.send', status: 'planned', tool: 'message.send' }]
   const preferences = toolResults['memory.get-preferences']

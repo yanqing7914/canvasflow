@@ -79,4 +79,22 @@ describe('airport pickup task engine', () => {
     const stale = applyEvent(landed, { eventId: 'in-air-old', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:35:00+08:00' })
     expect(stale).toEqual(landed)
   })
+
+  it('does not plan effects for stale events', () => {
+    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:40:00+08:00' }
+    const stale = { eventId: 'stale-landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:35:00+08:00' }
+    expect(planEffects(state, stale, {})).toEqual([])
+  })
+
+  it('clears pending confirmations on cancellation', () => {
+    const state = { ...createInitialTask(), phase: 'returning-home' as const, pendingConfirmation: { confirmationId: 'confirm', action: 'save-memory' as const } }
+    const cancelled = applyEvent(state, { eventId: 'cancel', type: 'user.cancelled-task', timestamp: '2026-07-22T12:10:00+08:00' })
+    expect(cancelled.pendingConfirmation).toBeUndefined()
+  })
+
+  it('does not advance the ordering watermark for irrelevant input', () => {
+    const state = createInitialTask()
+    const ignored = applyEvent(state, { eventId: 'small-talk', type: 'user.input', text: '今天天气不错', timestamp: '2026-07-22T12:30:00+08:00' })
+    expect(ignored).toEqual(state)
+  })
 })
