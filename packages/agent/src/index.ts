@@ -14,16 +14,26 @@ export function createInitialTask(taskId = 'pickup-001'): AirportPickupTaskState
   })
 }
 
+function taskFacts(state: AirportPickupTaskState) {
+  return {
+    ...state,
+    updatedAt: '',
+    processedEventIds: [],
+  }
+}
+
 export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEvent): AirportPickupTaskState {
   const event = airportPickupEventSchema.parse(input)
   if (state.processedEventIds.includes(event.eventId)) return state
   const next = structuredClone(state)
+  const beforeFacts = taskFacts(state)
   next.processedEventIds.push(event.eventId)
   next.updatedAt = event.timestamp
 
   switch (event.type) {
     case 'user.input':
       if (/MU\d+/i.test(event.text)) next.flight = { flightNumber: event.text.match(/MU\d+/i)?.[0].toUpperCase() ?? event.text, status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
+      if (/补能|充电/.test(event.text)) next.charging = { ...next.charging, recommended: true, status: 'planned' }
       if (next.flight && next.passengers.names.length > 0 && next.phase === 'collecting-information') next.phase = 'preparing'
       break
     case 'flight.updated':
@@ -44,6 +54,7 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'user.cancelled-task': next.phase = 'cancelled'; break
     default: break
   }
-  if (JSON.stringify(next) !== JSON.stringify(state)) next.taskRevision += 1
+  const afterFacts = taskFacts(next)
+  if (JSON.stringify(afterFacts) !== JSON.stringify(beforeFacts)) next.taskRevision += 1
   return airportPickupTaskStateSchema.parse(next)
 }

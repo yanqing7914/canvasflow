@@ -6,13 +6,25 @@ const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
 }
 
 export function composePickupSpec(task: AirportPickupTaskState): UISpec {
+  const phaseOrder: AirportPickupTaskState['phase'][] = ['preparing', 'driving-to-airport', 'approaching-airport', 'waiting-for-passengers', 'returning-home', 'completed']
+  const currentIndex = phaseOrder.indexOf(task.phase)
+  const progressStatus = (phase: AirportPickupTaskState['phase']) => {
+    const phaseIndex = phaseOrder.indexOf(phase)
+    if (phase === task.phase) return 'active' as const
+    if (currentIndex >= 0 && phaseIndex >= 0 && phaseIndex < currentIndex) return 'completed' as const
+    return 'pending' as const
+  }
+  const airport = task.navigation?.destination?.includes('机场') ? task.navigation.destination.replace(/\s*T\d$/, '') : '虹桥机场'
+  const title = task.passengers.names.length > 0
+    ? `去${airport}接${task.passengers.names.join('和')}`
+    : '机场接人任务'
   const components = [
-    { id: 'pickup-overview', type: 'pickup-overview' as const, props: { passengers: task.passengers.names, flightNumber: task.flight?.flightNumber ?? '待补充', airport: '虹桥机场', terminal: task.flight?.terminal ?? 'T2', phaseLabel: phaseLabels[task.phase] } },
-    { id: 'task-progress', type: 'task-progress' as const, props: { currentPhase: task.phase, steps: ['preparing', 'driving-to-airport', 'waiting-for-passengers', 'returning-home', 'completed'].map((phase) => ({ phase: phase as AirportPickupTaskState['phase'], label: phaseLabels[phase as AirportPickupTaskState['phase']], status: phase === task.phase ? 'active' as const : 'pending' as const })) } },
+    { id: 'pickup-overview', type: 'pickup-overview' as const, props: { passengers: task.passengers.names, flightNumber: task.flight?.flightNumber ?? '待补充', airport, terminal: task.flight?.terminal ?? 'T2', phaseLabel: phaseLabels[task.phase] } },
+    { id: 'task-progress', type: 'task-progress' as const, props: { currentPhase: task.phase, steps: phaseOrder.slice(0, 5).map((phase) => ({ phase, label: phaseLabels[phase], status: progressStatus(phase) })) } },
   ]
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: task.uiRevision + 1,
-    phase: task.phase, title: '去虹桥机场接妈妈和豆豆', presentation: { mode: 'replace', density: 'full', theme: 'dark', priority: 'normal' },
+    phase: task.phase, title, presentation: { mode: 'replace', density: 'full', theme: 'dark', priority: 'normal' },
     layout: { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } }, components, actions: [],
     meta: { generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm: false, generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${task.uiRevision + 1}` },
   })
