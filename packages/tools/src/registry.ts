@@ -1,5 +1,6 @@
-import type { ToolDefinition } from '@canvasflow/schema'
+import type { ToolDefinition, ToolResult } from '@canvasflow/schema'
 import { createCabinProfileTools } from './cabin'
+import { getFixtureChargingRecommendation, getFixtureFlightStatus } from './compat'
 import { recommendCharging } from './charging'
 import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
@@ -9,6 +10,7 @@ import { createPreferenceReader } from './memory'
 import { createMemoryWriteTools } from './memory-write'
 import { createMessageSender, prepareMessage } from './message'
 import { createNavigationSideEffects, planRoute } from './navigation'
+import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
 
 /** Risk levels and timeouts follow the P0 table in the tool contract. */
@@ -122,7 +124,15 @@ export const toolDefinitions = {
 
 export type ToolName = keyof typeof toolDefinitions
 
-export function createToolRegistry(runtime: SideEffectRuntime = createSideEffectRuntime()) {
+export type ToolHandler = (ctx: ToolContext, input?: unknown) => ToolResult<unknown>
+
+/**
+ * Provider registry: every handler takes `(ctx, input)` and returns a contract
+ * `ToolResult`. Prefer this over the legacy `createToolRegistry`.
+ */
+export function createProviderRegistry(
+  runtime: SideEffectRuntime = createSideEffectRuntime(),
+): Record<ToolName, ToolHandler> {
   const navigation = createNavigationSideEffects(runtime)
   const cabin = createCabinProfileTools(runtime)
   const memoryWrite = createMemoryWriteTools(runtime)
@@ -146,7 +156,26 @@ export function createToolRegistry(runtime: SideEffectRuntime = createSideEffect
     'media.play': playMedia,
     'message.prepare': prepareMessage,
     'message.send': sendMessage,
-  } as const satisfies Record<ToolName, unknown>
+  }
 }
 
-export type ToolRegistry = ReturnType<typeof createToolRegistry>
+/**
+ * Legacy registry that shipped on `dev`: handlers take a bare `taskId` string
+ * and return the canonical demo fixture for that tool. Kept so existing
+ * callers of `createToolRegistry()['flight.get-status']('task-id')` keep
+ * working. New code should use `createProviderRegistry()`.
+ *
+ * @deprecated Use {@link createProviderRegistry} with a ToolContext.
+ */
+export function createToolRegistry() {
+  return {
+    'flight.get-status': getFixtureFlightStatus,
+    'charging.recommend': getFixtureChargingRecommendation,
+  } as const
+}
+
+/** @deprecated Alias kept for clarity in migration notes. */
+export type LegacyToolRegistry = ReturnType<typeof createToolRegistry>
+export type ProviderRegistry = ReturnType<typeof createProviderRegistry>
+/** @deprecated Prefer ProviderRegistry / createProviderRegistry. */
+export type ToolRegistry = ProviderRegistry

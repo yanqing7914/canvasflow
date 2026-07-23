@@ -10,7 +10,7 @@ import {
   type RoutePlanOutput,
   type ToolResult,
 } from '@canvasflow/schema'
-import { knownRouteIds, routeFixtureKey, routes } from './data'
+import { DEMO_ORIGIN, knownRouteIds, routeFixtureKey, routes } from './data'
 import type { SideEffectRuntime } from './idempotency'
 import { errorResult, okResult, type ToolContext } from './result'
 
@@ -24,8 +24,10 @@ export function planRoute(ctx: ToolContext, input: unknown): ToolResult<RoutePla
     return errorResult(ctx, PLAN, 'INVALID_ARGUMENT', '需要 origin 和 destination', false)
   }
 
-  const { destination, via, preferences } = parsed.data
+  const { origin, destination, via, preferences } = parsed.data
   const key = routeFixtureKey({
+    originLatitude: origin.latitude,
+    originLongitude: origin.longitude,
     destinationId: destination.id,
     viaIds: (via ?? []).map((point) => point.id),
     avoidHighway: preferences?.avoidHighway === true,
@@ -34,16 +36,15 @@ export function planRoute(ctx: ToolContext, input: unknown): ToolResult<RoutePla
 
   const route = routes[key]
   if (!route) {
-    const constraints: string[] = []
+    const constraints: string[] = [`origin=${origin.latitude},${origin.longitude}`]
     if ((via ?? []).length > 0) constraints.push(`via=${(via ?? []).map((point) => point.id).join(',')}`)
     if (preferences?.avoidHighway) constraints.push('avoidHighway')
     if (preferences?.avoidTolls) constraints.push('avoidTolls')
-    const suffix = constraints.length > 0 ? `（约束：${constraints.join(', ')}）` : ''
     return errorResult(
       ctx,
       PLAN,
       'ROUTE_NOT_FOUND',
-      `未找到通往 ${destination.name} 的匹配路线${suffix}`,
+      `未找到通往 ${destination.name} 的匹配路线（约束：${constraints.join(', ')}）`,
       false,
     )
   }
@@ -98,7 +99,7 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
     }
 
     const planned = planRoute(ctx, {
-      origin: { latitude: 0, longitude: 0 },
+      origin: { latitude: DEMO_ORIGIN.latitude, longitude: DEMO_ORIGIN.longitude },
       destination: parsed.data.destination,
       via: parsed.data.via,
     })
