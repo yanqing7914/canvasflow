@@ -12,4 +12,10 @@ describe('airport pickup task engine', () => {
     state = applyEvent(state, { eventId: 'start', type: 'navigation.started', routeId: 'route-001', timestamp: '2026-07-22T12:02:00+08:00' })
     expect(state.phase).toBe('driving-to-airport')
   })
+
+  it('does not mutate terminal tasks when late events arrive', () => {
+    const completed = { ...createInitialTask(), phase: 'completed' as const, taskRevision: 4 }
+    const lateEvent = { eventId: 'late-cancel', type: 'user.cancelled-task' as const, timestamp: '2026-07-22T12:10:00+08:00' }
+    expect(applyEvent(completed, lateEvent)).toEqual(completed)
+  })
 })
