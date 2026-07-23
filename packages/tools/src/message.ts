@@ -7,7 +7,7 @@ import {
   type MessageSendOutput,
   type ToolResult,
 } from '@canvasflow/schema'
-import { familyMembers, memberPreferences } from './data'
+import { familyMembers, memberPreferences, type MemberPreferenceRecord } from './data'
 import type { MessageSendBinding, SideEffectRuntime } from './idempotency'
 import { errorResult, FIXTURE_GENERATED_AT, okResult, type ToolContext } from './result'
 
@@ -26,10 +26,13 @@ export function autoNotifyAuthorizationId(taskId: string): string {
  * Resolve the landing-notification recipient for a task: first passenger who
  * has both a contactId and landingNotificationAuthorized preference.
  */
-export function resolveAuthorizedLandingContact(memberIds: string[]): string | undefined {
+export function resolveAuthorizedLandingContact(
+  memberIds: string[],
+  preferences: Record<string, MemberPreferenceRecord> = memberPreferences,
+): string | undefined {
   for (const memberId of memberIds) {
-    if (!Object.hasOwn(memberPreferences, memberId)) continue
-    if (memberPreferences[memberId].landingNotificationAuthorized !== true) continue
+    if (!Object.hasOwn(preferences, memberId)) continue
+    if (preferences[memberId].landingNotificationAuthorized !== true) continue
     const contactId = familyMembers.find((member) => member.memberId === memberId)?.contactId
     if (contactId) return contactId
   }

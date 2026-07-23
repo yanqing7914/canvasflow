@@ -91,10 +91,8 @@ export default function App({
     if (actionId === 'retry-landing-message') {
       setTask((current) => {
         if (current.message.status !== 'failed' || !current.flight) return current
-        // Prefer the contact retained at schedule time; otherwise only authorized recipients.
-        const contactId =
-          current.message.pendingContactId ??
-          resolveAuthorizedLandingContact(current.passengers.memberIds)
+        // Always re-resolve from authorization prefs; do not trust a stale pendingContactId.
+        const contactId = resolveAuthorizedLandingContact(current.passengers.memberIds)
         if (!contactId) return current
         const ctx = { taskId: current.taskId }
         const prepared = prepareMessage(ctx, {
@@ -104,9 +102,52 @@ export default function App({
         })
         if (!prepared.ok || !prepared.data) return current
 
-        const pendingMessageId = `${current.flight.flightNumber}:landing`
+        const binding = {
+          taskId: current.taskId,
+          contactId: prepared.data.contactId,
+          messageId: prepared.data.messageId,
+          text: prepared.data.text,
+        }
+        const confirmationId = issueSendMessageConfirmation(demoRuntime, binding)
+        // Arm an explicit confirmation boundary; do not send until the user accepts.
+        return {
+          ...current,
+          message: {
+            ...current.message,
+            pendingContactId: contactId,
+            pendingMessageId: `${current.flight.flightNumber}:landing`,
+            idempotencyKey: prepared.data.messageId,
+          },
+          pendingConfirmation: {
+            confirmationId,
+            action: 'send-message',
+          },
+        }
+      })
+      return
+    }
+    if (actionId === 'confirm-retry-landing-message') {
+      setTask((current) => {
+        if (
+          current.message.status !== 'failed' ||
+          !current.flight ||
+          current.pendingConfirmation?.action !== 'send-message' ||
+          !current.message.pendingContactId
+        ) {
+          return current
+        }
+        const ctx = { taskId: current.taskId }
+        const prepared = prepareMessage(ctx, {
+          contactId: current.message.pendingContactId,
+          flightNumber: current.flight.flightNumber,
+          eta: '20:40',
+        })
+        if (!prepared.ok || !prepared.data) return current
+
+        const pendingMessageId = current.message.pendingMessageId ?? `${current.flight.flightNumber}:landing`
         const armed: AirportPickupTaskState = {
           ...current,
+          pendingConfirmation: undefined,
           message: {
             ...current.message,
             status: 'scheduled',
@@ -115,16 +156,11 @@ export default function App({
             landingNoticeSent: false,
           },
         }
-        const binding = {
-          taskId: current.taskId,
+        const sent = demoRegistry['message.send'](ctx, {
           contactId: prepared.data.contactId,
           messageId: prepared.data.messageId,
           text: prepared.data.text,
-        }
-        const confirmationId = issueSendMessageConfirmation(demoRuntime, binding)
-        const sent = demoRegistry['message.send'](ctx, {
-          ...binding,
-          confirmationId,
+          confirmationId: current.pendingConfirmation.confirmationId,
           idempotencyKey: `${prepared.data.messageId}:retry`,
         })
         if (!sent.ok) {

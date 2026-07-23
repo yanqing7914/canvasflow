@@ -66,6 +66,8 @@ export type CabinEffectRecord = {
 
 export type MemoryProposalRecord = {
   proposalId: string
+  /** Task that issued this proposal; confirm-update must stay on the same task. */
+  taskId: string
   memberId: string
   before: Record<string, unknown>
   after: Record<string, unknown>
@@ -158,6 +160,8 @@ export class ConfirmationStore {
 export type SideEffectRuntime = {
   idempotency: IdempotencyStore
   confirmations: ConfirmationStore
+  /** Route IDs successfully returned by plan-route / update-route for each task. */
+  plannedRouteIdsByTask: Map<string, Set<string>>
   cabinEffects: Map<string, CabinEffectRecord>
   cabinCurrent: CabinProfileValues
   memoryProposals: Map<string, MemoryProposalRecord>
@@ -175,6 +179,7 @@ export function createSideEffectRuntime(nowMs: () => number = () => Date.parse('
   return {
     idempotency: new IdempotencyStore(),
     confirmations: new ConfirmationStore(),
+    plannedRouteIdsByTask: new Map(),
     cabinEffects: new Map(),
     cabinCurrent: { temperatureC: 22, fanLevel: 2 },
     memoryProposals: new Map(),

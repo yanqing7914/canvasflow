@@ -4,6 +4,7 @@ import {
   type AirportPickupEvent,
   type AirportPickupTaskState,
 } from '@canvasflow/schema'
+import { resolveAuthorizedLandingContact } from '@canvasflow/tools'
 
 export * from './effects'
 
@@ -47,8 +48,9 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
         next.message.status = 'scheduled'
         next.message.pendingMessageId = `${event.flight.flightNumber}:landing`
         next.message.idempotencyKey = `${next.taskId}:${event.flight.flightNumber}:landing`
-        // Retain the authorized recipient for later explicit retry after failure.
-        if (next.passengers.memberIds.includes('mom')) next.message.pendingContactId = 'contact-mom'
+        // Retain only a currently authorized recipient for later explicit retry.
+        const contactId = resolveAuthorizedLandingContact(next.passengers.memberIds)
+        if (contactId) next.message.pendingContactId = contactId
       }
       break
     case 'navigation.started':

@@ -9,7 +9,7 @@ import { createMediaPlayer } from './media'
 import { createPreferenceReader } from './memory'
 import { createMemoryWriteTools } from './memory-write'
 import { createMessageSender, prepareMessage } from './message'
-import { createNavigationSideEffects, planRoute } from './navigation'
+import { createNavigationSideEffects } from './navigation'
 import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
 
@@ -142,7 +142,7 @@ export function createProviderRegistry(runtime: SideEffectRuntime = createSideEf
     'memory.propose-update': memoryWrite.proposeMemoryUpdate,
     'memory.confirm-update': memoryWrite.confirmMemoryUpdate,
     'flight.get-status': getFlightStatus,
-    'navigation.plan-route': planRoute,
+    'navigation.plan-route': navigation.planRoute,
     'navigation.start': navigation.startNavigation,
     'navigation.update-route': navigation.updateRoute,
     'vehicle.get-status': getVehicleStatus,

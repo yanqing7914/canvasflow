@@ -143,6 +143,12 @@ describe('fixture toolResults contract', () => {
 
   it('regenerates side-effect tool results from the fixture providers', () => {
     const registry = createProviderRegistry(createSideEffectRuntime())
+    expect(
+      registry['navigation.plan-route'](ctx, {
+        origin: { latitude: 31.23, longitude: 121.47 },
+        destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      }).ok,
+    ).toBe(true)
     expect(registry['navigation.start'](ctx, { routeId: 'route-airport-001', idempotencyKey: 'nav-start-airport' }).data)
       .toEqual(toolData('route-airport', 'navigation.start'))
     expect(
@@ -218,6 +224,12 @@ function replayMainTimeline(): TimelineRun {
 
   step(event('route-airport'))
   expect(state.phase).toBe('driving-to-airport')
+  const planned = registry['navigation.plan-route'](ctx, {
+    origin: { latitude: 31.23, longitude: 121.47 },
+    destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+  })
+  expect(planned.ok).toBe(true)
+  expect(planned.data?.routeId).toBe(state.navigation!.routeId)
   const started = registry['navigation.start'](ctx, { routeId: state.navigation!.routeId, idempotencyKey: `${state.taskId}:nav-start` })
   expect(started.ok).toBe(true)
 

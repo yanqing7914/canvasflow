@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { memberPreferences, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { applyEvent, createInitialTask, planEffects, resolveConfirmation } from './index'
 
 describe('airport pickup task engine', () => {
@@ -150,6 +151,62 @@ describe('airport pickup task engine', () => {
     expect(planEffects(state, event, toolResults)).toEqual([
       { type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
     ])
+  })
+
+  it('schedules landing notify with the first authorized contact, not a hard-coded mom', () => {
+    const driving = {
+      ...createInitialTask(),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      updatedAt: '2026-07-22T20:30:00+08:00',
+    }
+    const landed = applyEvent(driving, {
+      eventId: 'landed-auth-contact',
+      type: 'flight.updated',
+      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      timestamp: '2026-07-22T20:40:00+08:00',
+    })
+    expect(landed.message.pendingContactId).toBe('contact-mom')
+
+    const unauthorizedOnly = applyEvent(
+      {
+        ...driving,
+        passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
+      },
+      {
+        eventId: 'landed-no-auth-contact',
+        type: 'flight.updated',
+        flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        timestamp: '2026-07-22T20:40:00+08:00',
+      },
+    )
+    expect(unauthorizedOnly.message.status).toBe('scheduled')
+    expect(unauthorizedOnly.message.pendingContactId).toBeUndefined()
+
+    // mom unauthorized + dad authorized → agent retains dad, not a hard-coded mom contact.
+    const momWasAuthorized = memberPreferences.mom.landingNotificationAuthorized
+    const dadWasAuthorized = memberPreferences.dad.landingNotificationAuthorized
+    memberPreferences.mom.landingNotificationAuthorized = false
+    memberPreferences.dad.landingNotificationAuthorized = true
+    try {
+      expect(resolveAuthorizedLandingContact(['mom', 'dad'])).toBe('contact-dad')
+      const dadPreferred = applyEvent(
+        {
+          ...driving,
+          passengers: { memberIds: ['mom', 'dad'], names: ['妈妈', '爸爸'], confirmedOnboard: false },
+        },
+        {
+          eventId: 'landed-dad-auth',
+          type: 'flight.updated',
+          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          timestamp: '2026-07-22T20:40:00+08:00',
+        },
+      )
+      expect(dadPreferred.message.pendingContactId).toBe('contact-dad')
+    } finally {
+      memberPreferences.mom.landingNotificationAuthorized = momWasAuthorized
+      memberPreferences.dad.landingNotificationAuthorized = dadWasAuthorized
+    }
   })
 
   it('plans cabin apply from memory.get-preferences members shape', () => {
