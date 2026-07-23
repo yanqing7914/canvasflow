@@ -128,3 +128,6 @@ export const chargingStation = {
   suggestedDurationMinutes: 10,
   etaImpactMinutes: 12,
 }
+
+/** Planned route IDs that navigation.start / update-route may activate. */
+export const knownRouteIds = new Set(Object.values(routes).map((route) => route.routeId))
