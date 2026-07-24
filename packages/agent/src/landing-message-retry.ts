@@ -4,6 +4,7 @@ import {
   createMessagePreparer,
   createMessageSender,
   resolveAuthorizedLandingContact,
+  revokeSendMessageConfirmation,
   type MemberPreferenceRecord,
   type SideEffectRuntime,
 } from '@canvasflow/tools'
@@ -50,6 +51,11 @@ export function armLandingMessageRetry(
   const contactId = resolveAuthorizedLandingContact(task.passengers.memberIds, runtime.preferences)
   if (!contactId) return undefined
 
+  // Superseding an in-flight confirmation must kill the previous opaque grant.
+  if (task.pendingConfirmation?.action === 'send-message') {
+    revokeSendMessageConfirmation(runtime, task.pendingConfirmation.confirmationId)
+  }
+
   const eta = resolveLandingMeetingEta(task)
   const prepared = createMessagePreparer(runtime)(
     { taskId: task.taskId },
@@ -89,7 +95,7 @@ export type LandingMessageRetryResolution =
 /**
  * Resolve a pending send-message confirmation.
  * Accept prepares an armed task + receipt event for the caller to apply;
- * reject only clears the confirmation boundary.
+ * reject clears the confirmation boundary and revokes the opaque grant.
  */
 export function resolveLandingMessageRetry(
   task: AirportPickupTaskState,
@@ -109,6 +115,7 @@ export function resolveLandingMessageRetry(
   }
 
   if (decision === 'reject') {
+    revokeSendMessageConfirmation(runtime, confirmationId)
     return {
       decision: 'reject',
       task: {
@@ -155,6 +162,9 @@ export function resolveLandingMessageRetry(
   )
 
   if (!sent.ok) {
+    // Provider may leave the grant live for a same-token retry; this confirmation
+    // boundary is closed — UI must re-arm — so revoke any leftover capability.
+    revokeSendMessageConfirmation(runtime, confirmationId)
     return {
       decision: 'accept',
       task: armed,

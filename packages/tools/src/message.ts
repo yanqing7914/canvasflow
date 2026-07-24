@@ -41,6 +41,11 @@ export function issueSendMessageConfirmation(runtime: SideEffectRuntime, binding
   return runtime.confirmations.issueSendMessageConfirmation(binding)
 }
 
+/** Revoke an abandoned / rejected / superseded send-message confirmation. */
+export function revokeSendMessageConfirmation(runtime: SideEffectRuntime, confirmationId: string): boolean {
+  return runtime.confirmations.revokeSendMessageConfirmation(confirmationId)
+}
+
 /**
  * Issue an opaque auto-notify capability grant bound to a prepared landing-message
  * payload (taskId + contactId + messageId + text). Not forgeable from taskId alone.

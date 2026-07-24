@@ -158,6 +158,17 @@ export class ConfirmationStore {
     return true
   }
 
+  /**
+   * Irrevocably invalidates a send-message confirmation after reject / abandon /
+   * supersede. Does not require a payload match — the confirmation boundary is gone.
+   */
+  revokeSendMessageConfirmation(confirmationId: string): boolean {
+    const grant = this.grants.get(confirmationId)
+    if (!grant || grant.kind !== 'send-message') return false
+    grant.consumed = true
+    return true
+  }
+
   matchesMemoryConfirmation(confirmationId: string, binding: MemoryConfirmBinding): boolean {
     const grant = this.grants.get(confirmationId)
     if (!grant || grant.kind !== 'confirm-memory' || grant.consumed) return false
