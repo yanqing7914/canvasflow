@@ -8,6 +8,7 @@ import { memberPreferences, resolveAuthorizedLandingContact, type MemberPreferen
 import { normalizeFlightNumber } from './flight-number'
 
 export * from './effects'
+export * from './effect-executor'
 export * from './flight-number'
 export * from './composer'
 export * from './landing-message-retry'
