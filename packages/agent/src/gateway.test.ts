@@ -199,9 +199,9 @@ describe('AgentGateway', () => {
 
     const first = gateway.submitEvent(created.task.taskId, request)
     expect(first.task).toMatchObject({
-      ...created.task,
       uiRevision: created.task.uiRevision + 1,
-      taskRevision: created.task.taskRevision,
+      taskRevision: created.task.taskRevision + 1,
+      phase: 'preparing',
     })
     expect(first.ui.meta.generatedBy).toBe('fallback')
     expect(first.meta.fallbackUsed).toBe(true)
@@ -222,9 +222,9 @@ describe('AgentGateway', () => {
       event: { eventId: 'unknown-flight', type: 'user.input', text: 'MU9999', timestamp: '2026-07-22T12:01:00+08:00' },
     })
     expect(failed.task).toMatchObject({
-      ...created.task,
       uiRevision: created.task.uiRevision + 1,
-      taskRevision: created.task.taskRevision,
+      taskRevision: created.task.taskRevision + 1,
+      phase: 'preparing',
     })
     expect(failed.ui.meta.generatedBy).toBe('fallback')
     expect(failed.meta.fallbackUsed).toBe(true)
@@ -287,6 +287,37 @@ describe('AgentGateway', () => {
       navigation: { routeId: 'route-airport-001' },
       message: { autoNotifyAuthorized: true },
     })
+  })
+
+  it('preserves an incremental flight slot when preparation fails after user input', () => {
+    const base = new ReadToolOrchestrator()
+    const orchestrator = {
+      resolveInitialPassengers: base.resolveInitialPassengers.bind(base),
+      prepareTrip: () => { throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'flight timeout', true) },
+      resolveReturnTripPreferences: base.resolveReturnTripPreferences.bind(base),
+    }
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator })
+    const created = gateway.createTask(createRequest('接妈妈'))
+
+    const fallback = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight-input',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'flight-input', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(fallback.meta.fallbackUsed).toBe(true)
+    expect(fallback.task).toMatchObject({
+      phase: 'preparing',
+      flight: { flightNumber: 'MU5102' },
+      passengers: { memberIds: ['mom'], names: ['妈妈'] },
+    })
+    const duplicate = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight-input-retry',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'flight-input', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(duplicate.task).toEqual(fallback.task)
+    expect(duplicate.ui).toEqual(fallback.ui)
   })
 
   it('returns the current snapshot through revision conflict errors', () => {

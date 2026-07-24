@@ -218,7 +218,7 @@ export class AgentGateway {
         toolResults = { ...toolResults, ...passengerToolResults, ...prepared.toolResults }
       } catch (error) {
         if (error instanceof ReadToolOrchestrationError) {
-          const stored = this.#store.save(this.#publishFallback(current.task, current.toolResults, error))
+          const stored = this.#store.save(this.#publishFallback(next, current.toolResults, error))
           this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
           return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
         }
