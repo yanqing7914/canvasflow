@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { uiSpecSchema, type AirportPickupEvent, type AirportPickupTaskState } from '@canvasflow/schema'
 import { applyEvent, planEffects } from '@canvasflow/agent'
 import { composeFallbackSpec, composePickupSpec } from '@canvasflow/ui'
+import { TIMEOUT_DESTINATION_ID } from './data'
 import { getFlightStatus } from './flight'
 import { planRoute } from './navigation'
 import { FAILING_CONTACT_ID, issueAutoNotifyAuthorization, issueSendMessageConfirmation } from './message'
@@ -19,7 +20,7 @@ function drivingState(overrides: Partial<AirportPickupTaskState> = {}): AirportP
     uiRevision: 3,
     phase: 'driving-to-airport',
     passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-    flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+    flight: { flightNumber: 'MU5102', status: 'in-air', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
     navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
     charging: { recommended: false, accepted: false, status: 'none' },
     message: { autoNotifyAuthorized: true, status: 'idle', landingNoticeSent: false },
@@ -33,7 +34,7 @@ function landedEvent(eventId: string, timestamp: string): AirportPickupEvent {
   return {
     eventId,
     type: 'flight.updated',
-    flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+    flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
     timestamp,
   }
 }
@@ -59,7 +60,7 @@ describe('无授权落地联系人：不进入 scheduled 死胡同', () => {
   it('失败态无授权联系人时展示不可用说明，不渲染重试发送', () => {
     const failed = drivingState({
       passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
       message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
     })
     const spec = composePickupSpec(failed, { landingMessageRetryAvailable: false })
@@ -360,6 +361,157 @@ describe('charging.completed：保留机场路线上下文；直达切回由 Pla
     })
     expect(direct.data?.routeId).toBe('route-airport-001')
     expect(viaStation.data?.routeId).toBe('route-airport-via-charge-001')
+  })
+})
+
+describe('航班延误 / 取消：不触发落地通知，状态可投影', () => {
+  it('延误更新 ETA 与航站楼，且不计划自动消息', () => {
+    const preparing = drivingState({
+      phase: 'preparing',
+      navigation: undefined,
+      taskRevision: 1,
+      uiRevision: 1,
+      flight: { flightNumber: 'MU5102', status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      updatedAt: '2026-07-22T20:01:00+08:00',
+    })
+    const delayedEvent: AirportPickupEvent = {
+      eventId: 'delayed-1',
+      type: 'flight.updated',
+      flight: { flightNumber: 'MU5102', status: 'delayed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T21:10:00+08:00', terminal: 'T1' },
+      timestamp: '2026-07-22T20:15:00+08:00',
+    }
+    expect(planEffects(preparing, delayedEvent, {})).toEqual([])
+    const delayed = applyEvent(preparing, delayedEvent)
+    expect(delayed.flight).toEqual(delayedEvent.flight)
+    expect(delayed.flight).toMatchObject({
+      status: 'delayed',
+      scheduledArrival: '2026-07-22T20:30:00+08:00',
+      estimatedArrival: '2026-07-22T21:10:00+08:00',
+    })
+    expect(delayed.message).toMatchObject({ status: 'idle', landingNoticeSent: false })
+    expect(composePickupSpec(delayed).components).toEqual([
+      expect.objectContaining({
+        type: 'flight-status',
+        props: expect.objectContaining({
+          status: 'delayed',
+          terminal: 'T1',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: '2026-07-22T21:10:00+08:00',
+        }),
+      }),
+    ])
+  })
+
+  it('取消航班不计划落地通知，任务保持 preparing', () => {
+    const preparing = drivingState({
+      phase: 'preparing',
+      navigation: undefined,
+      taskRevision: 1,
+      uiRevision: 1,
+      charging: { recommended: true, accepted: false, status: 'planned' },
+      updatedAt: '2026-07-22T20:02:00+08:00',
+    })
+    const cancelledEvent: AirportPickupEvent = {
+      eventId: 'cancelled-1',
+      type: 'flight.updated',
+      flight: { flightNumber: 'MU5102', status: 'cancelled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:30:00+08:00', terminal: 'T2' },
+      timestamp: '2026-07-22T20:08:00+08:00',
+    }
+    expect(planEffects(preparing, cancelledEvent, {})).toEqual([])
+    const cancelled = applyEvent(preparing, cancelledEvent)
+    expect(cancelled.phase).toBe('preparing')
+    expect(cancelled.flight?.status).toBe('cancelled')
+    expect(cancelled.message.status).toBe('idle')
+    // 取消后再次落地推送也不应自动发消息（状态不是 landed）
+    expect(planEffects(cancelled, landedEvent('landed-after-cancel', '2026-07-22T20:40:00+08:00'), {})).toEqual([])
+  })
+})
+
+describe('message.cancelled：用户取消后本次落地不再自动调度', () => {
+  it('message.status=cancelled 时后续落地推送不再计划发送', () => {
+    const cancelledNotice = drivingState({
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      message: {
+        autoNotifyAuthorized: true,
+        status: 'cancelled',
+        landingNoticeSent: false,
+        idempotencyKey: 'pickup-001:MU5102:landing',
+      },
+      updatedAt: '2026-07-22T20:41:00+08:00',
+    })
+    expect(planEffects(cancelledNotice, landedEvent('landed-after-cancel-notice', '2026-07-22T20:42:00+08:00'), {})).toEqual([])
+    // reducer 对非 idle 状态也不会再次调度
+    const after = applyEvent(cancelledNotice, landedEvent('landed-after-cancel-notice', '2026-07-22T20:42:00+08:00'))
+    expect(after.message.status).toBe('cancelled')
+    expect(after.message.landingNoticeSent).toBe(false)
+  })
+})
+
+describe('路线拥堵改线与 plan-route 超时', () => {
+  it('途中可通过外环 via 切到拥堵备选路线', () => {
+    const registry = createProviderRegistry(createSideEffectRuntime())
+    const active = drivingState()
+    expect(
+      registry['navigation.plan-route'](ctx, {
+        origin: { latitude: 31.23, longitude: 121.47 },
+        destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      }).ok,
+    ).toBe(true)
+    const bypassed = registry['navigation.update-route'](ctx, {
+      routeId: active.navigation!.routeId,
+      destination: { id: 'destination-hongqiao-t2', name: active.navigation!.destination },
+      via: [{ id: 'via-ring-road-01', name: '外环快速路' }],
+      idempotencyKey: `${active.taskId}:bypass-congestion`,
+    })
+    expect(bypassed.ok).toBe(true)
+    expect(bypassed.data).toMatchObject({
+      routeId: 'route-airport-bypass-001',
+      destination: '虹桥机场 T2',
+      status: 'active',
+    })
+  })
+
+  it('destination-timeout 确定性触发 PROVIDER_TIMEOUT，可走降级卡片', () => {
+    const first = planRoute(ctx, {
+      origin: { latitude: 31.23, longitude: 121.47 },
+      destination: { id: TIMEOUT_DESTINATION_ID, name: '超时目的地' },
+    })
+    const second = planRoute(ctx, {
+      origin: { latitude: 31.23, longitude: 121.47 },
+      destination: { id: TIMEOUT_DESTINATION_ID, name: '超时目的地' },
+    })
+    expect(first.error).toMatchObject({ code: 'PROVIDER_TIMEOUT', retryable: true })
+    expect(second).toEqual(first)
+
+    const state = drivingState()
+    const timedOut = applyEvent(state, {
+      eventId: 'route-timeout',
+      type: 'provider.timeout',
+      provider: 'navigation-provider',
+      timestamp: '2026-07-22T20:36:00+08:00',
+    })
+    const spec = composeFallbackSpec(timedOut, '路线数据暂时不可用', '正在使用缓存路线或固定降级卡片。')
+    expect(spec.meta.generatedBy).toBe('fallback')
+    expect(spec.components[0]).toMatchObject({
+      type: 'status-banner',
+      props: expect.objectContaining({ level: 'warning', title: '路线数据暂时不可用' }),
+    })
+  })
+
+  it('navigation.update-route 透传 destination-timeout 的 retryable', () => {
+    const registry = createProviderRegistry(createSideEffectRuntime())
+    expect(
+      registry['navigation.plan-route'](ctx, {
+        origin: { latitude: 31.23, longitude: 121.47 },
+        destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      }).ok,
+    ).toBe(true)
+    const updated = registry['navigation.update-route'](ctx, {
+      routeId: 'route-airport-001',
+      destination: { id: TIMEOUT_DESTINATION_ID, name: '超时目的地' },
+      idempotencyKey: 'pickup-001:update-timeout',
+    })
+    expect(updated.error).toMatchObject({ code: 'PROVIDER_TIMEOUT', retryable: true })
   })
 })
 

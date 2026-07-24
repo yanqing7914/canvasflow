@@ -46,9 +46,20 @@ export const memberPreferences: Record<string, MemberPreferenceRecord> = {
 /** Requesting this flight number deterministically simulates PROVIDER_TIMEOUT. */
 export const TIMEOUT_FLIGHT_NUMBER = 'MU0000'
 
+/**
+ * Requesting a route to this destination id deterministically simulates
+ * PROVIDER_TIMEOUT for navigation.plan-route (mirrors MU0000 for flights).
+ */
+export const TIMEOUT_DESTINATION_ID = 'destination-timeout'
+
 export type FlightRecord = FlightStatusOutput & { date: string }
 
-/** Fixtures are keyed by flight number; `date` must also match the request. */
+/**
+ * Fixtures are keyed by flight number; `date` must also match the request.
+ * MU5102 is the main-demo flight (scheduled baseline; in-air / landed / delayed /
+ * cancelled updates arrive as provider pushes on the timeline). MU5103 / MU5104
+ * are exception lookup fixtures for delayed and cancelled tool demos.
+ */
 export const flights: Record<string, FlightRecord> = {
   MU5102: {
     flightNumber: 'MU5102',
@@ -56,6 +67,24 @@ export const flights: Record<string, FlightRecord> = {
     status: 'scheduled',
     scheduledArrival: '2026-07-22T20:30:00+08:00',
     estimatedArrival: '2026-07-22T20:40:00+08:00',
+    terminal: 'T2',
+    sourceUpdatedAt: FIXTURE_GENERATED_AT,
+  },
+  MU5103: {
+    flightNumber: 'MU5103',
+    date: '2026-07-22',
+    status: 'delayed',
+    scheduledArrival: '2026-07-22T20:30:00+08:00',
+    estimatedArrival: '2026-07-22T21:10:00+08:00',
+    terminal: 'T1',
+    sourceUpdatedAt: FIXTURE_GENERATED_AT,
+  },
+  MU5104: {
+    flightNumber: 'MU5104',
+    date: '2026-07-22',
+    status: 'cancelled',
+    scheduledArrival: '2026-07-22T20:30:00+08:00',
+    estimatedArrival: '2026-07-22T20:30:00+08:00',
     terminal: 'T2',
     sourceUpdatedAt: FIXTURE_GENERATED_AT,
   },
@@ -116,6 +145,33 @@ export const routes: Record<string, RoutePlanOutput> = {
     arrivalTime: '2026-07-22T20:37:00+08:00',
     estimatedBatteryAtArrival: 55,
   },
+  // Congestion alternate: avoid the highway (plan-route with avoidHighway).
+  [demoRouteKey({
+    destinationId: 'destination-hongqiao-t2',
+    viaIds: [],
+    avoidHighway: true,
+    avoidTolls: false,
+  })]: {
+    routeId: 'route-airport-avoid-hw-001',
+    distanceKm: 36,
+    durationMinutes: 28,
+    arrivalTime: '2026-07-22T20:33:00+08:00',
+    estimatedBatteryAtArrival: 25,
+  },
+  // Congestion alternate mid-trip: ring-road via for navigation.update-route
+  // (update-route schema has via but not preferences).
+  [demoRouteKey({
+    destinationId: 'destination-hongqiao-t2',
+    viaIds: ['via-ring-road-01'],
+    avoidHighway: false,
+    avoidTolls: false,
+  })]: {
+    routeId: 'route-airport-bypass-001',
+    distanceKm: 40,
+    durationMinutes: 30,
+    arrivalTime: '2026-07-22T20:35:00+08:00',
+    estimatedBatteryAtArrival: 24,
+  },
   [demoRouteKey({
     destinationId: 'destination-home',
     viaIds: [],
@@ -140,6 +196,7 @@ export type VehicleSnapshotName =
   | 'low-battery-parked'
   | 'low-battery-city'
   | 'low-battery-highway'
+
 export const DEFAULT_VEHICLE_SNAPSHOT: VehicleSnapshotName = 'parked'
 
 /**
@@ -229,6 +286,13 @@ export type MeetingPointRecord = {
  * only — no parking-spot query, reservation or payment.
  */
 export const recommendedMeetingPoints: Record<string, MeetingPointRecord> = {
+  T1: {
+    id: 'meeting-point-t1-01',
+    terminal: 'T1',
+    name: 'P1 停车场到达层 5 号门',
+    description: '航站楼变更后的推荐接机点；短时停车 15 分钟内免费。',
+    walkMinutes: 4,
+  },
   T2: {
     id: 'meeting-point-t2-01',
     terminal: 'T2',

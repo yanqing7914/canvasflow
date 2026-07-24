@@ -23,6 +23,7 @@ describe('landing-message retry ETA', () => {
       flight: {
         flightNumber: 'CA1831',
         status: 'landed' as const,
+        scheduledArrival: '2026-07-22T20:30:00+08:00',
         estimatedArrival: '2026-07-22T21:15:00+08:00',
         terminal: 'T2',
       },
@@ -65,6 +66,7 @@ describe('landing-message retry ETA', () => {
       flight: {
         flightNumber: 'MU5102',
         status: 'landed' as const,
+        scheduledArrival: '2026-07-22T20:30:00+08:00',
         estimatedArrival: '2026-07-22T20:40:00+08:00',
         terminal: 'T2',
       },
@@ -109,6 +111,7 @@ describe('landing-message retry confirmation lifecycle', () => {
       flight: {
         flightNumber: 'MU5102',
         status: 'landed' as const,
+        scheduledArrival: '2026-07-22T20:30:00+08:00',
         estimatedArrival: '2026-07-22T20:40:00+08:00',
         terminal: 'T2',
       },

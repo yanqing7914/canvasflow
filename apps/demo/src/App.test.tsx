@@ -51,7 +51,7 @@ describe('demo integration', () => {
       ...createInitialTask(),
       phase: 'approaching-airport',
       passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
       navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
     })
     expect(approaching.components[0]).toMatchObject({
@@ -63,7 +63,7 @@ describe('demo integration', () => {
       ...createInitialTask(),
       phase: 'waiting-for-passengers',
       passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
     })
     expect(waiting.components[0]).toMatchObject({
       type: 'passenger-status',
@@ -97,6 +97,7 @@ describe('demo integration', () => {
       flight: {
         flightNumber: 'MU5102',
         status: 'in-air',
+        scheduledArrival: '2026-07-22T20:30:00+08:00',
         estimatedArrival: '2026-07-22T20:40:00+08:00',
         terminal: 'T2',
       },
@@ -114,6 +115,40 @@ describe('demo integration', () => {
     })
     expect(spec.components.map((component) => component.type)).not.toContain('flight-status')
     expect(spec.components.map((component) => component.type)).not.toContain('navigation-summary')
+  })
+
+  it('surfaces delayed and cancelled flight status over active navigation', () => {
+    for (const status of ['delayed', 'cancelled'] as const) {
+      const spec = composePickupSpec({
+        ...createInitialTask(),
+        phase: 'driving-to-airport',
+        passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+        flight: {
+          flightNumber: 'MU5102',
+          status,
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: status === 'delayed' ? '2026-07-22T21:10:00+08:00' : '2026-07-22T20:30:00+08:00',
+          terminal: status === 'delayed' ? 'T1' : 'T2',
+        },
+        navigation: {
+          routeId: 'route-airport-001',
+          destination: '虹桥机场 T2',
+          eta: '2026-07-22T20:25:00+08:00',
+          status: 'active',
+        },
+        charging: { recommended: true, accepted: false, status: 'planned' },
+      })
+      expect(spec.components[0]).toMatchObject({
+        type: 'flight-status',
+        props: {
+          status,
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: status === 'delayed' ? '2026-07-22T21:10:00+08:00' : '2026-07-22T20:30:00+08:00',
+        },
+      })
+      expect(spec.components.map((component) => component.type)).not.toContain('navigation-summary')
+      expect(spec.components.map((component) => component.type)).not.toContain('charging-recommendation')
+    }
   })
 
   it('selects charging station density from parked/city/highway vehicle context', () => {
@@ -297,7 +332,7 @@ describe('demo integration', () => {
           ...createInitialTask(),
           phase: 'driving-to-airport',
           passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
           navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
           message: {
             autoNotifyAuthorized: true,
@@ -327,7 +362,7 @@ describe('demo integration', () => {
           ...createInitialTask(),
           phase: 'driving-to-airport',
           passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
-          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
           message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
           updatedAt: '2026-07-22T20:41:00+08:00',
         }}
