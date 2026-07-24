@@ -1063,6 +1063,51 @@ describe('AgentGateway', () => {
     expect(sent.ui.actions.some((action) => action.id === 'retry-landing-message')).toBe(false)
   })
 
+  it('executes the scheduled landing message before committing the sent state', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const sendMessage = vi.fn(base['message.send'])
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime, providers: { ...base, 'message.send': sendMessage } })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'message-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision,
+      actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'message-nav',
+    })
+    const landed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'message-landed', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'message-landed-event', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' },
+    })
+    expect(landed.task.message).toMatchObject({ status: 'scheduled', authorizationId: expect.stringMatching(/^cnf_/) })
+
+    const sent = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'message-sent', expectedTaskRevision: landed.task.taskRevision,
+      event: { eventId: 'message-sent-event', type: 'message.sent', messageId: landed.task.message.pendingMessageId!, timestamp: '2026-07-22T20:41:00+08:00' },
+    })
+    const duplicate = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'message-sent-retry', expectedTaskRevision: landed.task.taskRevision,
+      event: { eventId: 'message-sent-event', type: 'message.sent', messageId: landed.task.message.pendingMessageId!, timestamp: '2026-07-22T20:41:00+08:00' },
+    })
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+    expect(sent.task.message).toMatchObject({ status: 'sent', landingNoticeSent: true, authorizationId: undefined })
+    expect(sent.effects).toEqual([expect.objectContaining({ type: 'message.send', status: 'succeeded' })])
+    expect(duplicate.task).toEqual(sent.task)
+  })
+
+  it('keeps the scheduled snapshot when the landing message provider fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'message.send': (ctx) => ({ ok: false as const, data: null, error: { code: 'SEND_FAILED', message: 'failed', retryable: false }, meta: { taskId: ctx.taskId, tool: 'message.send', requestId: ctx.requestId ?? `${ctx.taskId}:message.send`, provider: 'fixture' as const, durationMs: 1, generatedAt: now } }) },
+    })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'failed-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'failed-nav' })
+    const landed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'failed-landed', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'failed-landed-event', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' } })
+    const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'failed-sent', expectedTaskRevision: landed.task.taskRevision, event: { eventId: 'failed-sent-event', type: 'message.sent', messageId: landed.task.message.pendingMessageId!, timestamp: '2026-07-22T20:41:00+08:00' } })
+    expect(failed.task).toEqual(landed.task)
+    expect(failed.effects).toEqual([expect.objectContaining({ type: 'message.send', status: 'failed', errorCode: 'SEND_FAILED' })])
+  })
+
   it('hides retry and surfaces unavailable UI when failed notify has no authorized contact', () => {
     const runtime = createSideEffectRuntime()
     const gateway = new AgentGateway({

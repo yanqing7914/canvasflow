@@ -91,6 +91,7 @@ export const airportPickupTaskStateSchema = z.object({
     pendingMessageId: z.string().optional(),
     /** Authorized recipient retained for schedule/retry; cleared after terminal send outcomes. */
     pendingContactId: z.string().optional(),
+    authorizationId: z.string().optional(),
     scheduledAt: z.iso.datetime({ offset: true }).optional(),
     sentAt: z.iso.datetime({ offset: true }).optional(),
     idempotencyKey: z.string().optional(),

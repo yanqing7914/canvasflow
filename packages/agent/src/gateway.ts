@@ -20,6 +20,7 @@ import {
 } from '@canvasflow/schema'
 import {
   createProviderRegistry,
+  issueAutoNotifyAuthorization,
   resetSideEffectRuntimeTask,
   createSideEffectRuntime,
   type MemberPreferenceRecord,
@@ -235,7 +236,28 @@ export class AgentGateway {
     }
 
     const effects = planEffects(current.task, request.event, current.toolResults ?? {}, this.#preferences)
+    if (request.event.type === 'message.sent') {
+      if (current.task.message.pendingMessageId !== request.event.messageId) {
+        throw new AgentGatewayError('INVALID_REQUEST', 'Message is not pending for this task', false, current)
+      }
+      const execution = this.#effectExecutor.sendLandingMessage({ task: current.task, idempotencyKey: current.task.message.idempotencyKey ?? request.event.eventId, effectId: `${request.event.eventId}:0` })
+      if (!execution.succeeded) {
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [execution.effect] })
+        return this.#response(request.clientRequestId, current, [execution.effect], performance.now() - startedAt)
+      }
+      const sent = this.#store.save(this.#publish(applyEvent(current.task, request.event, this.#preferences), current.toolResults))
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored: sent, effects: [execution.effect] })
+      return this.#response(request.clientRequestId, sent, [execution.effect], performance.now() - startedAt)
+    }
     let next = applyEvent(current.task, request.event, this.#preferences)
+    if (request.event.type === 'flight.updated' && request.event.flight.status === 'landed' && next.message.pendingContactId && next.message.pendingMessageId) {
+      next.message.authorizationId = issueAutoNotifyAuthorization(this.#runtime, {
+        taskId,
+        contactId: next.message.pendingContactId,
+        messageId: next.message.pendingMessageId,
+        text: `我已到达机场接机点，航班 ${request.event.flight.flightNumber}，预计 ${next.navigation?.eta ?? request.event.flight.estimatedArrival} 会合。`,
+      })
+    }
     let toolResults = current.toolResults
     const flightNumber = request.event.type === 'user.input' ? normalizeFlightNumber(request.event.text) : undefined
     const parsedPassengers = request.event.type === 'user.input' ? parsePassengers(request.event.text) : undefined
