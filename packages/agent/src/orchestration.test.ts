@@ -1,7 +1,13 @@
 import type { FlightStatusOutput, GetPreferencesOutput, ToolResult } from '@canvasflow/schema'
-import { createProviderRegistry, type ProviderRegistry } from '@canvasflow/tools'
+import { createProviderRegistry, type ProviderRegistry, type ToolContext } from '@canvasflow/tools'
 import { describe, expect, it, vi } from 'vitest'
 import { ReadToolOrchestrationError, ReadToolOrchestrator } from './orchestration'
+
+type MutableProviderRegistry = { -readonly [K in keyof ProviderRegistry]: ProviderRegistry[K] }
+
+function createMutableRegistry(): MutableProviderRegistry {
+  return { ...createProviderRegistry() }
+}
 
 function successfulResult<T>(tool: string, data: T): ToolResult<T> {
   return {
@@ -22,7 +28,7 @@ function successfulResult<T>(tool: string, data: T): ToolResult<T> {
 describe('ReadToolOrchestrator', () => {
   it('wires passenger and trip reads through validated provider results', () => {
     const base = createProviderRegistry()
-    const registry = Object.fromEntries(Object.entries(base).map(([name, handler]) => [name, vi.fn(handler)])) as unknown as ProviderRegistry
+    const registry = Object.fromEntries(Object.entries(base).map(([name, handler]) => [name, vi.fn(handler)])) as unknown as MutableProviderRegistry
     const orchestrator = new ReadToolOrchestrator({ registry })
 
     const passengers = orchestrator.resolveInitialPassengers('pickup-001', 'create-001', ['妈妈', '豆豆'])
@@ -49,8 +55,8 @@ describe('ReadToolOrchestrator', () => {
   })
 
   it('rejects invalid envelopes before using provider data', () => {
-    const registry = createProviderRegistry()
-    registry['family.resolve-members'] = () => ({ ok: true, data: { members: [] } }) as ToolResult<unknown>
+    const registry = createMutableRegistry()
+    registry['family.resolve-members'] = () => ({ ok: true, data: { members: [] } }) as unknown as ReturnType<ProviderRegistry['family.resolve-members']>
     const orchestrator = new ReadToolOrchestrator({ registry })
 
     expect(() => orchestrator.resolveInitialPassengers('pickup-001', 'create-001', ['妈妈'])).toThrowError(
@@ -59,7 +65,7 @@ describe('ReadToolOrchestrator', () => {
   })
 
   it('authorizes notification when a later contactable member has valid authorization', () => {
-    const registry = createProviderRegistry()
+    const registry = createMutableRegistry()
     registry['family.resolve-members'] = () => successfulResult('family.resolve-members', {
       members: [
         { memberId: 'doubao', displayName: '豆豆' },
@@ -67,7 +73,7 @@ describe('ReadToolOrchestrator', () => {
       ],
       unresolvedLabels: [],
     })
-    registry['memory.get-preferences'] = (_ctx, input) => {
+    registry['memory.get-preferences'] = (_ctx: ToolContext, input?: unknown) => {
       expect(input).toEqual({ memberIds: ['doubao', 'mom'], scopes: ['notification'] })
       return successfulResult<GetPreferencesOutput>('memory.get-preferences', {
         members: [
@@ -85,7 +91,7 @@ describe('ReadToolOrchestrator', () => {
   })
 
   it('does not authorize notification for an authorized member without a contact id', () => {
-    const registry = createProviderRegistry()
+    const registry = createMutableRegistry()
     registry['memory.get-preferences'] = () => successfulResult<GetPreferencesOutput>('memory.get-preferences', {
       members: [{ memberId: 'doubao', landingNotificationAuthorized: true }],
     })
@@ -98,7 +104,7 @@ describe('ReadToolOrchestrator', () => {
   })
 
   it('retries flight status exactly once after a retryable failure', () => {
-    const registry = createProviderRegistry()
+    const registry = createMutableRegistry()
     const success = registry['flight.get-status']
     registry['flight.get-status'] = vi.fn()
       .mockReturnValueOnce({
@@ -122,7 +128,7 @@ describe('ReadToolOrchestrator', () => {
   })
 
   it('retries route planning once, then returns the second retryable failure', () => {
-    const registry = createProviderRegistry()
+    const registry = createMutableRegistry()
     const failure = {
       ok: false,
       data: null,
@@ -141,7 +147,7 @@ describe('ReadToolOrchestrator', () => {
   })
 
   it('maps provider timeout results to a retryable typed error', () => {
-    const registry = createProviderRegistry()
+    const registry = createMutableRegistry()
     registry['flight.get-status'] = vi.fn(registry['flight.get-status'])
     const orchestrator = new ReadToolOrchestrator({ registry })
 
