@@ -4,11 +4,13 @@ import {
   type AirportPickupEvent,
   type AirportPickupTaskState,
 } from '@canvasflow/schema'
+import { memberPreferences, resolveAuthorizedLandingContact, type MemberPreferenceRecord } from '@canvasflow/tools'
 import { normalizeFlightNumber } from './flight-number'
 
 export * from './effects'
 export * from './flight-number'
 export * from './composer'
+export * from './landing-message-retry'
 export * from './gateway'
 export * from './orchestration'
 export * from './planner'
@@ -31,7 +33,11 @@ function taskFacts(state: AirportPickupTaskState) {
   }
 }
 
-export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEvent): AirportPickupTaskState {
+export function applyEvent(
+  state: AirportPickupTaskState,
+  input: AirportPickupEvent,
+  preferences: Record<string, MemberPreferenceRecord> = memberPreferences,
+): AirportPickupTaskState {
   const event = airportPickupEventSchema.parse(input)
   if (state.processedEventIds.includes(event.eventId)) return state
   if (state.phase === 'completed' || state.phase === 'cancelled') return state
@@ -57,9 +63,15 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'flight.updated':
       next.flight = event.flight
       if (next.phase === 'driving-to-airport' && event.flight.status === 'landed' && next.message.autoNotifyAuthorized && !next.message.landingNoticeSent && next.message.status === 'idle') {
-        next.message.status = 'scheduled'
-        next.message.pendingMessageId = `${event.flight.flightNumber}:landing`
-        next.message.idempotencyKey = `${next.taskId}:${event.flight.flightNumber}:landing`
+        // Never enter scheduled without a currently authorized recipient — otherwise
+        // planEffects/UI can trap the task in a high-priority notify state with no recovery.
+        const contactId = resolveAuthorizedLandingContact(next.passengers.memberIds, preferences)
+        if (contactId) {
+          next.message.status = 'scheduled'
+          next.message.pendingMessageId = `${event.flight.flightNumber}:landing`
+          next.message.idempotencyKey = `${next.taskId}:${event.flight.flightNumber}:landing`
+          next.message.pendingContactId = contactId
+        }
       }
       break
     case 'navigation.started':
@@ -87,8 +99,22 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
       if (next.message.status === 'scheduled') next.message.status = 'cancelled'
       break
     case 'provider.timeout': handled = true; break
-    case 'message.sent': if (next.message.pendingMessageId === event.messageId) { next.message.status = 'sent'; next.message.landingNoticeSent = true; next.message.sentAt = event.timestamp; next.message.pendingMessageId = undefined } break
-    case 'message.failed': if (next.message.pendingMessageId === event.messageId) { next.message.status = 'failed'; next.message.pendingMessageId = undefined } break
+    case 'message.sent':
+      if (next.message.pendingMessageId === event.messageId) {
+        next.message.status = 'sent'
+        next.message.landingNoticeSent = true
+        next.message.sentAt = event.timestamp
+        next.message.pendingMessageId = undefined
+        next.message.pendingContactId = undefined
+      }
+      break
+    case 'message.failed':
+      if (next.message.pendingMessageId === event.messageId) {
+        next.message.status = 'failed'
+        next.message.pendingMessageId = undefined
+        // Keep pendingContactId so explicit retry targets the original recipient.
+      }
+      break
     default: break
   }
   const afterFacts = taskFacts(next)

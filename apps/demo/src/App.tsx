@@ -1,7 +1,16 @@
 import { useMemo, useState } from 'react'
-import { applyEvent, createInitialTask, resolveConfirmation } from '@canvasflow/agent'
-import { composePickupSpec } from '@canvasflow/ui'
+import {
+  applyEvent,
+  armLandingMessageRetry,
+  createInitialTask,
+  resolveConfirmation,
+  resolveLandingMessageRetry,
+} from '@canvasflow/agent'
+import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
+import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
 import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
+
+const demoRuntime = createSideEffectRuntime()
 
 const timeline: AirportPickupEvent[] = [
   { eventId: 'start-navigation', type: 'navigation.started', routeId: 'route-airport-001', timestamp: '2026-07-22T20:05:00+08:00' },
@@ -32,7 +41,13 @@ function componentSummary(component: ComponentSpec): string {
     case 'charging-recommendation': return component.props.reason
     case 'message-preview': return `${component.props.contactLabel}：${component.props.textPreview}`
     case 'passenger-status': return component.props.meetingPoint ? `${component.props.label} · ${component.props.meetingPoint}` : component.props.label
-    case 'cabin-profile': return `${component.props.temperatureC}°C${component.props.mediaTitle ? ` · ${component.props.mediaTitle}` : ''}`
+    case 'cabin-profile': {
+      const parts: string[] = []
+      if (component.props.temperatureC !== undefined) parts.push(`${component.props.temperatureC}°C`)
+      if (component.props.fanLevel !== undefined) parts.push(`风速 ${component.props.fanLevel}`)
+      if (component.props.mediaTitle) parts.push(component.props.mediaTitle)
+      return parts.join(' · ')
+    }
     case 'alert': return component.props.message ?? component.props.title
   }
 }
@@ -52,18 +67,50 @@ function componentTitle(component: ComponentSpec): string {
   }
 }
 
-export default function App({ initialTask = createDemoTask() }: { initialTask?: AirportPickupTaskState }) {
+export default function App({
+  initialTask = createDemoTask(),
+  composeContext = {},
+}: {
+  initialTask?: AirportPickupTaskState
+  composeContext?: ComposerContext
+}) {
   const [task, setTask] = useState<AirportPickupTaskState>(initialTask)
-  const spec = useMemo(() => composePickupSpec(task), [task])
+  const spec = useMemo(() => composePickupSpec(task, {
+    ...composeContext,
+    landingMessageRetryAvailable:
+      composeContext.landingMessageRetryAvailable
+      ?? Boolean(resolveAuthorizedLandingContact(task.passengers.memberIds, demoRuntime.preferences)),
+  }), [task, composeContext])
   const advance = () => {
     const candidate = timeline
-      .map((event) => ({ event, next: applyEvent(task, event) }))
+      .map((event) => ({ event, next: applyEvent(task, event, demoRuntime.preferences) }))
       .find(({ event, next }) => !task.processedEventIds.includes(event.eventId) && next.processedEventIds.includes(event.eventId))
     if (candidate) setTask(candidate.next)
   }
   const handleAction = (actionId: string) => {
     if (actionId === 'save-trip-preferences') {
       setTask((current) => resolveConfirmation(current, `${current.taskId}:save-memory`))
+      return
+    }
+    if (actionId === 'retry-landing-message') {
+      setTask((current) => armLandingMessageRetry(current, demoRuntime) ?? current)
+      return
+    }
+    if (actionId === 'confirm-retry-landing-message') {
+      setTask((current) => {
+        const confirmationId = current.pendingConfirmation?.confirmationId
+        if (!confirmationId) return current
+        const resolved = resolveLandingMessageRetry(
+          current,
+          demoRuntime,
+          confirmationId,
+          'accept',
+          '2026-07-22T20:42:00+08:00',
+        )
+        if (!resolved) return current
+        if (resolved.decision === 'reject') return resolved.task
+        return applyEvent(resolved.task, resolved.event, demoRuntime.preferences)
+      })
     }
   }
 

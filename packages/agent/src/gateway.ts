@@ -13,10 +13,22 @@ import {
   type SubmitEventRequest,
   type UISpec,
 } from '@canvasflow/schema'
+import {
+  createProviderRegistry,
+  createSideEffectRuntime,
+  type MemberPreferenceRecord,
+  type SideEffectRuntime,
+} from '@canvasflow/tools'
 import { applyEvent, createInitialTask, resolveConfirmation } from './index'
 import { normalizeFlightNumber } from './flight-number'
 import { composeAgentSpec } from './composer'
 import { planEffects } from './effects'
+import {
+  armLandingMessageRetry,
+  resolveLandingMessageRetry,
+  RETRY_LANDING_MESSAGE_ACTION_ID,
+  retryLandingMessageActionToken,
+} from './landing-message-retry'
 import {
   ReadToolOrchestrationError,
   ReadToolOrchestrator,
@@ -40,23 +52,51 @@ export type AgentGatewayOptions = {
   store?: TaskStore
   now?: () => string
   createId?: () => string
-  compose?: (task: AirportPickupTaskState, toolResults?: ReadToolResults) => UISpec
+  compose?: (
+    task: AirportPickupTaskState,
+    toolResults?: ReadToolResults,
+    preferences?: Record<string, MemberPreferenceRecord>,
+  ) => UISpec
   orchestrator?: ReadToolOrchestration
+  /**
+   * Side-effect runtime for opaque confirmations and preference-backed notify.
+   * When provided, its preferences are authoritative for landing-notify auth.
+   */
+  runtime?: SideEffectRuntime
+  /** @deprecated Prefer `runtime.preferences`; used only when `runtime` is omitted. */
+  preferences?: Record<string, MemberPreferenceRecord>
 }
 
 export class AgentGateway {
   readonly #store: TaskStore
   readonly #now: () => string
   readonly #createId: () => string
-  readonly #compose: (task: AirportPickupTaskState, toolResults?: ReadToolResults) => UISpec
+  readonly #compose: (
+    task: AirportPickupTaskState,
+    toolResults?: ReadToolResults,
+    preferences?: Record<string, MemberPreferenceRecord>,
+  ) => UISpec
   readonly #orchestrator: ReadToolOrchestration
+  readonly #runtime: SideEffectRuntime
+  readonly #preferences: Record<string, MemberPreferenceRecord>
 
   constructor(options: AgentGatewayOptions = {}) {
     this.#store = options.store ?? new MemoryTaskStore()
     this.#now = options.now ?? (() => new Date().toISOString())
     this.#createId = options.createId ?? (() => crypto.randomUUID())
+    const runtime = options.runtime ?? createSideEffectRuntime()
+    if (!options.runtime && options.preferences) {
+      for (const key of Object.keys(runtime.preferences)) delete runtime.preferences[key]
+      for (const [memberId, record] of Object.entries(options.preferences)) {
+        runtime.preferences[memberId] = { ...record }
+      }
+    }
+    this.#runtime = runtime
+    this.#preferences = runtime.preferences
     this.#compose = options.compose ?? composeAgentSpec
-    this.#orchestrator = options.orchestrator ?? new ReadToolOrchestrator()
+    this.#orchestrator = options.orchestrator ?? new ReadToolOrchestrator({
+      registry: createProviderRegistry(runtime),
+    })
   }
 
   createTask(input: CreateTaskRequest): AgentResponse {
@@ -81,7 +121,7 @@ export class AgentGateway {
         type: 'user.input',
         text: flightNumber ?? request.input.text,
         timestamp,
-      })
+      }, this.#preferences)
       let toolResults = passengerReads.toolResults
       if (flightNumber && task.passengers.memberIds.length > 0) {
         const prepared = this.#prepareTask(task, request.clientRequestId, flightNumber)
@@ -119,8 +159,8 @@ export class AgentGateway {
       )
     }
 
-    const effects = planEffects(current.task, request.event, {})
-    let next = applyEvent(current.task, request.event)
+    const effects = planEffects(current.task, request.event, current.toolResults ?? {}, this.#preferences)
+    let next = applyEvent(current.task, request.event, this.#preferences)
     let toolResults = current.toolResults
     const flightNumber = request.event.type === 'user.input' ? normalizeFlightNumber(request.event.text) : undefined
     if (flightNumber && next !== current.task && next.phase === 'preparing' && next.passengers.memberIds.length > 0) {
@@ -153,6 +193,10 @@ export class AgentGateway {
     const previous = this.#store.getIdempotencyResult(taskId, operation, request.idempotencyKey)
     if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
     this.#assertRevisions(current, request.expectedTaskRevision, request.expectedUiRevision)
+
+    if (request.actionId === RETRY_LANDING_MESSAGE_ACTION_ID) {
+      return this.#submitRetryLandingMessage(taskId, current, request, operation, startedAt)
+    }
 
     const action = current.ui.actions.find((candidate) => candidate.id === request.actionId)
     const component = current.ui.components.find((candidate) => candidate.id === request.componentId)
@@ -190,11 +234,19 @@ export class AgentGateway {
     this.#assertRevisions(current, request.expectedTaskRevision)
 
     const pending = current.task.pendingConfirmation
-    if (pending?.action !== 'save-memory' || pending.confirmationId !== confirmationId) {
-      throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current save-memory confirmation is available', false, current)
+    if (!pending || pending.confirmationId !== confirmationId) {
+      throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current confirmation is available', false, current)
     }
     if (pending.expiresAt && Date.parse(pending.expiresAt) < Date.parse(this.#now())) {
-      throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'The save-memory confirmation has expired', false, current)
+      throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'The confirmation has expired', false, current)
+    }
+
+    if (pending.action === 'send-message') {
+      return this.#submitSendMessageConfirmation(taskId, confirmationId, current, request, operation, startedAt)
+    }
+
+    if (pending.action !== 'save-memory') {
+      throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current save-memory confirmation is available', false, current)
     }
 
     // Fixture mode only: both decisions close the prompt without writing long-term memory.
@@ -208,8 +260,81 @@ export class AgentGateway {
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
 
+  #submitRetryLandingMessage(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitActionRequest,
+    operation: string,
+    startedAt: number,
+  ): AgentResponse {
+    const action = current.ui.actions.find((candidate) => candidate.id === request.actionId)
+    const component = current.ui.components.find((candidate) => candidate.id === request.componentId)
+    const expectedToken = retryLandingMessageActionToken(current.task.taskId)
+    if (
+      current.task.message.status !== 'failed'
+      || request.componentId !== 'message-preview'
+      || action?.event.type !== 'tool-request'
+      || action.event.actionToken !== expectedToken
+      || !component?.actions?.includes(RETRY_LANDING_MESSAGE_ACTION_ID)
+      || current.task.pendingConfirmation?.action === 'send-message'
+    ) {
+      throw new AgentGatewayError('INVALID_REQUEST', 'Retry landing-message action is not registered for the current task state', false, current)
+    }
+
+    const armed = armLandingMessageRetry(current.task, this.#runtime)
+    if (!armed) {
+      throw new AgentGatewayError('INVALID_REQUEST', 'Landing-message retry is not available for the current authorization state', false, current)
+    }
+
+    const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const stored = this.#store.save(this.#publish({ ...armed, updatedAt: timestamp }, current.toolResults))
+    const effects: AgentResponse['effects'] = []
+    this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
+    return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
+  }
+
+  #submitSendMessageConfirmation(
+    taskId: string,
+    confirmationId: string,
+    current: StoredTask,
+    request: SubmitConfirmationRequest,
+    operation: string,
+    startedAt: number,
+  ): AgentResponse {
+    const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const resolved = resolveLandingMessageRetry(
+      current.task,
+      this.#runtime,
+      confirmationId,
+      request.decision,
+      timestamp,
+    )
+    if (!resolved) {
+      throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current send-message confirmation is available', false, current)
+    }
+
+    let nextTask: AirportPickupTaskState
+    let effects: AgentResponse['effects'] = []
+    if (resolved.decision === 'reject') {
+      nextTask = resolved.task
+    } else {
+      nextTask = applyEvent(resolved.task, resolved.event, this.#preferences)
+      effects = [{
+        effectId: `${resolved.event.eventId}:0`,
+        type: 'message.send',
+        status: resolved.sendSucceeded ? 'succeeded' : 'failed',
+        tool: 'message.send',
+        ...(resolved.sendSucceeded ? {} : { errorCode: resolved.event.type === 'message.failed' ? resolved.event.errorCode : 'SEND_FAILED' }),
+      }]
+    }
+
+    const stored = this.#store.save(this.#publish(nextTask, current.toolResults))
+    this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
+    return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
+  }
+
   #publish(task: AirportPickupTaskState, toolResults?: ReadToolResults): StoredTask {
-    const ui = this.#compose(task, toolResults)
+    const ui = this.#compose(task, toolResults, this.#preferences)
     const canStartNavigation = task.phase === 'preparing'
       && toolResults?.['navigation.plan-route'] !== undefined
       && ui.components.some((component) => component.id === 'navigation-plan')
@@ -234,8 +359,8 @@ export class AgentGateway {
   }
 
   #applyAuthorizedEvent(current: StoredTask, event: Parameters<typeof applyEvent>[1]): { stored: StoredTask; effectRecords: AgentResponse['effects'] } {
-    const effects = planEffects(current.task, event, {})
-    const next = applyEvent(current.task, event)
+    const effects = planEffects(current.task, event, current.toolResults ?? {}, this.#preferences)
+    const next = applyEvent(current.task, event, this.#preferences)
     const stored = next === current.task ? current : this.#store.save(this.#publish(next, current.toolResults))
     const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${event.eventId}:${index}` }))
     return { stored, effectRecords }

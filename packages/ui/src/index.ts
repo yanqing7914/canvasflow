@@ -5,7 +5,15 @@ const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'approaching-airport': '接近机场', 'waiting-for-passengers': '等待家人', 'returning-home': '返程中', completed: '已完成', cancelled: '已取消',
 }
 
-export type ComposerContext = { toolResults?: Record<string, unknown>; fallback?: { title: string; message?: string; level?: 'warning' | 'error' } }
+export type ComposerContext = {
+  toolResults?: Record<string, unknown>
+  fallback?: { title: string; message?: string; level?: 'warning' | 'error' }
+  /**
+   * When set, gates the failed-message retry action.
+   * When omitted, retry is offered only if `pendingContactId` was retained from scheduling.
+   */
+  landingMessageRetryAvailable?: boolean
+}
 
 export function composePickupSpec(task: AirportPickupTaskState, context: ComposerContext = {}): UISpec {
   if (context.fallback) return composeFallbackSpec(task, context.fallback.title, context.fallback.message, context.fallback.level)
@@ -43,19 +51,81 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     requiresConfirm = task.pendingConfirmation?.action === 'save-memory'
     actions = requiresConfirm ? [{ id: 'save-trip-preferences', label: '保存本次偏好', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } }] : []
   }
-  else if (successfulPreferences(context.toolResults?.['memory.get-preferences'])) {
+  else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
+  else if (task.message.status === 'failed') {
+    title = '落地通知失败'
+    density = 'minimal'
+    priority = 'high'
+    const retryAvailable =
+      task.pendingConfirmation?.action === 'send-message'
+      || (context.landingMessageRetryAvailable
+        ?? Boolean(task.message.pendingContactId))
+    if (!retryAvailable) {
+      components = [{
+        id: 'status-banner',
+        type: 'status-banner',
+        props: {
+          level: 'error',
+          title: '无法重试发送',
+          message: '没有已授权的落地通知联系人',
+        },
+      }]
+      actions = []
+    } else {
+      components = [{
+        id: 'message-preview',
+        type: 'message-preview',
+        props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'failed', cancellable: false },
+        actions: task.pendingConfirmation?.action === 'send-message'
+          ? ['confirm-retry-landing-message']
+          : ['retry-landing-message'],
+      }]
+      actions =
+        task.pendingConfirmation?.action === 'send-message'
+          ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
+          : [{ id: 'retry-landing-message', label: '重试发送', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-landing-message` } }]
+    }
+  }
+  else if (
+    task.charging.status === 'completed' &&
+    (task.phase === 'driving-to-airport' || task.phase === 'approaching-airport')
+  ) {
+    density = 'compact'
+    components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: false, reason: '补能完成，机场路线上下文保持', currentBatteryPercent: 78, estimatedFinalBatteryPercent: 42 } }]
+  }
+  else if (
+    task.phase === 'returning-home' &&
+    task.passengers.confirmedOnboard &&
+    successfulPreferences(context.toolResults?.['memory.get-preferences'])
+  ) {
     const members = (context.toolResults!['memory.get-preferences'] as {
-      data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string }> }
+      data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string; fanLevel?: number }> }
     }).data.members
-    const temperatureC = members.find((member) => typeof member.rearTemperatureC === 'number')!.rearTemperatureC!
-    const mediaTitle = members.find((member) => typeof member.mediaTitle === 'string')?.mediaTitle
+    const temperatureC = members.find((member) => typeof member.rearTemperatureC === 'number')?.rearTemperatureC
+    const mediaTitle = members.find(
+      (member) => typeof member.mediaTitle === 'string' && member.mediaTitle.length > 0,
+    )?.mediaTitle
+    const fanLevel = members.find((member) => typeof member.fanLevel === 'number')?.fanLevel
     title = '已应用家庭偏好'
     density = 'compact'
-    components = [{ id: 'cabin-profile', type: 'cabin-profile', props: { zone: 'rear', temperatureC, mediaTitle, appliedFromMemory: true, reversible: true } }]
+    const cabinProps: {
+      zone: 'rear'
+      appliedFromMemory: true
+      reversible: true
+      temperatureC?: number
+      mediaTitle?: string
+      fanLevel?: number
+    } = {
+      zone: 'rear',
+      appliedFromMemory: true,
+      reversible: true,
+    }
+    if (temperatureC !== undefined) cabinProps.temperatureC = temperatureC
+    if (mediaTitle !== undefined) cabinProps.mediaTitle = mediaTitle
+    if (fanLevel !== undefined) cabinProps.fanLevel = fanLevel
+    components = [{ id: 'cabin-profile', type: 'cabin-profile', props: cabinProps }]
   }
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
-  else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
-  else if (task.charging.status === 'completed') { density = 'compact'; components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: false, reason: '补能完成，已恢复机场路线', currentBatteryPercent: 78, estimatedFinalBatteryPercent: 42 } }] }
   else if (task.navigation) { density = 'compact'; components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }] }
   else if (task.charging.recommended && !task.flight) components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: true, reason: '完成往返后预计低于安全余量', currentBatteryPercent: 42, estimatedFinalBatteryPercent: 18, suggestedDurationMinutes: 10, etaImpactMinutes: 12 } }]
   else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }] }
@@ -67,7 +137,7 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   })
 }
 
-/** Cabin UI currently requires a temperature; media-only is handled in a later stacked PR. */
+/** Matches the memory.get-preferences output contract: any applicable cabin/media preference counts. */
 function successfulPreferences(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return false
   const data = (value as { data?: unknown }).data
@@ -75,7 +145,12 @@ function successfulPreferences(value: unknown): boolean {
   const members = (data as { members?: unknown }).members
   return Array.isArray(members) && members.some((member) => {
     if (typeof member !== 'object' || member === null) return false
-    return typeof (member as { rearTemperatureC?: unknown }).rearTemperatureC === 'number'
+    const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown }
+    // memory.get-preferences does not emit fanLevel; only temperature/non-empty media count.
+    return (
+      typeof record.rearTemperatureC === 'number' ||
+      (typeof record.mediaTitle === 'string' && record.mediaTitle.length > 0)
+    )
   })
 }
 

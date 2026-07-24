@@ -54,4 +54,90 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '推进下一事件' }))
     expect(screen.getByText(/taskRevision 1/)).toBeInTheDocument()
   })
+
+  it('renders fallback status banner without a blank screen', () => {
+    render(
+      <App
+        composeContext={{
+          fallback: { title: '界面暂时降级', message: '已切换到安全模板。', level: 'error' },
+        }}
+      />,
+    )
+    expect(screen.getByText('界面暂时降级')).toBeInTheDocument()
+    expect(screen.getByText('已切换到安全模板。')).toBeInTheDocument()
+    expect(screen.getByText('status-banner')).toBeInTheDocument()
+  })
+
+  it('renders media-only cabin preferences without inventing temperature', () => {
+    render(
+      <App
+        initialTask={{
+          ...createInitialTask(),
+          phase: 'returning-home',
+          passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: true },
+          updatedAt: '2026-07-22T20:56:00+08:00',
+        }}
+        composeContext={{
+          toolResults: {
+            'memory.get-preferences': {
+              ok: true,
+              data: { members: [{ memberId: 'doubao', mediaTitle: '豆豆故事' }] },
+            },
+          },
+        }}
+      />,
+    )
+    expect(screen.getByText('豆豆故事')).toBeInTheDocument()
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/°C/)).not.toBeInTheDocument()
+  })
+
+  it('wires the failed-message retry action through prepare → confirm → send', async () => {
+    const user = userEvent.setup()
+    render(
+      <App
+        initialTask={{
+          ...createInitialTask(),
+          phase: 'driving-to-airport',
+          passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+          message: {
+            autoNotifyAuthorized: true,
+            status: 'failed',
+            landingNoticeSent: false,
+            pendingContactId: 'contact-mom',
+          },
+          updatedAt: '2026-07-22T20:41:00+08:00',
+        }}
+      />,
+    )
+    expect(screen.getByRole('button', { name: '重试发送' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重试发送' }))
+    // First click only arms an opaque confirmation; send waits for explicit accept.
+    expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '确认发送' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '确认发送' }))
+    expect(screen.queryByRole('button', { name: '确认发送' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
+    expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
+  })
+
+  it('shows unavailable state instead of retry when no authorized contact remains', () => {
+    render(
+      <App
+        initialTask={{
+          ...createInitialTask(),
+          phase: 'driving-to-airport',
+          passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
+          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
+          updatedAt: '2026-07-22T20:41:00+08:00',
+        }}
+      />,
+    )
+    expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
+    expect(screen.getByText('无法重试发送')).toBeInTheDocument()
+    expect(screen.getByText('没有已授权的落地通知联系人')).toBeInTheDocument()
+  })
 })
