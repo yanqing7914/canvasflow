@@ -26,7 +26,7 @@ import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
 import { createSideEffectRuntime, type SideEffectRuntime } from './idempotency'
 import { getPreferences } from './memory'
-import { issueAutoNotifyAuthorization, prepareMessage } from './message'
+import { createMessagePreparer, issueAutoNotifyAuthorization } from './message'
 import { planRoute } from './navigation'
 import { createProviderRegistry, toolDefinitions, type ToolName } from './registry'
 import type { ToolContext } from './result'
@@ -53,6 +53,7 @@ function executeStepTools(
   runtime: SideEffectRuntime,
 ): ToolPatch {
   const patch: ToolPatch = {}
+  const prepareMessage = createMessagePreparer(runtime)
   for (const tool of step.toolCalls ?? []) {
     expect(Object.keys(toolDefinitions), `${step.event.eventId}:${tool}`).toContain(tool)
     switch (tool as ToolName) {

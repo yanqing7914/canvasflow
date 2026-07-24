@@ -55,6 +55,33 @@ describe('demo integration', () => {
     })
   })
 
+  it('keeps preparing charging recommendation after a flight is attached', () => {
+    const spec = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'preparing',
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: {
+        flightNumber: 'MU5102',
+        status: 'in-air',
+        estimatedArrival: '2026-07-22T20:40:00+08:00',
+        terminal: 'T2',
+      },
+      navigation: {
+        routeId: 'route-airport-001',
+        destination: '虹桥机场 T2',
+        eta: '2026-07-22T20:25:00+08:00',
+        status: 'active',
+      },
+      charging: { recommended: true, accepted: false, status: 'planned' },
+    })
+    expect(spec.components[0]).toMatchObject({
+      type: 'charging-recommendation',
+      props: { recommended: true, reason: '完成往返后预计低于安全余量（对比 3 站）' },
+    })
+    expect(spec.components.map((component) => component.type)).not.toContain('flight-status')
+    expect(spec.components.map((component) => component.type)).not.toContain('navigation-summary')
+  })
+
   it('selects charging station density from parked/city/highway vehicle context', () => {
     const chargingTask = {
       ...createInitialTask(),
