@@ -7,11 +7,16 @@ import {
   type RevertCabinProfileOutput,
   type ToolResult,
 } from '@canvasflow/schema'
+import { knownMediaTitles } from './data'
 import type { CabinProfileValues, SideEffectRuntime } from './idempotency'
 import { errorResult, okResult, type ToolContext } from './result'
 
 const APPLY = 'vehicle.apply-cabin-profile'
 const REVERT = 'vehicle.revert-cabin-profile'
+const TEMPERATURE_MIN_C = 16
+const TEMPERATURE_MAX_C = 32
+const FAN_LEVEL_MIN = 0
+const FAN_LEVEL_MAX = 5
 
 function cloneProfile(profile: CabinProfileValues): CabinProfileValues {
   return { ...profile }
@@ -51,9 +56,38 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, APPLY, 'APPLY_FAILED', '至少需要一项座舱设置', false)
     }
 
+    // Domain bounds before preference matching (schema also enforces these).
+    if (
+      parsed.data.temperatureC !== undefined &&
+      (parsed.data.temperatureC < TEMPERATURE_MIN_C || parsed.data.temperatureC > TEMPERATURE_MAX_C)
+    ) {
+      return errorResult(
+        ctx,
+        APPLY,
+        'INVALID_ARGUMENT',
+        `温度须在 ${TEMPERATURE_MIN_C}–${TEMPERATURE_MAX_C}°C`,
+        false,
+      )
+    }
+    if (
+      parsed.data.fanLevel !== undefined &&
+      (!Number.isInteger(parsed.data.fanLevel) ||
+        parsed.data.fanLevel < FAN_LEVEL_MIN ||
+        parsed.data.fanLevel > FAN_LEVEL_MAX)
+    ) {
+      return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', `风速须为 ${FAN_LEVEL_MIN}–${FAN_LEVEL_MAX} 的整数`, false)
+    }
+
+    const sourceRecords = parsed.data.sourceMemberIds.map((memberId) => runtime.preferences[memberId])
+    if (parsed.data.mediaTitle !== undefined) {
+      const matchesPreference = sourceRecords.some((record) => record.mediaTitle === parsed.data.mediaTitle)
+      if (!knownMediaTitles.has(parsed.data.mediaTitle) && !matchesPreference) {
+        return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', `未知媒体标题：${parsed.data.mediaTitle}`, false)
+      }
+    }
+
     // 声明"来自成员偏好"的值必须与某个来源成员存储的偏好一致；
     // fanLevel 不在记忆白名单内，视为可撤销的手动调整，不做偏好校验。
-    const sourceRecords = parsed.data.sourceMemberIds.map((memberId) => runtime.preferences[memberId])
     if (
       parsed.data.temperatureC !== undefined &&
       !sourceRecords.some((record) => record.rearTemperatureC === parsed.data.temperatureC)

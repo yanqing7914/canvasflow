@@ -29,7 +29,7 @@ import { recommendCharging } from './charging'
 import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
 import { getPreferences } from './memory'
-import { autoNotifyAuthorizationId, prepareMessage } from './message'
+import { issueAutoNotifyAuthorization, prepareMessage } from './message'
 import { planRoute } from './navigation'
 import { createSideEffectRuntime } from './idempotency'
 import { createProviderRegistry, toolDefinitions, type ToolName } from './registry'
@@ -192,7 +192,8 @@ type TimelineRun = {
  */
 function replayMainTimeline(): TimelineRun {
   const event = (id: string): AirportPickupEvent => fixtureById.get(id)!.inputEvent
-  const registry = createProviderRegistry(createSideEffectRuntime())
+  const runtime = createSideEffectRuntime()
+  const registry = createProviderRegistry(runtime)
 
   let state = fixtureById.get('task-created')!.initialTaskState
   const trace: TimelineRun['trace'] = []
@@ -250,7 +251,7 @@ function replayMainTimeline(): TimelineRun {
     contactId: 'contact-mom',
     messageId: prepared.data!.messageId,
     text: prepared.data!.text,
-    authorizationId: autoNotifyAuthorizationId(state.taskId),
+    authorizationId: issueAutoNotifyAuthorization(runtime, state.taskId),
     idempotencyKey: state.message.idempotencyKey!,
   }
   const firstSend = registry['message.send'](ctx, sendInput)
