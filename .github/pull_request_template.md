@@ -25,6 +25,7 @@
 - [ ] I reviewed the generated diff before requesting review.
 - [ ] I checked that no secrets, tokens, or private data are included.
 - [ ] I added or updated tests for behavior changes.
-- [ ] I asked Codex to review the PR or reviewed it locally with Codex before merge.
+- [ ] A completed Codex review ran on this PR after its latest source change.
+- [ ] I verified the latest PR Codex review has no unresolved P0 or P1 findings.
 - [ ] I did not add `.env`, credentials, tokens, private data, or generated secrets.
 - [ ] For a UI change, I attached a screenshot or recording.

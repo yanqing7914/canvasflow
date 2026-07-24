@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DEMO_ORIGIN } from './data'
 import { createSideEffectRuntime } from './idempotency'
-import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, issueSendMessageConfirmation } from './message'
+import { FAILING_CONTACT_ID, issueAutoNotifyAuthorization, issueSendMessageConfirmation } from './message'
 import { createProviderRegistry, type ProviderRegistry } from './registry'
 import type { ToolContext } from './result'
 
@@ -171,6 +171,31 @@ describe('cabin profile side effects', () => {
     expect(wrongMedia.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
   })
 
+  it('超范围温度/风速与未知媒体返回 INVALID_ARGUMENT', () => {
+    const registry = createProviderRegistry()
+    const hot = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      temperatureC: 40,
+      sourceMemberIds: ['mom'],
+      idempotencyKey: 'pickup-001:apply-hot',
+    })
+    expect(hot.error).toMatchObject({ code: 'INVALID_ARGUMENT', retryable: false })
+    const fan = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      fanLevel: 9,
+      sourceMemberIds: ['mom'],
+      idempotencyKey: 'pickup-001:apply-fan',
+    })
+    expect(fan.error).toMatchObject({ code: 'INVALID_ARGUMENT', retryable: false })
+    const unknownMedia = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      mediaTitle: '未知专辑',
+      sourceMemberIds: ['doubao'],
+      idempotencyKey: 'pickup-001:apply-unknown-media',
+    })
+    expect(unknownMedia.error).toMatchObject({ code: 'INVALID_ARGUMENT', retryable: false })
+  })
+
   it('原型属性 memberId（toString/constructor）返回 POLICY_DENIED 且不抛异常', () => {
     const registry = createProviderRegistry()
     for (const memberId of ['toString', 'constructor', '__proto__']) {
@@ -331,14 +356,14 @@ describe('idempotency store isolation', () => {
       contactId: 'contact-mom',
       messageId: 'shared-msg',
       text: 'hello',
-      authorizationId: autoNotifyAuthorizationId('pickup-001'),
+      authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-001'),
       idempotencyKey: 'shared-send-key',
     }
     const first = registry['message.send']({ taskId: 'pickup-001' }, payload)
     expect(first.ok).toBe(true)
     const other = registry['message.send'](
       { taskId: 'pickup-002' },
-      { ...payload, authorizationId: autoNotifyAuthorizationId('pickup-002') },
+      { ...payload, authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-002') },
     )
     expect(other.ok).toBe(true)
     expect(other).not.toBe(first)
@@ -348,12 +373,13 @@ describe('idempotency store isolation', () => {
 
 describe('message.send', () => {
   it('同一 idempotencyKey 最多成功发送一次', () => {
-    const registry = createProviderRegistry()
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
     const input = {
       contactId: 'contact-mom',
       messageId: 'pickup-001:MU5102:landing',
       text: '我已到达机场接机点',
-      authorizationId: autoNotifyAuthorizationId('pickup-001'),
+      authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-001'),
       idempotencyKey: 'pickup-001:MU5102:landing',
     }
     const first = registry['message.send'](ctx, input)
@@ -373,42 +399,56 @@ describe('message.send', () => {
     expect(result.error).toMatchObject({ code: 'AUTHORIZATION_REQUIRED', retryable: false })
   })
 
-  it('任意非空凭据不再有效，必须是任务绑定的授权或确认', () => {
-    const registry = createProviderRegistry()
-    const arbitraryAuth = registry['message.send'](ctx, {
+  it('拒绝可伪造的 auto-notify / 确认字符串与任意非空凭据', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const forgedAutoNotify = registry['message.send'](ctx, {
       contactId: 'contact-mom',
       messageId: 'msg-2',
+      text: 'hello',
+      authorizationId: 'pickup-001:auto-notify',
+      idempotencyKey: 'pickup-001:msg-forged-auto',
+    })
+    expect(forgedAutoNotify.error?.code).toBe('AUTHORIZATION_REQUIRED')
+
+    const forgedConfirm = registry['message.send'](ctx, {
+      contactId: 'contact-mom',
+      messageId: 'msg-3',
+      text: 'hello',
+      confirmationId: 'pickup-001:send-message:contact-mom:msg-3:deadbeef',
+      idempotencyKey: 'pickup-001:msg-forged-confirm',
+    })
+    expect(forgedConfirm.error?.code).toBe('AUTHORIZATION_REQUIRED')
+
+    const arbitraryAuth = registry['message.send'](ctx, {
+      contactId: 'contact-mom',
+      messageId: 'msg-4',
       text: 'hello',
       authorizationId: 'auth-anything',
       idempotencyKey: 'pickup-001:msg-bad-auth',
     })
     expect(arbitraryAuth.error?.code).toBe('AUTHORIZATION_REQUIRED')
-    const arbitraryConfirm = registry['message.send'](ctx, {
-      contactId: 'contact-mom',
-      messageId: 'msg-3',
-      text: 'hello',
-      confirmationId: 'confirm-anything',
-      idempotencyKey: 'pickup-001:msg-bad-confirm',
-    })
-    expect(arbitraryConfirm.error?.code).toBe('AUTHORIZATION_REQUIRED')
+
+    const otherRuntime = createSideEffectRuntime()
     const wrongTask = registry['message.send'](ctx, {
       contactId: 'contact-mom',
-      messageId: 'msg-4',
+      messageId: 'msg-5',
       text: 'hello',
-      authorizationId: autoNotifyAuthorizationId('other-task'),
+      authorizationId: issueAutoNotifyAuthorization(otherRuntime, 'other-task'),
       idempotencyKey: 'pickup-001:msg-wrong-task',
     })
     expect(wrongTask.error?.code).toBe('AUTHORIZATION_REQUIRED')
   })
 
   it('预授权路径要求联系人对应成员开启落地通知授权', () => {
-    const registry = createProviderRegistry()
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
     // FAILING_CONTACT_ID 不属于任何成员，auto-notify 预授权不适用
     const result = registry['message.send'](ctx, {
       contactId: FAILING_CONTACT_ID,
-      messageId: 'msg-5',
+      messageId: 'msg-6',
       text: 'hello',
-      authorizationId: autoNotifyAuthorizationId('pickup-001'),
+      authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-001'),
       idempotencyKey: 'pickup-001:msg-auto-unknown',
     })
     expect(result.error?.code).toBe('AUTHORIZATION_REQUIRED')
@@ -434,7 +474,6 @@ describe('message.send', () => {
     const message = { contactId: 'contact-mom', messageId: 'msg-confirm-1', text: '我已到达机场' }
     const confirmationId = issueSendMessageConfirmation(runtime, { taskId: 'pickup-001', ...message })
     expect(confirmationId.startsWith('cnf_')).toBe(true)
-    // 不可由调用方从字段确定性算出
     expect(confirmationId).not.toContain(message.messageId)
     expect(confirmationId).not.toContain(message.contactId)
 
@@ -472,7 +511,6 @@ describe('message.send', () => {
     })
     expect(bound.ok).toBe(true)
 
-    // 成功后 token 已消费，不能再授权另一次发送
     expect(
       registry['message.send'](ctx, {
         ...message,
@@ -483,12 +521,13 @@ describe('message.send', () => {
   })
 
   it('同一 idempotencyKey 换参数不能重放缓存结果', () => {
-    const registry = createProviderRegistry()
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
     const sendInput = {
       contactId: 'contact-mom',
       messageId: 'msg-conflict',
       text: 'hello',
-      authorizationId: autoNotifyAuthorizationId('pickup-001'),
+      authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-001'),
       idempotencyKey: 'pickup-001:conflict-key',
     }
     expect(registry['message.send'](ctx, sendInput).ok).toBe(true)
@@ -551,6 +590,13 @@ describe('memory write side effects', () => {
     expect(proposed.data!.confirmationId.startsWith('cnf_')).toBe(true)
     expect(proposed.data!.confirmationId).not.toBe(`${proposed.data!.proposalId}:confirm`)
 
+    const forged = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: `${proposed.data!.proposalId}:confirm`,
+      idempotencyKey: 'pickup-001:confirm-forged',
+    })
+    expect(forged.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', retryable: false })
+
     const wrong = registry['memory.confirm-update'](ctx, {
       proposalId: proposed.data!.proposalId,
       confirmationId: 'confirm-anything',
@@ -565,16 +611,33 @@ describe('memory write side effects', () => {
     }
     const first = registry['memory.confirm-update'](ctx, confirmInput)
     expect(first.ok).toBe(true)
-    // 同一幂等键可重放成功结果
     expect(registry['memory.confirm-update'](ctx, confirmInput)).toEqual(first)
 
-    // 不同幂等键再次出示已消费 token：必须拒绝，不能铸造新的成功回执
     const replay = registry['memory.confirm-update'](ctx, {
       proposalId: proposed.data!.proposalId,
       confirmationId: proposed.data!.confirmationId,
       idempotencyKey: 'pickup-001:confirm-replay-token',
     })
     expect(replay.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', retryable: false })
+  })
+
+  it('确认后超过 TTL，同一幂等键仍可命中缓存成功', () => {
+    let now = Date.parse('2026-07-22T12:00:00+08:00')
+    const runtime = createSideEffectRuntime(() => now)
+    const registry = createProviderRegistry(runtime)
+    const proposed = registry['memory.propose-update'](ctx, {
+      memberId: 'mom',
+      changes: { mediaTitle: '轻音乐' },
+    })
+    const confirmInput = {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-then-expire',
+    }
+    const first = registry['memory.confirm-update'](ctx, confirmInput)
+    expect(first.ok).toBe(true)
+    now += 31 * 60 * 1000
+    expect(registry['memory.confirm-update'](ctx, confirmInput)).toEqual(first)
   })
 
   it('已确认提案的 token 不能被其他 task 复用为确认成功', () => {
@@ -666,12 +729,31 @@ describe('memory write side effects', () => {
     expect(confirmed.error).toMatchObject({ code: 'PROPOSAL_EXPIRED', retryable: false })
   })
 
-  it('非白名单字段不能进入提案', () => {
+  it('非白名单字段与超范围/未知目录值不能进入提案', () => {
     const registry = createProviderRegistry()
-    const result = registry['memory.propose-update'](ctx, {
-      memberId: 'mom',
-      changes: { secretPhone: '123' },
-    })
-    expect(result.error?.code).toBe('INVALID_ARGUMENT')
+    expect(
+      registry['memory.propose-update'](ctx, {
+        memberId: 'mom',
+        changes: { secretPhone: '123' },
+      }).error?.code,
+    ).toBe('INVALID_ARGUMENT')
+    expect(
+      registry['memory.propose-update'](ctx, {
+        memberId: 'mom',
+        changes: { rearTemperatureC: 40 },
+      }).error?.code,
+    ).toBe('INVALID_ARGUMENT')
+    expect(
+      registry['memory.propose-update'](ctx, {
+        memberId: 'mom',
+        changes: { mediaTitle: '未知专辑' },
+      }).error?.code,
+    ).toBe('INVALID_ARGUMENT')
+    expect(
+      registry['memory.propose-update'](ctx, {
+        memberId: 'mom',
+        changes: { homeDestinationId: 'destination-mars' },
+      }).error?.code,
+    ).toBe('INVALID_ARGUMENT')
   })
 })

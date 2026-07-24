@@ -4,12 +4,13 @@ import {
   type MediaPlayOutput,
   type ToolResult,
 } from '@canvasflow/schema'
+import { knownMediaTitles } from './data'
 import type { SideEffectRuntime } from './idempotency'
 import { errorResult, okResult, type ToolContext } from './result'
 
 const TOOL = 'media.play'
 
-export const AVAILABLE_MEDIA_TITLES = new Set(['豆豆故事', '轻音乐'])
+export const AVAILABLE_MEDIA_TITLES = knownMediaTitles
 
 export function createMediaPlayer(runtime: SideEffectRuntime) {
   return function playMedia(ctx: ToolContext, input: unknown): ToolResult<MediaPlayOutput> {

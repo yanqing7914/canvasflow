@@ -91,14 +91,20 @@ export type MemoryConfirmBinding = {
   proposalId: string
 }
 
+export type AutoNotifyBinding = {
+  taskId: string
+}
+
 type ConfirmationRecord =
   | { kind: 'send-message'; binding: MessageSendBinding; consumed: boolean }
   | { kind: 'confirm-memory'; binding: MemoryConfirmBinding; consumed: boolean }
+  | { kind: 'auto-notify'; binding: AutoNotifyBinding; consumed: boolean }
 
 /**
- * Opaque, runtime-issued confirmation tokens. Callers cannot compute a valid
- * token from task/message fields; they must obtain one via issue* and present
- * it once. Successful consumption marks the token spent.
+ * Opaque, runtime-issued confirmation / authorization tokens. Callers cannot
+ * compute a valid token from task/message/proposal fields; they must obtain
+ * one via issue* and present it. Send-message and memory tokens are one-shot;
+ * auto-notify is a reusable capability grant for a task (not consumed on use).
  */
 export class ConfirmationStore {
   private readonly grants = new Map<string, ConfirmationRecord>()
@@ -106,9 +112,10 @@ export class ConfirmationStore {
 
   private mint(): string {
     this.counter += 1
-    const entropy = typeof crypto !== 'undefined' && 'randomUUID' in crypto
-      ? crypto.randomUUID()
-      : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
+    const entropy =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
     return `cnf_${this.counter}_${entropy}`
   }
 
@@ -122,6 +129,12 @@ export class ConfirmationStore {
     const confirmationId = this.mint()
     this.grants.set(confirmationId, { kind: 'confirm-memory', binding: { ...binding }, consumed: false })
     return confirmationId
+  }
+
+  issueAutoNotifyAuthorization(taskId: string): string {
+    const authorizationId = this.mint()
+    this.grants.set(authorizationId, { kind: 'auto-notify', binding: { taskId }, consumed: false })
+    return authorizationId
   }
 
   matchesSendMessageConfirmation(confirmationId: string, binding: MessageSendBinding): boolean {
@@ -155,6 +168,13 @@ export class ConfirmationStore {
     if (!this.matchesMemoryConfirmation(confirmationId, binding)) return false
     this.grants.get(confirmationId)!.consumed = true
     return true
+  }
+
+  /** Capability grant for a task; not consumed on successful send. */
+  matchesAutoNotifyAuthorization(authorizationId: string, taskId: string): boolean {
+    const grant = this.grants.get(authorizationId)
+    if (!grant || grant.kind !== 'auto-notify' || grant.consumed) return false
+    return grant.binding.taskId === taskId
   }
 }
 

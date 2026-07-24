@@ -6,7 +6,7 @@
 2. Let your coding agent implement a small, reviewable change.
 3. Run the local quality checks.
 4. Push the short-lived branch to the shared upstream repository and open a pull request into `dev`.
-5. Wait for CI, Codex review, and owner review before merging. The PR author does not self-merge their own change.
+5. Wait for green CI and a completed Codex review with no unresolved P0 or P1 findings before merging. The PR author does not self-merge their own change; another collaborator may merge an eligible PR.
 6. The owner opens a separate `dev` -> `main` pull request for a competition release.
 
 GitHub Free does not provide protected branches for private repositories. The team therefore treats `dev` and `main` as protected by convention: do not push directly to them, require CI and review on every PR, and let the owner handle the release merge. This is a process gate, not a server-enforced permission gate.
@@ -27,7 +27,7 @@ Every PR should include:
 - A short summary of the change.
 - Screenshots or recordings for visual UI changes.
 - The commands used to test the change.
-- Notes about what the agent generated and what a human reviewed.
+- Notes about what the agent generated and what the author reviewed before handoff.
 - The target branch (`dev` for normal work, `main` only for an owner-managed release).
 - A rollback plan or a statement that rollback is not needed.
 

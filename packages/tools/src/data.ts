@@ -245,9 +245,21 @@ export const chargingStations: ChargingStationRecord[] = [
   { stationId: 'station-hongqiao-03', name: '北翟路充电站', distanceKm: 5.8, detourMinutes: 22, availableStalls: 4, totalStalls: 10, maxPowerKw: 90, pricePerKwhYuan: 1.1, open24h: false },
 ]
 
+export type ChargingPresentationDensity = 'full' | 'compact' | 'minimal'
+
+/**
+ * Map vehicle speed to charging-list density:
+ * parked (0) → full, city (≤60) → compact, highway (>60) → minimal.
+ */
+export function chargingDensityForSpeed(speedKph: number): ChargingPresentationDensity {
+  if (speedKph <= 0) return 'full'
+  if (speedKph <= 60) return 'compact'
+  return 'minimal'
+}
+
 /** Parked/full → 3 stations; city/compact → 2; highway/minimal → nearest only. */
 export function chargingStationsForDensity(
-  density: 'full' | 'compact' | 'minimal',
+  density: ChargingPresentationDensity,
 ): ChargingStationRecord[] {
   if (density === 'full') return chargingStations.slice()
   if (density === 'compact') return chargingStations.slice(0, 2)
@@ -292,3 +304,13 @@ export const recommendedMeetingPoints: Record<string, MeetingPointRecord> = {
 
 /** Fixture catalog of route IDs. Activation still requires a task-scoped plan. */
 export const knownRouteIds = new Set(Object.values(routes).map((route) => route.routeId))
+
+/** Known media titles accepted by cabin/memory/media side effects. */
+export const knownMediaTitles = new Set(['豆豆故事', '轻音乐'])
+
+/** Destination / waypoint IDs used by demo routes and preference updates. */
+export const knownDestinationIds = new Set([
+  'destination-home',
+  'destination-hongqiao-t2',
+  'station-hongqiao-01',
+])

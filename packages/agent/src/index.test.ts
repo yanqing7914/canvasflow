@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { memberPreferences, resolveAuthorizedLandingContact } from '@canvasflow/tools'
+import { createSideEffectRuntime, memberPreferences, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { applyEvent, createInitialTask, planEffects, resolveConfirmation } from './index'
 
 describe('airport pickup task engine', () => {
@@ -157,7 +157,7 @@ describe('airport pickup task engine', () => {
     ])
   })
 
-  it('schedules landing notify with the first authorized contact, not a hard-coded mom', () => {
+  it('schedules landing notify from runtime preferences, not module defaults', () => {
     const driving = {
       ...createInitialTask(),
       phase: 'driving-to-airport' as const,
@@ -188,30 +188,31 @@ describe('airport pickup task engine', () => {
     expect(unauthorizedOnly.message.pendingContactId).toBeUndefined()
     expect(unauthorizedOnly.message.pendingMessageId).toBeUndefined()
 
-    // mom unauthorized + dad authorized → agent retains dad, not a hard-coded mom contact.
-    const momWasAuthorized = memberPreferences.mom.landingNotificationAuthorized
-    const dadWasAuthorized = memberPreferences.dad.landingNotificationAuthorized
-    memberPreferences.mom.landingNotificationAuthorized = false
-    memberPreferences.dad.landingNotificationAuthorized = true
-    try {
-      expect(resolveAuthorizedLandingContact(['mom', 'dad'])).toBe('contact-dad')
-      const dadPreferred = applyEvent(
-        {
-          ...driving,
-          passengers: { memberIds: ['mom', 'dad'], names: ['妈妈', '爸爸'], confirmedOnboard: false },
-        },
-        {
-          eventId: 'landed-dad-auth',
-          type: 'flight.updated',
-          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
-          timestamp: '2026-07-22T20:40:00+08:00',
-        },
-      )
-      expect(dadPreferred.message.pendingContactId).toBe('contact-dad')
-    } finally {
-      memberPreferences.mom.landingNotificationAuthorized = momWasAuthorized
-      memberPreferences.dad.landingNotificationAuthorized = dadWasAuthorized
+    // Runtime prefs can diverge after module load; scheduling must follow runtime, not module defaults.
+    expect(memberPreferences.mom.landingNotificationAuthorized).toBe(true)
+    expect(memberPreferences.dad.landingNotificationAuthorized).toBe(false)
+    const runtime = createSideEffectRuntime()
+    runtime.preferences.mom.landingNotificationAuthorized = false
+    runtime.preferences.dad.landingNotificationAuthorized = true
+
+    expect(resolveAuthorizedLandingContact(['mom', 'dad'], memberPreferences)).toBe('contact-mom')
+    expect(resolveAuthorizedLandingContact(['mom', 'dad'], runtime.preferences)).toBe('contact-dad')
+
+    const momDadPassengers = {
+      ...driving,
+      passengers: { memberIds: ['mom', 'dad'], names: ['妈妈', '爸爸'], confirmedOnboard: false },
     }
+    const dadAuthEvent = {
+      eventId: 'landed-dad-auth',
+      type: 'flight.updated' as const,
+      flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      timestamp: '2026-07-22T20:40:00+08:00',
+    }
+    expect(planEffects(momDadPassengers, dadAuthEvent, {}, runtime.preferences)).toEqual([
+      { type: 'message.send', status: 'planned', tool: 'message.send' },
+    ])
+    const dadPreferred = applyEvent(momDadPassengers, dadAuthEvent, runtime.preferences)
+    expect(dadPreferred.message.pendingContactId).toBe('contact-dad')
   })
 
   it('plans cabin apply from memory.get-preferences members shape', () => {

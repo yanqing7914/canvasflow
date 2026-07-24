@@ -7,6 +7,7 @@ import {
   type ProposeMemoryUpdateOutput,
   type ToolResult,
 } from '@canvasflow/schema'
+import { knownDestinationIds, knownMediaTitles } from './data'
 import type { SideEffectRuntime } from './idempotency'
 import { errorResult, okResult, type ToolContext } from './result'
 
@@ -21,6 +22,8 @@ const MEMORY_WHITELIST = [
 ] as const
 
 const PROPOSAL_TTL_MS = 30 * 60 * 1000
+const TEMPERATURE_MIN_C = 16
+const TEMPERATURE_MAX_C = 32
 
 function pickWhitelist(changes: Record<string, unknown>): Record<string, unknown> {
   const picked: Record<string, unknown> = {}
@@ -28,6 +31,22 @@ function pickWhitelist(changes: Record<string, unknown>): Record<string, unknown
     if (changes[key] !== undefined) picked[key] = changes[key]
   }
   return picked
+}
+
+function validatePreferenceDomain(changes: Record<string, unknown>): string | undefined {
+  const temperature = changes.rearTemperatureC
+  if (typeof temperature === 'number' && (temperature < TEMPERATURE_MIN_C || temperature > TEMPERATURE_MAX_C)) {
+    return `后排温度须在 ${TEMPERATURE_MIN_C}–${TEMPERATURE_MAX_C}°C`
+  }
+  const mediaTitle = changes.mediaTitle
+  if (typeof mediaTitle === 'string' && !knownMediaTitles.has(mediaTitle)) {
+    return `未知媒体标题：${mediaTitle}`
+  }
+  const homeDestinationId = changes.homeDestinationId
+  if (typeof homeDestinationId === 'string' && !knownDestinationIds.has(homeDestinationId)) {
+    return `未知目的地：${homeDestinationId}`
+  }
+  return undefined
 }
 
 export function createMemoryWriteTools(runtime: SideEffectRuntime) {
@@ -45,6 +64,11 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     const changes = pickWhitelist(parsed.data.changes as Record<string, unknown>)
     if (Object.keys(changes).length === 0) {
       return errorResult(ctx, PROPOSE, 'INVALID_ARGUMENT', 'changes 仅允许白名单偏好字段', false)
+    }
+
+    const domainError = validatePreferenceDomain(changes)
+    if (domainError) {
+      return errorResult(ctx, PROPOSE, 'INVALID_ARGUMENT', domainError, false)
     }
 
     const before: Record<string, unknown> = {}
@@ -114,6 +138,13 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '需要 proposalId、confirmationId 和 idempotencyKey', false)
     }
 
+    // Cache-first: a prior success for this key must replay even after proposal TTL.
+    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(ctx.taskId, CONFIRM, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
+
     const proposal = runtime.memoryProposals.get(parsed.data.proposalId)
     if (!proposal) {
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案不存在或已过期：${parsed.data.proposalId}`, false)
@@ -124,44 +155,26 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     }
 
     // Task ownership is authoritative: proposalId prefixes are not a security boundary.
-    if (proposal.taskId !== ctx.taskId || parsed.data.confirmationId !== proposal.confirmationId) {
-      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案或当前任务不匹配', false)
+    if (proposal.taskId !== ctx.taskId) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与当前任务不匹配', false)
     }
 
-    // Unspent opaque tokens must still match the confirmation store before apply.
-    if (
-      !proposal.confirmed &&
-      !runtime.confirmations.matchesMemoryConfirmation(parsed.data.confirmationId, {
-        taskId: ctx.taskId,
-        proposalId: proposal.proposalId,
-      })
-    ) {
+    if (parsed.data.confirmationId !== proposal.confirmationId) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案不匹配', false)
+    }
+
+    const binding = { taskId: ctx.taskId, proposalId: proposal.proposalId }
+    if (!proposal.confirmed && !runtime.confirmations.matchesMemoryConfirmation(parsed.data.confirmationId, binding)) {
       return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据无效或已使用', false)
     }
 
-    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(ctx.taskId, CONFIRM, parsed.data.idempotencyKey, parsed.data)
-    if (cached.kind === 'hit') {
-      if (cached.result.meta.taskId !== ctx.taskId) {
-        return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '幂等结果与当前任务不匹配', false)
-      }
-      return cached.result
-    }
-    if (cached.kind === 'conflict') {
-      return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
-    }
-
     // After the first successful confirm the token is spent: only the original
-    // idempotency key may replay success. Fresh keys must not mint new oks.
+    // idempotency key may replay success (handled above). Fresh keys must not mint new oks.
     if (proposal.confirmed) {
       return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据已使用', false)
     }
 
-    if (
-      !runtime.confirmations.consumeMemoryConfirmation(parsed.data.confirmationId, {
-        taskId: ctx.taskId,
-        proposalId: proposal.proposalId,
-      })
-    ) {
+    if (!runtime.confirmations.consumeMemoryConfirmation(parsed.data.confirmationId, binding)) {
       return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据无效或已使用', false)
     }
     const record = runtime.preferences[proposal.memberId]
