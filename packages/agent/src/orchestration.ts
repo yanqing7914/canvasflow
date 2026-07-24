@@ -59,9 +59,12 @@ export type TripPreparationReads = {
   toolResults: ReadToolResults
 }
 
+export type ReturnTripPreferenceReads = SuccessfulToolResult<GetPreferencesOutput>
+
 export interface ReadToolOrchestration {
   resolveInitialPassengers(taskId: string, requestId: string, labels: string[]): InitialPassengerReads
   prepareTrip(taskId: string, requestId: string, flightNumber: string): TripPreparationReads
+  resolveReturnTripPreferences(taskId: string, requestId: string, memberIds: string[]): ReturnTripPreferenceReads
 }
 
 export class ReadToolOrchestrator implements ReadToolOrchestration {
@@ -168,6 +171,16 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
         'charging.recommend': charging,
       },
     }
+  }
+
+  resolveReturnTripPreferences(taskId: string, requestId: string, memberIds: string[]): ReturnTripPreferenceReads {
+    return this.#call(
+      'memory.get-preferences',
+      taskId,
+      requestId,
+      { memberIds, scopes: ['cabin', 'media', 'address'] },
+      toolResultSchema(getPreferencesOutputSchema),
+    )
   }
 
   #call<T>(

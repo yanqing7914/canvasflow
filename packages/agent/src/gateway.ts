@@ -203,6 +203,48 @@ export class AgentGateway {
         this.#throwProviderError(error, current)
       }
     }
+    if (request.event.type === 'user.confirmed-passengers-onboard' && current.task.phase === 'waiting-for-passengers' && next.phase === 'returning-home') {
+      try {
+        const preferences = this.#orchestrator.resolveReturnTripPreferences(
+          taskId,
+          request.clientRequestId,
+          next.passengers.memberIds,
+        )
+        toolResults = { ...toolResults, 'memory.get-preferences': preferences }
+        const records = preferences.data.members
+        const homeDestinationId = records.find((member) => member.homeDestinationId)?.homeDestinationId
+        const cabinMember = records.find((member) => member.rearTemperatureC !== undefined || member.mediaTitle !== undefined)
+        const mediaMember = records.find((member) => member.mediaTitle !== undefined)
+        const execution = this.#effectExecutor.executeReturnTrip({
+          task: next,
+          memberIds: next.passengers.memberIds,
+          preferences: {
+            homeDestinationId,
+            temperatureC: cabinMember?.rearTemperatureC,
+            mediaTitle: mediaMember?.mediaTitle,
+            mediaMemberId: mediaMember?.memberId,
+          },
+          idempotencyKey: request.event.eventId,
+          effectIdPrefix: `${request.event.eventId}:effect`,
+        })
+        if (!execution.succeeded) {
+          return this.#response(request.clientRequestId, current, execution.effect, performance.now() - startedAt)
+        }
+        if (execution.navigation) {
+          next.navigation = {
+            routeId: execution.navigation.routeId,
+            destination: execution.navigation.destination,
+            eta: execution.navigation.eta,
+            status: 'active',
+          }
+        }
+        const stored = this.#store.save(this.#publish(next, toolResults))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: execution.effect })
+        return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
+      } catch (error) {
+        this.#throwProviderError(error, current)
+      }
+    }
     const stored = next === current.task
       ? current
       : this.#store.save(this.#publish(next, toolResults))

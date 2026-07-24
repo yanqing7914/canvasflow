@@ -27,6 +27,8 @@ export function planEffects(
   }
   const preferencesResult = toolResults['memory.get-preferences']
   if (event.type === 'user.input' && state.phase === 'returning-home' && /座舱|偏好|温度|媒体/.test(event.text) && isSuccessfulPreferences(preferencesResult)) return [{ type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' }]
+  // Legacy fixture replay keeps this planned effect; AgentGateway replaces it
+  // with provider receipts when the live return-trip path executes.
   if (event.type === 'user.confirmed-passengers-onboard' && state.phase === 'waiting-for-passengers') return [{ type: 'navigation.update-route', status: 'succeeded', tool: 'navigation.update-route' }]
   if (event.type === 'destination.arrived' && state.phase === 'returning-home') return [{ type: 'memory.propose-update', status: 'pending-confirmation', tool: 'memory.propose-update' }]
   return []

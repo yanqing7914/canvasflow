@@ -1,5 +1,9 @@
 import {
+  applyCabinProfileOutputSchema,
+  mediaPlayOutputSchema,
   navigationStartOutputSchema,
+  navigationUpdateRouteOutputSchema,
+  routePlanOutputSchema,
   toolResultSchema,
   type AirportPickupTaskState,
   type EffectRecord,
@@ -40,6 +44,12 @@ export class DefaultPolicyGate implements PolicyGate {
 export type NavigationStartExecution = {
   succeeded: boolean
   effect: EffectRecord
+}
+
+export type ReturnTripExecution = {
+  succeeded: boolean
+  effect: EffectRecord[]
+  navigation?: { routeId: string; destination: string; eta: string }
 }
 
 export class EffectExecutor {
@@ -104,6 +114,85 @@ export class EffectExecutor {
       }
     }
     return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+  }
+
+  executeReturnTrip(input: {
+    task: AirportPickupTaskState
+    memberIds: string[]
+    preferences: { homeDestinationId?: string; temperatureC?: number; mediaTitle?: string; mediaMemberId?: string }
+    idempotencyKey: string
+    effectIdPrefix: string
+  }): ReturnTripExecution {
+    const effects: EffectRecord[] = []
+    const failed = (type: string, errorCode: string): ReturnTripExecution => ({
+      succeeded: false,
+      effect: [...effects, { effectId: `${input.effectIdPrefix}:${effects.length}`, type, status: 'failed', tool: type, errorCode }],
+    })
+    if (input.task.phase !== 'returning-home' || input.task.passengers.confirmedOnboard === false) {
+      return failed('return-trip', 'POLICY_DENIED')
+    }
+    const destinationId = input.preferences.homeDestinationId
+    if (!destinationId) return failed('navigation.update-route', 'PREFERENCE_UNAVAILABLE')
+
+    const providerRequestId = `${input.task.taskId}:return-trip:${input.idempotencyKey}`
+    const planRaw = this.#registry['navigation.plan-route'](
+      { taskId: input.task.taskId, requestId: `${providerRequestId}:plan` },
+      { origin: { latitude: 31.23, longitude: 121.47 }, destination: { id: destinationId, name: '家' } },
+    )
+    const plan = toolResultSchema(routePlanOutputSchema).safeParse(planRaw)
+    if (!plan.success || !plan.data.ok || plan.data.data === null || plan.data.error !== null) {
+      return failed('navigation.update-route', plan.success && plan.data.error ? plan.data.error.code : 'PROVIDER_FAILED')
+    }
+    const route = plan.data.data
+    const updateRaw = this.#registry['navigation.update-route'](
+      { taskId: input.task.taskId, requestId: `${providerRequestId}:update` },
+      { routeId: route.routeId, destination: { id: destinationId, name: '家' }, idempotencyKey: `${input.idempotencyKey}:route` },
+    )
+    const update = toolResultSchema(navigationUpdateRouteOutputSchema).safeParse(updateRaw)
+    if (!update.success || !update.data.ok || update.data.data === null || update.data.error !== null) {
+      return failed('navigation.update-route', update.success && update.data.error ? update.data.error.code : 'PROVIDER_FAILED')
+    }
+    effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'navigation.update-route', status: 'succeeded', tool: 'navigation.update-route' })
+
+    let cabinEffectId: string | undefined
+    if (input.preferences.temperatureC !== undefined || input.preferences.mediaTitle !== undefined) {
+      const cabinRaw = this.#registry['vehicle.apply-cabin-profile'](
+        { taskId: input.task.taskId, requestId: `${providerRequestId}:cabin` },
+        {
+          zone: 'rear',
+          ...(input.preferences.temperatureC !== undefined ? { temperatureC: input.preferences.temperatureC } : {}),
+          ...(input.preferences.mediaTitle !== undefined ? { mediaTitle: input.preferences.mediaTitle } : {}),
+          sourceMemberIds: input.memberIds,
+          idempotencyKey: `${input.idempotencyKey}:cabin`,
+        },
+      )
+      const cabin = toolResultSchema(applyCabinProfileOutputSchema).safeParse(cabinRaw)
+      if (!cabin.success || !cabin.data.ok || cabin.data.data === null || cabin.data.error !== null) {
+        return failed('vehicle.apply-cabin-profile', cabin.success && cabin.data.error ? cabin.data.error.code : 'PROVIDER_FAILED')
+      }
+      cabinEffectId = cabin.data.data.effectId
+      effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' })
+    }
+
+    if (input.preferences.mediaTitle !== undefined && input.preferences.mediaMemberId !== undefined) {
+      const mediaRaw = this.#registry['media.play'](
+        { taskId: input.task.taskId, requestId: `${providerRequestId}:media` },
+        { mediaTitle: input.preferences.mediaTitle, sourceMemberId: input.preferences.mediaMemberId, idempotencyKey: `${input.idempotencyKey}:media` },
+      )
+      const media = toolResultSchema(mediaPlayOutputSchema).safeParse(mediaRaw)
+      if (!media.success || !media.data.ok || media.data.data === null || media.data.error !== null) {
+        if (cabinEffectId) {
+          this.#registry['vehicle.revert-cabin-profile'](
+            { taskId: input.task.taskId, requestId: `${providerRequestId}:cabin-revert` },
+            { effectId: cabinEffectId, idempotencyKey: `${input.idempotencyKey}:cabin-revert` },
+          )
+        }
+        return failed('media.play', media.success && media.data.error ? media.data.error.code : 'PROVIDER_FAILED')
+      }
+      effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'media.play', status: 'succeeded', tool: 'media.play' })
+    }
+
+    return { succeeded: true, effect: effects, navigation: { routeId: route.routeId, destination: '家', eta: route.arrivalTime } }
   }
 }
 
