@@ -17,12 +17,14 @@ import {
   createProviderRegistry,
   createSideEffectRuntime,
   type MemberPreferenceRecord,
+  type ProviderRegistry,
   type SideEffectRuntime,
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask, resolveConfirmation } from './index'
 import { normalizeFlightNumber } from './flight-number'
 import { composeAgentSpec } from './composer'
 import { planEffects } from './effects'
+import { EffectExecutor, type PolicyGate } from './effect-executor'
 import {
   armLandingMessageRetry,
   resolveLandingMessageRetry,
@@ -58,6 +60,8 @@ export type AgentGatewayOptions = {
     preferences?: Record<string, MemberPreferenceRecord>,
   ) => UISpec
   orchestrator?: ReadToolOrchestration
+  providers?: ProviderRegistry
+  policyGate?: PolicyGate
   /**
    * Side-effect runtime for opaque confirmations and preference-backed notify.
    * When provided, its preferences are authoritative for landing-notify auth.
@@ -77,6 +81,7 @@ export class AgentGateway {
     preferences?: Record<string, MemberPreferenceRecord>,
   ) => UISpec
   readonly #orchestrator: ReadToolOrchestration
+  readonly #effectExecutor: EffectExecutor
   readonly #runtime: SideEffectRuntime
   readonly #preferences: Record<string, MemberPreferenceRecord>
 
@@ -94,9 +99,11 @@ export class AgentGateway {
     this.#runtime = runtime
     this.#preferences = runtime.preferences
     this.#compose = options.compose ?? composeAgentSpec
+    const providers = options.providers ?? createProviderRegistry(runtime)
     this.#orchestrator = options.orchestrator ?? new ReadToolOrchestrator({
-      registry: createProviderRegistry(runtime),
+      registry: providers,
     })
+    this.#effectExecutor = new EffectExecutor(providers, options.policyGate)
   }
 
   createTask(input: CreateTaskRequest): AgentResponse {
@@ -145,11 +152,11 @@ export class AgentGateway {
     const startedAt = performance.now()
     const request = submitEventRequestSchema.parse(input)
     const current = this.#requireTask(taskId)
-    const previous = this.#store.getEventResult(taskId, request.event.eventId)
-    if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
     if (request.event.type === 'navigation.started') {
       throw new AgentGatewayError('POLICY_DENIED', 'Navigation must be started through a registered action', false, current)
     }
+    const previous = this.#store.getEventResult(taskId, request.event.eventId)
+    if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
     if (request.expectedTaskRevision !== current.task.taskRevision) {
       throw new AgentGatewayError(
         'TASK_REVISION_CONFLICT',
@@ -201,8 +208,7 @@ export class AgentGateway {
     const action = current.ui.actions.find((candidate) => candidate.id === request.actionId)
     const component = current.ui.components.find((candidate) => candidate.id === request.componentId)
     if (
-      current.task.phase !== 'preparing'
-      || action?.event.type !== 'tool-request'
+      action?.event.type !== 'tool-request'
       || action.event.actionToken !== 'start-navigation'
       || request.actionId !== 'start-navigation'
       || component?.id !== 'navigation-plan'
@@ -219,7 +225,16 @@ export class AgentGateway {
       routeId: current.toolResults['navigation.plan-route'].data.routeId,
       timestamp,
     }
-    const { stored, effectRecords } = this.#applyAuthorizedEvent(current, event)
+    const execution = this.#effectExecutor.startNavigation({
+      task: current.task,
+      routeId: event.routeId,
+      idempotencyKey: request.idempotencyKey,
+      effectId: `${event.eventId}:0`,
+    })
+    const stored = execution.succeeded
+      ? this.#store.save(this.#publish(applyEvent(current.task, event, this.#preferences), current.toolResults))
+      : current
+    const effectRecords = [execution.effect]
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: effectRecords })
     return this.#response(request.clientRequestId, stored, effectRecords, performance.now() - startedAt)
   }
@@ -335,17 +350,32 @@ export class AgentGateway {
 
   #publish(task: AirportPickupTaskState, toolResults?: ReadToolResults): StoredTask {
     const ui = this.#compose(task, toolResults, this.#preferences)
+    const uiWithoutStartNavigation = {
+      ...ui,
+      components: ui.components.map((component) => component.actions?.includes('start-navigation')
+        ? { ...component, actions: component.actions.filter((actionId) => actionId !== 'start-navigation') }
+        : component),
+      actions: ui.actions.filter((action) => action.id !== 'start-navigation'),
+    }
+    const trustedRoute = toolResults?.['navigation.plan-route']
+    const trustedRouteId = trustedRoute?.ok === true && trustedRoute.data !== null
+      ? trustedRoute.data.routeId
+      : undefined
     const canStartNavigation = task.phase === 'preparing'
-      && toolResults?.['navigation.plan-route'] !== undefined
-      && ui.components.some((component) => component.id === 'navigation-plan')
+      && task.flight?.status !== 'cancelled'
+      && task.navigation?.status === 'planned'
+      && trustedRoute?.ok === true
+      && trustedRoute.data !== null
+      && task.navigation.routeId === trustedRouteId
+      && uiWithoutStartNavigation.components.some((component) => component.id === 'navigation-plan')
     const publishedUi = canStartNavigation
       ? {
-          ...ui,
-          components: ui.components.map((component) => component.id === 'navigation-plan'
+          ...uiWithoutStartNavigation,
+          components: uiWithoutStartNavigation.components.map((component) => component.id === 'navigation-plan'
             ? { ...component, actions: [...(component.actions ?? []), 'start-navigation'] }
             : component),
           actions: [
-            ...ui.actions.filter((action) => action.id !== 'start-navigation'),
+            ...uiWithoutStartNavigation.actions,
             {
               id: 'start-navigation',
               label: '开始导航',
@@ -354,16 +384,8 @@ export class AgentGateway {
             },
           ],
         }
-      : ui
+      : uiWithoutStartNavigation
     return { task: { ...task, uiRevision: publishedUi.uiRevision }, ui: publishedUi, toolResults }
-  }
-
-  #applyAuthorizedEvent(current: StoredTask, event: Parameters<typeof applyEvent>[1]): { stored: StoredTask; effectRecords: AgentResponse['effects'] } {
-    const effects = planEffects(current.task, event, current.toolResults ?? {}, this.#preferences)
-    const next = applyEvent(current.task, event, this.#preferences)
-    const stored = next === current.task ? current : this.#store.save(this.#publish(next, current.toolResults))
-    const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${event.eventId}:${index}` }))
-    return { stored, effectRecords }
   }
 
   #assertRevisions(current: StoredTask, expectedTaskRevision: number, expectedUiRevision?: number): void {

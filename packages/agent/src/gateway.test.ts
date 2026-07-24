@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { createSideEffectRuntime } from '@canvasflow/tools'
+import { describe, expect, it, vi } from 'vitest'
+import { createProviderRegistry, createSideEffectRuntime } from '@canvasflow/tools'
 import { AgentGateway, AgentGatewayError } from './gateway'
 import { ReadToolOrchestrator } from './orchestration'
 import { MemoryTaskStore } from './store'
@@ -221,6 +221,105 @@ describe('AgentGateway', () => {
     expect(duplicate.effects).toEqual(started.effects)
   })
 
+  it('executes navigation.start before committing the navigation event', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const startNavigation = vi.fn(base['navigation.start'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => now,
+      createId: () => '001',
+      runtime,
+      providers: { ...base, 'navigation.start': startNavigation },
+    })
+    const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'client-start-navigation',
+      expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision,
+      actionId: 'start-navigation',
+      componentId: 'navigation-plan',
+      idempotencyKey: 'nav-provider-001',
+    })
+
+    expect(startNavigation).toHaveBeenCalledTimes(1)
+    expect(startNavigation).toHaveBeenCalledWith(
+      { taskId: created.task.taskId, requestId: 'pickup-001:navigation.start:nav-provider-001' },
+      { routeId: 'route-airport-001', idempotencyKey: 'nav-provider-001' },
+    )
+    expect(started.task).toMatchObject({ phase: 'driving-to-airport', navigation: { status: 'active' } })
+    expect(started.effects).toEqual([{
+      effectId: 'action:nav-provider-001:0',
+      type: 'navigation.start',
+      status: 'succeeded',
+      tool: 'navigation.start',
+    }])
+
+    const duplicate = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'client-start-navigation-retry',
+      expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision,
+      actionId: 'start-navigation',
+      componentId: 'navigation-plan',
+      idempotencyKey: 'nav-provider-001',
+    })
+    expect(startNavigation).toHaveBeenCalledTimes(1)
+    expect(duplicate.task).toEqual(started.task)
+    expect(duplicate.effects).toEqual(started.effects)
+  })
+
+  it('keeps the original snapshot and records a failed effect when navigation.start fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const startNavigation = vi.fn((ctx: { taskId: string; requestId?: string }) => ({
+      ok: false,
+      data: null,
+      error: { code: 'PROVIDER_TIMEOUT', message: 'navigation timeout', retryable: true },
+      meta: {
+        requestId: ctx.requestId!,
+        taskId: ctx.taskId,
+        tool: 'navigation.start',
+        provider: 'fixture' as const,
+        durationMs: 1,
+        generatedAt: '2026-07-22T12:00:00+08:00',
+      },
+    }))
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => now,
+      createId: () => '001',
+      runtime,
+      providers: { ...base, 'navigation.start': startNavigation },
+    })
+    const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆，航班 MU5102'))
+    const failed = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'client-start-navigation',
+      expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision,
+      actionId: 'start-navigation',
+      componentId: 'navigation-plan',
+      idempotencyKey: 'nav-provider-timeout',
+    })
+
+    expect(failed.task).toEqual(created.task)
+    expect(failed.ui).toEqual(created.ui)
+    expect(failed.effects).toEqual([expect.objectContaining({
+      type: 'navigation.start', status: 'failed', tool: 'navigation.start', errorCode: 'PROVIDER_TIMEOUT',
+    })])
+    expect(gateway.getTask(created.task.taskId).task).toEqual(created.task)
+
+    const duplicate = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'client-start-navigation-retry',
+      expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision,
+      actionId: 'start-navigation',
+      componentId: 'navigation-plan',
+      idempotencyKey: 'nav-provider-timeout',
+    })
+    expect(startNavigation).toHaveBeenCalledTimes(1)
+    expect(duplicate.effects).toEqual(failed.effects)
+  })
+
   it('rejects stale and unregistered navigation actions with typed errors', () => {
     const gateway = createGateway()
     const created = gateway.createTask(createRequest())
@@ -247,6 +346,48 @@ describe('AgentGateway', () => {
     expect(() => gateway.submitAction(created.task.taskId, { ...request, actionId: 'unknown-action' })).toThrowError(
       expect.objectContaining({ code: 'INVALID_REQUEST' }),
     )
+  })
+
+  it('does not publish or execute navigation after the flight is cancelled', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const startNavigation = vi.fn(base['navigation.start'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => now,
+      createId: () => '001',
+      runtime,
+      providers: { ...base, 'navigation.start': startNavigation },
+    })
+    const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆，航班 MU5102'))
+    const cancelled = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight-cancelled',
+      expectedTaskRevision: created.task.taskRevision,
+      event: {
+        eventId: 'flight-cancelled',
+        type: 'flight.updated',
+        flight: {
+          flightNumber: 'MU5102',
+          status: 'cancelled',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: '2026-07-22T20:30:00+08:00',
+          terminal: 'T2',
+        },
+        timestamp: '2026-07-22T12:01:00+08:00',
+      },
+    })
+
+    expect(cancelled.task.flight?.status).toBe('cancelled')
+    expect(cancelled.ui.actions.some((action) => action.id === 'start-navigation')).toBe(false)
+    expect(() => gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'client-start-cancelled',
+      expectedTaskRevision: cancelled.task.taskRevision,
+      expectedUiRevision: cancelled.ui.uiRevision,
+      actionId: 'start-navigation',
+      componentId: 'navigation-plan',
+      idempotencyKey: 'nav-cancelled',
+    })).toThrowError(expect.objectContaining({ code: 'INVALID_REQUEST' }))
+    expect(startNavigation).not.toHaveBeenCalled()
   })
 
   it('rejects externally submitted navigation events', () => {
