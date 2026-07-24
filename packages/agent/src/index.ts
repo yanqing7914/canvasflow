@@ -45,12 +45,15 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'flight.updated':
       next.flight = event.flight
       if (next.phase === 'driving-to-airport' && event.flight.status === 'landed' && next.message.autoNotifyAuthorized && !next.message.landingNoticeSent && next.message.status === 'idle') {
-        next.message.status = 'scheduled'
-        next.message.pendingMessageId = `${event.flight.flightNumber}:landing`
-        next.message.idempotencyKey = `${next.taskId}:${event.flight.flightNumber}:landing`
-        // Retain only a currently authorized recipient for later explicit retry.
+        // Never enter scheduled without a currently authorized recipient — otherwise
+        // planEffects/UI can trap the task in a high-priority notify state with no recovery.
         const contactId = resolveAuthorizedLandingContact(next.passengers.memberIds)
-        if (contactId) next.message.pendingContactId = contactId
+        if (contactId) {
+          next.message.status = 'scheduled'
+          next.message.pendingMessageId = `${event.flight.flightNumber}:landing`
+          next.message.idempotencyKey = `${next.taskId}:${event.flight.flightNumber}:landing`
+          next.message.pendingContactId = contactId
+        }
       }
       break
     case 'navigation.started':
