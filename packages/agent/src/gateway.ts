@@ -398,6 +398,7 @@ export class AgentGateway {
         flight: {
           flightNumber: reads.flight.flightNumber,
           status: reads.flight.status,
+          scheduledArrival: reads.flight.scheduledArrival,
           estimatedArrival: reads.flight.estimatedArrival,
           terminal: reads.flight.terminal,
           baggageClaim: reads.flight.baggageClaim,

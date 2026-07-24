@@ -13,14 +13,20 @@ describe('Agent UISpec composer', () => {
       ...createInitialTask('pickup-001', timestamp),
       phase: 'preparing' as const,
       passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
       navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
       charging: { recommended: true, accepted: false, status: 'planned' as const },
     }
 
-    expect(composeAgentSpec(task, reads.toolResults).components.map((component) => component.type)).toEqual([
+    const spec = composeAgentSpec(task, reads.toolResults)
+
+    expect(spec.components.map((component) => component.type)).toEqual([
       'flight-status', 'navigation-summary', 'charging-recommendation',
     ])
+    expect(spec.components).toContainEqual(expect.objectContaining({
+      id: 'flight-status',
+      props: expect.objectContaining({ scheduledArrival: reads.flight.scheduledArrival }),
+    }))
   })
 
   it('projects a scheduled landing notification into a cancellable message preview', () => {
@@ -105,7 +111,7 @@ describe('Agent UISpec composer', () => {
       ...createInitialTask('pickup-001', timestamp),
       phase: 'driving-to-airport' as const,
       passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: timestamp, terminal: 'T2' },
+      flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: timestamp, estimatedArrival: timestamp, terminal: 'T2' },
       message: {
         ...createInitialTask().message,
         status: 'failed' as const,
