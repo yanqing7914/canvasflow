@@ -92,6 +92,36 @@ describe('AgentGateway', () => {
     expect(updated.task).toMatchObject({ phase: 'preparing', passengers: { names: ['爸爸'] }, flight: { flightNumber: 'MU5102' } })
   })
 
+  it('preserves an authorized landing contact when an unauthorized passenger is added', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈'))
+    expect(created.task.message.autoNotifyAuthorized).toBe(true)
+
+    const updated = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-add-dad',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'add-dad', type: 'user.input', text: '接爸爸，航班 MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(updated.task.passengers.names).toEqual(['妈妈', '爸爸'])
+    expect(updated.task.message.autoNotifyAuthorized).toBe(true)
+  })
+
+  it('enables landing notification when an authorized passenger is added', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接爸爸'))
+    expect(created.task.message.autoNotifyAuthorized).toBe(false)
+
+    const updated = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-add-mom',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'add-mom', type: 'user.input', text: '接妈妈，航班 MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(updated.task.passengers.names).toEqual(['爸爸', '妈妈'])
+    expect(updated.task.message.autoNotifyAuthorized).toBe(true)
+  })
+
   it('keeps unresolved passengers missing while still accepting the flight slot', () => {
     const gateway = createGateway()
     const created = gateway.createTask(createRequest('接叔叔，航班 MU5102'))

@@ -186,10 +186,11 @@ export class AgentGateway {
       try {
         let passengerToolResults: ReadToolResults = {}
         if (parsedPassengers) {
+          const mergedPassengers = mergePassengers(current.task.passengers, parsedPassengers)
           const passengerReads = this.#orchestrator.resolveInitialPassengers(
             taskId,
             request.clientRequestId,
-            parsedPassengers.names,
+            mergedPassengers.names,
           )
           next.passengers = mergePassengers(current.task.passengers, passengerReads.passengers)
           next.message = { ...next.message, autoNotifyAuthorized: passengerReads.notificationAuthorized }
