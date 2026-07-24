@@ -96,6 +96,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
           after: active.after,
           requiresConfirmation: true,
           confirmationId: active.confirmationId,
+          expiresAt: new Date(active.expiresAtMs).toISOString(),
         }),
       )
     }
@@ -128,6 +129,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
         after,
         requiresConfirmation: true,
         confirmationId,
+        expiresAt: new Date(now + PROPOSAL_TTL_MS).toISOString(),
       }),
     )
   }

@@ -181,6 +181,14 @@ export class ConfirmationStore {
     return true
   }
 
+  /** Invalidates a pending memory proposal after an explicit reject. */
+  revokeMemoryConfirmation(confirmationId: string): boolean {
+    const grant = this.grants.get(confirmationId)
+    if (!grant || grant.kind !== 'confirm-memory') return false
+    grant.consumed = true
+    return true
+  }
+
   /** Capability grant for a prepared payload; must still be unconsumed. */
   matchesAutoNotifyAuthorization(authorizationId: string, binding: AutoNotifyBinding): boolean {
     const grant = this.grants.get(authorizationId)

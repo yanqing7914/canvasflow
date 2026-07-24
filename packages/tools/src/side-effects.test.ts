@@ -745,6 +745,21 @@ describe('message.send', () => {
 })
 
 describe('memory write side effects', () => {
+  it('returns provider-authoritative expiry and revoke invalidates the opaque token', () => {
+    const runtime = createSideEffectRuntime(() => Date.parse('2026-07-22T12:00:00Z'))
+    const registry = createProviderRegistry(runtime)
+    const proposed = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 26 } })
+    expect(proposed.data?.expiresAt).toBe('2026-07-22T12:30:00.000Z')
+    runtime.confirmations.revokeMemoryConfirmation(proposed.data!.confirmationId)
+    const confirmed = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'rejected-proposal',
+    })
+    expect(confirmed.error?.code).toBe('CONFIRMATION_REQUIRED')
+    expect(runtime.preferences.mom.rearTemperatureC).toBe(25)
+  })
+
   it('propose 后 confirm 才写入，confirm 幂等且写入对读取可见', () => {
     const registry = createProviderRegistry()
     const proposed = registry['memory.propose-update'](ctx, {

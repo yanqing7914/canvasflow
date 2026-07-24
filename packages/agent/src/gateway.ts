@@ -21,7 +21,7 @@ import {
   type ProviderRegistry,
   type SideEffectRuntime,
 } from '@canvasflow/tools'
-import { applyEvent, createInitialTask, resolveConfirmation } from './index'
+import { applyEvent, createInitialTask } from './index'
 import { normalizeFlightNumber } from './flight-number'
 import { mergePassengers, parsePassengerLabels, parsePassengers } from './passengers'
 import { composeAgentSpec } from './composer'
@@ -270,6 +270,49 @@ export class AgentGateway {
         this.#throwProviderError(error, current)
       }
     }
+    if (request.event.type === 'destination.arrived' && current.task.phase === 'returning-home' && next.phase === 'completed') {
+      const memberId = next.passengers.memberIds.find((candidate) => this.#preferences[candidate]?.rearTemperatureC !== undefined)
+      if (!memberId) {
+        next.pendingConfirmation = undefined
+        next.memoryProposal = { status: 'skipped', errorCode: 'PREFERENCE_UNAVAILABLE' }
+        const stored = this.#store.save(this.#publish(next, toolResults))
+        const skipped: AgentResponse['effects'] = [{ effectId: `${request.event.eventId}:0`, type: 'memory.propose-update', status: 'cancelled', tool: 'memory.propose-update', errorCode: 'PREFERENCE_UNAVAILABLE' }]
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: skipped })
+        return this.#response(request.clientRequestId, stored, skipped, performance.now() - startedAt)
+      }
+      const proposal = this.#effectExecutor.proposeMemoryUpdate({
+        task: next,
+        memberId,
+        changes: { rearTemperatureC: this.#preferences[memberId]!.rearTemperatureC! },
+        requestId: request.event.eventId,
+        effectId: `${request.event.eventId}:0`,
+      })
+      if (!proposal.succeeded || !proposal.proposal) {
+        const stored = this.#store.save(this.#publish({
+          ...next,
+          memoryProposal: { status: 'failed', errorCode: proposal.effect.errorCode ?? 'PROVIDER_FAILED' },
+          pendingConfirmation: undefined,
+        }, toolResults))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [proposal.effect] })
+        return this.#response(request.clientRequestId, stored, [proposal.effect], performance.now() - startedAt)
+      }
+      next.memoryProposal = {
+        proposalId: proposal.proposal.proposalId,
+        memberId: proposal.proposal.memberId,
+        confirmationId: proposal.proposal.confirmationId,
+        expiresAt: proposal.proposal.expiresAt,
+        changes: { rearTemperatureC: this.#preferences[memberId]!.rearTemperatureC! },
+        status: 'pending',
+      }
+      next.pendingConfirmation = {
+        confirmationId: proposal.proposal.confirmationId,
+        action: 'save-memory',
+        expiresAt: proposal.proposal.expiresAt,
+      }
+      const stored = this.#store.save(this.#publish(next, toolResults))
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [proposal.effect] })
+      return this.#response(request.clientRequestId, stored, [proposal.effect], performance.now() - startedAt)
+    }
     const stored = next === current.task
       ? current
       : this.#store.save(this.#publish(next, toolResults))
@@ -347,11 +390,10 @@ export class AgentGateway {
     if (!pending || pending.confirmationId !== confirmationId) {
       throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current confirmation is available', false, current)
     }
-    if (pending.expiresAt && Date.parse(pending.expiresAt) < Date.parse(this.#now())) {
-      throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'The confirmation has expired', false, current)
-    }
-
     if (pending.action === 'send-message') {
+      if (pending.expiresAt && Date.parse(pending.expiresAt) < Date.parse(this.#now())) {
+        throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'The confirmation has expired', false, current)
+      }
       return this.#submitSendMessageConfirmation(taskId, confirmationId, current, request, operation, startedAt)
     }
 
@@ -359,13 +401,85 @@ export class AgentGateway {
       throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current save-memory confirmation is available', false, current)
     }
 
-    // Fixture mode only: both decisions close the prompt without writing long-term memory.
-    const resolved = resolveConfirmation(current.task, confirmationId)
-    const stored = this.#store.save(this.#publish(
-      { ...resolved, updatedAt: this.#eventTimestamp(current.task.updatedAt) },
-      current.toolResults,
-    ))
-    const effects: AgentResponse['effects'] = []
+    const proposal = current.task.memoryProposal
+    if (!proposal?.proposalId || proposal.confirmationId !== confirmationId || proposal.status !== 'pending') {
+      throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current memory proposal is available', false, current)
+    }
+    if (pending.expiresAt && Date.parse(pending.expiresAt) < Date.parse(this.#now())) {
+      const expiration = this.#effectExecutor.confirmMemoryUpdate({
+        task: current.task,
+        proposalId: proposal.proposalId,
+        confirmationId,
+        memberId: proposal.memberId ?? '',
+        changes: proposal.changes ?? {},
+        idempotencyKey: request.idempotencyKey,
+        effectId: `${confirmationId}:expired`,
+      })
+      const expired = {
+        ...current.task,
+        memoryProposal: { ...proposal, status: 'expired' as const, errorCode: 'PROPOSAL_EXPIRED' },
+        pendingConfirmation: undefined,
+        taskRevision: current.task.taskRevision + 1,
+        updatedAt: this.#eventTimestamp(current.task.updatedAt),
+      }
+      const effects: AgentResponse['effects'] = [{
+        ...expiration.effect,
+        status: 'failed',
+        errorCode: expiration.errorCode ?? 'PROPOSAL_EXPIRED',
+      }]
+      const stored = this.#store.save(this.#publish(expired, current.toolResults))
+      this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
+      return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
+    }
+
+    let effects: AgentResponse['effects']
+    let next: AirportPickupTaskState
+    if (request.decision === 'reject') {
+      this.#runtime.confirmations.revokeMemoryConfirmation(confirmationId)
+      this.#runtime.memoryProposals.delete(proposal.proposalId)
+      next = {
+        ...current.task,
+        memoryProposal: { ...proposal, status: 'rejected' },
+        pendingConfirmation: undefined,
+        taskRevision: current.task.taskRevision + 1,
+        updatedAt: this.#eventTimestamp(current.task.updatedAt),
+      }
+      effects = [{ effectId: `${confirmationId}:reject`, type: 'memory.propose-update', status: 'cancelled', tool: 'memory.propose-update', errorCode: 'USER_REJECTED' }]
+    } else {
+      const execution = this.#effectExecutor.confirmMemoryUpdate({
+        task: current.task,
+        proposalId: proposal.proposalId,
+        confirmationId,
+        memberId: proposal.memberId ?? '',
+        changes: proposal.changes ?? {},
+        idempotencyKey: request.idempotencyKey,
+        effectId: `${confirmationId}:confirm`,
+      })
+      if (!execution.succeeded) {
+        const errorCode = execution.errorCode ?? 'PROVIDER_FAILED'
+        const expired = errorCode === 'PROPOSAL_EXPIRED'
+        const failed = {
+          ...current.task,
+          memoryProposal: { ...proposal, status: expired ? 'expired' as const : 'pending' as const, errorCode },
+          ...(expired ? { pendingConfirmation: undefined } : {}),
+          taskRevision: current.task.taskRevision + 1,
+          updatedAt: this.#eventTimestamp(current.task.updatedAt),
+        }
+        effects = [execution.effect]
+        const stored = this.#store.save(this.#publish(failed, current.toolResults))
+        this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
+        return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
+      }
+      next = {
+        ...current.task,
+        memoryProposal: { ...proposal, status: 'accepted', errorCode: undefined },
+        pendingConfirmation: undefined,
+        taskRevision: current.task.taskRevision + 1,
+        updatedAt: this.#eventTimestamp(current.task.updatedAt),
+      }
+      effects = [execution.effect]
+    }
+    const stored = this.#store.save(this.#publish(next, current.toolResults))
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
