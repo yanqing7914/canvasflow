@@ -55,7 +55,7 @@ export const getPreferencesOutputSchema = z.object({
     z.object({
       memberId: z.string().min(1),
       rearTemperatureC: z.number().optional(),
-      mediaTitle: z.string().optional(),
+      mediaTitle: z.string().min(1).optional(),
       homeDestinationId: z.string().optional(),
       /** Only present when `notification` is in the requested scopes. */
       landingNotificationAuthorized: z.boolean().optional(),
@@ -159,7 +159,7 @@ export const navigationUpdateRouteOutputSchema = z.object({
 export const cabinProfileValuesSchema = z.object({
   temperatureC: z.number().optional(),
   fanLevel: z.number().optional(),
-  mediaTitle: z.string().optional(),
+  mediaTitle: z.string().min(1).optional(),
 })
 
 export const applyCabinProfileInputSchema = z.object({
@@ -213,6 +213,12 @@ export const messagePrepareOutputSchema = z.object({
   messageId: z.string().min(1),
   contactId: z.string().min(1),
   text: z.string().min(1),
+  /**
+   * Opaque, single-use credential issued into the registry runtime's ConfirmationStore.
+   * Pass the same id to `message.send` for the explicit confirm path; bound to this
+   * prepared message (taskId + contactId + messageId + text). Auto-notify may omit it.
+   */
+  confirmationId: z.string().min(1),
 })
 
 export const messageSendInputSchema = z.object({

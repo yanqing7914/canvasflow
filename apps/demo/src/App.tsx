@@ -1,17 +1,16 @@
 import { useMemo, useState } from 'react'
-import { applyEvent, createInitialTask, resolveConfirmation } from '@canvasflow/agent'
 import {
-  createProviderRegistry,
-  createSideEffectRuntime,
-  issueSendMessageConfirmation,
-  prepareMessage,
-  resolveAuthorizedLandingContact,
-} from '@canvasflow/tools'
+  applyEvent,
+  armLandingMessageRetry,
+  createInitialTask,
+  resolveConfirmation,
+  resolveLandingMessageRetry,
+} from '@canvasflow/agent'
+import { createSideEffectRuntime } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
 import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
 
 const demoRuntime = createSideEffectRuntime()
-const demoRegistry = createProviderRegistry(demoRuntime)
 
 const timeline: AirportPickupEvent[] = [
   { eventId: 'start-navigation', type: 'navigation.started', routeId: 'route-airport-001', timestamp: '2026-07-22T20:05:00+08:00' },
@@ -89,95 +88,23 @@ export default function App({
       return
     }
     if (actionId === 'retry-landing-message') {
-      setTask((current) => {
-        if (current.message.status !== 'failed' || !current.flight) return current
-        // Always re-resolve from runtime prefs; do not trust a stale pendingContactId.
-        const contactId = resolveAuthorizedLandingContact(current.passengers.memberIds, demoRuntime.preferences)
-        if (!contactId) return current
-        const ctx = { taskId: current.taskId }
-        const prepared = prepareMessage(ctx, {
-          contactId,
-          flightNumber: current.flight.flightNumber,
-          eta: '20:40',
-        })
-        if (!prepared.ok || !prepared.data) return current
-
-        const binding = {
-          taskId: current.taskId,
-          contactId: prepared.data.contactId,
-          messageId: prepared.data.messageId,
-          text: prepared.data.text,
-        }
-        const confirmationId = issueSendMessageConfirmation(demoRuntime, binding)
-        // Arm an explicit confirmation boundary; do not send until the user accepts.
-        return {
-          ...current,
-          message: {
-            ...current.message,
-            pendingContactId: contactId,
-            pendingMessageId: `${current.flight.flightNumber}:landing`,
-            idempotencyKey: prepared.data.messageId,
-          },
-          pendingConfirmation: {
-            confirmationId,
-            action: 'send-message',
-          },
-        }
-      })
+      setTask((current) => armLandingMessageRetry(current, demoRuntime) ?? current)
       return
     }
     if (actionId === 'confirm-retry-landing-message') {
       setTask((current) => {
-        if (
-          current.message.status !== 'failed' ||
-          !current.flight ||
-          current.pendingConfirmation?.action !== 'send-message' ||
-          !current.message.pendingContactId
-        ) {
-          return current
-        }
-        const ctx = { taskId: current.taskId }
-        const prepared = prepareMessage(ctx, {
-          contactId: current.message.pendingContactId,
-          flightNumber: current.flight.flightNumber,
-          eta: '20:40',
-        })
-        if (!prepared.ok || !prepared.data) return current
-
-        const pendingMessageId = current.message.pendingMessageId ?? `${current.flight.flightNumber}:landing`
-        const armed: AirportPickupTaskState = {
-          ...current,
-          pendingConfirmation: undefined,
-          message: {
-            ...current.message,
-            status: 'scheduled',
-            pendingMessageId,
-            idempotencyKey: prepared.data.messageId,
-            landingNoticeSent: false,
-          },
-        }
-        const sent = demoRegistry['message.send'](ctx, {
-          contactId: prepared.data.contactId,
-          messageId: prepared.data.messageId,
-          text: prepared.data.text,
-          confirmationId: current.pendingConfirmation.confirmationId,
-          idempotencyKey: `${prepared.data.messageId}:retry`,
-        })
-        if (!sent.ok) {
-          return applyEvent(armed, {
-            eventId: `retry-failed-${current.taskRevision}`,
-            type: 'message.failed',
-            messageId: pendingMessageId,
-            errorCode: sent.error?.code ?? 'SEND_FAILED',
-            timestamp: '2026-07-22T20:42:00+08:00',
-          }, demoRuntime.preferences)
-        }
-        return applyEvent(armed, {
-          eventId: `retry-sent-${current.taskRevision}`,
-          type: 'message.sent',
-          messageId: pendingMessageId,
-          timestamp: '2026-07-22T20:42:00+08:00',
-        }, demoRuntime.preferences)
+        const confirmationId = current.pendingConfirmation?.confirmationId
+        if (!confirmationId) return current
+        const resolved = resolveLandingMessageRetry(
+          current,
+          demoRuntime,
+          confirmationId,
+          'accept',
+          '2026-07-22T20:42:00+08:00',
+        )
+        if (!resolved) return current
+        if (resolved.decision === 'reject') return resolved.task
+        return applyEvent(resolved.task, resolved.event, demoRuntime.preferences)
       })
     }
   }
