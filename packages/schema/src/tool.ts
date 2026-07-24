@@ -164,9 +164,9 @@ export const cabinProfileValuesSchema = z.object({
 
 export const applyCabinProfileInputSchema = z.object({
   zone: z.literal('rear'),
-  temperatureC: z.number().optional(),
-  fanLevel: z.number().optional(),
-  mediaTitle: z.string().optional(),
+  temperatureC: z.number().min(16).max(32).optional(),
+  fanLevel: z.number().int().min(0).max(5).optional(),
+  mediaTitle: z.string().min(1).optional(),
   sourceMemberIds: z.array(z.string().min(1)).min(1),
   idempotencyKey: z.string().min(1),
 })
@@ -231,9 +231,9 @@ export const messageSendOutputSchema = z.object({
 })
 
 export const memoryPreferenceChangeSchema = z.object({
-  rearTemperatureC: z.number().optional(),
-  mediaTitle: z.string().optional(),
-  homeDestinationId: z.string().optional(),
+  rearTemperatureC: z.number().min(16).max(32).optional(),
+  mediaTitle: z.string().min(1).optional(),
+  homeDestinationId: z.string().min(1).optional(),
   landingNotificationAuthorized: z.boolean().optional(),
 }).strict()
 

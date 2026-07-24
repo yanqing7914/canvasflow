@@ -4,15 +4,21 @@ import {
   type AirportPickupEvent,
   type AirportPickupTaskState,
 } from '@canvasflow/schema'
+import { normalizeFlightNumber } from './flight-number'
 
 export * from './effects'
+export * from './flight-number'
+export * from './composer'
+export * from './gateway'
+export * from './planner'
+export * from './store'
 
-export function createInitialTask(taskId = 'pickup-001'): AirportPickupTaskState {
+export function createInitialTask(taskId = 'pickup-001', updatedAt = '2026-07-22T12:00:00+08:00'): AirportPickupTaskState {
   return airportPickupTaskStateSchema.parse({
     taskId, surfaceId: 'airport-pickup-main', taskRevision: 0, uiRevision: 0, phase: 'collecting-information',
     passengers: { memberIds: [], names: [], confirmedOnboard: false }, charging: { recommended: false, accepted: false, status: 'none' },
     message: { autoNotifyAuthorized: true, status: 'idle', landingNoticeSent: false }, processedEventIds: [],
-    updatedAt: '2026-07-22T12:00:00+08:00',
+    updatedAt,
   })
 }
 
@@ -36,9 +42,15 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
 
   switch (event.type) {
     case 'user.input':
-      handled = /MU\d+/i.test(event.text) || /机场|接妈妈|接豆豆|补能|充电|座舱|偏好|温度|媒体/.test(event.text)
-      if (/MU\d+/i.test(event.text)) next.flight = { flightNumber: event.text.match(/MU\d+/i)?.[0].toUpperCase() ?? event.text, status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
-      if (/补能|充电/.test(event.text)) next.charging = { ...next.charging, recommended: true, status: 'planned' }
+      {
+        const flightNumber = normalizeFlightNumber(event.text)
+        handled = flightNumber !== undefined || /机场|接妈妈|接豆豆|补能|充电|座舱|偏好|温度|媒体/.test(event.text)
+        if (flightNumber) next.flight = { flightNumber, status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
+      }
+      if (/补能|充电/.test(event.text)) {
+        const accepted = /先去(?:充电|补能)/.test(event.text)
+        next.charging = { ...next.charging, recommended: true, accepted: next.charging.accepted || accepted, status: 'planned' }
+      }
       if (next.flight && next.passengers.names.length > 0 && next.phase === 'collecting-information') next.phase = 'preparing'
       break
     case 'flight.updated':
@@ -62,7 +74,12 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'charging.started': if (next.phase === 'driving-to-airport' && next.charging.status === 'planned') next.charging.status = 'active'; break
     case 'charging.completed': if (next.charging.status === 'active') next.charging.status = 'completed'; break
     case 'charging.cancelled': if (next.charging.status === 'planned' || next.charging.status === 'active') next.charging = { ...next.charging, accepted: false, status: 'none' }; break
-    case 'user.cancelled-task': next.phase = 'cancelled'; next.pendingConfirmation = undefined; next.message.pendingMessageId = undefined; break
+    case 'user.cancelled-task':
+      next.phase = 'cancelled'
+      next.pendingConfirmation = undefined
+      next.message.pendingMessageId = undefined
+      if (next.message.status === 'scheduled') next.message.status = 'cancelled'
+      break
     case 'provider.timeout': handled = true; break
     case 'message.sent': if (next.message.pendingMessageId === event.messageId) { next.message.status = 'sent'; next.message.landingNoticeSent = true; next.message.sentAt = event.timestamp; next.message.pendingMessageId = undefined } break
     case 'message.failed': if (next.message.pendingMessageId === event.messageId) { next.message.status = 'failed'; next.message.pendingMessageId = undefined } break

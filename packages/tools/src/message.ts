@@ -17,14 +17,14 @@ const SEND = 'message.send'
 /** Fixture contact that deterministically fails send. */
 export const FAILING_CONTACT_ID = 'contact-fail'
 
-/** Task-scoped pre-authorization credential for the automatic landing notice. */
-export function autoNotifyAuthorizationId(taskId: string): string {
-  return `${taskId}:auto-notify`
-}
-
 /** Issue an opaque, one-time confirmation for an explicit send / retry. */
 export function issueSendMessageConfirmation(runtime: SideEffectRuntime, binding: MessageSendBinding): string {
   return runtime.confirmations.issueSendMessageConfirmation(binding)
+}
+
+/** Issue an opaque auto-notify capability grant for a task (not forgeable from taskId). */
+export function issueAutoNotifyAuthorization(runtime: SideEffectRuntime, taskId: string): string {
+  return runtime.confirmations.issueAutoNotifyAuthorization(taskId)
 }
 
 export function prepareMessage(ctx: ToolContext, input: unknown): ToolResult<MessagePrepareOutput> {
@@ -60,13 +60,7 @@ export function createMessageSender(runtime: SideEffectRuntime) {
     }
 
     const cached = runtime.idempotency.get<MessageSendOutput>(ctx.taskId, SEND, parsed.data.idempotencyKey, parsed.data)
-    if (cached.kind === 'hit') {
-      // Ledger is task-scoped; still refuse a hit whose stored meta belongs elsewhere.
-      if (cached.result.meta.taskId !== ctx.taskId) {
-        return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '幂等结果与当前任务不匹配', false)
-      }
-      return cached.result
-    }
+    if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
     }
@@ -78,11 +72,12 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       text: parsed.data.text,
     }
 
-    // 凭据必须与任务绑定：预授权路径还要求联系人对应成员开启了落地通知授权；
-    // 显式确认路径使用 runtime 签发的一次性 opaque token，绑定到具体消息。
+    // 凭据必须由 runtime 签发：预授权路径还要求联系人对应成员开启了落地通知授权；
+    // 显式确认路径使用一次性 opaque token，绑定到具体消息。
     const member = familyMembers.find((candidate) => candidate.contactId === parsed.data.contactId)
     const autoNotifyGranted =
-      parsed.data.authorizationId === autoNotifyAuthorizationId(ctx.taskId) &&
+      parsed.data.authorizationId !== undefined &&
+      runtime.confirmations.matchesAutoNotifyAuthorization(parsed.data.authorizationId, ctx.taskId) &&
       member !== undefined &&
       Object.hasOwn(runtime.preferences, member.memberId) &&
       runtime.preferences[member.memberId]?.landingNotificationAuthorized === true
