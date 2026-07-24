@@ -774,6 +774,25 @@ describe('memory write side effects', () => {
     expect(runtime.preferences.mom.rearTemperatureC).toBe(25)
   })
 
+  it('does not consume a foreign active token while cleaning a missing proposal', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const first = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 26 } })
+    runtime.memoryProposals.delete(first.data!.proposalId)
+    const foreign = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { landingNotificationAuthorized: false } })
+    const rejected = registry['memory.reject-update']({ taskId: 'pickup-001', requestId: 'foreign-token' }, {
+      proposalId: first.data!.proposalId,
+      confirmationId: foreign.data!.confirmationId,
+      idempotencyKey: 'foreign-token-cleanup',
+    })
+    expect(rejected.error?.code).toBe('CONFIRMATION_REQUIRED')
+    expect(registry['memory.confirm-update']({ taskId: 'pickup-001', requestId: 'foreign-confirm' }, {
+      proposalId: foreign.data!.proposalId,
+      confirmationId: foreign.data!.confirmationId,
+      idempotencyKey: 'foreign-confirm',
+    }).ok).toBe(true)
+  })
+
   it('propose 后 confirm 才写入，confirm 幂等且写入对读取可见', () => {
     const registry = createProviderRegistry()
     const proposed = registry['memory.propose-update'](ctx, {
