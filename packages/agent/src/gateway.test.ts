@@ -249,6 +249,46 @@ describe('AgentGateway', () => {
     expect(duplicate.effects).toEqual(first.effects)
   })
 
+  it('preserves locally parsed passenger and flight facts when initial passenger lookup fails', () => {
+    const base = new ReadToolOrchestrator()
+    let passengerReads = 0
+    const orchestrator = {
+      resolveInitialPassengers: (taskId: string, requestId: string, labels: string[]) => {
+        passengerReads += 1
+        if (passengerReads === 1) throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'family timeout', true)
+        return base.resolveInitialPassengers(taskId, requestId, labels)
+      },
+      prepareTrip: base.prepareTrip.bind(base),
+      resolveReturnTripPreferences: base.resolveReturnTripPreferences.bind(base),
+    }
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator })
+    const request = createRequest('接妈妈，航班 MU5102')
+
+    const fallback = gateway.createTask(request)
+
+    expect(fallback.task).toMatchObject({
+      phase: 'preparing',
+      passengers: { memberIds: ['mom'], names: ['妈妈'] },
+      flight: { flightNumber: 'MU5102' },
+      message: { autoNotifyAuthorized: false },
+    })
+    expect(fallback.assistant).toBeUndefined()
+    expect(fallback.meta.fallbackUsed).toBe(true)
+
+    const recovered = gateway.submitEvent(fallback.task.taskId, {
+      clientRequestId: 'client-create-retry',
+      expectedTaskRevision: fallback.task.taskRevision,
+      event: { eventId: 'retry-input', type: 'user.input', text: request.input.text, timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(recovered.meta.fallbackUsed).toBe(false)
+    expect(recovered.task).toMatchObject({
+      passengers: { memberIds: ['mom'], names: ['妈妈'] },
+      flight: { flightNumber: 'MU5102' },
+      navigation: { routeId: 'route-airport-001' },
+      message: { autoNotifyAuthorized: true },
+    })
+  })
+
   it('returns the current snapshot through revision conflict errors', () => {
     const gateway = createGateway()
     const created = gateway.createTask(createRequest())

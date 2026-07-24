@@ -116,7 +116,21 @@ export class AgentGateway {
     const taskId = `pickup-${this.#createId()}`
     const timestamp = this.#now()
     const flightNumber = normalizeFlightNumber(request.input.text)
+    const parsedPassengers = parsePassengers(request.input.text)
     let task = createInitialTask(taskId, timestamp)
+    if (parsedPassengers) {
+      task = {
+        ...task,
+        passengers: parsedPassengers,
+        message: { ...task.message, autoNotifyAuthorized: false },
+      }
+    }
+    task = applyEvent(task, {
+      eventId: `${request.clientRequestId}:input`,
+      type: 'user.input',
+      text: request.input.text,
+      timestamp,
+    }, this.#preferences)
     let toolResults: ReadToolResults = {}
     try {
       const labels = parsePassengerLabels(request.input.text)
@@ -126,12 +140,6 @@ export class AgentGateway {
         passengers: { ...passengerReads.passengers, confirmedOnboard: false },
         message: { ...task.message, autoNotifyAuthorized: passengerReads.notificationAuthorized },
       }
-      task = applyEvent(task, {
-        eventId: `${request.clientRequestId}:input`,
-        type: 'user.input',
-        text: request.input.text,
-        timestamp,
-      }, this.#preferences)
       toolResults = passengerReads.toolResults
       if (flightNumber && task.passengers.memberIds.length > 0) {
         const prepared = this.#prepareTask(task, request.clientRequestId, flightNumber)
