@@ -4,6 +4,7 @@ import {
   createMessagePreparer,
   createMessageSender,
   resolveAuthorizedLandingContact,
+  type MemberPreferenceRecord,
   type SideEffectRuntime,
 } from '@canvasflow/tools'
 
@@ -15,6 +16,29 @@ export function retryLandingMessageActionToken(taskId: string): string {
 }
 
 /**
+ * Meeting ETA label (HH:mm) for landing-notify copy.
+ * Prefer active route ETA, then flight estimated arrival; omit when neither is reliable.
+ */
+export function resolveLandingMeetingEta(task: AirportPickupTaskState): string | undefined {
+  const iso = task.navigation?.eta ?? task.flight?.estimatedArrival
+  if (!iso || Number.isNaN(Date.parse(iso))) return undefined
+  const match = /T(\d{2}):(\d{2})/.exec(iso)
+  return match ? `${match[1]}:${match[2]}` : undefined
+}
+
+/** True when failed landing notify can be armed for an authorized contact. */
+export function canRetryLandingMessage(
+  task: AirportPickupTaskState,
+  preferences: Record<string, MemberPreferenceRecord>,
+): boolean {
+  return (
+    task.message.status === 'failed'
+    && Boolean(task.flight)
+    && resolveAuthorizedLandingContact(task.passengers.memberIds, preferences) !== undefined
+  )
+}
+
+/**
  * Arm an explicit send-message confirmation after a failed landing notify.
  * Does not send; uses runtime preferences + opaque prepare confirmation.
  */
@@ -22,13 +46,18 @@ export function armLandingMessageRetry(
   task: AirportPickupTaskState,
   runtime: SideEffectRuntime,
 ): AirportPickupTaskState | undefined {
-  if (task.message.status !== 'failed' || !task.flight) return undefined
+  if (!canRetryLandingMessage(task, runtime.preferences) || !task.flight) return undefined
   const contactId = resolveAuthorizedLandingContact(task.passengers.memberIds, runtime.preferences)
   if (!contactId) return undefined
 
+  const eta = resolveLandingMeetingEta(task)
   const prepared = createMessagePreparer(runtime)(
     { taskId: task.taskId },
-    { contactId, flightNumber: task.flight.flightNumber, eta: '20:40' },
+    {
+      contactId,
+      flightNumber: task.flight.flightNumber,
+      ...(eta !== undefined ? { eta } : {}),
+    },
   )
   if (!prepared.ok || !prepared.data) return undefined
 
@@ -95,7 +124,13 @@ export function resolveLandingMessageRetry(
     ?? resolveAuthorizedLandingContact(task.passengers.memberIds, runtime.preferences)
   if (!contactId) return undefined
 
-  const content = buildLandingNotifyContent(task.taskId, contactId, task.flight.flightNumber, '20:40')
+  const eta = resolveLandingMeetingEta(task)
+  const content = buildLandingNotifyContent(
+    task.taskId,
+    contactId,
+    task.flight.flightNumber,
+    eta ?? '即将到达',
+  )
   const pendingMessageId = task.message.pendingMessageId ?? `${task.flight.flightNumber}:landing`
   const armed: AirportPickupTaskState = {
     ...task,

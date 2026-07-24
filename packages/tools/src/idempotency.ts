@@ -91,9 +91,8 @@ export type MemoryConfirmBinding = {
   proposalId: string
 }
 
-export type AutoNotifyBinding = {
-  taskId: string
-}
+/** Auto-notify grants bind to the same payload fields as an explicit send. */
+export type AutoNotifyBinding = MessageSendBinding
 
 type ConfirmationRecord =
   | { kind: 'send-message'; binding: MessageSendBinding; consumed: boolean }
@@ -104,7 +103,8 @@ type ConfirmationRecord =
  * Opaque, runtime-issued confirmation / authorization tokens. Callers cannot
  * compute a valid token from task/message/proposal fields; they must obtain
  * one via issue* and present it. Send-message and memory tokens are one-shot;
- * auto-notify is a reusable capability grant for a task (not consumed on use).
+ * auto-notify is a reusable capability grant bound to a prepared landing-message
+ * payload (taskId + contactId + messageId + text), not consumed on use.
  */
 export class ConfirmationStore {
   private readonly grants = new Map<string, ConfirmationRecord>()
@@ -131,9 +131,9 @@ export class ConfirmationStore {
     return confirmationId
   }
 
-  issueAutoNotifyAuthorization(taskId: string): string {
+  issueAutoNotifyAuthorization(binding: AutoNotifyBinding): string {
     const authorizationId = this.mint()
-    this.grants.set(authorizationId, { kind: 'auto-notify', binding: { taskId }, consumed: false })
+    this.grants.set(authorizationId, { kind: 'auto-notify', binding: { ...binding }, consumed: false })
     return authorizationId
   }
 
@@ -170,11 +170,16 @@ export class ConfirmationStore {
     return true
   }
 
-  /** Capability grant for a task; not consumed on successful send. */
-  matchesAutoNotifyAuthorization(authorizationId: string, taskId: string): boolean {
+  /** Capability grant for a prepared payload; not consumed on successful send. */
+  matchesAutoNotifyAuthorization(authorizationId: string, binding: AutoNotifyBinding): boolean {
     const grant = this.grants.get(authorizationId)
     if (!grant || grant.kind !== 'auto-notify' || grant.consumed) return false
-    return grant.binding.taskId === taskId
+    return (
+      grant.binding.taskId === binding.taskId &&
+      grant.binding.contactId === binding.contactId &&
+      grant.binding.messageId === binding.messageId &&
+      grant.binding.text === binding.text
+    )
   }
 }
 

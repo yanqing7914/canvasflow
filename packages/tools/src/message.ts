@@ -41,9 +41,12 @@ export function issueSendMessageConfirmation(runtime: SideEffectRuntime, binding
   return runtime.confirmations.issueSendMessageConfirmation(binding)
 }
 
-/** Issue an opaque auto-notify capability grant for a task (not forgeable from taskId). */
-export function issueAutoNotifyAuthorization(runtime: SideEffectRuntime, taskId: string): string {
-  return runtime.confirmations.issueAutoNotifyAuthorization(taskId)
+/**
+ * Issue an opaque auto-notify capability grant bound to a prepared landing-message
+ * payload (taskId + contactId + messageId + text). Not forgeable from taskId alone.
+ */
+export function issueAutoNotifyAuthorization(runtime: SideEffectRuntime, binding: MessageSendBinding): string {
+  return runtime.confirmations.issueAutoNotifyAuthorization(binding)
 }
 
 /** Deterministic landing-notify payload (no confirmation mint). */
@@ -64,7 +67,8 @@ export function buildLandingNotifyContent(
 /**
  * Prepare a landing message and mint a single-use confirmation bound to the
  * prepared contactId / messageId / text. Callers pass the returned
- * `confirmationId` to `message.send` (auto-notify still works without it).
+ * `confirmationId` to `message.send`. Auto-notify still works without it when
+ * callers present an `authorizationId` issued for this exact prepared payload.
  */
 export function createMessagePreparer(runtime: SideEffectRuntime) {
   return function prepareMessage(ctx: ToolContext, input: unknown): ToolResult<MessagePrepareOutput> {
@@ -119,12 +123,12 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       text: parsed.data.text,
     }
 
-    // 凭据必须由 runtime 签发：预授权路径还要求联系人对应成员开启了落地通知授权；
-    // 显式确认路径使用一次性 opaque token，绑定到具体消息。
+    // 凭据必须由 runtime 签发：auto-notify 与 confirmation 均绑定到具体消息 payload；
+    // 预授权路径还要求联系人对应成员开启了落地通知授权。
     const member = familyMembers.find((candidate) => candidate.contactId === parsed.data.contactId)
     const autoNotifyGranted =
       parsed.data.authorizationId !== undefined &&
-      runtime.confirmations.matchesAutoNotifyAuthorization(parsed.data.authorizationId, ctx.taskId) &&
+      runtime.confirmations.matchesAutoNotifyAuthorization(parsed.data.authorizationId, binding) &&
       member !== undefined &&
       Object.hasOwn(runtime.preferences, member.memberId) &&
       runtime.preferences[member.memberId]?.landingNotificationAuthorized === true

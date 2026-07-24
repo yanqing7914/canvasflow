@@ -266,7 +266,12 @@ function replayMainTimeline(): TimelineRun {
     contactId: 'contact-mom',
     messageId: prepared.data!.messageId,
     text: prepared.data!.text,
-    authorizationId: issueAutoNotifyAuthorization(runtime, state.taskId),
+    authorizationId: issueAutoNotifyAuthorization(runtime, {
+      taskId: state.taskId,
+      contactId: 'contact-mom',
+      messageId: prepared.data!.messageId,
+      text: prepared.data!.text,
+    }),
     idempotencyKey: state.message.idempotencyKey!,
   }
   const firstSend = registry['message.send'](ctx, sendInput)
