@@ -6,6 +6,7 @@ import {
   cabinProfileValuesSchema,
   getPreferencesOutputSchema,
   memoryPreferenceChangeSchema,
+  routePlanOutputSchema,
 } from './tool'
 import { componentSpecSchema, uiSpecSchema } from './ui'
 
@@ -52,6 +53,50 @@ describe('UISpec', () => {
     expect(
       getPreferencesOutputSchema.safeParse({ members: [{ memberId: 'doubao', mediaTitle: '豆豆故事' }] }).success,
     ).toBe(true)
+  })
+})
+
+describe('routePlanOutputSchema sketch geometry', () => {
+  const base = {
+    routeId: 'route-airport-001',
+    distanceKm: 32,
+    durationMinutes: 20,
+    arrivalTime: '2026-07-22T20:25:00+08:00',
+    estimatedBatteryAtArrival: 27,
+  }
+
+  it('accepts legacy numeric-only route plans without geometry', () => {
+    expect(routePlanOutputSchema.safeParse(base).success).toBe(true)
+  })
+
+  it('accepts optional waypoints, polyline, and summary', () => {
+    expect(
+      routePlanOutputSchema.safeParse({
+        ...base,
+        summary: '直达虹桥机场 T2',
+        waypoints: [
+          { id: 'origin-demo', name: '出发地', latitude: 31.23, longitude: 121.47 },
+          { id: 'destination-hongqiao-t2', name: '虹桥机场 T2', latitude: 31.198, longitude: 121.336 },
+        ],
+        polyline: [
+          { latitude: 31.23, longitude: 121.47 },
+          { latitude: 31.222, longitude: 121.44 },
+          { latitude: 31.198, longitude: 121.336 },
+        ],
+      }).success,
+    ).toBe(true)
+  })
+
+  it('rejects polylines shorter than three points', () => {
+    expect(
+      routePlanOutputSchema.safeParse({
+        ...base,
+        polyline: [
+          { latitude: 31.23, longitude: 121.47 },
+          { latitude: 31.198, longitude: 121.336 },
+        ],
+      }).success,
+    ).toBe(false)
   })
 })
 

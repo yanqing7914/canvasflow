@@ -181,13 +181,19 @@ describe('navigation.plan-route', () => {
 
   it('机场路线与 route-airport Fixture 一致', () => {
     const result = planRoute(ctx, canonicalInputs['navigation.plan-route'])
-    expect(result.data).toEqual({
+    expect(result.data).toMatchObject({
       routeId: 'route-airport-001',
       distanceKm: 32,
       durationMinutes: 20,
       arrivalTime: '2026-07-22T20:25:00+08:00',
       estimatedBatteryAtArrival: 27,
+      summary: '直达虹桥机场 T2',
     })
+    expect(result.data?.polyline?.length).toBeGreaterThanOrEqual(3)
+    expect(result.data?.waypoints?.map((point) => point.id)).toEqual([
+      'origin-demo',
+      'destination-hongqiao-t2',
+    ])
   })
 
   it('支持途经已知充电站的机场路线', () => {
@@ -198,6 +204,53 @@ describe('navigation.plan-route', () => {
     })
     expect(result.ok).toBe(true)
     expect(result.data?.routeId).toBe('route-airport-via-charge-001')
+    expect(result.data?.summary).toContain('超充')
+  })
+
+  it('回家路线 sketch 几何以请求 origin 为起点、以家为终点', () => {
+    const result = planRoute(ctx, {
+      origin,
+      destination: { id: 'destination-home', name: '家' },
+    })
+    expect(result.ok).toBe(true)
+    expect(result.data?.routeId).toBe('route-home-001')
+    expect(result.data?.polyline?.[0]).toEqual(origin)
+    expect(result.data?.polyline?.at(-1)).toMatchObject({
+      latitude: 31.228,
+      longitude: 121.468,
+    })
+    expect(result.data?.waypoints?.[0]?.id).toBe('origin-demo')
+    expect(result.data?.waypoints?.at(-1)?.id).toBe('destination-home')
+  })
+
+  it('直达 / 经充电站 / 避高速 / 外环改线的 sketch 几何可区分', () => {
+    const direct = planRoute(ctx, { origin, destination: airport })
+    const viaCharge = planRoute(ctx, {
+      origin,
+      destination: airport,
+      via: [{ id: 'station-hongqiao-01', name: '虹桥补能站' }],
+    })
+    const avoidHwy = planRoute(ctx, {
+      origin,
+      destination: airport,
+      preferences: { avoidHighway: true },
+    })
+    const bypass = planRoute(ctx, {
+      origin,
+      destination: airport,
+      via: [{ id: 'via-ring-road-01', name: '外环快速路' }],
+    })
+
+    const summaries = [direct, viaCharge, avoidHwy, bypass].map((result) => result.data?.summary)
+    expect(new Set(summaries).size).toBe(4)
+
+    const polylines = [direct, viaCharge, avoidHwy, bypass].map((result) =>
+      JSON.stringify(result.data?.polyline),
+    )
+    expect(new Set(polylines).size).toBe(4)
+
+    expect(viaCharge.data?.waypoints?.some((point) => point.id === 'station-hongqiao-01')).toBe(true)
+    expect(bypass.data?.waypoints?.some((point) => point.id === 'via-ring-road-01')).toBe(true)
   })
 
   it('未知目的地返回 ROUTE_NOT_FOUND', () => {

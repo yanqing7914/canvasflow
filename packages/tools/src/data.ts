@@ -120,6 +120,34 @@ function demoRouteKey(partial: Omit<RouteFixtureKey, 'originLatitude' | 'originL
   })
 }
 
+/** Fictional landmark coordinates for static sketch-map demos (not real GIS). */
+const GEO = {
+  origin: { latitude: DEMO_ORIGIN.latitude, longitude: DEMO_ORIGIN.longitude },
+  home: { id: 'destination-home', name: '家', latitude: 31.228, longitude: 121.468 },
+  airportT2: {
+    id: 'destination-hongqiao-t2',
+    name: '虹桥机场 T2',
+    latitude: 31.198,
+    longitude: 121.336,
+  },
+  stationHongqiao01: {
+    id: 'station-hongqiao-01',
+    name: '虹桥枢纽超充站',
+    latitude: 31.21,
+    longitude: 121.38,
+  },
+  ringRoad: {
+    id: 'via-ring-road-01',
+    name: '外环快速路',
+    latitude: 31.215,
+    longitude: 121.41,
+  },
+} as const
+
+/**
+ * Fixture routes keyed by origin, destination, optional via waypoints, and preference flags.
+ * Each entry includes optional sketch geometry (waypoints / polyline / summary) for demo maps.
+ */
 export const routes: Record<string, RoutePlanOutput> = {
   [demoRouteKey({
     destinationId: 'destination-hongqiao-t2',
@@ -132,6 +160,17 @@ export const routes: Record<string, RoutePlanOutput> = {
     durationMinutes: 20,
     arrivalTime: '2026-07-22T20:25:00+08:00',
     estimatedBatteryAtArrival: 27,
+    summary: '直达虹桥机场 T2',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', ...GEO.origin },
+      GEO.airportT2,
+    ],
+    polyline: [
+      GEO.origin,
+      { latitude: 31.222, longitude: 121.44 },
+      { latitude: 31.21, longitude: 121.39 },
+      GEO.airportT2,
+    ],
   },
   [demoRouteKey({
     destinationId: 'destination-hongqiao-t2',
@@ -144,6 +183,19 @@ export const routes: Record<string, RoutePlanOutput> = {
     durationMinutes: 32,
     arrivalTime: '2026-07-22T20:37:00+08:00',
     estimatedBatteryAtArrival: 55,
+    summary: '经虹桥枢纽超充站前往机场',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', ...GEO.origin },
+      GEO.stationHongqiao01,
+      GEO.airportT2,
+    ],
+    polyline: [
+      GEO.origin,
+      { latitude: 31.22, longitude: 121.43 },
+      GEO.stationHongqiao01,
+      { latitude: 31.204, longitude: 121.355 },
+      GEO.airportT2,
+    ],
   },
   // Congestion alternate: avoid the highway (plan-route with avoidHighway).
   [demoRouteKey({
@@ -157,6 +209,19 @@ export const routes: Record<string, RoutePlanOutput> = {
     durationMinutes: 28,
     arrivalTime: '2026-07-22T20:33:00+08:00',
     estimatedBatteryAtArrival: 25,
+    summary: '避高速地面道路前往机场',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', ...GEO.origin },
+      GEO.airportT2,
+    ],
+    polyline: [
+      GEO.origin,
+      { latitude: 31.225, longitude: 121.45 },
+      { latitude: 31.218, longitude: 121.42 },
+      { latitude: 31.208, longitude: 121.37 },
+      { latitude: 31.2, longitude: 121.345 },
+      GEO.airportT2,
+    ],
   },
   // Congestion alternate mid-trip: ring-road via for navigation.update-route
   // (update-route schema has via but not preferences).
@@ -171,6 +236,19 @@ export const routes: Record<string, RoutePlanOutput> = {
     durationMinutes: 30,
     arrivalTime: '2026-07-22T20:35:00+08:00',
     estimatedBatteryAtArrival: 24,
+    summary: '经外环快速路改线前往机场',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', ...GEO.origin },
+      GEO.ringRoad,
+      GEO.airportT2,
+    ],
+    polyline: [
+      GEO.origin,
+      { latitude: 31.226, longitude: 121.455 },
+      GEO.ringRoad,
+      { latitude: 31.205, longitude: 121.36 },
+      GEO.airportT2,
+    ],
   },
   [demoRouteKey({
     destinationId: 'destination-home',
@@ -183,6 +261,19 @@ export const routes: Record<string, RoutePlanOutput> = {
     durationMinutes: 40,
     arrivalTime: '2026-07-22T21:35:00+08:00',
     estimatedBatteryAtArrival: 32,
+    // Geometry must match plan-route request origin (DEMO_ORIGIN), not the airport —
+    // callers today plan home with the same demo origin key as outbound routes.
+    summary: '返程回家',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', ...GEO.origin },
+      GEO.home,
+    ],
+    polyline: [
+      GEO.origin,
+      { latitude: 31.225, longitude: 121.45 },
+      { latitude: 31.22, longitude: 121.46 },
+      GEO.home,
+    ],
   },
 }
 
