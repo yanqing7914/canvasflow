@@ -123,12 +123,12 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案已过期：${parsed.data.proposalId}`, false)
     }
 
-    // Opaque token must match the proposal and stay on the issuing task for every
-    // request — including post-confirm replays — so another task cannot present
-    // a spent token and claim the applied result as its own authorization.
+    // Task ownership is authoritative: proposalId prefixes are not a security boundary.
     if (proposal.taskId !== ctx.taskId || parsed.data.confirmationId !== proposal.confirmationId) {
       return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案或当前任务不匹配', false)
     }
+
+    // Unspent opaque tokens must still match the confirmation store before apply.
     if (
       !proposal.confirmed &&
       !runtime.confirmations.matchesMemoryConfirmation(parsed.data.confirmationId, {
@@ -150,19 +150,23 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
     }
 
-    if (!proposal.confirmed) {
-      if (
-        !runtime.confirmations.consumeMemoryConfirmation(parsed.data.confirmationId, {
-          taskId: ctx.taskId,
-          proposalId: proposal.proposalId,
-        })
-      ) {
-        return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据无效或已使用', false)
-      }
-      const record = runtime.preferences[proposal.memberId]
-      Object.assign(record, proposal.after)
-      proposal.confirmed = true
+    // After the first successful confirm the token is spent: only the original
+    // idempotency key may replay success. Fresh keys must not mint new oks.
+    if (proposal.confirmed) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据已使用', false)
     }
+
+    if (
+      !runtime.confirmations.consumeMemoryConfirmation(parsed.data.confirmationId, {
+        taskId: ctx.taskId,
+        proposalId: proposal.proposalId,
+      })
+    ) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据无效或已使用', false)
+    }
+    const record = runtime.preferences[proposal.memberId]
+    Object.assign(record, proposal.after)
+    proposal.confirmed = true
 
     const result = okResult(
       ctx,
