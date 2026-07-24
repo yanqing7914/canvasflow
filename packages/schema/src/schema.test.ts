@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createTaskRequestSchema } from './api'
+import { applyCabinProfileInputSchema, memoryPreferenceChangeSchema } from './tool'
 import { uiSpecSchema } from './ui'
 
 describe('UISpec', () => {
@@ -24,5 +25,42 @@ describe('Agent API', () => {
       clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true },
     })
     expect(result.success).toBe(true)
+  })
+})
+
+describe('cabin / memory domain bounds', () => {
+  it('rejects out-of-range cabin temperature and fan level', () => {
+    expect(
+      applyCabinProfileInputSchema.safeParse({
+        zone: 'rear',
+        temperatureC: 40,
+        sourceMemberIds: ['mom'],
+        idempotencyKey: 'k',
+      }).success,
+    ).toBe(false)
+    expect(
+      applyCabinProfileInputSchema.safeParse({
+        zone: 'rear',
+        fanLevel: 9,
+        sourceMemberIds: ['mom'],
+        idempotencyKey: 'k',
+      }).success,
+    ).toBe(false)
+    expect(
+      applyCabinProfileInputSchema.safeParse({
+        zone: 'rear',
+        temperatureC: 22,
+        fanLevel: 3,
+        sourceMemberIds: ['mom'],
+        idempotencyKey: 'k',
+      }).success,
+    ).toBe(true)
+  })
+
+  it('rejects out-of-range preference temperature and empty catalog strings', () => {
+    expect(memoryPreferenceChangeSchema.safeParse({ rearTemperatureC: 10 }).success).toBe(false)
+    expect(memoryPreferenceChangeSchema.safeParse({ mediaTitle: '' }).success).toBe(false)
+    expect(memoryPreferenceChangeSchema.safeParse({ homeDestinationId: '' }).success).toBe(false)
+    expect(memoryPreferenceChangeSchema.safeParse({ rearTemperatureC: 24, mediaTitle: '豆豆故事' }).success).toBe(true)
   })
 })

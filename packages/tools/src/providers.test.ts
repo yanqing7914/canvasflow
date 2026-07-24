@@ -14,7 +14,16 @@ import { getVehicleStatus } from './vehicle'
 
 const ctx: ToolContext = { taskId: 'pickup-001' }
 
-const canonicalInputs: Record<ToolName, unknown> = {
+const readOnlyTools = [
+  'family.resolve-members',
+  'memory.get-preferences',
+  'flight.get-status',
+  'navigation.plan-route',
+  'vehicle.get-status',
+  'charging.recommend',
+] as const satisfies readonly ToolName[]
+
+const canonicalInputs: Record<(typeof readOnlyTools)[number], unknown> = {
   'family.resolve-members': { labels: ['妈妈', '豆豆'] },
   'memory.get-preferences': { memberIds: ['mom', 'doubao'], scopes: ['cabin', 'media', 'address', 'notification'] },
   'flight.get-status': { flightNumber: 'MU5102', date: '2026-07-22' },
@@ -33,9 +42,9 @@ const canonicalInputs: Record<ToolName, unknown> = {
 }
 
 describe('provider registry (ctx, input)', () => {
-  it('每个 P0 只读工具对同样输入返回完全相同、Schema 合法的结果', () => {
+  it('每个只读工具对同样输入返回完全相同、Schema 合法的结果', () => {
     const registry = createProviderRegistry()
-    for (const name of Object.keys(toolDefinitions) as ToolName[]) {
+    for (const name of readOnlyTools) {
       const first = registry[name](ctx, canonicalInputs[name] as never)
       const second = registry[name](ctx, canonicalInputs[name] as never)
       expect(second).toEqual(first)
@@ -45,13 +54,30 @@ describe('provider registry (ctx, input)', () => {
     }
   })
 
+  it('message.prepare 签发 opaque confirmationId，稳定字段可复现', () => {
+    const registry = createProviderRegistry()
+    const input = { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:45' }
+    const first = registry['message.prepare'](ctx, input)
+    const second = registry['message.prepare'](ctx, input)
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    expect(first.data!.confirmationId.startsWith('cnf_')).toBe(true)
+    expect(second.data!.confirmationId).not.toBe(first.data!.confirmationId)
+    expect({ ...first.data!, confirmationId: undefined }).toEqual({
+      ...second.data!,
+      confirmationId: undefined,
+    })
+    expect(() => toolResultSchema(z.unknown()).parse(first)).not.toThrow()
+  })
+
   it('工具定义的风险级别和超时符合契约 P0 表', () => {
-    for (const definition of Object.values(toolDefinitions)) {
-      expect(definition.riskLevel).toBe('read')
-    }
     expect(toolDefinitions['flight.get-status'].timeoutMs).toBe(3000)
     expect(toolDefinitions['navigation.plan-route'].timeoutMs).toBe(5000)
     expect(toolDefinitions['charging.recommend'].timeoutMs).toBe(1000)
+    expect(toolDefinitions['navigation.start'].riskLevel).toBe('reversible')
+    expect(toolDefinitions['message.send'].riskLevel).toBe('external')
+    expect(toolDefinitions['memory.confirm-update'].riskLevel).toBe('persistent')
+    expect(toolDefinitions['message.send'].timeoutMs).toBe(3000)
   })
 })
 

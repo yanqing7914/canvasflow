@@ -131,6 +131,144 @@ export const policyDecisionSchema = z.object({
   reason: z.string().optional(),
 })
 
+export const navigationStartInputSchema = z.object({
+  routeId: z.string().min(1),
+  idempotencyKey: z.string().min(1),
+})
+
+export const navigationStartOutputSchema = z.object({
+  navigationId: z.string().min(1),
+  routeId: z.string().min(1),
+  status: z.literal('active'),
+})
+
+export const navigationUpdateRouteInputSchema = z.object({
+  routeId: z.string().min(1),
+  destination: z.object({ id: z.string().min(1), name: z.string().min(1) }),
+  via: z.array(z.object({ id: z.string().min(1), name: z.string().min(1) })).optional(),
+  idempotencyKey: z.string().min(1),
+})
+
+export const navigationUpdateRouteOutputSchema = z.object({
+  navigationId: z.string().min(1),
+  routeId: z.string().min(1),
+  destination: z.string().min(1),
+  status: z.literal('active'),
+})
+
+export const cabinProfileValuesSchema = z.object({
+  temperatureC: z.number().optional(),
+  fanLevel: z.number().optional(),
+  mediaTitle: z.string().optional(),
+})
+
+export const applyCabinProfileInputSchema = z.object({
+  zone: z.literal('rear'),
+  temperatureC: z.number().min(16).max(32).optional(),
+  fanLevel: z.number().int().min(0).max(5).optional(),
+  mediaTitle: z.string().min(1).optional(),
+  sourceMemberIds: z.array(z.string().min(1)).min(1),
+  idempotencyKey: z.string().min(1),
+})
+
+export const applyCabinProfileOutputSchema = z.object({
+  effectId: z.string().min(1),
+  applied: z.boolean(),
+  previous: cabinProfileValuesSchema,
+  current: cabinProfileValuesSchema,
+  reversible: z.boolean(),
+})
+
+export const revertCabinProfileInputSchema = z.object({
+  effectId: z.string().min(1),
+  idempotencyKey: z.string().min(1),
+})
+
+export const revertCabinProfileOutputSchema = z.object({
+  effectId: z.string().min(1),
+  reverted: z.boolean(),
+  current: cabinProfileValuesSchema,
+})
+
+export const mediaPlayInputSchema = z.object({
+  mediaTitle: z.string().min(1),
+  sourceMemberId: z.string().optional(),
+  idempotencyKey: z.string().min(1),
+})
+
+export const mediaPlayOutputSchema = z.object({
+  playbackId: z.string().min(1),
+  title: z.string().min(1),
+  status: z.literal('playing'),
+  reversible: z.literal(true),
+})
+
+export const messagePrepareInputSchema = z.object({
+  contactId: z.string().min(1),
+  flightNumber: z.string().min(1),
+  eta: z.string().optional(),
+})
+
+export const messagePrepareOutputSchema = z.object({
+  messageId: z.string().min(1),
+  contactId: z.string().min(1),
+  text: z.string().min(1),
+  /**
+   * Opaque, single-use credential issued into the registry runtime's ConfirmationStore.
+   * Pass the same id to `message.send` for the explicit confirm path; bound to this
+   * prepared message (taskId + contactId + messageId + text). Auto-notify may omit it.
+   */
+  confirmationId: z.string().min(1),
+})
+
+export const messageSendInputSchema = z.object({
+  contactId: z.string().min(1),
+  messageId: z.string().min(1),
+  text: z.string().min(1),
+  authorizationId: z.string().optional(),
+  confirmationId: z.string().optional(),
+  idempotencyKey: z.string().min(1),
+})
+
+export const messageSendOutputSchema = z.object({
+  messageId: z.string().min(1),
+  status: z.literal('sent'),
+  sentAt: z.iso.datetime({ offset: true }),
+})
+
+export const memoryPreferenceChangeSchema = z.object({
+  rearTemperatureC: z.number().min(16).max(32).optional(),
+  mediaTitle: z.string().min(1).optional(),
+  homeDestinationId: z.string().min(1).optional(),
+  landingNotificationAuthorized: z.boolean().optional(),
+}).strict()
+
+export const proposeMemoryUpdateInputSchema = z.object({
+  memberId: z.string().min(1),
+  changes: memoryPreferenceChangeSchema,
+})
+
+export const proposeMemoryUpdateOutputSchema = z.object({
+  proposalId: z.string().min(1),
+  before: z.record(z.string(), z.unknown()),
+  after: z.record(z.string(), z.unknown()),
+  requiresConfirmation: z.literal(true),
+  /** The exact confirmation credential `memory.confirm-update` will accept for this proposal. */
+  confirmationId: z.string().min(1),
+})
+
+export const confirmMemoryUpdateInputSchema = z.object({
+  proposalId: z.string().min(1),
+  confirmationId: z.string().min(1),
+  idempotencyKey: z.string().min(1),
+})
+
+export const confirmMemoryUpdateOutputSchema = z.object({
+  proposalId: z.string().min(1),
+  memberId: z.string().min(1),
+  applied: z.record(z.string(), z.unknown()),
+})
+
 export type ProviderMode = z.infer<typeof providerModeSchema>
 export type ToolDefinition = z.infer<typeof toolDefinitionSchema>
 export type ResolveMembersInput = z.infer<typeof resolveMembersInputSchema>
@@ -145,6 +283,24 @@ export type RoutePlanOutput = z.infer<typeof routePlanOutputSchema>
 export type ChargingRecommendationInput = z.infer<typeof chargingRecommendationInputSchema>
 export type ChargingRecommendationOutput = z.infer<typeof chargingRecommendationOutputSchema>
 export type VehicleStatusOutput = z.infer<typeof vehicleStatusOutputSchema>
+export type NavigationStartInput = z.infer<typeof navigationStartInputSchema>
+export type NavigationStartOutput = z.infer<typeof navigationStartOutputSchema>
+export type NavigationUpdateRouteInput = z.infer<typeof navigationUpdateRouteInputSchema>
+export type NavigationUpdateRouteOutput = z.infer<typeof navigationUpdateRouteOutputSchema>
+export type ApplyCabinProfileInput = z.infer<typeof applyCabinProfileInputSchema>
+export type ApplyCabinProfileOutput = z.infer<typeof applyCabinProfileOutputSchema>
+export type RevertCabinProfileInput = z.infer<typeof revertCabinProfileInputSchema>
+export type RevertCabinProfileOutput = z.infer<typeof revertCabinProfileOutputSchema>
+export type MediaPlayInput = z.infer<typeof mediaPlayInputSchema>
+export type MediaPlayOutput = z.infer<typeof mediaPlayOutputSchema>
+export type MessagePrepareInput = z.infer<typeof messagePrepareInputSchema>
+export type MessagePrepareOutput = z.infer<typeof messagePrepareOutputSchema>
+export type MessageSendInput = z.infer<typeof messageSendInputSchema>
+export type MessageSendOutput = z.infer<typeof messageSendOutputSchema>
+export type ProposeMemoryUpdateInput = z.infer<typeof proposeMemoryUpdateInputSchema>
+export type ProposeMemoryUpdateOutput = z.infer<typeof proposeMemoryUpdateOutputSchema>
+export type ConfirmMemoryUpdateInput = z.infer<typeof confirmMemoryUpdateInputSchema>
+export type ConfirmMemoryUpdateOutput = z.infer<typeof confirmMemoryUpdateOutputSchema>
 export type ToolResult<T> = {
   ok: boolean
   data: T | null

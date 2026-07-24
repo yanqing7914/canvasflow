@@ -1,0 +1,176 @@
+import {
+  applyCabinProfileInputSchema,
+  applyCabinProfileOutputSchema,
+  revertCabinProfileInputSchema,
+  revertCabinProfileOutputSchema,
+  type ApplyCabinProfileOutput,
+  type RevertCabinProfileOutput,
+  type ToolResult,
+} from '@canvasflow/schema'
+import { knownMediaTitles } from './data'
+import type { CabinProfileValues, SideEffectRuntime } from './idempotency'
+import { errorResult, okResult, type ToolContext } from './result'
+
+const APPLY = 'vehicle.apply-cabin-profile'
+const REVERT = 'vehicle.revert-cabin-profile'
+const TEMPERATURE_MIN_C = 16
+const TEMPERATURE_MAX_C = 32
+const FAN_LEVEL_MIN = 0
+const FAN_LEVEL_MAX = 5
+
+function cloneProfile(profile: CabinProfileValues): CabinProfileValues {
+  return { ...profile }
+}
+
+function profilesEqual(a: CabinProfileValues, b: CabinProfileValues): boolean {
+  return a.temperatureC === b.temperatureC && a.fanLevel === b.fanLevel && a.mediaTitle === b.mediaTitle
+}
+
+export function createCabinProfileTools(runtime: SideEffectRuntime) {
+  function applyCabinProfile(ctx: ToolContext, input: unknown): ToolResult<ApplyCabinProfileOutput> {
+    const parsed = applyCabinProfileInputSchema.safeParse(input)
+    if (!parsed.success) {
+      return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', '需要 zone、sourceMemberIds 和 idempotencyKey', false)
+    }
+
+    const cached = runtime.idempotency.get<ApplyCabinProfileOutput>(ctx.taskId, APPLY, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
+
+    // 授权基于 runtime 的可变偏好副本，与 memory.confirm-update 的写入保持一致。
+    // 必须用 own-property 判断：普通对象上的 `in` 会把 toString/constructor 等原型键误判为成员。
+    const unknownMembers = parsed.data.sourceMemberIds.filter(
+      (memberId) => !Object.hasOwn(runtime.preferences, memberId),
+    )
+    if (unknownMembers.length > 0) {
+      return errorResult(ctx, APPLY, 'POLICY_DENIED', `未授权成员：${unknownMembers.join('、')}`, false)
+    }
+
+    if (
+      parsed.data.temperatureC === undefined &&
+      parsed.data.fanLevel === undefined &&
+      parsed.data.mediaTitle === undefined
+    ) {
+      return errorResult(ctx, APPLY, 'APPLY_FAILED', '至少需要一项座舱设置', false)
+    }
+
+    // Domain bounds before preference matching (schema also enforces these).
+    if (
+      parsed.data.temperatureC !== undefined &&
+      (parsed.data.temperatureC < TEMPERATURE_MIN_C || parsed.data.temperatureC > TEMPERATURE_MAX_C)
+    ) {
+      return errorResult(
+        ctx,
+        APPLY,
+        'INVALID_ARGUMENT',
+        `温度须在 ${TEMPERATURE_MIN_C}–${TEMPERATURE_MAX_C}°C`,
+        false,
+      )
+    }
+    if (
+      parsed.data.fanLevel !== undefined &&
+      (!Number.isInteger(parsed.data.fanLevel) ||
+        parsed.data.fanLevel < FAN_LEVEL_MIN ||
+        parsed.data.fanLevel > FAN_LEVEL_MAX)
+    ) {
+      return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', `风速须为 ${FAN_LEVEL_MIN}–${FAN_LEVEL_MAX} 的整数`, false)
+    }
+
+    const sourceRecords = parsed.data.sourceMemberIds.map((memberId) => runtime.preferences[memberId])
+    if (parsed.data.mediaTitle !== undefined) {
+      const matchesPreference = sourceRecords.some((record) => record.mediaTitle === parsed.data.mediaTitle)
+      if (!knownMediaTitles.has(parsed.data.mediaTitle) && !matchesPreference) {
+        return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', `未知媒体标题：${parsed.data.mediaTitle}`, false)
+      }
+    }
+
+    // 声明"来自成员偏好"的值必须与某个来源成员存储的偏好一致；
+    // fanLevel 不在记忆白名单内，视为可撤销的手动调整，不做偏好校验。
+    if (
+      parsed.data.temperatureC !== undefined &&
+      !sourceRecords.some((record) => record.rearTemperatureC === parsed.data.temperatureC)
+    ) {
+      return errorResult(ctx, APPLY, 'POLICY_DENIED', `温度 ${parsed.data.temperatureC}°C 与来源成员偏好不一致`, false)
+    }
+    if (
+      parsed.data.mediaTitle !== undefined &&
+      !sourceRecords.some((record) => record.mediaTitle === parsed.data.mediaTitle)
+    ) {
+      return errorResult(ctx, APPLY, 'POLICY_DENIED', `媒体「${parsed.data.mediaTitle}」与来源成员偏好不一致`, false)
+    }
+
+    const previous = cloneProfile(runtime.cabinCurrent)
+    const current: CabinProfileValues = {
+      temperatureC: parsed.data.temperatureC ?? previous.temperatureC,
+      fanLevel: parsed.data.fanLevel ?? previous.fanLevel,
+      mediaTitle: parsed.data.mediaTitle ?? previous.mediaTitle,
+    }
+    const effectId = `${ctx.taskId}:cabin:${parsed.data.idempotencyKey}`
+    runtime.cabinCurrent = current
+    runtime.cabinEffects.set(effectId, { effectId, taskId: ctx.taskId, previous, current, reverted: false })
+
+    const result = okResult(
+      ctx,
+      APPLY,
+      applyCabinProfileOutputSchema.parse({
+        effectId,
+        applied: true,
+        previous,
+        current,
+        reversible: true,
+      }),
+    )
+    runtime.idempotency.set(ctx.taskId, APPLY, parsed.data.idempotencyKey, parsed.data, result)
+    return result
+  }
+
+  function revertCabinProfile(ctx: ToolContext, input: unknown): ToolResult<RevertCabinProfileOutput> {
+    const parsed = revertCabinProfileInputSchema.safeParse(input)
+    if (!parsed.success) {
+      return errorResult(ctx, REVERT, 'INVALID_ARGUMENT', '需要 effectId 和 idempotencyKey', false)
+    }
+
+    const cached = runtime.idempotency.get<RevertCabinProfileOutput>(ctx.taskId, REVERT, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, REVERT, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
+
+    const effect = runtime.cabinEffects.get(parsed.data.effectId)
+    if (!effect) {
+      return errorResult(ctx, REVERT, 'APPLY_FAILED', `未知座舱效果：${parsed.data.effectId}`, false)
+    }
+
+    // effectId embedding the task id is not authorization; enforce ownership explicitly.
+    if (effect.taskId !== ctx.taskId) {
+      return errorResult(ctx, REVERT, 'POLICY_DENIED', `座舱效果不属于当前任务：${parsed.data.effectId}`, false)
+    }
+
+    // 只允许撤销仍然生效的效果：若座舱状态已被后续 apply 覆盖，
+    // 直接恢复旧快照会丢掉后来的设置。
+    if (!effect.reverted && !profilesEqual(runtime.cabinCurrent, effect.current)) {
+      return errorResult(ctx, REVERT, 'APPLY_FAILED', `座舱状态已被后续操作修改，无法撤销：${parsed.data.effectId}`, false)
+    }
+
+    if (!effect.reverted) {
+      runtime.cabinCurrent = cloneProfile(effect.previous)
+      effect.reverted = true
+    }
+
+    const result = okResult(
+      ctx,
+      REVERT,
+      revertCabinProfileOutputSchema.parse({
+        effectId: effect.effectId,
+        reverted: true,
+        current: cloneProfile(runtime.cabinCurrent),
+      }),
+    )
+    runtime.idempotency.set(ctx.taskId, REVERT, parsed.data.idempotencyKey, parsed.data, result)
+    return result
+  }
+
+  return { applyCabinProfile, revertCabinProfile }
+}
