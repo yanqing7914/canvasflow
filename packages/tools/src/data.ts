@@ -17,6 +17,7 @@ export type FamilyMemberRecord = {
 
 export const familyMembers: FamilyMemberRecord[] = [
   { memberId: 'mom', displayName: '妈妈', labels: ['妈妈'], contactId: 'contact-mom' },
+  { memberId: 'dad', displayName: '爸爸', labels: ['爸爸'], contactId: 'contact-dad' },
   { memberId: 'doubao', displayName: '豆豆', labels: ['豆豆'] },
 ]
 
@@ -32,6 +33,9 @@ export const memberPreferences: Record<string, MemberPreferenceRecord> = {
     rearTemperatureC: 25,
     homeDestinationId: 'destination-home',
     landingNotificationAuthorized: true,
+  },
+  dad: {
+    landingNotificationAuthorized: false,
   },
   doubao: {
     mediaTitle: '豆豆故事',

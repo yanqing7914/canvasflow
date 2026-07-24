@@ -7,7 +7,7 @@ import {
   type MessageSendOutput,
   type ToolResult,
 } from '@canvasflow/schema'
-import { familyMembers } from './data'
+import { familyMembers, type MemberPreferenceRecord } from './data'
 import type { MessageSendBinding, SideEffectRuntime } from './idempotency'
 import { errorResult, FIXTURE_GENERATED_AT, okResult, type ToolContext } from './result'
 
@@ -17,9 +17,33 @@ const SEND = 'message.send'
 /** Fixture contact that deterministically fails send. */
 export const FAILING_CONTACT_ID = 'contact-fail'
 
+/**
+ * Resolve the landing-notification recipient for a task: first passenger who
+ * has both a contactId and landingNotificationAuthorized preference.
+ * Callers must pass current preferences (e.g. runtime.preferences), not a
+ * stale module snapshot.
+ */
+export function resolveAuthorizedLandingContact(
+  memberIds: string[],
+  preferences: Record<string, MemberPreferenceRecord>,
+): string | undefined {
+  for (const memberId of memberIds) {
+    if (!Object.hasOwn(preferences, memberId)) continue
+    if (preferences[memberId].landingNotificationAuthorized !== true) continue
+    const contactId = familyMembers.find((member) => member.memberId === memberId)?.contactId
+    if (contactId) return contactId
+  }
+  return undefined
+}
+
 /** Issue an opaque, one-time confirmation for an explicit send / retry. */
 export function issueSendMessageConfirmation(runtime: SideEffectRuntime, binding: MessageSendBinding): string {
   return runtime.confirmations.issueSendMessageConfirmation(binding)
+}
+
+/** Revoke an abandoned / rejected / superseded send-message confirmation. */
+export function revokeSendMessageConfirmation(runtime: SideEffectRuntime, confirmationId: string): boolean {
+  return runtime.confirmations.revokeSendMessageConfirmation(confirmationId)
 }
 
 /**
@@ -28,6 +52,21 @@ export function issueSendMessageConfirmation(runtime: SideEffectRuntime, binding
  */
 export function issueAutoNotifyAuthorization(runtime: SideEffectRuntime, binding: MessageSendBinding): string {
   return runtime.confirmations.issueAutoNotifyAuthorization(binding)
+}
+
+/** Deterministic landing-notify payload (no confirmation mint). */
+export function buildLandingNotifyContent(
+  taskId: string,
+  contactId: string,
+  flightNumber: string,
+  eta = '即将到达',
+): Pick<MessageSendBinding, 'contactId' | 'messageId' | 'text'> {
+  const normalizedFlight = flightNumber.toUpperCase()
+  return {
+    contactId,
+    messageId: `${taskId}:${normalizedFlight}:landing`,
+    text: `我已到达机场接机点，航班 ${normalizedFlight}，预计 ${eta} 会合。`,
+  }
 }
 
 /**
@@ -48,22 +87,21 @@ export function createMessagePreparer(runtime: SideEffectRuntime) {
       return errorResult(ctx, PREPARE, 'AUTHORIZATION_REQUIRED', `联系人未授权：${parsed.data.contactId}`, false)
     }
 
-    const eta = parsed.data.eta ?? '即将到达'
-    const text = `我已到达机场接机点，航班 ${parsed.data.flightNumber.toUpperCase()}，预计 ${eta} 会合。`
-    const messageId = `${ctx.taskId}:${parsed.data.flightNumber.toUpperCase()}:landing`
+    const content = buildLandingNotifyContent(
+      ctx.taskId,
+      parsed.data.contactId,
+      parsed.data.flightNumber,
+      parsed.data.eta ?? '即将到达',
+    )
     const confirmationId = runtime.confirmations.issueSendMessageConfirmation({
       taskId: ctx.taskId,
-      contactId: parsed.data.contactId,
-      messageId,
-      text,
+      ...content,
     })
     return okResult(
       ctx,
       PREPARE,
       messagePrepareOutputSchema.parse({
-        messageId,
-        contactId: parsed.data.contactId,
-        text,
+        ...content,
         confirmationId,
       }),
     )

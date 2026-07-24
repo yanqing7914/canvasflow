@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createSideEffectRuntime } from '@canvasflow/tools'
 import { AgentGateway, AgentGatewayError } from './gateway'
 import { MemoryTaskStore } from './store'
 
@@ -288,6 +289,167 @@ describe('AgentGateway', () => {
     expect(() => createGateway().getTask('missing')).toThrowError(
       expect.objectContaining({ code: 'TASK_NOT_FOUND' }),
     )
+  })
+
+  it('retries a failed landing message through action → confirmation → send', () => {
+    const runtime = createSideEffectRuntime()
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => now,
+      createId: () => '001',
+      runtime,
+    })
+    const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'client-start-navigation',
+      expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision,
+      actionId: 'start-navigation',
+      componentId: 'flight-status',
+      idempotencyKey: 'start-navigation-001',
+    })
+    const landed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight-landed',
+      expectedTaskRevision: started.task.taskRevision,
+      event: {
+        eventId: 'flight-landed',
+        type: 'flight.updated',
+        flight: {
+          flightNumber: 'MU5102',
+          status: 'landed',
+          estimatedArrival: '2026-07-22T20:40:00+08:00',
+          terminal: 'T2',
+        },
+        timestamp: '2026-07-22T20:40:00+08:00',
+      },
+    })
+    expect(landed.task.message).toMatchObject({ status: 'scheduled', pendingContactId: 'contact-mom' })
+
+    const failed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-message-failed',
+      expectedTaskRevision: landed.task.taskRevision,
+      event: {
+        eventId: 'message-failed',
+        type: 'message.failed',
+        messageId: landed.task.message.pendingMessageId!,
+        errorCode: 'SEND_FAILED',
+        timestamp: '2026-07-22T20:41:00+08:00',
+      },
+    })
+    expect(failed.ui.actions).toContainEqual(expect.objectContaining({
+      id: 'retry-landing-message',
+      event: { type: 'tool-request', actionToken: 'pickup-001:retry-landing-message' },
+    }))
+    expect(failed.ui.components).toContainEqual(expect.objectContaining({
+      id: 'message-preview',
+      actions: ['retry-landing-message'],
+    }))
+
+    const armed = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'client-retry-landing',
+      expectedTaskRevision: failed.task.taskRevision,
+      expectedUiRevision: failed.ui.uiRevision,
+      actionId: 'retry-landing-message',
+      componentId: 'message-preview',
+      idempotencyKey: 'retry-landing-001',
+    })
+    expect(armed.task.pendingConfirmation).toMatchObject({ action: 'send-message' })
+    expect(armed.task.message).toMatchObject({
+      status: 'failed',
+      pendingContactId: 'contact-mom',
+      idempotencyKey: 'pickup-001:MU5102:landing',
+    })
+    expect(armed.ui.actions).toContainEqual(expect.objectContaining({
+      id: 'confirm-retry-landing-message',
+      event: {
+        type: 'confirmation',
+        confirmationId: armed.task.pendingConfirmation!.confirmationId,
+        decision: 'accept',
+      },
+    }))
+
+    const sent = gateway.submitConfirmation(
+      created.task.taskId,
+      armed.task.pendingConfirmation!.confirmationId,
+      {
+        clientRequestId: 'client-confirm-retry',
+        expectedTaskRevision: armed.task.taskRevision,
+        decision: 'accept',
+        idempotencyKey: 'confirm-retry-001',
+      },
+    )
+    expect(sent.task.message).toMatchObject({ status: 'sent', landingNoticeSent: true })
+    expect(sent.task.pendingConfirmation).toBeUndefined()
+    expect(sent.effects).toMatchObject([{ type: 'message.send', status: 'succeeded', tool: 'message.send' }])
+    expect(sent.ui.actions.some((action) => action.id === 'retry-landing-message')).toBe(false)
+  })
+
+  it('hides retry and surfaces unavailable UI when failed notify has no authorized contact', () => {
+    const runtime = createSideEffectRuntime()
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => now,
+      createId: () => '001',
+      runtime,
+    })
+    const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'client-start-navigation',
+      expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision,
+      actionId: 'start-navigation',
+      componentId: 'flight-status',
+      idempotencyKey: 'start-navigation-001',
+    })
+    const landed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight-landed',
+      expectedTaskRevision: started.task.taskRevision,
+      event: {
+        eventId: 'flight-landed',
+        type: 'flight.updated',
+        flight: {
+          flightNumber: 'MU5102',
+          status: 'landed',
+          estimatedArrival: '2026-07-22T20:40:00+08:00',
+          terminal: 'T2',
+        },
+        timestamp: '2026-07-22T20:40:00+08:00',
+      },
+    })
+    const failed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-message-failed',
+      expectedTaskRevision: landed.task.taskRevision,
+      event: {
+        eventId: 'message-failed',
+        type: 'message.failed',
+        messageId: landed.task.message.pendingMessageId!,
+        errorCode: 'SEND_FAILED',
+        timestamp: '2026-07-22T20:41:00+08:00',
+      },
+    })
+    expect(failed.ui.actions.some((action) => action.id === 'retry-landing-message')).toBe(true)
+
+    // Revoke authorization after failure; next publish must not keep a dead retry button.
+    runtime.preferences.mom = { ...runtime.preferences.mom, landingNotificationAuthorized: false }
+    const view = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-auth-revoked-view',
+      expectedTaskRevision: failed.task.taskRevision,
+      event: {
+        eventId: 'timeout-after-revoke',
+        type: 'provider.timeout',
+        provider: 'flight',
+        timestamp: '2026-07-22T20:41:30+08:00',
+      },
+    })
+    expect(view.ui.actions.some((action) => action.id === 'retry-landing-message')).toBe(false)
+    expect(view.ui.components).toContainEqual(expect.objectContaining({
+      type: 'status-banner',
+      props: {
+        level: 'error',
+        title: '无法重试发送',
+        message: '没有已授权的落地通知联系人',
+      },
+    }))
   })
 })
 

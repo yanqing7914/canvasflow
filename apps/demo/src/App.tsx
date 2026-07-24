@@ -1,7 +1,16 @@
 import { useMemo, useState } from 'react'
-import { applyEvent, createInitialTask, resolveConfirmation } from '@canvasflow/agent'
+import {
+  applyEvent,
+  armLandingMessageRetry,
+  createInitialTask,
+  resolveConfirmation,
+  resolveLandingMessageRetry,
+} from '@canvasflow/agent'
+import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
 import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
+
+const demoRuntime = createSideEffectRuntime()
 
 const timeline: AirportPickupEvent[] = [
   { eventId: 'start-navigation', type: 'navigation.started', routeId: 'route-airport-001', timestamp: '2026-07-22T20:05:00+08:00' },
@@ -66,16 +75,42 @@ export default function App({
   composeContext?: ComposerContext
 }) {
   const [task, setTask] = useState<AirportPickupTaskState>(initialTask)
-  const spec = useMemo(() => composePickupSpec(task, composeContext), [task, composeContext])
+  const spec = useMemo(() => composePickupSpec(task, {
+    ...composeContext,
+    landingMessageRetryAvailable:
+      composeContext.landingMessageRetryAvailable
+      ?? Boolean(resolveAuthorizedLandingContact(task.passengers.memberIds, demoRuntime.preferences)),
+  }), [task, composeContext])
   const advance = () => {
     const candidate = timeline
-      .map((event) => ({ event, next: applyEvent(task, event) }))
+      .map((event) => ({ event, next: applyEvent(task, event, demoRuntime.preferences) }))
       .find(({ event, next }) => !task.processedEventIds.includes(event.eventId) && next.processedEventIds.includes(event.eventId))
     if (candidate) setTask(candidate.next)
   }
   const handleAction = (actionId: string) => {
     if (actionId === 'save-trip-preferences') {
       setTask((current) => resolveConfirmation(current, `${current.taskId}:save-memory`))
+      return
+    }
+    if (actionId === 'retry-landing-message') {
+      setTask((current) => armLandingMessageRetry(current, demoRuntime) ?? current)
+      return
+    }
+    if (actionId === 'confirm-retry-landing-message') {
+      setTask((current) => {
+        const confirmationId = current.pendingConfirmation?.confirmationId
+        if (!confirmationId) return current
+        const resolved = resolveLandingMessageRetry(
+          current,
+          demoRuntime,
+          confirmationId,
+          'accept',
+          '2026-07-22T20:42:00+08:00',
+        )
+        if (!resolved) return current
+        if (resolved.decision === 'reject') return resolved.task
+        return applyEvent(resolved.task, resolved.event, demoRuntime.preferences)
+      })
     }
   }
 

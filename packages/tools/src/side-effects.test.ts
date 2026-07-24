@@ -644,6 +644,21 @@ describe('message.send', () => {
     expect(registry['message.send'](ctx, input).error?.code).toBe('SEND_FAILED')
   })
 
+  it('revoke 后的 confirmationId 不能再授权发送', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const message = { contactId: 'contact-mom', messageId: 'msg-revoke-1', text: '我已到达机场' }
+    const confirmationId = issueSendMessageConfirmation(runtime, { taskId: 'pickup-001', ...message })
+    expect(runtime.confirmations.revokeSendMessageConfirmation(confirmationId)).toBe(true)
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId,
+        idempotencyKey: 'pickup-001:msg-revoked',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+  })
+
   it('opaque 确认：签发→成功发送→消费；伪造/改 payload/重复消费均失败', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
