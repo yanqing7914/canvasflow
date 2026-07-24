@@ -67,7 +67,6 @@ export class AgentGateway {
     this.#store = options.store ?? new MemoryTaskStore()
     this.#now = options.now ?? (() => new Date().toISOString())
     this.#createId = options.createId ?? (() => crypto.randomUUID())
-    this.#compose = options.compose ?? composeAgentSpec
     const runtime = options.runtime ?? createSideEffectRuntime()
     if (!options.runtime && options.preferences) {
       for (const key of Object.keys(runtime.preferences)) delete runtime.preferences[key]
@@ -77,6 +76,7 @@ export class AgentGateway {
     }
     this.#runtime = runtime
     this.#preferences = runtime.preferences
+    this.#compose = options.compose ?? ((task) => composeAgentSpec(task, this.#preferences))
   }
 
   createTask(input: CreateTaskRequest): AgentResponse {

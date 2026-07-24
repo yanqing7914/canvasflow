@@ -55,6 +55,24 @@ describe('无授权落地联系人：不进入 scheduled 死胡同', () => {
     expect(spec.components.some((component) => component.type === 'message-preview')).toBe(false)
     expect(spec.actions).toEqual([])
   })
+
+  it('失败态无授权联系人时展示不可用说明，不渲染重试发送', () => {
+    const failed = drivingState({
+      passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
+    })
+    const spec = composePickupSpec(failed, { landingMessageRetryAvailable: false })
+    expect(spec.actions.some((action) => action.id === 'retry-landing-message')).toBe(false)
+    expect(spec.components).toContainEqual(expect.objectContaining({
+      type: 'status-banner',
+      props: {
+        level: 'error',
+        title: '无法重试发送',
+        message: '没有已授权的落地通知联系人',
+      },
+    }))
+  })
 })
 
 describe('重复航班落地事件：消息重复发送率 0%', () => {
@@ -92,7 +110,12 @@ describe('重复航班落地事件：消息重复发送率 0%', () => {
       contactId: prepared.data!.contactId,
       messageId: prepared.data!.messageId,
       text: prepared.data!.text,
-      authorizationId: issueAutoNotifyAuthorization(runtime, scheduled.taskId),
+      authorizationId: issueAutoNotifyAuthorization(runtime, {
+        taskId: scheduled.taskId,
+        contactId: prepared.data!.contactId,
+        messageId: prepared.data!.messageId,
+        text: prepared.data!.text,
+      }),
       idempotencyKey: scheduled.message.idempotencyKey!,
     }
     const firstSend = registry['message.send'](ctx, sendInput)

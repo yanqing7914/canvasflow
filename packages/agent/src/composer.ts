@@ -1,4 +1,6 @@
 import { uiSpecSchema, type AirportPickupTaskState, type UISpec } from '@canvasflow/schema'
+import { memberPreferences, type MemberPreferenceRecord } from '@canvasflow/tools'
+import { canRetryLandingMessage } from './landing-message-retry'
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息',
@@ -11,7 +13,10 @@ const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   cancelled: '已取消',
 }
 
-export function composeAgentSpec(task: AirportPickupTaskState): UISpec {
+export function composeAgentSpec(
+  task: AirportPickupTaskState,
+  preferences: Record<string, MemberPreferenceRecord> = memberPreferences,
+): UISpec {
   const progress = progressComponent(task)
   let components: UISpec['components'] = [overviewComponent(task), progress]
   let title = task.passengers.names.length > 0
@@ -48,23 +53,39 @@ export function composeAgentSpec(task: AirportPickupTaskState): UISpec {
     title = '落地通知失败'
     density = 'minimal'
     priority = 'high'
-    components = [{
-      id: 'message-preview',
-      type: 'message-preview',
-      props: {
-        contactLabel: task.passengers.names[0] ?? '乘客',
-        textPreview: '我已到达机场，正在接你们。',
-        status: 'failed',
-        cancellable: false,
-      },
-      actions: task.pendingConfirmation?.action === 'send-message'
-        ? ['confirm-retry-landing-message']
-        : ['retry-landing-message'],
-    }]
-    actions =
+    const retryAvailable =
       task.pendingConfirmation?.action === 'send-message'
-        ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
-        : [{ id: 'retry-landing-message', label: '重试发送', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-landing-message` } }]
+      || canRetryLandingMessage(task, preferences)
+    if (!retryAvailable) {
+      components = [{
+        id: 'status-banner',
+        type: 'status-banner',
+        props: {
+          level: 'error',
+          title: '无法重试发送',
+          message: '没有已授权的落地通知联系人',
+        },
+      }]
+      actions = []
+    } else {
+      components = [{
+        id: 'message-preview',
+        type: 'message-preview',
+        props: {
+          contactLabel: task.passengers.names[0] ?? '乘客',
+          textPreview: '我已到达机场，正在接你们。',
+          status: 'failed',
+          cancellable: false,
+        },
+        actions: task.pendingConfirmation?.action === 'send-message'
+          ? ['confirm-retry-landing-message']
+          : ['retry-landing-message'],
+      }]
+      actions =
+        task.pendingConfirmation?.action === 'send-message'
+          ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
+          : [{ id: 'retry-landing-message', label: '重试发送', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-landing-message` } }]
+    }
   } else if (task.charging.status === 'completed') {
     density = 'compact'
     components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: false, reason: '补能完成，已恢复机场路线', currentBatteryPercent: 78, estimatedFinalBatteryPercent: 42 } }]

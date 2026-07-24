@@ -190,7 +190,12 @@ function executeStepTools(
           contactId: prepared.data!.contactId,
           messageId: prepared.data!.messageId,
           text: prepared.data!.text,
-          authorizationId: issueAutoNotifyAuthorization(runtime, state.taskId),
+          authorizationId: issueAutoNotifyAuthorization(runtime, {
+            taskId: state.taskId,
+            contactId: prepared.data!.contactId,
+            messageId: prepared.data!.messageId,
+            text: prepared.data!.text,
+          }),
           idempotencyKey: state.message.idempotencyKey!,
         }
         const first = registry['message.send'](ctx, sendInput)

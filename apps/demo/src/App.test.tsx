@@ -2,10 +2,39 @@ import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
+import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { createInitialTask } from '@canvasflow/agent'
+import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
 
 describe('demo integration', () => {
+  it('loads the shared main-flow timeline for the demo player', () => {
+    expect(mainFlowTimeline.id).toBe('main-flow')
+    expect(mainFlowTimeline.steps[0]?.event.eventId).toBe('event-task-created')
+    expect(mainFlowTimeline.steps.some((step) => step.event.eventId === 'event-charging-recommended')).toBe(true)
+
+    let task = mainFlowTimeline.initialTaskState
+    expect(task.phase).toBe('collecting-information')
+
+    // Create task + resolve passengers (statePatch from shared timeline).
+    task = advanceMainFlowStep(task)
+    expect(task.passengers.names).toEqual(['妈妈', '豆豆'])
+    expect(task.processedEventIds).toContain('event-task-created')
+
+    // Flight number → preparing.
+    task = advanceMainFlowStep(task)
+    expect(task.phase).toBe('preparing')
+    expect(task.flight?.flightNumber).toBe('MU5102')
+
+    // Charging recommend step from main-flow (not a hard-coded skip-ahead).
+    task = advanceMainFlowStep(task)
+    expect(task.charging).toMatchObject({ recommended: true, status: 'planned' })
+    expect(task.processedEventIds).toContain('event-charging-recommended')
+
+    const chargingStep = mainFlowTimeline.steps.find((step) => step.event.eventId === 'event-charging-recommended')
+    expect(chargingStep?.toolCalls).toEqual(expect.arrayContaining(['vehicle.get-status', 'charging.recommend']))
+  })
+
   it('composes a valid UI from task state', () => {
     const spec = composePickupSpec(createInitialTask())
     expect(spec.surfaceId).toBe('airport-pickup-main')
@@ -51,7 +80,12 @@ describe('demo integration', () => {
     })
     expect(spec.components[0]).toMatchObject({
       type: 'charging-recommendation',
-      props: { recommended: true, reason: '完成往返后预计低于安全余量（对比 3 站）' },
+      props: {
+        recommended: true,
+        reason: '完成往返后预计低于安全余量（对比 3 站）',
+        currentBatteryPercent: vehicleSnapshots.parked.batteryPercent,
+        estimatedFinalBatteryPercent: 18,
+      },
     })
   })
 
@@ -90,18 +124,34 @@ describe('demo integration', () => {
       charging: { recommended: true, accepted: false, status: 'planned' as const },
     }
     const cases = [
-      { speedKph: 0, density: 'full', stations: 3 },
-      { speedKph: 35, density: 'compact', stations: 2 },
-      { speedKph: 80, density: 'minimal', stations: 1 },
+      { snapshot: vehicleSnapshots['low-battery-parked'], density: 'full', stations: 3 },
+      { snapshot: vehicleSnapshots['low-battery-city'], density: 'compact', stations: 2 },
+      { snapshot: vehicleSnapshots['low-battery-highway'], density: 'minimal', stations: 1 },
     ] as const
 
-    for (const { speedKph, density, stations } of cases) {
-      const fromVehicle = composePickupSpec(chargingTask, { vehicle: { speedKph } })
+    for (const { snapshot, density, stations } of cases) {
+      const expectedFinal = estimateFinalBatteryPercent(
+        snapshot.batteryPercent,
+        snapshot.remainingRangeKm,
+        32,
+        32,
+      )
+      const fromVehicle = composePickupSpec(chargingTask, {
+        vehicle: {
+          speedKph: snapshot.speedKph,
+          batteryPercent: snapshot.batteryPercent,
+          remainingRangeKm: snapshot.remainingRangeKm,
+        },
+      })
       expect(fromVehicle).toMatchObject({
         presentation: { density },
         components: [{
           type: 'charging-recommendation',
-          props: { reason: `完成往返后预计低于安全余量（对比 ${stations} 站）` },
+          props: {
+            reason: `完成往返后预计低于安全余量（对比 ${stations} 站）`,
+            currentBatteryPercent: snapshot.batteryPercent,
+            estimatedFinalBatteryPercent: expectedFinal,
+          },
         }],
       })
 
@@ -109,15 +159,50 @@ describe('demo integration', () => {
         toolResults: {
           'vehicle.get-status': {
             ok: true,
-            data: { speedKph, batteryPercent: 18, remainingRangeKm: 46, gear: 'D', isNight: true, rearOccupied: false },
+            data: snapshot,
           },
         },
       })
       expect(fromToolResult.presentation.density).toBe(density)
       expect(fromToolResult.components[0]).toMatchObject({
-        props: { reason: `完成往返后预计低于安全余量（对比 ${stations} 站）` },
+        props: {
+          reason: `完成往返后预计低于安全余量（对比 ${stations} 站）`,
+          currentBatteryPercent: snapshot.batteryPercent,
+          estimatedFinalBatteryPercent: expectedFinal,
+        },
       })
     }
+  })
+
+  it('prefers charging.recommend estimated final over recomputation', () => {
+    const snapshot = vehicleSnapshots['low-battery-parked']
+    const spec = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'preparing',
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      charging: { recommended: true, accepted: false, status: 'planned' },
+    }, {
+      toolResults: {
+        'vehicle.get-status': { ok: true, data: snapshot },
+        'charging.recommend': {
+          ok: true,
+          data: {
+            recommended: true,
+            reason: '完成往返后预计低于安全余量',
+            estimatedFinalBatteryPercent: 12,
+            suggestedDurationMinutes: 10,
+            stationId: 'station-hongqiao-01',
+            etaImpactMinutes: 12,
+          },
+        },
+      },
+    })
+    expect(spec.components[0]).toMatchObject({
+      props: {
+        currentBatteryPercent: snapshot.batteryPercent,
+        estimatedFinalBatteryPercent: 12,
+      },
+    })
   })
 
   it('includes completed and cancelled terminal phases in progress', () => {
@@ -134,12 +219,21 @@ describe('demo integration', () => {
     expect(second.uiRevision).toBeGreaterThan(first.uiRevision)
   })
 
-  it('advances the rendered demo and disables terminal controls', async () => {
+  it('advances the rendered demo from main-flow through the charging step', async () => {
     const user = userEvent.setup()
     render(<App />)
     const advance = screen.getByRole('button', { name: '推进下一事件' })
+    expect(screen.getByText(/collecting-information/)).toBeInTheDocument()
+
+    await user.click(advance) // passengers
+    await user.click(advance) // flight → preparing
     expect(screen.getByText(/preparing/)).toBeInTheDocument()
-    await user.click(advance)
+
+    await user.click(advance) // charging recommend
+    expect(screen.getByText('charging-recommendation')).toBeInTheDocument()
+    expect(screen.getByText(/42% → 18%/)).toBeInTheDocument()
+
+    await user.click(advance) // navigation.started
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
   })
 
@@ -226,8 +320,7 @@ describe('demo integration', () => {
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
   })
 
-  it('does not retry landing notify when no authorized contact remains', async () => {
-    const user = userEvent.setup()
+  it('shows unavailable state instead of retry when no authorized contact remains', () => {
     render(
       <App
         initialTask={{
@@ -240,8 +333,8 @@ describe('demo integration', () => {
         }}
       />,
     )
-    await user.click(screen.getByRole('button', { name: '重试发送' }))
-    // No authorized contact → handler no-ops; retry action remains.
-    expect(screen.getByRole('button', { name: '重试发送' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
+    expect(screen.getByText('无法重试发送')).toBeInTheDocument()
+    expect(screen.getByText('没有已授权的落地通知联系人')).toBeInTheDocument()
   })
 })
