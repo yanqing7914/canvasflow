@@ -48,7 +48,14 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     title = '落地通知失败'
     density = 'minimal'
     priority = 'high'
-    components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'failed', cancellable: false } }]
+    components = [{
+      id: 'message-preview',
+      type: 'message-preview',
+      props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'failed', cancellable: false },
+      actions: task.pendingConfirmation?.action === 'send-message'
+        ? ['confirm-retry-landing-message']
+        : ['retry-landing-message'],
+    }]
     actions =
       task.pendingConfirmation?.action === 'send-message'
         ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
@@ -70,7 +77,9 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
       data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string; fanLevel?: number }> }
     }).data.members
     const temperatureC = members.find((member) => typeof member.rearTemperatureC === 'number')?.rearTemperatureC
-    const mediaTitle = members.find((member) => typeof member.mediaTitle === 'string')?.mediaTitle
+    const mediaTitle = members.find(
+      (member) => typeof member.mediaTitle === 'string' && member.mediaTitle.length > 0,
+    )?.mediaTitle
     const fanLevel = members.find((member) => typeof member.fanLevel === 'number')?.fanLevel
     title = '已应用家庭偏好'
     density = 'compact'
@@ -112,8 +121,11 @@ function successfulPreferences(value: unknown): boolean {
   return Array.isArray(members) && members.some((member) => {
     if (typeof member !== 'object' || member === null) return false
     const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown }
-    // memory.get-preferences does not emit fanLevel; only temperature/media count.
-    return typeof record.rearTemperatureC === 'number' || typeof record.mediaTitle === 'string'
+    // memory.get-preferences does not emit fanLevel; only temperature/non-empty media count.
+    return (
+      typeof record.rearTemperatureC === 'number' ||
+      (typeof record.mediaTitle === 'string' && record.mediaTitle.length > 0)
+    )
   })
 }
 

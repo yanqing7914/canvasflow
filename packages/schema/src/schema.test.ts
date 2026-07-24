@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { createTaskRequestSchema } from './api'
-import { applyCabinProfileInputSchema, memoryPreferenceChangeSchema } from './tool'
+import {
+  applyCabinProfileInputSchema,
+  cabinProfileValuesSchema,
+  getPreferencesOutputSchema,
+  memoryPreferenceChangeSchema,
+} from './tool'
 import { componentSpecSchema, uiSpecSchema } from './ui'
 
 describe('UISpec', () => {
@@ -29,6 +34,23 @@ describe('UISpec', () => {
       props: { zone: 'rear', mediaTitle: '豆豆故事', appliedFromMemory: true, reversible: true },
     })
     expect(mediaOnly.success).toBe(true)
+
+    const emptyMediaTitle = componentSpecSchema.safeParse({
+      id: 'cabin',
+      type: 'cabin-profile',
+      props: { zone: 'rear', mediaTitle: '', appliedFromMemory: true, reversible: true },
+    })
+    expect(emptyMediaTitle.success).toBe(false)
+  })
+
+  it('rejects empty mediaTitle in preference and cabin value schemas', () => {
+    expect(getPreferencesOutputSchema.safeParse({ members: [{ memberId: 'doubao', mediaTitle: '' }] }).success).toBe(
+      false,
+    )
+    expect(cabinProfileValuesSchema.safeParse({ mediaTitle: '' }).success).toBe(false)
+    expect(
+      getPreferencesOutputSchema.safeParse({ members: [{ memberId: 'doubao', mediaTitle: '豆豆故事' }] }).success,
+    ).toBe(true)
   })
 })
 

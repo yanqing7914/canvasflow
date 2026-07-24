@@ -60,4 +60,29 @@ describe('airport pickup fixtures', () => {
     ])
     expect(spec.components[0]?.props).not.toHaveProperty('temperatureC')
   })
+
+  it('composer ignores empty mediaTitle and does not emit a blank preference card', () => {
+    const task = {
+      ...createInitialTask(),
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: true },
+      updatedAt: '2026-07-22T20:56:00+08:00',
+    }
+    const spec = composePickupSpec(task, {
+      toolResults: {
+        'memory.get-preferences': {
+          ok: true,
+          data: { members: [{ memberId: 'doubao', mediaTitle: '' }] },
+        },
+      },
+    })
+    expect(spec.title).toBe('返程回家')
+    expect(spec.components.some((component) => component.type === 'cabin-profile')).toBe(false)
+    expect(spec.components).toEqual([
+      expect.objectContaining({
+        type: 'passenger-status',
+        props: expect.objectContaining({ status: 'confirmed-onboard' }),
+      }),
+    ])
+  })
 })

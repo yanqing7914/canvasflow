@@ -72,13 +72,15 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
         zone: z.literal('rear'),
         temperatureC: z.number().optional(),
         fanLevel: z.number().optional(),
-        mediaTitle: z.string().optional(),
+        mediaTitle: z.string().min(1).optional(),
         appliedFromMemory: z.boolean(),
         reversible: z.boolean(),
       })
       .refine(
         (props) =>
-          props.temperatureC !== undefined || props.fanLevel !== undefined || props.mediaTitle !== undefined,
+          props.temperatureC !== undefined ||
+          props.fanLevel !== undefined ||
+          (props.mediaTitle !== undefined && props.mediaTitle.length > 0),
         { message: 'cabin-profile requires at least one of temperatureC, fanLevel, or mediaTitle' },
       ),
   }),
