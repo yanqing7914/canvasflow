@@ -272,6 +272,8 @@ export const proposeMemoryUpdateOutputSchema = z.object({
   requiresConfirmation: z.literal(true),
   /** The exact confirmation credential `memory.confirm-update` will accept for this proposal. */
   confirmationId: z.string().min(1),
+  /** Absolute expiry for the one-shot confirmation and its proposal. */
+  expiresAt: z.iso.datetime({ offset: true }),
 })
 
 export const confirmMemoryUpdateInputSchema = z.object({
@@ -284,6 +286,11 @@ export const confirmMemoryUpdateOutputSchema = z.object({
   proposalId: z.string().min(1),
   memberId: z.string().min(1),
   applied: z.record(z.string(), z.unknown()),
+})
+
+export const rejectMemoryUpdateOutputSchema = z.object({
+  proposalId: z.string().min(1),
+  rejected: z.literal(true),
 })
 
 export type ProviderMode = z.infer<typeof providerModeSchema>
@@ -318,6 +325,7 @@ export type ProposeMemoryUpdateInput = z.infer<typeof proposeMemoryUpdateInputSc
 export type ProposeMemoryUpdateOutput = z.infer<typeof proposeMemoryUpdateOutputSchema>
 export type ConfirmMemoryUpdateInput = z.infer<typeof confirmMemoryUpdateInputSchema>
 export type ConfirmMemoryUpdateOutput = z.infer<typeof confirmMemoryUpdateOutputSchema>
+export type RejectMemoryUpdateOutput = z.infer<typeof rejectMemoryUpdateOutputSchema>
 export type ToolResult<T> = {
   ok: boolean
   data: T | null

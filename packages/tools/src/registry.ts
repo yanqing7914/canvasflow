@@ -43,6 +43,13 @@ export const toolDefinitions = {
     riskLevel: 'persistent',
     timeoutMs: 2000,
   },
+  'memory.reject-update': {
+    name: 'memory.reject-update',
+    version: '1.0',
+    description: '撤销待确认的长期记忆更新',
+    riskLevel: 'reversible',
+    timeoutMs: 1000,
+  },
   'flight.get-status': {
     name: 'flight.get-status',
     version: '1.0',
@@ -142,6 +149,7 @@ export function createProviderRegistry(runtime: SideEffectRuntime = createSideEf
     'memory.get-preferences': createPreferenceReader(runtime.preferences),
     'memory.propose-update': memoryWrite.proposeMemoryUpdate,
     'memory.confirm-update': memoryWrite.confirmMemoryUpdate,
+    'memory.reject-update': memoryWrite.rejectMemoryUpdate,
     'flight.get-status': getFlightStatus,
     'navigation.plan-route': navigation.planRoute,
     'navigation.start': navigation.startNavigation,

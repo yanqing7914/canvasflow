@@ -34,6 +34,16 @@ const returnTripEffectStateSchema = z.object({
   errorCode: z.string().optional(),
 })
 
+export const memoryProposalStateSchema = z.object({
+  proposalId: z.string().min(1).optional(),
+  memberId: z.string().min(1).optional(),
+  confirmationId: z.string().min(1).optional(),
+  expiresAt: z.iso.datetime({ offset: true }).optional(),
+  changes: z.record(z.string(), z.unknown()).optional(),
+  status: z.enum(['pending', 'accepted', 'rejected', 'expired', 'failed', 'skipped']),
+  errorCode: z.string().optional(),
+})
+
 export const returnTripStateSchema = z.object({
   workflowId: z.string().min(1),
   homeDestinationId: z.string().min(1).optional(),
@@ -66,6 +76,7 @@ export const airportPickupTaskStateSchema = z.object({
     })
     .optional(),
   returnTrip: returnTripStateSchema.optional(),
+  memoryProposal: memoryProposalStateSchema.optional(),
   charging: z.object({
     recommended: z.boolean(),
     accepted: z.boolean(),
@@ -120,5 +131,6 @@ export const airportPickupEventSchema = z.discriminatedUnion('type', [
 export type AirportPickupPhase = z.infer<typeof airportPickupPhaseSchema>
 export type FlightState = z.infer<typeof flightStateSchema>
 export type ReturnTripState = z.infer<typeof returnTripStateSchema>
+export type MemoryProposalState = z.infer<typeof memoryProposalStateSchema>
 export type AirportPickupTaskState = z.infer<typeof airportPickupTaskStateSchema>
 export type AirportPickupEvent = z.infer<typeof airportPickupEventSchema>

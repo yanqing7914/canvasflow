@@ -135,7 +135,10 @@ describe('Agent UISpec composer', () => {
 
     expect(composeAgentSpec(task)).toMatchObject({
       meta: { requiresConfirm: true },
-      actions: [{ event: { type: 'confirmation', confirmationId: 'pickup-001:save-memory', decision: 'accept' } }],
+      actions: [
+        { event: { type: 'confirmation', confirmationId: 'pickup-001:save-memory', decision: 'accept' } },
+        { event: { type: 'confirmation', confirmationId: 'pickup-001:save-memory', decision: 'reject' } },
+      ],
     })
   })
 

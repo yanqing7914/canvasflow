@@ -1,8 +1,11 @@
 import {
   applyCabinProfileOutputSchema,
+  confirmMemoryUpdateOutputSchema,
   mediaPlayOutputSchema,
   navigationStartOutputSchema,
   navigationUpdateRouteOutputSchema,
+  proposeMemoryUpdateOutputSchema,
+  rejectMemoryUpdateOutputSchema,
   routePlanOutputSchema,
   toolResultSchema,
   type AirportPickupTaskState,
@@ -58,6 +61,23 @@ export type ReturnTripExecution = {
   succeeded: boolean
   effect: EffectRecord[]
   navigation?: { routeId: string; destination: string; eta: string }
+}
+
+export type MemoryProposalExecution = {
+  succeeded: boolean
+  effect: EffectRecord
+  proposal?: {
+    proposalId: string
+    memberId: string
+    confirmationId: string
+    expiresAt: string
+  }
+}
+
+export type MemoryConfirmationExecution = {
+  succeeded: boolean
+  effect: EffectRecord
+  errorCode?: string
 }
 
 type ProviderResult<T> =
@@ -245,6 +265,124 @@ export class EffectExecutor {
     }
 
     return { succeeded: true, effect: effects, navigation }
+  }
+
+  proposeMemoryUpdate(input: {
+    task: AirportPickupTaskState
+    memberId: string
+    changes: { rearTemperatureC: number }
+    requestId: string
+    effectId: string
+  }): MemoryProposalExecution {
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
+      effectId: input.effectId,
+      type: 'memory.propose-update',
+      status,
+      tool: 'memory.propose-update',
+      ...(errorCode ? { errorCode } : {}),
+    })
+    const providerRequestId = `${input.task.taskId}:memory.propose-update:${input.requestId}`
+    const result = this.#callProvider(
+      input.task.taskId,
+      'memory.propose-update',
+      providerRequestId,
+      () => this.#registry['memory.propose-update'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        { memberId: input.memberId, changes: input.changes },
+      ),
+      toolResultSchema(proposeMemoryUpdateOutputSchema),
+    )
+    if (!result.succeeded) return { succeeded: false, effect: effect('failed', result.errorCode) }
+    if (
+      !result.data.requiresConfirmation
+      || JSON.stringify(result.data.after) !== JSON.stringify(input.changes)
+    ) return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+    return {
+      succeeded: true,
+      effect: effect('pending-confirmation'),
+      proposal: {
+        proposalId: result.data.proposalId,
+        memberId: input.memberId,
+        confirmationId: result.data.confirmationId,
+        expiresAt: result.data.expiresAt,
+      },
+    }
+  }
+
+  confirmMemoryUpdate(input: {
+    task: AirportPickupTaskState
+    proposalId: string
+    confirmationId: string
+    memberId: string
+    changes: Record<string, unknown>
+    idempotencyKey: string
+    effectId: string
+  }): MemoryConfirmationExecution {
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
+      effectId: input.effectId,
+      type: 'memory.confirm-update',
+      status,
+      tool: 'memory.confirm-update',
+      ...(errorCode ? { errorCode } : {}),
+    })
+    const providerRequestId = `${input.task.taskId}:memory.confirm-update:${input.idempotencyKey}`
+    const result = this.#callProvider(
+      input.task.taskId,
+      'memory.confirm-update',
+      providerRequestId,
+      () => this.#registry['memory.confirm-update'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        {
+          proposalId: input.proposalId,
+          confirmationId: input.confirmationId,
+          idempotencyKey: input.idempotencyKey,
+        },
+      ),
+      toolResultSchema(confirmMemoryUpdateOutputSchema),
+    )
+    if (!result.succeeded) {
+      return { succeeded: false, errorCode: result.errorCode, effect: effect('failed', result.errorCode) }
+    }
+    if (
+      result.data.proposalId !== input.proposalId
+      || result.data.memberId !== input.memberId
+      || JSON.stringify(result.data.applied) !== JSON.stringify(input.changes)
+    ) {
+      return { succeeded: false, errorCode: 'PROVIDER_FAILED', effect: effect('failed', 'PROVIDER_FAILED') }
+    }
+    return { succeeded: true, effect: effect('succeeded') }
+  }
+
+  rejectMemoryUpdate(input: {
+    task: AirportPickupTaskState
+    proposalId: string
+    confirmationId: string
+    idempotencyKey: string
+    effectId: string
+  }): MemoryConfirmationExecution {
+    const providerRequestId = `${input.task.taskId}:memory.reject-update:${input.idempotencyKey}`
+    const result = this.#callProvider(
+      input.task.taskId,
+      'memory.reject-update',
+      providerRequestId,
+      () => this.#registry['memory.reject-update'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        { proposalId: input.proposalId, confirmationId: input.confirmationId, idempotencyKey: input.idempotencyKey },
+      ),
+      toolResultSchema(rejectMemoryUpdateOutputSchema),
+    )
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
+      effectId: input.effectId,
+      type: 'memory.reject-update',
+      status,
+      tool: 'memory.reject-update',
+      ...(errorCode ? { errorCode } : {}),
+    })
+    if (!result.succeeded || result.data.proposalId !== input.proposalId || !result.data.rejected) {
+      const errorCode = result.succeeded ? 'PROVIDER_FAILED' : result.errorCode
+      return { succeeded: false, errorCode, effect: effect('failed', errorCode) }
+    }
+    return { succeeded: true, effect: effect('cancelled', 'USER_REJECTED') }
   }
 
   #callProvider<T>(

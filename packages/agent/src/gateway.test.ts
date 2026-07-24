@@ -595,27 +595,32 @@ describe('AgentGateway', () => {
     expect(current.navigation).toMatchObject({ routeId: 'route-airport-001', status: 'planned' })
   })
 
-  it('clears a current save-memory confirmation for accept and reject without effects in Fixture mode', () => {
-    const acceptGateway = createGateway()
+  it('proposes and accepts the arrival memory update through the provider', () => {
+    const runtime = createSideEffectRuntime()
+    const acceptGateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime })
     const accepted = completeTask(acceptGateway)
+    expect(accepted.memoryProposal).toMatchObject({ status: 'pending', memberId: 'mom' })
+    expect(accepted.pendingConfirmation?.confirmationId).toBe(accepted.memoryProposal?.confirmationId)
     const acceptRequest = {
       clientRequestId: 'client-save-memory-accept',
       expectedTaskRevision: accepted.taskRevision,
       decision: 'accept',
       idempotencyKey: 'save-memory-accept',
     } as const
-    const acceptedResult = acceptGateway.submitConfirmation(accepted.taskId, 'pickup-001:save-memory', acceptRequest)
-    const acceptedRetry = acceptGateway.submitConfirmation(accepted.taskId, 'pickup-001:save-memory', {
+    const confirmationId = accepted.pendingConfirmation!.confirmationId
+    const acceptedResult = acceptGateway.submitConfirmation(accepted.taskId, confirmationId, acceptRequest)
+    const acceptedRetry = acceptGateway.submitConfirmation(accepted.taskId, confirmationId, {
       ...acceptRequest,
       clientRequestId: 'client-save-memory-accept-retry',
     })
 
-    expect(acceptedResult.task).toMatchObject({ taskRevision: accepted.taskRevision + 1, pendingConfirmation: undefined })
-    expect(acceptedResult.effects).toEqual([])
+    expect(acceptedResult.task).toMatchObject({ taskRevision: accepted.taskRevision + 1, pendingConfirmation: undefined, memoryProposal: { status: 'accepted' } })
+    expect(acceptedResult.effects).toEqual([expect.objectContaining({ type: 'memory.confirm-update', status: 'succeeded' })])
+    expect(runtime.preferences.mom.rearTemperatureC).toBe(25)
     expect(acceptedRetry.task).toEqual(acceptedResult.task)
     expect(acceptedRetry.ui).toEqual(acceptedResult.ui)
 
-    expect(() => acceptGateway.submitConfirmation(accepted.taskId, 'pickup-001:save-memory', {
+    expect(() => acceptGateway.submitConfirmation(accepted.taskId, confirmationId, {
       ...acceptRequest,
       clientRequestId: 'client-save-memory-reject-after-accept',
       decision: 'reject',
@@ -623,15 +628,91 @@ describe('AgentGateway', () => {
 
     const rejectGateway = createGateway()
     const rejected = completeTask(rejectGateway)
-    const rejectedResult = rejectGateway.submitConfirmation(rejected.taskId, 'pickup-001:save-memory', {
+    const rejectedResult = rejectGateway.submitConfirmation(rejected.taskId, rejected.pendingConfirmation!.confirmationId, {
       clientRequestId: 'client-save-memory-reject',
       expectedTaskRevision: rejected.taskRevision,
       decision: 'reject',
       idempotencyKey: 'save-memory-reject',
     })
 
-    expect(rejectedResult.task).toMatchObject({ taskRevision: rejected.taskRevision + 1, pendingConfirmation: undefined })
-    expect(rejectedResult.effects).toEqual([])
+    expect(rejectedResult.task).toMatchObject({ taskRevision: rejected.taskRevision + 1, pendingConfirmation: undefined, memoryProposal: { status: 'rejected' } })
+    expect(rejectedResult.effects).toEqual([expect.objectContaining({ type: 'memory.reject-update', status: 'cancelled', errorCode: 'USER_REJECTED' })])
+  })
+
+  it('does not confirm an expired proposal when the gateway clock is ahead of the provider clock', () => {
+    const runtime = createSideEffectRuntime(() => Date.parse('2026-07-22T12:00:00Z'))
+    let gatewayNow = now
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => gatewayNow,
+      createId: () => '001',
+      runtime,
+    })
+    const completed = completeTask(gateway)
+    expect(completed.pendingConfirmation?.expiresAt).toBe('2026-07-22T12:30:00.000Z')
+    gatewayNow = '2026-07-22T12:31:00Z'
+
+    const expired = gateway.submitConfirmation(completed.taskId, completed.pendingConfirmation!.confirmationId, {
+      clientRequestId: 'client-save-memory-expired',
+      expectedTaskRevision: completed.taskRevision,
+      decision: 'accept',
+      idempotencyKey: 'save-memory-expired',
+    })
+
+    expect(expired.task).toMatchObject({ pendingConfirmation: undefined, memoryProposal: { status: 'expired', errorCode: 'PROPOSAL_EXPIRED' } })
+    expect(expired.effects).toEqual([expect.objectContaining({ type: 'memory.reject-update', status: 'failed', errorCode: 'PROPOSAL_EXPIRED' })])
+    expect(runtime.preferences.mom.rearTemperatureC).toBe(25)
+  })
+
+  it('revokes rejected proposals through the injected provider runtime', () => {
+    const providerRuntime = createSideEffectRuntime()
+    const providers = createProviderRegistry(providerRuntime)
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', providers })
+    const completed = completeTask(gateway)
+    const confirmationId = completed.pendingConfirmation!.confirmationId
+    const proposalId = completed.memoryProposal!.proposalId!
+
+    gateway.submitConfirmation(completed.taskId, confirmationId, {
+      clientRequestId: 'client-provider-runtime-reject',
+      expectedTaskRevision: completed.taskRevision,
+      decision: 'reject',
+      idempotencyKey: 'provider-runtime-reject',
+    })
+
+    const retained = providers['memory.confirm-update'](
+      { taskId: completed.taskId, requestId: 'stolen-confirm' },
+      { proposalId, confirmationId, idempotencyKey: 'stolen-confirm' },
+    )
+    expect(retained.error?.code).toBe('PROPOSAL_EXPIRED')
+    expect(providerRuntime.preferences.mom.rearTemperatureC).toBe(25)
+  })
+
+  it('dismisses an expired prompt when the provider already removed the proposal', () => {
+    let providerNow = Date.parse('2026-07-22T12:00:00Z')
+    let gatewayNow = now
+    const providerRuntime = createSideEffectRuntime(() => providerNow)
+    const providers = createProviderRegistry(providerRuntime)
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => gatewayNow, createId: () => '001', providers })
+    const completed = completeTask(gateway)
+    const confirmationId = completed.pendingConfirmation!.confirmationId
+    const proposalId = completed.memoryProposal!.proposalId!
+
+    providerNow = Date.parse('2026-07-22T12:31:00Z')
+    providers['memory.confirm-update'](
+      { taskId: completed.taskId, requestId: 'provider-expiry-cleanup' },
+      { proposalId, confirmationId, idempotencyKey: 'provider-expiry-cleanup' },
+    )
+    gatewayNow = '2026-07-22T12:31:00Z'
+
+    const expired = gateway.submitConfirmation(completed.taskId, confirmationId, {
+      clientRequestId: 'client-provider-first-expiry',
+      expectedTaskRevision: completed.taskRevision,
+      decision: 'accept',
+      idempotencyKey: 'provider-first-expiry',
+    })
+
+    expect(expired.task).toMatchObject({ pendingConfirmation: undefined, memoryProposal: { status: 'expired' } })
+    expect(expired.ui.actions).toEqual([])
   })
 
   it('preserves trusted provider context when accepting save-memory confirmation', () => {
@@ -639,7 +720,7 @@ describe('AgentGateway', () => {
     const gateway = new AgentGateway({ store, now: () => now, createId: () => '001' })
     const completed = completeTask(gateway)
 
-    gateway.submitConfirmation(completed.taskId, 'pickup-001:save-memory', {
+    gateway.submitConfirmation(completed.taskId, completed.pendingConfirmation!.confirmationId, {
       clientRequestId: 'client-save-memory-context',
       expectedTaskRevision: completed.taskRevision,
       decision: 'accept',
@@ -656,21 +737,21 @@ describe('AgentGateway', () => {
     const gateway = createGateway()
     const completed = completeTask(gateway, 'shared-idempotency-key')
 
-    const confirmed = gateway.submitConfirmation(completed.taskId, 'pickup-001:save-memory', {
+    const confirmed = gateway.submitConfirmation(completed.taskId, completed.pendingConfirmation!.confirmationId, {
       clientRequestId: 'client-save-memory',
       expectedTaskRevision: completed.taskRevision,
       decision: 'accept',
       idempotencyKey: 'shared-idempotency-key',
     })
 
-    expect(confirmed.task).toMatchObject({ taskRevision: completed.taskRevision + 1, pendingConfirmation: undefined })
+    expect(confirmed.task).toMatchObject({ taskRevision: completed.taskRevision + 1, pendingConfirmation: undefined, memoryProposal: { status: 'accepted' } })
   })
 
   it('requires a current save-memory confirmation', () => {
     const gateway = createGateway()
     const created = gateway.createTask(createRequest())
 
-    expect(() => gateway.submitConfirmation(created.task.taskId, 'pickup-001:save-memory', {
+    expect(() => gateway.submitConfirmation(created.task.taskId, 'missing-confirmation', {
       clientRequestId: 'client-save-memory',
       expectedTaskRevision: created.task.taskRevision,
       decision: 'accept',
