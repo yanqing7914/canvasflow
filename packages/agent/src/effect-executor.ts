@@ -18,6 +18,7 @@ export type PolicyDecision =
 
 export interface PolicyGate {
   authorizeNavigationStart(task: AirportPickupTaskState, routeId: string): PolicyDecision
+  authorizeReturnTrip(task: AirportPickupTaskState): PolicyDecision
 }
 
 export class DefaultPolicyGate implements PolicyGate {
@@ -37,6 +38,13 @@ export class DefaultPolicyGate implements PolicyGate {
     if (task.navigation.routeId !== routeId) {
       return { allowed: false, errorCode: 'ROUTE_MISMATCH' }
     }
+    return { allowed: true }
+  }
+
+  authorizeReturnTrip(task: AirportPickupTaskState): PolicyDecision {
+    if (task.phase === 'completed' || task.phase === 'cancelled') return { allowed: false, errorCode: 'TASK_TERMINAL' }
+    if (task.phase !== 'returning-home' || !task.passengers.confirmedOnboard) return { allowed: false, errorCode: 'INVALID_TASK_PHASE' }
+    if (task.flight?.status === 'cancelled') return { allowed: false, errorCode: 'FLIGHT_CANCELLED' }
     return { allowed: true }
   }
 }
@@ -140,6 +148,7 @@ export class EffectExecutor {
     preferences: { homeDestinationId?: string; temperatureC?: number; mediaTitle?: string; mediaMemberId?: string }
     idempotencyKey: string
     effectIdPrefix: string
+    completed?: { route: boolean; cabin: boolean; media: boolean }
   }): ReturnTripExecution {
     const effects: EffectRecord[] = []
     const navigation = { routeId: '', destination: '', eta: '' }
@@ -148,14 +157,15 @@ export class EffectExecutor {
       effect: [...effects, { effectId: `${input.effectIdPrefix}:${effects.length}`, type, status: 'failed', tool: type, errorCode }],
       ...(navigation.routeId ? { navigation } : {}),
     })
-    if (input.task.phase !== 'returning-home' || input.task.passengers.confirmedOnboard === false) {
-      return failed('return-trip', 'POLICY_DENIED')
-    }
+    const policy = this.#policy.authorizeReturnTrip(input.task)
+    if (!policy.allowed) return failed('return-trip', policy.errorCode)
     const destinationId = input.preferences.homeDestinationId
-    if (!destinationId) return failed('navigation.update-route', 'PREFERENCE_UNAVAILABLE')
+    if (!destinationId && !(input.completed?.route === true)) return failed('navigation.update-route', 'PREFERENCE_UNAVAILABLE')
 
     const providerRequestId = `${input.task.taskId}:return-trip:${input.idempotencyKey}`
-    const plan = this.#callProvider(
+    const plan = input.completed?.route
+      ? { succeeded: true as const, data: { routeId: input.task.navigation?.routeId ?? '', distanceKm: 0, durationMinutes: 0, arrivalTime: input.task.navigation?.eta ?? input.task.updatedAt, estimatedBatteryAtArrival: 0 } }
+      : this.#callProvider(
       input.task.taskId,
       'navigation.plan-route',
       `${providerRequestId}:plan`,
@@ -164,10 +174,12 @@ export class EffectExecutor {
         { origin: { latitude: 31.23, longitude: 121.47 }, destination: { id: destinationId, name: '家' } },
       ),
       toolResultSchema(routePlanOutputSchema),
-    )
+      )
     if (!plan.succeeded) return failed('navigation.update-route', plan.errorCode)
     const route = plan.data
-    const update = this.#callProvider(
+    const update = input.completed?.route
+      ? { succeeded: true as const, data: { navigationId: '', routeId: route.routeId, destination: '家', status: 'active' as const } }
+      : this.#callProvider(
       input.task.taskId,
       'navigation.update-route',
       `${providerRequestId}:update`,
@@ -176,14 +188,17 @@ export class EffectExecutor {
         { routeId: route.routeId, destination: { id: destinationId, name: '家' }, idempotencyKey: `${input.idempotencyKey}:route` },
       ),
       toolResultSchema(navigationUpdateRouteOutputSchema),
-    )
+        )
     if (!update.succeeded) return failed('navigation.update-route', update.errorCode)
+    if (!input.completed?.route && (update.data.routeId !== route.routeId || update.data.destination !== '家' || update.data.status !== 'active')) {
+      return failed('navigation.update-route', 'PROVIDER_FAILED')
+    }
     navigation.routeId = route.routeId
     navigation.destination = '家'
     navigation.eta = route.arrivalTime
-    effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'navigation.update-route', status: 'succeeded', tool: 'navigation.update-route' })
+    if (!input.completed?.route) effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'navigation.update-route', status: 'succeeded', tool: 'navigation.update-route' })
 
-    if (input.preferences.temperatureC !== undefined || input.preferences.mediaTitle !== undefined) {
+    if (!input.completed?.cabin && (input.preferences.temperatureC !== undefined || input.preferences.mediaTitle !== undefined)) {
       const cabin = this.#callProvider(
         input.task.taskId,
         'vehicle.apply-cabin-profile',
@@ -201,10 +216,17 @@ export class EffectExecutor {
         toolResultSchema(applyCabinProfileOutputSchema),
       )
       if (!cabin.succeeded) return failed('vehicle.apply-cabin-profile', cabin.errorCode)
+      if (
+        !cabin.data.applied
+        || (input.preferences.temperatureC !== undefined && cabin.data.current.temperatureC !== input.preferences.temperatureC)
+        || (input.preferences.mediaTitle !== undefined && cabin.data.current.mediaTitle !== input.preferences.mediaTitle)
+      ) {
+        return failed('vehicle.apply-cabin-profile', 'PROVIDER_FAILED')
+      }
       effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' })
     }
 
-    if (input.preferences.mediaTitle !== undefined && input.preferences.mediaMemberId !== undefined) {
+    if (!input.completed?.media && input.preferences.mediaTitle !== undefined && input.preferences.mediaMemberId !== undefined) {
       const media = this.#callProvider(
         input.task.taskId,
         'media.play',
@@ -216,6 +238,9 @@ export class EffectExecutor {
         toolResultSchema(mediaPlayOutputSchema),
       )
       if (!media.succeeded) return failed('media.play', media.errorCode)
+      if (media.data.title !== input.preferences.mediaTitle || media.data.status !== 'playing') {
+        return failed('media.play', 'PROVIDER_FAILED')
+      }
       effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'media.play', status: 'succeeded', tool: 'media.play' })
     }
 

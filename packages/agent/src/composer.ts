@@ -72,6 +72,10 @@ export function composeAgentSpec(
     title = '返程回家'
     density = 'compact'
     components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }]
+    if (task.returnTrip && [task.returnTrip.route, task.returnTrip.cabin, task.returnTrip.media].some((effect) => effect.status === 'failed')) {
+      components = [{ ...components[0], actions: ['retry-return-trip'] }]
+      actions = [{ id: 'retry-return-trip', label: '重试返程设置', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-return-trip` } }]
+    }
   } else if (task.message.status === 'scheduled') {
     title = '落地通知'
     density = 'minimal'

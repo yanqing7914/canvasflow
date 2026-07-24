@@ -225,7 +225,7 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       return { error: new ReadToolOrchestrationError('PROVIDER_FAILED', `${tool} returned an invalid result envelope`, false) }
     }
     const result = parsed.data
-    if (result.meta.taskId !== taskId || result.meta.tool !== tool) {
+    if (result.meta.taskId !== taskId || result.meta.tool !== tool || result.meta.requestId !== `${requestId}:${tool}`) {
       return { error: new ReadToolOrchestrationError('PROVIDER_FAILED', `${tool} returned mismatched result metadata`, false) }
     }
     if (!result.ok || result.data === null || result.error !== null) {

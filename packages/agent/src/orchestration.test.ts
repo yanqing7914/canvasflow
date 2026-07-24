@@ -9,13 +9,13 @@ function createMutableRegistry(): MutableProviderRegistry {
   return { ...createProviderRegistry() }
 }
 
-function successfulResult<T>(tool: string, data: T): ToolResult<T> {
+function successfulResult<T>(tool: string, data: T, requestId = `request:${tool}`): ToolResult<T> {
   return {
     ok: true,
     data,
     error: null,
     meta: {
-      requestId: `request:${tool}`,
+      requestId,
       taskId: 'pickup-001',
       tool,
       provider: 'fixture',
@@ -66,21 +66,21 @@ describe('ReadToolOrchestrator', () => {
 
   it('authorizes notification when a later contactable member has valid authorization', () => {
     const registry = createMutableRegistry()
-    registry['family.resolve-members'] = () => successfulResult('family.resolve-members', {
+    registry['family.resolve-members'] = (ctx) => successfulResult('family.resolve-members', {
       members: [
         { memberId: 'doubao', displayName: '豆豆' },
         { memberId: 'mom', displayName: '妈妈', contactId: 'contact-mom' },
       ],
       unresolvedLabels: [],
-    })
-    registry['memory.get-preferences'] = (_ctx: ToolContext, input?: unknown) => {
+    }, ctx.requestId)
+    registry['memory.get-preferences'] = (ctx: ToolContext, input?: unknown) => {
       expect(input).toEqual({ memberIds: ['doubao', 'mom'], scopes: ['notification'] })
       return successfulResult<GetPreferencesOutput>('memory.get-preferences', {
         members: [
           { memberId: 'doubao', landingNotificationAuthorized: false },
           { memberId: 'mom', landingNotificationAuthorized: true },
         ],
-      })
+      }, ctx.requestId)
     }
 
     expect(new ReadToolOrchestrator({ registry }).resolveInitialPassengers(
@@ -92,9 +92,9 @@ describe('ReadToolOrchestrator', () => {
 
   it('does not authorize notification for an authorized member without a contact id', () => {
     const registry = createMutableRegistry()
-    registry['memory.get-preferences'] = () => successfulResult<GetPreferencesOutput>('memory.get-preferences', {
+    registry['memory.get-preferences'] = (ctx) => successfulResult<GetPreferencesOutput>('memory.get-preferences', {
       members: [{ memberId: 'doubao', landingNotificationAuthorized: true }],
-    })
+    }, ctx.requestId)
 
     expect(new ReadToolOrchestrator({ registry }).resolveInitialPassengers(
       'pickup-001',
@@ -107,7 +107,7 @@ describe('ReadToolOrchestrator', () => {
     const registry = createMutableRegistry()
     const success = registry['flight.get-status']
     registry['flight.get-status'] = vi.fn()
-      .mockReturnValueOnce({
+      .mockImplementationOnce((ctx) => ({
         ...successfulResult<FlightStatusOutput>('flight.get-status', {
           flightNumber: 'MU5102',
           status: 'scheduled',
@@ -119,7 +119,8 @@ describe('ReadToolOrchestrator', () => {
         ok: false,
         data: null,
         error: { code: 'PROVIDER_TIMEOUT', message: 'temporary timeout', retryable: true },
-      })
+        meta: { ...successfulResult<FlightStatusOutput>('flight.get-status', { flightNumber: 'MU5102', status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', sourceUpdatedAt: '2026-07-22T12:00:00+08:00' }).meta, requestId: ctx.requestId },
+      }))
       .mockImplementation(success)
 
     expect(new ReadToolOrchestrator({ registry }).prepareTrip('pickup-001', 'event-001', 'MU5102').flight.flightNumber)
@@ -134,7 +135,7 @@ describe('ReadToolOrchestrator', () => {
       data: null,
       error: { code: 'PROVIDER_TIMEOUT', message: 'route timeout', retryable: true },
       meta: {
-        requestId: 'request:navigation.plan-route', taskId: 'pickup-001', tool: 'navigation.plan-route',
+        requestId: 'event-001:navigation.plan-route', taskId: 'pickup-001', tool: 'navigation.plan-route',
         provider: 'fixture' as const, durationMs: 1, generatedAt: '2026-07-22T12:00:00+08:00',
       },
     }
