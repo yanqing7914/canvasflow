@@ -1,10 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import { composeAgentSpec } from './composer'
 import { applyEvent, createInitialTask } from './index'
+import { ReadToolOrchestrator } from './orchestration'
 
 const timestamp = '2026-07-22T20:00:00+08:00'
 
 describe('Agent UISpec composer', () => {
+  it('combines provider-backed flight, route, and charging cards while preparing', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    expect(composeAgentSpec(task, reads.toolResults).components.map((component) => component.type)).toEqual([
+      'flight-status', 'navigation-summary', 'charging-recommendation',
+    ])
+  })
+
   it('projects a scheduled landing notification into a cancellable message preview', () => {
     const task = {
       ...createInitialTask('pickup-001', timestamp),

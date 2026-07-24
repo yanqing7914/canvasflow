@@ -10,6 +10,7 @@ export * from './effects'
 export * from './flight-number'
 export * from './composer'
 export * from './gateway'
+export * from './orchestration'
 export * from './planner'
 export * from './store'
 
@@ -64,7 +65,12 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'navigation.started':
       if (next.phase === 'preparing') {
         next.phase = 'driving-to-airport'
-        next.navigation = { routeId: event.routeId, destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' }
+        next.navigation = {
+          routeId: event.routeId,
+          destination: next.navigation?.destination ?? '虹桥机场 T2',
+          eta: next.navigation?.eta ?? '2026-07-22T20:25:00+08:00',
+          status: 'active',
+        }
       }
       break
     case 'vehicle.entered-airport-geofence': if (next.phase === 'driving-to-airport') next.phase = 'approaching-airport'; break
