@@ -75,7 +75,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
     }
     const effectId = `${ctx.taskId}:cabin:${parsed.data.idempotencyKey}`
     runtime.cabinCurrent = current
-    runtime.cabinEffects.set(effectId, { effectId, previous, current, reverted: false })
+    runtime.cabinEffects.set(effectId, { effectId, taskId: ctx.taskId, previous, current, reverted: false })
 
     const result = okResult(
       ctx,
@@ -107,6 +107,11 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
     const effect = runtime.cabinEffects.get(parsed.data.effectId)
     if (!effect) {
       return errorResult(ctx, REVERT, 'APPLY_FAILED', `未知座舱效果：${parsed.data.effectId}`, false)
+    }
+
+    // effectId embedding the task id is not authorization; enforce ownership explicitly.
+    if (effect.taskId !== ctx.taskId) {
+      return errorResult(ctx, REVERT, 'POLICY_DENIED', `座舱效果不属于当前任务：${parsed.data.effectId}`, false)
     }
 
     // 只允许撤销仍然生效的效果：若座舱状态已被后续 apply 覆盖，
