@@ -32,6 +32,33 @@ describe('Agent UISpec composer', () => {
     })
   })
 
+  it('keeps original scheduledArrival separate from delayed estimatedArrival', () => {
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: {
+        flightNumber: 'MU5102',
+        status: 'delayed' as const,
+        scheduledArrival: '2026-07-22T20:30:00+08:00',
+        estimatedArrival: '2026-07-22T21:10:00+08:00',
+        terminal: 'T1',
+      },
+    }
+
+    expect(composeAgentSpec(task)).toMatchObject({
+      components: [{
+        type: 'flight-status',
+        props: {
+          status: 'delayed',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: '2026-07-22T21:10:00+08:00',
+          terminal: 'T1',
+        },
+      }],
+    })
+  })
+
   it('does not retain a landing notification after task cancellation', () => {
     const scheduled = {
       ...createInitialTask('pickup-001', timestamp),

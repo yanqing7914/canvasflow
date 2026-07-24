@@ -177,6 +177,7 @@ describe('fixture toolResults contract', () => {
       flightNumber: 'MU5102',
       status: 'delayed',
       terminal: 'T1',
+      scheduledArrival: '2026-07-22T20:30:00+08:00',
       estimatedArrival: '2026-07-22T21:10:00+08:00',
     })
     expect(toolData('flight-cancelled', 'flight.get-status')).toMatchObject({ flightNumber: 'MU5102', status: 'cancelled' })

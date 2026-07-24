@@ -20,7 +20,7 @@ function drivingState(overrides: Partial<AirportPickupTaskState> = {}): AirportP
     uiRevision: 3,
     phase: 'driving-to-airport',
     passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-    flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+    flight: { flightNumber: 'MU5102', status: 'in-air', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
     navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
     charging: { recommended: false, accepted: false, status: 'none' },
     message: { autoNotifyAuthorized: true, status: 'idle', landingNoticeSent: false },
@@ -34,7 +34,7 @@ function landedEvent(eventId: string, timestamp: string): AirportPickupEvent {
   return {
     eventId,
     type: 'flight.updated',
-    flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+    flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
     timestamp,
   }
 }
@@ -348,23 +348,33 @@ describe('航班延误 / 取消：不触发落地通知，状态可投影', () =
       navigation: undefined,
       taskRevision: 1,
       uiRevision: 1,
-      flight: { flightNumber: 'MU5102', status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      flight: { flightNumber: 'MU5102', status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
       updatedAt: '2026-07-22T20:01:00+08:00',
     })
     const delayedEvent: AirportPickupEvent = {
       eventId: 'delayed-1',
       type: 'flight.updated',
-      flight: { flightNumber: 'MU5102', status: 'delayed', estimatedArrival: '2026-07-22T21:10:00+08:00', terminal: 'T1' },
+      flight: { flightNumber: 'MU5102', status: 'delayed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T21:10:00+08:00', terminal: 'T1' },
       timestamp: '2026-07-22T20:15:00+08:00',
     }
     expect(planEffects(preparing, delayedEvent, {})).toEqual([])
     const delayed = applyEvent(preparing, delayedEvent)
     expect(delayed.flight).toEqual(delayedEvent.flight)
+    expect(delayed.flight).toMatchObject({
+      status: 'delayed',
+      scheduledArrival: '2026-07-22T20:30:00+08:00',
+      estimatedArrival: '2026-07-22T21:10:00+08:00',
+    })
     expect(delayed.message).toMatchObject({ status: 'idle', landingNoticeSent: false })
     expect(composePickupSpec(delayed).components).toEqual([
       expect.objectContaining({
         type: 'flight-status',
-        props: expect.objectContaining({ status: 'delayed', terminal: 'T1' }),
+        props: expect.objectContaining({
+          status: 'delayed',
+          terminal: 'T1',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: '2026-07-22T21:10:00+08:00',
+        }),
       }),
     ])
   })
@@ -381,7 +391,7 @@ describe('航班延误 / 取消：不触发落地通知，状态可投影', () =
     const cancelledEvent: AirportPickupEvent = {
       eventId: 'cancelled-1',
       type: 'flight.updated',
-      flight: { flightNumber: 'MU5102', status: 'cancelled', estimatedArrival: '2026-07-22T20:30:00+08:00', terminal: 'T2' },
+      flight: { flightNumber: 'MU5102', status: 'cancelled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:30:00+08:00', terminal: 'T2' },
       timestamp: '2026-07-22T20:08:00+08:00',
     }
     expect(planEffects(preparing, cancelledEvent, {})).toEqual([])
@@ -397,7 +407,7 @@ describe('航班延误 / 取消：不触发落地通知，状态可投影', () =
 describe('message.cancelled：用户取消后本次落地不再自动调度', () => {
   it('message.status=cancelled 时后续落地推送不再计划发送', () => {
     const cancelledNotice = drivingState({
-      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
       message: {
         autoNotifyAuthorized: true,
         status: 'cancelled',

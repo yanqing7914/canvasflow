@@ -58,7 +58,7 @@ describe('airport pickup Planner', () => {
   it('proposes a navigation event without applying it', () => {
     const state = createInitialTask('pickup-001', timestamp)
     state.passengers = { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false }
-    state.flight = { flightNumber: 'MU5102', status: 'scheduled', estimatedArrival: timestamp, terminal: 'T2' }
+    state.flight = { flightNumber: 'MU5102', status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: timestamp, terminal: 'T2' }
 
     const plan = new Planner().plan({ text: '开始导航', state, eventId: 'nav-1', routeId: 'route-airport-001' })
 

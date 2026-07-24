@@ -50,7 +50,7 @@ export function applyEvent(
       {
         const flightNumber = normalizeFlightNumber(event.text)
         handled = flightNumber !== undefined || /机场|接妈妈|接豆豆|补能|充电|座舱|偏好|温度|媒体/.test(event.text)
-        if (flightNumber) next.flight = { flightNumber, status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
+        if (flightNumber) next.flight = { flightNumber, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
       }
       if (/补能|充电/.test(event.text)) {
         const accepted = /先去(?:充电|补能)/.test(event.text)

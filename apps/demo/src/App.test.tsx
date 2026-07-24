@@ -22,7 +22,7 @@ describe('demo integration', () => {
       ...createInitialTask(),
       phase: 'approaching-airport',
       passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
       navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
     })
     expect(approaching.components[0]).toMatchObject({
@@ -34,7 +34,7 @@ describe('demo integration', () => {
       ...createInitialTask(),
       phase: 'waiting-for-passengers',
       passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
     })
     expect(waiting.components[0]).toMatchObject({
       type: 'passenger-status',
@@ -176,7 +176,7 @@ describe('demo integration', () => {
           ...createInitialTask(),
           phase: 'driving-to-airport',
           passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
           navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
           message: {
             autoNotifyAuthorized: true,
@@ -207,7 +207,7 @@ describe('demo integration', () => {
           ...createInitialTask(),
           phase: 'driving-to-airport',
           passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
-          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
           message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
           updatedAt: '2026-07-22T20:41:00+08:00',
         }}

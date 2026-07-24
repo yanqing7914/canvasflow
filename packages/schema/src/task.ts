@@ -14,6 +14,8 @@ export const airportPickupPhaseSchema = z.enum([
 export const flightStateSchema = z.object({
   flightNumber: z.string().min(1),
   status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
+  /** Original published schedule; must not be overwritten by delay ETAs. */
+  scheduledArrival: z.iso.datetime({ offset: true }),
   estimatedArrival: z.iso.datetime({ offset: true }),
   terminal: z.string().min(1),
   baggageClaim: z.string().optional(),

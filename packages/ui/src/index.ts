@@ -121,7 +121,7 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   else if (task.flight && (task.flight.status === 'cancelled' || task.flight.status === 'delayed')) {
     // Exception flight states outrank a pending charging recommendation.
     density = 'compact'
-    components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }]
+    components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }]
   }
   else if (task.charging.recommended && task.charging.status === 'planned' && task.phase === 'preparing') {
     density = chargingDensityFromContext(context)
@@ -139,7 +139,7 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
       },
     }]
   }
-  else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }] }
+  else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }] }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,
     phase: task.phase, title, presentation: { mode: 'replace', density, theme: 'dark', priority },

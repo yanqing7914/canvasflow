@@ -15,7 +15,7 @@ const demoRegistry = createProviderRegistry(demoRuntime)
 
 const timeline: AirportPickupEvent[] = [
   { eventId: 'start-navigation', type: 'navigation.started', routeId: 'route-airport-001', timestamp: '2026-07-22T20:05:00+08:00' },
-  { eventId: 'flight-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' },
+  { eventId: 'flight-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' },
   { eventId: 'airport-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T20:41:00+08:00' },
   { eventId: 'vehicle-parked', type: 'vehicle.parked', timestamp: '2026-07-22T20:45:00+08:00' },
   { eventId: 'passengers-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T20:55:00+08:00' },
@@ -26,7 +26,7 @@ function createDemoTask(): AirportPickupTaskState {
   return {
     ...createInitialTask(),
     passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-    flight: { flightNumber: 'MU5102', status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+    flight: { flightNumber: 'MU5102', status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
     phase: 'preparing',
     taskRevision: 1,
   }
