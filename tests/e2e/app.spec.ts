@@ -1,18 +1,19 @@
 import { expect, test } from '@playwright/test'
 
-test('renders the fixture task card and advances the phase', async ({ page }) => {
+test('creates a task through Agent API and advances to airport navigation', async ({ page }) => {
   await page.goto('/')
 
   await expect(page.getByRole('heading', { name: '机场接人任务卡片' })).toBeVisible()
 
+  await page.getByRole('button', { name: '发送' }).click()
   const console = page.getByRole('region', { name: 'Event console' })
-  // Demo player starts from the shared main-flow timeline.
   await expect(console).toContainText('collecting-information')
 
-  // task-created → flight-number → charging-recommended → route-airport
-  for (let step = 0; step < 4; step += 1) {
-    await page.getByRole('button', { name: '推进下一事件' }).click()
-  }
+  await page.getByLabel('任务输入').fill('MU5102')
+  await page.getByRole('button', { name: '发送' }).click()
+  await expect(console).toContainText('preparing')
+  await page.getByRole('button', { name: '开始导航' }).click()
 
   await expect(console).toContainText('driving-to-airport')
+  await expect(page.getByLabel('Effect receipts')).toContainText('navigation.start:succeeded')
 })
