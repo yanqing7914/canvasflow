@@ -6,6 +6,7 @@ on:
       - opened
       - synchronize
       - reopened
+      - ready_for_review
   workflow_dispatch:
     inputs:
       pr_number:
@@ -241,21 +242,29 @@ jobs:
               await new Promise((resolve) => setTimeout(resolve, pollMs))
             }
 
+            let mergeFailure
             try {
               // Passing sha makes GitHub reject the merge if the head moved
               // between our last look and the merge call.
-              await github.rest.pulls.merge({
+              const { data: mergeResult } = await github.rest.pulls.merge({
                 ...repo,
                 pull_number: prNumber,
                 merge_method: 'squash',
                 sha: reviewedSha,
               })
+              // The endpoint can report a non-merge in a 200 response.
+              if (!mergeResult.merged) {
+                mergeFailure = mergeResult.message ?? 'GitHub reported the PR as not merged.'
+              }
             } catch (error) {
-              core.setFailed(`Auto-merge failed: ${error.message}`)
+              mergeFailure = error.message
+            }
+            if (mergeFailure) {
+              core.setFailed(`Auto-merge failed: ${mergeFailure}`)
               await github.rest.issues.createComment({
                 ...repo,
                 issue_number: prNumber,
-                body: `Auto-merge failed even though CI and the Codex review passed: ${error.message}\n\nResolve the problem (for example a merge conflict) and push again, or merge manually.`,
+                body: `Auto-merge failed even though CI and the Codex review passed: ${mergeFailure}\n\nResolve the problem (for example a merge conflict) and push again, or merge manually.`,
               })
               return
             }
