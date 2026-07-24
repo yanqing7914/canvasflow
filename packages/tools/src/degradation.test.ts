@@ -38,6 +38,25 @@ function landedEvent(eventId: string, timestamp: string): AirportPickupEvent {
   }
 }
 
+describe('无授权落地联系人：不进入 scheduled 死胡同', () => {
+  it('乘客均未授权时不计划发送，状态保持 idle，UI 不展示落地通知卡片', () => {
+    const state = drivingState({
+      passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
+    })
+    const landed = landedEvent('landed-unauthorized', '2026-07-22T20:40:00+08:00')
+    expect(planEffects(state, landed, {})).toEqual([])
+    const next = applyEvent(state, landed)
+    expect(next.flight?.status).toBe('landed')
+    expect(next.message.status).toBe('idle')
+    expect(next.message.pendingContactId).toBeUndefined()
+    expect(next.message.pendingMessageId).toBeUndefined()
+    const spec = composePickupSpec(next)
+    expect(spec.title).not.toBe('落地通知')
+    expect(spec.components.some((component) => component.type === 'message-preview')).toBe(false)
+    expect(spec.actions).toEqual([])
+  })
+})
+
 describe('重复航班落地事件：消息重复发送率 0%', () => {
   it('同一事件重放和后续重复落地推送都不再计划或发送消息', () => {
     const registry = createProviderRegistry(createSideEffectRuntime())

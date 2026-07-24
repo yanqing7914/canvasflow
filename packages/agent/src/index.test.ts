@@ -29,7 +29,11 @@ describe('airport pickup task engine', () => {
   it('schedules a landing notification only once across provider updates', () => {
     const first = { eventId: 'landed-1', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' }
     const second = { ...first, eventId: 'landed-2', timestamp: '2026-07-22T20:41:00+08:00' }
-    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const }
+    const state = {
+      ...createInitialTask(),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+    }
     expect(planEffects(state, first, {})).toHaveLength(1)
     const scheduled = applyEvent(state, first)
     expect(planEffects(scheduled, second, {})).toEqual([])
@@ -168,20 +172,21 @@ describe('airport pickup task engine', () => {
     })
     expect(landed.message.pendingContactId).toBe('contact-mom')
 
-    const unauthorizedOnly = applyEvent(
-      {
-        ...driving,
-        passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
-      },
-      {
-        eventId: 'landed-no-auth-contact',
-        type: 'flight.updated',
-        flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
-        timestamp: '2026-07-22T20:40:00+08:00',
-      },
-    )
-    expect(unauthorizedOnly.message.status).toBe('scheduled')
+    const unauthorizedPassengers = {
+      ...driving,
+      passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
+    }
+    const unauthorizedLandedEvent = {
+      eventId: 'landed-no-auth-contact',
+      type: 'flight.updated' as const,
+      flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      timestamp: '2026-07-22T20:40:00+08:00',
+    }
+    expect(planEffects(unauthorizedPassengers, unauthorizedLandedEvent, {})).toEqual([])
+    const unauthorizedOnly = applyEvent(unauthorizedPassengers, unauthorizedLandedEvent)
+    expect(unauthorizedOnly.message.status).toBe('idle')
     expect(unauthorizedOnly.message.pendingContactId).toBeUndefined()
+    expect(unauthorizedOnly.message.pendingMessageId).toBeUndefined()
 
     // mom unauthorized + dad authorized → agent retains dad, not a hard-coded mom contact.
     const momWasAuthorized = memberPreferences.mom.landingNotificationAuthorized

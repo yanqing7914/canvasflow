@@ -67,10 +67,20 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
   }),
   componentBase.extend({
     type: z.literal('cabin-profile'),
-    props: z.object({
-      zone: z.literal('rear'), temperatureC: z.number().optional(), fanLevel: z.number().optional(), mediaTitle: z.string().optional(),
-      appliedFromMemory: z.boolean(), reversible: z.boolean(),
-    }),
+    props: z
+      .object({
+        zone: z.literal('rear'),
+        temperatureC: z.number().optional(),
+        fanLevel: z.number().optional(),
+        mediaTitle: z.string().optional(),
+        appliedFromMemory: z.boolean(),
+        reversible: z.boolean(),
+      })
+      .refine(
+        (props) =>
+          props.temperatureC !== undefined || props.fanLevel !== undefined || props.mediaTitle !== undefined,
+        { message: 'cabin-profile requires at least one of temperatureC, fanLevel, or mediaTitle' },
+      ),
   }),
   componentBase.extend({
     type: z.literal('task-progress'),
