@@ -188,12 +188,19 @@ jobs:
 
             const repo = { owner: context.repo.owner, repo: context.repo.repo }
 
-            const latestCheckStates = async () => {
-              const checkRuns = await github.paginate(github.rest.checks.listForRef, {
-                ...repo,
-                ref: reviewedSha,
-                per_page: 100,
-              })
+            // Check runs for pull_request workflows are normally associated
+            // with the PR head SHA, but look at the synthetic merge commit
+            // too so the lookup is robust to either association.
+            const latestCheckStates = async (mergeSha) => {
+              const refs = [...new Set([reviewedSha, mergeSha].filter(Boolean))]
+              const checkRuns = []
+              for (const ref of refs) {
+                checkRuns.push(...await github.paginate(github.rest.checks.listForRef, {
+                  ...repo,
+                  ref,
+                  per_page: 100,
+                }))
+              }
               const states = {}
               for (const name of requiredChecks) {
                 const runs = checkRuns
@@ -218,7 +225,7 @@ jobs:
                 return
               }
 
-              const states = await latestCheckStates()
+              const states = await latestCheckStates(pullRequest.merge_commit_sha)
               const failed = requiredChecks.filter((name) => {
                 const run = states[name]
                 return run && run.status === 'completed' && run.conclusion !== 'success'
