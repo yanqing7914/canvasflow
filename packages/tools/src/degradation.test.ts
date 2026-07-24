@@ -4,7 +4,7 @@ import { applyEvent, planEffects } from '@canvasflow/agent'
 import { composeFallbackSpec, composePickupSpec } from '@canvasflow/ui'
 import { getFlightStatus } from './flight'
 import { planRoute } from './navigation'
-import { autoNotifyAuthorizationId, FAILING_CONTACT_ID, issueSendMessageConfirmation, prepareMessage } from './message'
+import { FAILING_CONTACT_ID, issueAutoNotifyAuthorization, issueSendMessageConfirmation, prepareMessage } from './message'
 import { createSideEffectRuntime } from './idempotency'
 import { createProviderRegistry } from './registry'
 import type { ToolContext } from './result'
@@ -59,12 +59,13 @@ describe('无授权落地联系人：不进入 scheduled 死胡同', () => {
 
 describe('重复航班落地事件：消息重复发送率 0%', () => {
   it('同一事件重放和后续重复落地推送都不再计划或发送消息', () => {
-    const registry = createProviderRegistry(createSideEffectRuntime())
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
     const state = drivingState()
     const first = landedEvent('landed-1', '2026-07-22T20:40:00+08:00')
 
-    expect(planEffects(state, first, {})).toEqual([{ type: 'message.send', status: 'planned', tool: 'message.send' }])
-    const scheduled = applyEvent(state, first)
+    expect(planEffects(state, first, {}, runtime.preferences)).toEqual([{ type: 'message.send', status: 'planned', tool: 'message.send' }])
+    const scheduled = applyEvent(state, first, runtime.preferences)
     expect(scheduled.message).toMatchObject({
       status: 'scheduled',
       idempotencyKey: 'pickup-001:MU5102:landing',
@@ -91,7 +92,7 @@ describe('重复航班落地事件：消息重复发送率 0%', () => {
       contactId: prepared.data!.contactId,
       messageId: prepared.data!.messageId,
       text: prepared.data!.text,
-      authorizationId: autoNotifyAuthorizationId(scheduled.taskId),
+      authorizationId: issueAutoNotifyAuthorization(runtime, scheduled.taskId),
       idempotencyKey: scheduled.message.idempotencyKey!,
     }
     const firstSend = registry['message.send'](ctx, sendInput)

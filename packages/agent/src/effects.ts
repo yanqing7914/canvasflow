@@ -1,9 +1,14 @@
 import type { AirportPickupEvent, AirportPickupTaskState } from '@canvasflow/schema'
-import { resolveAuthorizedLandingContact } from '@canvasflow/tools'
+import { memberPreferences, resolveAuthorizedLandingContact, type MemberPreferenceRecord } from '@canvasflow/tools'
 
 export type PlannedEffect = { type: string; status: 'planned' | 'pending-confirmation' | 'succeeded' | 'failed' | 'cancelled'; tool?: string }
 
-export function planEffects(state: AirportPickupTaskState, event: AirportPickupEvent, toolResults: Record<string, unknown>): PlannedEffect[] {
+export function planEffects(
+  state: AirportPickupTaskState,
+  event: AirportPickupEvent,
+  toolResults: Record<string, unknown>,
+  preferences: Record<string, MemberPreferenceRecord> = memberPreferences,
+): PlannedEffect[] {
   if (state.processedEventIds.includes(event.eventId)) return []
   if (state.phase === 'completed' || state.phase === 'cancelled') return []
   if (Date.parse(event.timestamp) < Date.parse(state.updatedAt)) return []
@@ -16,12 +21,12 @@ export function planEffects(state: AirportPickupTaskState, event: AirportPickupE
     state.message.autoNotifyAuthorized &&
     !state.message.landingNoticeSent &&
     state.message.status === 'idle' &&
-    resolveAuthorizedLandingContact(state.passengers.memberIds)
+    resolveAuthorizedLandingContact(state.passengers.memberIds, preferences)
   ) {
     return [{ type: 'message.send', status: 'planned', tool: 'message.send' }]
   }
-  const preferences = toolResults['memory.get-preferences']
-  if (event.type === 'user.input' && state.phase === 'returning-home' && /座舱|偏好|温度|媒体/.test(event.text) && isSuccessfulPreferences(preferences)) return [{ type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' }]
+  const preferencesResult = toolResults['memory.get-preferences']
+  if (event.type === 'user.input' && state.phase === 'returning-home' && /座舱|偏好|温度|媒体/.test(event.text) && isSuccessfulPreferences(preferencesResult)) return [{ type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' }]
   if (event.type === 'user.confirmed-passengers-onboard' && state.phase === 'waiting-for-passengers') return [{ type: 'navigation.update-route', status: 'succeeded', tool: 'navigation.update-route' }]
   if (event.type === 'destination.arrived' && state.phase === 'returning-home') return [{ type: 'memory.propose-update', status: 'pending-confirmation', tool: 'memory.propose-update' }]
   return []

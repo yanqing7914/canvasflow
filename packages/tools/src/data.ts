@@ -160,3 +160,13 @@ export const chargingStation = {
 
 /** Fixture catalog of route IDs. Activation still requires a task-scoped plan. */
 export const knownRouteIds = new Set(Object.values(routes).map((route) => route.routeId))
+
+/** Known media titles accepted by cabin/memory/media side effects. */
+export const knownMediaTitles = new Set(['豆豆故事', '轻音乐'])
+
+/** Destination / waypoint IDs used by demo routes and preference updates. */
+export const knownDestinationIds = new Set([
+  'destination-home',
+  'destination-hongqiao-t2',
+  'station-hongqiao-01',
+])

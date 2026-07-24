@@ -79,7 +79,7 @@ export default function App({
   const spec = useMemo(() => composePickupSpec(task, composeContext), [task, composeContext])
   const advance = () => {
     const candidate = timeline
-      .map((event) => ({ event, next: applyEvent(task, event) }))
+      .map((event) => ({ event, next: applyEvent(task, event, demoRuntime.preferences) }))
       .find(({ event, next }) => !task.processedEventIds.includes(event.eventId) && next.processedEventIds.includes(event.eventId))
     if (candidate) setTask(candidate.next)
   }
@@ -91,8 +91,8 @@ export default function App({
     if (actionId === 'retry-landing-message') {
       setTask((current) => {
         if (current.message.status !== 'failed' || !current.flight) return current
-        // Always re-resolve from authorization prefs; do not trust a stale pendingContactId.
-        const contactId = resolveAuthorizedLandingContact(current.passengers.memberIds)
+        // Always re-resolve from runtime prefs; do not trust a stale pendingContactId.
+        const contactId = resolveAuthorizedLandingContact(current.passengers.memberIds, demoRuntime.preferences)
         if (!contactId) return current
         const ctx = { taskId: current.taskId }
         const prepared = prepareMessage(ctx, {
@@ -170,14 +170,14 @@ export default function App({
             messageId: pendingMessageId,
             errorCode: sent.error?.code ?? 'SEND_FAILED',
             timestamp: '2026-07-22T20:42:00+08:00',
-          })
+          }, demoRuntime.preferences)
         }
         return applyEvent(armed, {
           eventId: `retry-sent-${current.taskRevision}`,
           type: 'message.sent',
           messageId: pendingMessageId,
           timestamp: '2026-07-22T20:42:00+08:00',
-        })
+        }, demoRuntime.preferences)
       })
     }
   }
