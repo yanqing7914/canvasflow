@@ -269,7 +269,7 @@ describe('AgentGateway', () => {
     expect(fallback.task).toMatchObject({
       phase: 'preparing',
       passengers: { memberIds: ['mom'], names: ['妈妈'] },
-      flight: { flightNumber: 'MU5102' },
+      flight: { flightNumber: 'MU5102', trusted: false },
       message: { autoNotifyAuthorized: false },
     })
     expect(fallback.assistant).toBeUndefined()
