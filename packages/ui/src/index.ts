@@ -1,4 +1,9 @@
 import { uiSpecSchema, type AirportPickupTaskState, type UISpec } from '@canvasflow/schema'
+import {
+  chargingStation,
+  chargingStationsForDensity,
+  recommendedMeetingPoints,
+} from '@canvasflow/tools'
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息', preparing: '准备出发', 'driving-to-airport': '前往机场',
@@ -92,8 +97,35 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     components = [{ id: 'cabin-profile', type: 'cabin-profile', props: cabinProps }]
   }
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
+  else if (task.phase === 'approaching-airport' || task.phase === 'waiting-for-passengers') {
+    density = 'compact'
+    const meeting = task.flight?.terminal ? recommendedMeetingPoints[task.flight.terminal] : undefined
+    components = [{
+      id: 'passenger-status',
+      type: 'passenger-status',
+      props: {
+        label: task.phase === 'waiting-for-passengers' ? '已停稳，等待家人' : '接近接机点',
+        status: task.phase === 'waiting-for-passengers' ? 'waiting' : 'landed',
+        ...(meeting ? { meetingPoint: meeting.name } : {}),
+      },
+    }]
+  }
   else if (task.navigation) { density = 'compact'; components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }] }
-  else if (task.charging.recommended && !task.flight) components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: true, reason: '完成往返后预计低于安全余量', currentBatteryPercent: 42, estimatedFinalBatteryPercent: 18, suggestedDurationMinutes: 10, etaImpactMinutes: 12 } }]
+  else if (task.charging.recommended && task.charging.status === 'planned' && task.phase === 'preparing') {
+    const stations = chargingStationsForDensity(density)
+    components = [{
+      id: 'charging-plan',
+      type: 'charging-recommendation',
+      props: {
+        recommended: true,
+        reason: `完成往返后预计低于安全余量（对比 ${stations.length} 站）`,
+        currentBatteryPercent: 42,
+        estimatedFinalBatteryPercent: 18,
+        suggestedDurationMinutes: chargingStation.suggestedDurationMinutes,
+        etaImpactMinutes: chargingStation.etaImpactMinutes,
+      },
+    }]
+  }
   else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }] }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,

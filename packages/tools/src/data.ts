@@ -148,9 +148,9 @@ export const DEFAULT_VEHICLE_SNAPSHOT: VehicleSnapshotName = 'parked'
  * `post-charge` mirrors the charging-completed fixture (78%), `airport-parked`
  * mirrors waiting-for-passengers (parked at the pickup point, rear empty),
  * `rear-occupied` mirrors passengers-onboard (51%, rear seats occupied).
- * The `low-battery-*` presets (battery < 20%) drive the charging branch demo:
- * parked shows the full 3-station comparison, city the compact 2-station view,
- * highway only the nearest station as a single primary action.
+ * The `low-battery-*` presets (battery < 20%) pair with
+ * {@link chargingStationsForDensity}: parked→full(3), city→compact(2),
+ * highway→minimal(1).
  */
 export const vehicleSnapshots: Record<VehicleSnapshotName, VehicleStatusOutput> = {
   parked: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: true, rearOccupied: false },
@@ -180,14 +180,23 @@ export type ChargingStationRecord = {
 /**
  * Comparison dataset for the low-battery charging branch, sorted by distance.
  * All stations are fictional. The first entry is the recommended station that
- * `charging.recommend` returns; UI density decides how many entries to show
- * (parked: all, city: 2, highway: nearest only).
+ * `charging.recommend` returns; {@link chargingStationsForDensity} projects how
+ * many entries the UI should surface for a density tier.
  */
 export const chargingStations: ChargingStationRecord[] = [
   { stationId: 'station-hongqiao-01', name: '虹桥枢纽超充站', distanceKm: 2.1, detourMinutes: 12, availableStalls: 6, totalStalls: 8, maxPowerKw: 250, pricePerKwhYuan: 1.6, open24h: true },
   { stationId: 'station-hongqiao-02', name: '申贵路快充站', distanceKm: 3.4, detourMinutes: 16, availableStalls: 2, totalStalls: 4, maxPowerKw: 120, pricePerKwhYuan: 1.3, open24h: true },
   { stationId: 'station-hongqiao-03', name: '北翟路充电站', distanceKm: 5.8, detourMinutes: 22, availableStalls: 4, totalStalls: 10, maxPowerKw: 90, pricePerKwhYuan: 1.1, open24h: false },
 ]
+
+/** Parked/full → 3 stations; city/compact → 2; highway/minimal → nearest only. */
+export function chargingStationsForDensity(
+  density: 'full' | 'compact' | 'minimal',
+): ChargingStationRecord[] {
+  if (density === 'full') return chargingStations.slice()
+  if (density === 'compact') return chargingStations.slice(0, 2)
+  return chargingStations.slice(0, 1)
+}
 
 export const chargingStation = {
   stationId: chargingStations[0].stationId,

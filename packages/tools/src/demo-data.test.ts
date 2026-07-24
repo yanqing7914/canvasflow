@@ -14,6 +14,7 @@ import { recommendCharging } from './charging'
 import {
   chargingStation,
   chargingStations,
+  chargingStationsForDensity,
   DEMO_ORIGIN,
   flights,
   knownRouteIds,
@@ -36,7 +37,7 @@ const timeline: DemoTimeline = demoTimelineSchema.parse(
   JSON.parse(readFileSync(resolve(process.cwd(), 'fixtures/airport-pickup/timelines/main-flow.json'), 'utf8')),
 )
 
-type ToolPatch = Partial<Pick<AirportPickupTaskState, 'passengers' | 'navigation'>>
+type ToolPatch = Partial<Pick<AirportPickupTaskState, 'passengers' | 'navigation' | 'charging'>>
 
 /**
  * Execute the tools declared on a timeline step against real fixture providers.
@@ -92,6 +93,12 @@ function executeStepTools(
         })
         expect(result.ok, `${step.event.eventId}:${tool}`).toBe(true)
         expect(result.data).toMatchObject({ recommended: true, stationId: chargingStations[0].stationId })
+        // Provider output must drive planner state — not only the “补能” text parse path.
+        patch.charging = {
+          recommended: result.data!.recommended,
+          accepted: false,
+          status: result.data!.recommended ? 'planned' : 'none',
+        }
         break
       }
       case 'navigation.plan-route': {
@@ -345,6 +352,16 @@ describe('charging comparison dataset', () => {
     })
     expect(result.ok).toBe(true)
     expect(result.data).toMatchObject({ recommended: true, stationId: chargingStations[0].stationId })
+  })
+
+  it('projects 3/2/1 stations for full/compact/minimal density', () => {
+    expect(chargingStationsForDensity('full').map((station) => station.stationId)).toEqual([
+      'station-hongqiao-01',
+      'station-hongqiao-02',
+      'station-hongqiao-03',
+    ])
+    expect(chargingStationsForDensity('compact')).toHaveLength(2)
+    expect(chargingStationsForDensity('minimal')).toEqual([chargingStations[0]])
   })
 })
 
