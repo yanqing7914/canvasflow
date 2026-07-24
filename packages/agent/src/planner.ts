@@ -1,5 +1,6 @@
 import type { AirportPickupEvent, AirportPickupTaskState } from '@canvasflow/schema'
 import { normalizeFlightNumber } from './flight-number'
+import { parsePassengers } from './passengers'
 
 export type PlannerIntent =
   | 'create-airport-pickup'
@@ -52,7 +53,7 @@ export function planAirportPickup(input: PlannerInput): Plan {
   const compactText = text.replace(/\s+/g, '')
   const state = input.state
   const flightNumber = normalizeFlightNumber(text)
-  const passengers = extractPassengers(text)
+  const passengers = parsePassengers(text)
   const eventBase = {
     eventId: input.eventId ?? `planner-${stableHash(compactText || 'empty')}`,
     timestamp: input.timestamp ?? state?.updatedAt ?? fallbackTimestamp,
@@ -113,7 +114,9 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
-  const isPickupRequest = /去机场接/.test(compactText) || /机场接(?:人|妈妈|豆豆)/.test(compactText)
+  const isPickupRequest = /去机场接/.test(compactText)
+    || /机场接(?:人|妈妈|爸爸|豆豆)/.test(compactText)
+    || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(compactText)
   if (isPickupRequest) {
     const missingSlots = pickupMissingSlots(state, passengers, flightNumber)
     return {
@@ -136,7 +139,10 @@ export function planAirportPickup(input: PlannerInput): Plan {
     return {
       intent: 'provide-flight-number',
       confidence: 0.99,
-      slotUpdates: { flightNumber },
+      slotUpdates: {
+        flightNumber,
+        ...(passengers ? { passengers } : {}),
+      },
       missingSlots,
       proposedEvents: [{ ...eventBase, type: 'user.input', text }],
       assistantText: missingSlots.includes('passengers')
@@ -152,16 +158,6 @@ export function planAirportPickup(input: PlannerInput): Plan {
     missingSlots: pickupMissingSlots(state, passengers, flightNumber),
     proposedEvents: [],
     assistantText: '我还不能确定你的接机安排，请换一种说法。',
-  }
-}
-
-function extractPassengers(text: string): AirportPickupTaskState['passengers'] | undefined {
-  const names = ['妈妈', '豆豆'].filter((name) => text.includes(name))
-  if (names.length === 0) return undefined
-  return {
-    memberIds: names.map((name) => name === '妈妈' ? 'mom' : 'doubao'),
-    names,
-    confirmedOnboard: false,
   }
 }
 

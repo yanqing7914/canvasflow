@@ -59,6 +59,47 @@ describe('AgentGateway', () => {
     expect(created.task.flight).toBeUndefined()
   })
 
+  it('fills passengers after a flight-first create request', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('航班 MU5102'))
+    expect(created.task.phase).toBe('collecting-information')
+
+    const updated = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-passenger',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'passenger-input', type: 'user.input', text: '接爸爸', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(updated.task).toMatchObject({
+      phase: 'preparing',
+      passengers: { memberIds: ['dad'], names: ['爸爸'] },
+      flight: { flightNumber: 'MU5102' },
+      navigation: { routeId: 'route-airport-001' },
+    })
+  })
+
+  it('fills passengers after a passenger-first create request', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接爸爸'))
+    expect(created.task).toMatchObject({ phase: 'collecting-information', passengers: { memberIds: ['dad'], names: ['爸爸'] } })
+
+    const updated = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'flight-input', type: 'user.input', text: '航班 MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(updated.task).toMatchObject({ phase: 'preparing', passengers: { names: ['爸爸'] }, flight: { flightNumber: 'MU5102' } })
+  })
+
+  it('keeps unresolved passengers missing while still accepting the flight slot', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接叔叔，航班 MU5102'))
+
+    expect(created.task).toMatchObject({ phase: 'collecting-information', flight: { flightNumber: 'MU5102' }, passengers: { memberIds: [], names: [] } })
+    expect(created.assistant?.text).toContain('哪位家人')
+  })
+
   it('returns the original task for a retried create request', () => {
     const gateway = createGateway()
     const first = gateway.createTask(createRequest())
