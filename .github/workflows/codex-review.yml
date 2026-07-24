@@ -167,6 +167,7 @@ jobs:
       needs.resolve-pr.outputs.draft == 'false'
     runs-on: ubuntu-latest
     permissions:
+      checks: read
       contents: write
       pull-requests: write
     steps:
