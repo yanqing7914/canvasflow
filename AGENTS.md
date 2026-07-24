@@ -30,7 +30,7 @@ npm run build
 4. Add or update tests when behavior changes.
 5. Run the required checks locally.
 6. Push the branch to the shared upstream repository and open a PR into `dev`.
-7. Merge only after CI is green and the latest completed Codex review reports no unresolved P0 or P1 findings. The PR author does not self-merge their own change; any other collaborator may merge an eligible PR.
+7. Wait for the automation: once CI is green and the latest completed Codex review ends with `CODEX-REVIEW-VERDICT: PASS`, the review workflow squash-merges the PR into `dev` automatically. Do not merge ordinary PRs manually; if auto-merge fails, fix the reported cause and push again, or escalate to the owner.
 8. Only the owner opens and merges the `dev` -> `main` release PR.
 
 ## Working Rules
@@ -51,7 +51,7 @@ Stop and report instead of guessing when the request conflicts with product dire
 
 ## Review and handoff contract
 
-The PR author must describe before/after behavior, tests run, visual changes, known risks, and rollback approach. Generated code must be reviewed by the author before handoff. A PR is eligible to merge once CI is green and the latest completed Codex review has no unresolved P0 or P1 findings; a green CI job alone is not sufficient. If someone accidentally pushes to `dev` or `main`, stop and notify the owner so the commit can be reviewed or reverted.
+The PR author must describe before/after behavior, tests run, visual changes, known risks, and rollback approach. Generated code must be reviewed by the author before handoff. A PR merges automatically once CI is green and the latest completed Codex review reports a PASS verdict; a green CI job alone is not sufficient, and owner review is no longer a merge gate for ordinary PRs into `dev`. If someone accidentally pushes to `dev` or `main`, stop and notify the owner so the commit can be reviewed or reverted.
 
 For a UI change, include a screenshot or short recording. For behavior changes, add a focused test or explain why a test is not practical. Never claim that a check ran if it did not run.
 
@@ -59,6 +59,7 @@ For a UI change, include a screenshot or short recording. For behavior changes, 
 
 - The repository owner is the default code owner.
 - PRs should not merge until CI is green and the latest completed Codex review has no unresolved P0 or P1 findings. A failed, cancelled, or still-running Codex review is not a passing review.
+- Ordinary same-repo PRs into `dev` are squash-merged automatically by the Codex review workflow on a PASS verdict. The `dev` -> `main` release PR is never auto-merged; only the owner merges it.
 - Use Codex or another agent for a second-pass review when the change touches shared UI flows, state models, deployment config, or auth/security code.
 - When reviewing, focus first on correctness, then regression risk, then clarity.
 - Treat visual regressions, broken loading states, and lost keyboard accessibility as review blockers.
