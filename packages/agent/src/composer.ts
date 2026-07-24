@@ -151,6 +151,48 @@ export function composeAgentSpec(
   })
 }
 
+/**
+ * Stable, schema-checked UI used when a read provider cannot produce a
+ * trustworthy result. It intentionally contains no derived provider facts.
+ */
+export function composeFallbackSpec(
+  task: AirportPickupTaskState,
+  title: string,
+  message?: string,
+  level: 'warning' | 'error' = 'warning',
+  retry?: { actionId: string; label: string; componentId: string; actionToken: string },
+): UISpec {
+  const nextUiRevision = Math.max(task.uiRevision, task.taskRevision) + 1
+  const actions: UISpec['actions'] = retry
+    ? [{ id: retry.actionId, label: retry.label, style: 'primary', event: { type: 'tool-request', actionToken: retry.actionToken } }]
+    : []
+  return uiSpecSchema.parse({
+    version: '1.0',
+    taskId: task.taskId,
+    surfaceId: task.surfaceId,
+    taskRevision: task.taskRevision,
+    uiRevision: nextUiRevision,
+    phase: task.phase,
+    title,
+    presentation: { mode: 'replace', density: 'minimal', theme: 'dark', priority: 'high' },
+    layout: { type: 'stack', gap: 'md', slots: { main: [retry?.componentId ?? 'provider-fallback'] } },
+    components: [{
+      id: retry?.componentId ?? 'provider-fallback',
+      type: 'status-banner',
+      props: { level, title, message },
+      ...(retry ? { actions: [retry.actionId] } : {}),
+    }],
+    actions,
+    meta: {
+      generatedBy: 'fallback',
+      sourceTaskRevision: task.taskRevision,
+      requiresConfirm: false,
+      generatedAt: task.updatedAt,
+      traceId: `trace-${task.taskId}-fallback-${nextUiRevision}`,
+    },
+  })
+}
+
 function isReadToolResults(
   value: ReadToolResults | Record<string, MemberPreferenceRecord>,
 ): value is ReadToolResults {
