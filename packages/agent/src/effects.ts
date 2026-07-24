@@ -16,10 +16,7 @@ export function planEffects(state: AirportPickupTaskState, event: AirportPickupE
   return []
 }
 
-/**
- * Matches memory.get-preferences members shape. Cabin UI in this PR still
- * requires a temperature, so media-only results must not plan a succeeded apply.
- */
+/** Matches the memory.get-preferences output contract: any applicable cabin/media preference counts. */
 function isSuccessfulPreferences(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return false
   const data = (value as { data?: unknown }).data
@@ -27,6 +24,11 @@ function isSuccessfulPreferences(value: unknown): boolean {
   const members = (data as { members?: unknown }).members
   return Array.isArray(members) && members.some((member) => {
     if (typeof member !== 'object' || member === null) return false
-    return typeof (member as { rearTemperatureC?: unknown }).rearTemperatureC === 'number'
+    const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown }
+    // Align with schema/composer: empty mediaTitle is not an applicable preference.
+    return (
+      typeof record.rearTemperatureC === 'number' ||
+      (typeof record.mediaTitle === 'string' && record.mediaTitle.length > 0)
+    )
   })
 }

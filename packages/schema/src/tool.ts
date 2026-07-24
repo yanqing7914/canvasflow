@@ -55,7 +55,7 @@ export const getPreferencesOutputSchema = z.object({
     z.object({
       memberId: z.string().min(1),
       rearTemperatureC: z.number().optional(),
-      mediaTitle: z.string().optional(),
+      mediaTitle: z.string().min(1).optional(),
       homeDestinationId: z.string().optional(),
       /** Only present when `notification` is in the requested scopes. */
       landingNotificationAuthorized: z.boolean().optional(),
@@ -159,7 +159,7 @@ export const navigationUpdateRouteOutputSchema = z.object({
 export const cabinProfileValuesSchema = z.object({
   temperatureC: z.number().optional(),
   fanLevel: z.number().optional(),
-  mediaTitle: z.string().optional(),
+  mediaTitle: z.string().min(1).optional(),
 })
 
 export const applyCabinProfileInputSchema = z.object({

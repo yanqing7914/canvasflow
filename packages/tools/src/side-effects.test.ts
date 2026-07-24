@@ -341,6 +341,33 @@ describe('idempotency store isolation', () => {
     expect(other.data?.navigationId).toContain('pickup-002')
     expect(first.data?.navigationId).toContain('pickup-001')
   })
+
+  it('message.send 跨 task 复用 idempotencyKey 不会命中他任务缓存', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const message = {
+      contactId: 'contact-mom',
+      messageId: 'shared-msg',
+      text: 'hello',
+    }
+    const payload = {
+      ...message,
+      authorizationId: issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-001', ...message }),
+      idempotencyKey: 'shared-send-key',
+    }
+    const first = registry['message.send']({ taskId: 'pickup-001' }, payload)
+    expect(first.ok).toBe(true)
+    const other = registry['message.send'](
+      { taskId: 'pickup-002' },
+      {
+        ...payload,
+        authorizationId: issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-002', ...message }),
+      },
+    )
+    expect(other.ok).toBe(true)
+    expect(other).not.toBe(first)
+    expect(other.meta.taskId).toBe('pickup-002')
+  })
 })
 
 describe('message.send', () => {
@@ -643,6 +670,16 @@ describe('message.send', () => {
       }).error?.code,
     ).toBe('AUTHORIZATION_REQUIRED')
 
+    const otherRuntime = createSideEffectRuntime()
+    const otherTaskToken = issueSendMessageConfirmation(otherRuntime, { taskId: 'other-task', ...message })
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId: otherTaskToken,
+        idempotencyKey: 'pickup-001:msg-confirm-cross-task',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+
     const bound = registry['message.send'](ctx, {
       ...message,
       confirmationId,
@@ -776,6 +813,31 @@ describe('memory write side effects', () => {
     expect(first.ok).toBe(true)
     now += 31 * 60 * 1000
     expect(registry['memory.confirm-update'](ctx, confirmInput)).toEqual(first)
+  })
+
+  it('已确认提案的 token 不能被其他 task 复用为确认成功', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const proposed = registry['memory.propose-update'](ctx, {
+      memberId: 'mom',
+      changes: { rearTemperatureC: 29 },
+    })
+    const confirmed = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'pickup-001:confirm-for-task-a',
+    })
+    expect(confirmed.ok).toBe(true)
+
+    const otherTask = registry['memory.confirm-update'](
+      { taskId: 'pickup-002' },
+      {
+        proposalId: proposed.data!.proposalId,
+        confirmationId: proposed.data!.confirmationId,
+        idempotencyKey: 'pickup-002:confirm-stolen-token',
+      },
+    )
+    expect(otherTask.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', retryable: false })
   })
 
   it('其他 task 不能确认本任务的记忆提案，偏好保持不变', () => {

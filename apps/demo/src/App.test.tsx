@@ -54,4 +54,28 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '推进下一事件' }))
     expect(screen.getByText(/taskRevision 1/)).toBeInTheDocument()
   })
+
+  it('renders media-only cabin preferences without inventing temperature', () => {
+    render(
+      <App
+        initialTask={{
+          ...createInitialTask(),
+          phase: 'returning-home',
+          passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: true },
+          updatedAt: '2026-07-22T20:56:00+08:00',
+        }}
+        composeContext={{
+          toolResults: {
+            'memory.get-preferences': {
+              ok: true,
+              data: { members: [{ memberId: 'doubao', mediaTitle: '豆豆故事' }] },
+            },
+          },
+        }}
+      />,
+    )
+    expect(screen.getByText('豆豆故事')).toBeInTheDocument()
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/°C/)).not.toBeInTheDocument()
+  })
 })

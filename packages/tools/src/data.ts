@@ -126,15 +126,26 @@ export const routes: Record<string, RoutePlanOutput> = {
   },
 }
 
-export type VehicleSnapshotName = 'parked' | 'city-driving' | 'highway-driving'
+export type VehicleSnapshotName =
+  | 'parked'
+  | 'city-driving'
+  | 'highway-driving'
+  | 'post-charge'
+  | 'rear-occupied'
 
 export const DEFAULT_VEHICLE_SNAPSHOT: VehicleSnapshotName = 'parked'
 
-/** Speed / battery / gear / night presets used to drive UI density scenarios. */
+/**
+ * Speed / battery / gear / night presets used to drive UI density scenarios.
+ * `post-charge` mirrors the charging-completed fixture (78%), `rear-occupied`
+ * mirrors the passengers-onboard fixture (51%, rear seats occupied).
+ */
 export const vehicleSnapshots: Record<VehicleSnapshotName, VehicleStatusOutput> = {
   parked: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: true, rearOccupied: false },
   'city-driving': { speedKph: 35, batteryPercent: 35, remainingRangeKm: 93, gear: 'D', isNight: true, rearOccupied: false },
   'highway-driving': { speedKph: 80, batteryPercent: 30, remainingRangeKm: 80, gear: 'D', isNight: true, rearOccupied: false },
+  'post-charge': { speedKph: 0, batteryPercent: 78, remainingRangeKm: 208, gear: 'P', isNight: true, rearOccupied: false },
+  'rear-occupied': { speedKph: 0, batteryPercent: 51, remainingRangeKm: 136, gear: 'P', isNight: true, rearOccupied: true },
 }
 
 export const chargingStation = {

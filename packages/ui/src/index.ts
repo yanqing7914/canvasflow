@@ -45,13 +45,31 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   }
   else if (successfulPreferences(context.toolResults?.['memory.get-preferences'])) {
     const members = (context.toolResults!['memory.get-preferences'] as {
-      data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string }> }
+      data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string; fanLevel?: number }> }
     }).data.members
-    const temperatureC = members.find((member) => typeof member.rearTemperatureC === 'number')!.rearTemperatureC!
-    const mediaTitle = members.find((member) => typeof member.mediaTitle === 'string')?.mediaTitle
+    const temperatureC = members.find((member) => typeof member.rearTemperatureC === 'number')?.rearTemperatureC
+    const mediaTitle = members.find(
+      (member) => typeof member.mediaTitle === 'string' && member.mediaTitle.length > 0,
+    )?.mediaTitle
+    const fanLevel = members.find((member) => typeof member.fanLevel === 'number')?.fanLevel
     title = '已应用家庭偏好'
     density = 'compact'
-    components = [{ id: 'cabin-profile', type: 'cabin-profile', props: { zone: 'rear', temperatureC, mediaTitle, appliedFromMemory: true, reversible: true } }]
+    const cabinProps: {
+      zone: 'rear'
+      appliedFromMemory: true
+      reversible: true
+      temperatureC?: number
+      mediaTitle?: string
+      fanLevel?: number
+    } = {
+      zone: 'rear',
+      appliedFromMemory: true,
+      reversible: true,
+    }
+    if (temperatureC !== undefined) cabinProps.temperatureC = temperatureC
+    if (mediaTitle !== undefined) cabinProps.mediaTitle = mediaTitle
+    if (fanLevel !== undefined) cabinProps.fanLevel = fanLevel
+    components = [{ id: 'cabin-profile', type: 'cabin-profile', props: cabinProps }]
   }
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
   else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
@@ -67,7 +85,7 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   })
 }
 
-/** Cabin UI currently requires a temperature; media-only is handled in a later stacked PR. */
+/** Matches the memory.get-preferences output contract: any applicable cabin/media preference counts. */
 function successfulPreferences(value: unknown): boolean {
   if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return false
   const data = (value as { data?: unknown }).data
@@ -75,7 +93,12 @@ function successfulPreferences(value: unknown): boolean {
   const members = (data as { members?: unknown }).members
   return Array.isArray(members) && members.some((member) => {
     if (typeof member !== 'object' || member === null) return false
-    return typeof (member as { rearTemperatureC?: unknown }).rearTemperatureC === 'number'
+    const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown }
+    // memory.get-preferences does not emit fanLevel; only temperature/non-empty media count.
+    return (
+      typeof record.rearTemperatureC === 'number' ||
+      (typeof record.mediaTitle === 'string' && record.mediaTitle.length > 0)
+    )
   })
 }
 
