@@ -345,18 +345,24 @@ describe('idempotency store isolation', () => {
   it('message.send 跨 task 复用 idempotencyKey 不会命中他任务缓存', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
-    const payload = {
+    const message = {
       contactId: 'contact-mom',
       messageId: 'shared-msg',
       text: 'hello',
-      authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-001'),
+    }
+    const payload = {
+      ...message,
+      authorizationId: issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-001', ...message }),
       idempotencyKey: 'shared-send-key',
     }
     const first = registry['message.send']({ taskId: 'pickup-001' }, payload)
     expect(first.ok).toBe(true)
     const other = registry['message.send'](
       { taskId: 'pickup-002' },
-      { ...payload, authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-002') },
+      {
+        ...payload,
+        authorizationId: issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-002', ...message }),
+      },
     )
     expect(other.ok).toBe(true)
     expect(other).not.toBe(first)
@@ -368,11 +374,14 @@ describe('message.send', () => {
   it('同一 idempotencyKey 最多成功发送一次', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
-    const input = {
+    const message = {
       contactId: 'contact-mom',
       messageId: 'pickup-001:MU5102:landing',
       text: '我已到达机场接机点',
-      authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-001'),
+    }
+    const input = {
+      ...message,
+      authorizationId: issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-001', ...message }),
       idempotencyKey: 'pickup-001:MU5102:landing',
     }
     const first = registry['message.send'](ctx, input)
@@ -465,11 +474,13 @@ describe('message.send', () => {
     expect(arbitraryAuth.error?.code).toBe('AUTHORIZATION_REQUIRED')
 
     const otherRuntime = createSideEffectRuntime()
+    const wrongTaskMessage = { contactId: 'contact-mom', messageId: 'msg-5', text: 'hello' }
     const wrongTask = registry['message.send'](ctx, {
-      contactId: 'contact-mom',
-      messageId: 'msg-5',
-      text: 'hello',
-      authorizationId: issueAutoNotifyAuthorization(otherRuntime, 'other-task'),
+      ...wrongTaskMessage,
+      authorizationId: issueAutoNotifyAuthorization(otherRuntime, {
+        taskId: 'other-task',
+        ...wrongTaskMessage,
+      }),
       idempotencyKey: 'pickup-001:msg-wrong-task',
     })
     expect(wrongTask.error?.code).toBe('AUTHORIZATION_REQUIRED')
@@ -479,14 +490,71 @@ describe('message.send', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
     // FAILING_CONTACT_ID 不属于任何成员，auto-notify 预授权不适用
+    const message = { contactId: FAILING_CONTACT_ID, messageId: 'msg-6', text: 'hello' }
     const result = registry['message.send'](ctx, {
-      contactId: FAILING_CONTACT_ID,
-      messageId: 'msg-6',
-      text: 'hello',
-      authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-001'),
+      ...message,
+      authorizationId: issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-001', ...message }),
       idempotencyKey: 'pickup-001:msg-auto-unknown',
     })
     expect(result.error?.code).toBe('AUTHORIZATION_REQUIRED')
+  })
+
+  it('auto-notify grant 绑定完整 payload，不能改发 messageId/text/contactId', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const prepared = registry['message.prepare'](ctx, {
+      contactId: 'contact-mom',
+      flightNumber: 'MU5102',
+      eta: '20:40',
+    })
+    expect(prepared.ok).toBe(true)
+    const binding = {
+      taskId: 'pickup-001' as const,
+      contactId: prepared.data!.contactId,
+      messageId: prepared.data!.messageId,
+      text: prepared.data!.text,
+    }
+    const authorizationId = issueAutoNotifyAuthorization(runtime, binding)
+
+    expect(
+      registry['message.send'](ctx, {
+        contactId: binding.contactId,
+        messageId: binding.messageId,
+        text: '完全不同的任意文案',
+        authorizationId,
+        idempotencyKey: 'pickup-001:auto-wrong-text',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+
+    expect(
+      registry['message.send'](ctx, {
+        contactId: binding.contactId,
+        messageId: 'pickup-001:OTHER:landing',
+        text: binding.text,
+        authorizationId,
+        idempotencyKey: 'pickup-001:auto-wrong-id',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+
+    expect(
+      registry['message.send'](ctx, {
+        contactId: FAILING_CONTACT_ID,
+        messageId: binding.messageId,
+        text: binding.text,
+        authorizationId,
+        idempotencyKey: 'pickup-001:auto-wrong-contact',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+
+    const sent = registry['message.send'](ctx, {
+      contactId: binding.contactId,
+      messageId: binding.messageId,
+      text: binding.text,
+      authorizationId,
+      idempotencyKey: 'pickup-001:auto-bound-ok',
+    })
+    expect(sent.ok).toBe(true)
+    expect(sent.data).toMatchObject({ status: 'sent', messageId: binding.messageId })
   })
 
   it('失败联系人返回 SEND_FAILED 且不写入幂等账本、不消耗确认', () => {
@@ -558,11 +626,10 @@ describe('message.send', () => {
   it('同一 idempotencyKey 换参数不能重放缓存结果', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
+    const message = { contactId: 'contact-mom', messageId: 'msg-conflict', text: 'hello' }
     const sendInput = {
-      contactId: 'contact-mom',
-      messageId: 'msg-conflict',
-      text: 'hello',
-      authorizationId: issueAutoNotifyAuthorization(runtime, 'pickup-001'),
+      ...message,
+      authorizationId: issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-001', ...message }),
       idempotencyKey: 'pickup-001:conflict-key',
     }
     expect(registry['message.send'](ctx, sendInput).ok).toBe(true)
