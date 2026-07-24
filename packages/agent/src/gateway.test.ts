@@ -339,6 +339,120 @@ describe('AgentGateway', () => {
     expect(duplicate.effects).toEqual(started.effects)
   })
 
+  it('executes the return-trip route, cabin, and media providers after passengers board', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const updateRoute = vi.fn(base['navigation.update-route'])
+    const applyCabin = vi.fn(base['vehicle.apply-cabin-profile'])
+    const playMedia = vi.fn(base['media.play'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'navigation.update-route': updateRoute, 'vehicle.apply-cabin-profile': applyCabin, 'media.play': playMedia },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'client-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision,
+      actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'return-nav-start',
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'return-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    const waiting = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-parked', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'return-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' },
+    })
+    const returning = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-onboard', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'return-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' },
+    })
+
+    expect(returning.task).toMatchObject({ phase: 'returning-home', passengers: { confirmedOnboard: true }, navigation: { destination: '家', status: 'active' } })
+    expect(returning.effects).toEqual([
+      { effectId: 'return-onboard:effect:0', type: 'navigation.update-route', status: 'succeeded', tool: 'navigation.update-route' },
+      { effectId: 'return-onboard:effect:1', type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
+      { effectId: 'return-onboard:effect:2', type: 'media.play', status: 'succeeded', tool: 'media.play' },
+    ])
+    expect(updateRoute).toHaveBeenCalledTimes(1)
+    expect(applyCabin).toHaveBeenCalledTimes(1)
+    expect(playMedia).toHaveBeenCalledTimes(1)
+    expect(applyCabin).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ zone: 'rear', temperatureC: 25, mediaTitle: '豆豆故事', sourceMemberIds: ['mom', 'doubao'] }))
+    expect(playMedia).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ mediaTitle: '豆豆故事', sourceMemberId: 'doubao' }))
+
+    const duplicate = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-onboard-retry', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'return-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' },
+    })
+    expect(duplicate.task).toEqual(returning.task)
+    expect(updateRoute).toHaveBeenCalledTimes(1)
+    expect(applyCabin).toHaveBeenCalledTimes(1)
+    expect(playMedia).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps task facts aligned with the return route when a later provider fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    let mediaCalls = 0
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'media.play': (ctx, input) => {
+          mediaCalls += 1
+          if (mediaCalls === 1) return { ok: false, data: null, error: { code: 'MEDIA_UNAVAILABLE', message: 'offline', retryable: false }, meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'media.play', provider: 'fixture', durationMs: 1, generatedAt: now } }
+          return base['media.play'](ctx, input)
+        },
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 's', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 's' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'g', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'g', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'p', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'p', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
+    expect(failed.task).toMatchObject({
+      phase: 'returning-home',
+      passengers: { confirmedOnboard: true },
+      navigation: { routeId: 'route-home-001', destination: '家', status: 'active' },
+    })
+    expect(failed.task.taskRevision).toBe(waiting.task.taskRevision + 1)
+    expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'media.play', status: 'failed', errorCode: 'MEDIA_UNAVAILABLE' }))
+    expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
+    const retry = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'o-retry', expectedTaskRevision: failed.task.taskRevision, expectedUiRevision: failed.ui.uiRevision,
+      actionId: 'retry-return-trip', componentId: 'passenger-status', idempotencyKey: 'return-retry',
+    })
+    expect(mediaCalls).toBe(2)
+    expect(retry.task.returnTrip).toMatchObject({ route: { status: 'succeeded' }, cabin: { status: 'succeeded' }, media: { status: 'succeeded' } })
+    expect(retry.effects).toContainEqual(expect.objectContaining({ type: 'media.play', status: 'succeeded' }))
+  })
+
+  it('marks a previously failed route succeeded when retry resumes later effects', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const prepared = gateway.submitEvent(created.task.taskId, { clientRequestId: 'flight', expectedTaskRevision: created.task.taskRevision, event: { eventId: 'flight', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' } })
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'start', expectedTaskRevision: prepared.task.taskRevision, expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'start' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'g', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'g', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'p', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'p', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const first = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
+    expect(first.task.returnTrip?.route.status).toBe('succeeded')
+  })
+
+  it('does not retain the outbound route when return-home address lookup fails', () => {
+    const runtime = createSideEffectRuntime()
+    runtime.preferences.mom = { ...runtime.preferences.mom, homeDestinationId: undefined }
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 's', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 's' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'g', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'g', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'p', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'p', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
+
+    expect(failed.task.phase).toBe('returning-home')
+    expect(failed.task.navigation).toBeUndefined()
+    expect(failed.task.returnTrip).toMatchObject({ route: { status: 'failed', errorCode: 'PREFERENCE_UNAVAILABLE' } })
+    expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'navigation.update-route', status: 'failed', errorCode: 'PREFERENCE_UNAVAILABLE' }))
+  })
+
   it('keeps the original snapshot and records a failed effect when navigation.start fails', () => {
     const runtime = createSideEffectRuntime()
     const base = createProviderRegistry(runtime)

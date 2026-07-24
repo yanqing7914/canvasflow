@@ -22,6 +22,17 @@ const task = {
 }
 
 describe('EffectExecutor', () => {
+  it('policy-gates return-trip effects and does not call providers for cancelled flights', () => {
+    const registry = createProviderRegistry()
+    const plan = vi.fn(registry['navigation.plan-route'])
+    const executor = new EffectExecutor({ ...registry, 'navigation.plan-route': plan })
+    const result = executor.executeReturnTrip({
+      task: { ...createInitialTask(), phase: 'returning-home', passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true }, flight: { ...task.flight, status: 'cancelled' } },
+      memberIds: ['mom'], preferences: { homeDestinationId: 'destination-home' }, idempotencyKey: 'cancelled-return', effectIdPrefix: 'cancelled-return:effect',
+    })
+    expect(plan).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ succeeded: false, effect: [{ type: 'return-trip', errorCode: 'FLIGHT_CANCELLED' }] })
+  })
   it('calls navigation.start with stable request metadata and returns a succeeded receipt', () => {
     const runtime = createSideEffectRuntime()
     runtime.plannedRouteIdsByTask.set(task.taskId, new Set([task.navigation.routeId]))

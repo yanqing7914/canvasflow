@@ -59,9 +59,12 @@ export type TripPreparationReads = {
   toolResults: ReadToolResults
 }
 
+export type ReturnTripPreferenceReads = SuccessfulToolResult<GetPreferencesOutput>
+
 export interface ReadToolOrchestration {
   resolveInitialPassengers(taskId: string, requestId: string, labels: string[]): InitialPassengerReads
   prepareTrip(taskId: string, requestId: string, flightNumber: string): TripPreparationReads
+  resolveReturnTripPreferences(taskId: string, requestId: string, memberIds: string[]): ReturnTripPreferenceReads
 }
 
 export class ReadToolOrchestrator implements ReadToolOrchestration {
@@ -170,6 +173,16 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
     }
   }
 
+  resolveReturnTripPreferences(taskId: string, requestId: string, memberIds: string[]): ReturnTripPreferenceReads {
+    return this.#call(
+      'memory.get-preferences',
+      taskId,
+      requestId,
+      { memberIds, scopes: ['cabin', 'media', 'address'] },
+      toolResultSchema(getPreferencesOutputSchema),
+    )
+  }
+
   #call<T>(
     tool: ToolName,
     taskId: string,
@@ -212,7 +225,7 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       return { error: new ReadToolOrchestrationError('PROVIDER_FAILED', `${tool} returned an invalid result envelope`, false) }
     }
     const result = parsed.data
-    if (result.meta.taskId !== taskId || result.meta.tool !== tool) {
+    if (result.meta.taskId !== taskId || result.meta.tool !== tool || result.meta.requestId !== `${requestId}:${tool}`) {
       return { error: new ReadToolOrchestrationError('PROVIDER_FAILED', `${tool} returned mismatched result metadata`, false) }
     }
     if (!result.ok || result.data === null || result.error !== null) {
