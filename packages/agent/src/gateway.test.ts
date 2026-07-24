@@ -636,7 +636,7 @@ describe('AgentGateway', () => {
     })
 
     expect(rejectedResult.task).toMatchObject({ taskRevision: rejected.taskRevision + 1, pendingConfirmation: undefined, memoryProposal: { status: 'rejected' } })
-    expect(rejectedResult.effects).toEqual([expect.objectContaining({ type: 'memory.propose-update', status: 'cancelled', errorCode: 'USER_REJECTED' })])
+    expect(rejectedResult.effects).toEqual([expect.objectContaining({ type: 'memory.reject-update', status: 'cancelled', errorCode: 'USER_REJECTED' })])
   })
 
   it('does not confirm an expired proposal when the gateway clock is ahead of the provider clock', () => {
@@ -660,8 +660,31 @@ describe('AgentGateway', () => {
     })
 
     expect(expired.task).toMatchObject({ pendingConfirmation: undefined, memoryProposal: { status: 'expired', errorCode: 'PROPOSAL_EXPIRED' } })
-    expect(expired.effects).toEqual([expect.objectContaining({ type: 'memory.propose-update', status: 'failed', errorCode: 'PROPOSAL_EXPIRED' })])
+    expect(expired.effects).toEqual([expect.objectContaining({ type: 'memory.reject-update', status: 'failed', errorCode: 'PROPOSAL_EXPIRED' })])
     expect(runtime.preferences.mom.rearTemperatureC).toBe(25)
+  })
+
+  it('revokes rejected proposals through the injected provider runtime', () => {
+    const providerRuntime = createSideEffectRuntime()
+    const providers = createProviderRegistry(providerRuntime)
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', providers })
+    const completed = completeTask(gateway)
+    const confirmationId = completed.pendingConfirmation!.confirmationId
+    const proposalId = completed.memoryProposal!.proposalId!
+
+    gateway.submitConfirmation(completed.taskId, confirmationId, {
+      clientRequestId: 'client-provider-runtime-reject',
+      expectedTaskRevision: completed.taskRevision,
+      decision: 'reject',
+      idempotencyKey: 'provider-runtime-reject',
+    })
+
+    const retained = providers['memory.confirm-update'](
+      { taskId: completed.taskId, requestId: 'stolen-confirm' },
+      { proposalId, confirmationId, idempotencyKey: 'stolen-confirm' },
+    )
+    expect(retained.error?.code).toBe('PROPOSAL_EXPIRED')
+    expect(providerRuntime.preferences.mom.rearTemperatureC).toBe(25)
   })
 
   it('preserves trusted provider context when accepting save-memory confirmation', () => {

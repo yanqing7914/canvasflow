@@ -1,10 +1,12 @@
 import {
   confirmMemoryUpdateInputSchema,
   confirmMemoryUpdateOutputSchema,
+  rejectMemoryUpdateOutputSchema,
   proposeMemoryUpdateInputSchema,
   proposeMemoryUpdateOutputSchema,
   type ConfirmMemoryUpdateOutput,
   type ProposeMemoryUpdateOutput,
+  type RejectMemoryUpdateOutput,
   type ToolResult,
 } from '@canvasflow/schema'
 import { knownDestinationIds, knownMediaTitles } from './data'
@@ -13,6 +15,7 @@ import { errorResult, okResult, type ToolContext } from './result'
 
 const PROPOSE = 'memory.propose-update'
 const CONFIRM = 'memory.confirm-update'
+const REJECT = 'memory.reject-update'
 
 const MEMORY_WHITELIST = [
   'rearTemperatureC',
@@ -196,5 +199,22 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     return result
   }
 
-  return { proposeMemoryUpdate, confirmMemoryUpdate }
+  function rejectMemoryUpdate(ctx: ToolContext, input: unknown): ToolResult<RejectMemoryUpdateOutput> {
+    const parsed = confirmMemoryUpdateInputSchema.safeParse(input)
+    if (!parsed.success) return errorResult(ctx, REJECT, 'INVALID_ARGUMENT', '需要 proposalId、confirmationId 和 idempotencyKey', false)
+    const cached = runtime.idempotency.get<RejectMemoryUpdateOutput>(ctx.taskId, REJECT, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') return errorResult(ctx, REJECT, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    const proposal = runtime.memoryProposals.get(parsed.data.proposalId)
+    if (!proposal || proposal.taskId !== ctx.taskId || proposal.confirmationId !== parsed.data.confirmationId) {
+      return errorResult(ctx, REJECT, 'CONFIRMATION_REQUIRED', '确认凭据与提案不匹配', false)
+    }
+    runtime.confirmations.revokeMemoryConfirmation(parsed.data.confirmationId)
+    runtime.memoryProposals.delete(proposal.proposalId)
+    const result = okResult(ctx, REJECT, rejectMemoryUpdateOutputSchema.parse({ proposalId: proposal.proposalId, rejected: true }))
+    runtime.idempotency.set(ctx.taskId, REJECT, parsed.data.idempotencyKey, parsed.data, result)
+    return result
+  }
+
+  return { proposeMemoryUpdate, confirmMemoryUpdate, rejectMemoryUpdate }
 }

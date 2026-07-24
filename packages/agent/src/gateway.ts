@@ -406,8 +406,18 @@ export class AgentGateway {
       throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current memory proposal is available', false, current)
     }
     if (pending.expiresAt && Date.parse(pending.expiresAt) < Date.parse(this.#now())) {
-      this.#runtime.confirmations.revokeMemoryConfirmation(confirmationId)
-      this.#runtime.memoryProposals.delete(proposal.proposalId)
+      const expiration = this.#effectExecutor.rejectMemoryUpdate({
+        task: current.task,
+        proposalId: proposal.proposalId,
+        confirmationId,
+        idempotencyKey: `${request.idempotencyKey}:expired`,
+        effectId: `${confirmationId}:expired`,
+      })
+      if (!expiration.succeeded) {
+        const effects = [expiration.effect]
+        this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored: current, effects })
+        return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+      }
       const expired = {
         ...current.task,
         memoryProposal: { ...proposal, status: 'expired' as const, errorCode: 'PROPOSAL_EXPIRED' },
@@ -415,13 +425,7 @@ export class AgentGateway {
         taskRevision: current.task.taskRevision + 1,
         updatedAt: this.#eventTimestamp(current.task.updatedAt),
       }
-      const effects: AgentResponse['effects'] = [{
-        effectId: `${confirmationId}:expired`,
-        type: 'memory.propose-update',
-        status: 'failed',
-        tool: 'memory.propose-update',
-        errorCode: 'PROPOSAL_EXPIRED',
-      }]
+      const effects: AgentResponse['effects'] = [{ ...expiration.effect, status: 'failed', errorCode: 'PROPOSAL_EXPIRED' }]
       const stored = this.#store.save(this.#publish(expired, current.toolResults))
       this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
       return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
@@ -430,8 +434,18 @@ export class AgentGateway {
     let effects: AgentResponse['effects']
     let next: AirportPickupTaskState
     if (request.decision === 'reject') {
-      this.#runtime.confirmations.revokeMemoryConfirmation(confirmationId)
-      this.#runtime.memoryProposals.delete(proposal.proposalId)
+      const rejection = this.#effectExecutor.rejectMemoryUpdate({
+        task: current.task,
+        proposalId: proposal.proposalId,
+        confirmationId,
+        idempotencyKey: request.idempotencyKey,
+        effectId: `${confirmationId}:reject`,
+      })
+      if (!rejection.succeeded) {
+        effects = [rejection.effect]
+        this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored: current, effects })
+        return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+      }
       next = {
         ...current.task,
         memoryProposal: { ...proposal, status: 'rejected' },
@@ -439,7 +453,7 @@ export class AgentGateway {
         taskRevision: current.task.taskRevision + 1,
         updatedAt: this.#eventTimestamp(current.task.updatedAt),
       }
-      effects = [{ effectId: `${confirmationId}:reject`, type: 'memory.propose-update', status: 'cancelled', tool: 'memory.propose-update', errorCode: 'USER_REJECTED' }]
+      effects = [rejection.effect]
     } else {
       const execution = this.#effectExecutor.confirmMemoryUpdate({
         task: current.task,

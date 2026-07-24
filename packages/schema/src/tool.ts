@@ -288,6 +288,11 @@ export const confirmMemoryUpdateOutputSchema = z.object({
   applied: z.record(z.string(), z.unknown()),
 })
 
+export const rejectMemoryUpdateOutputSchema = z.object({
+  proposalId: z.string().min(1),
+  rejected: z.literal(true),
+})
+
 export type ProviderMode = z.infer<typeof providerModeSchema>
 export type ToolDefinition = z.infer<typeof toolDefinitionSchema>
 export type ResolveMembersInput = z.infer<typeof resolveMembersInputSchema>
@@ -320,6 +325,7 @@ export type ProposeMemoryUpdateInput = z.infer<typeof proposeMemoryUpdateInputSc
 export type ProposeMemoryUpdateOutput = z.infer<typeof proposeMemoryUpdateOutputSchema>
 export type ConfirmMemoryUpdateInput = z.infer<typeof confirmMemoryUpdateInputSchema>
 export type ConfirmMemoryUpdateOutput = z.infer<typeof confirmMemoryUpdateOutputSchema>
+export type RejectMemoryUpdateOutput = z.infer<typeof rejectMemoryUpdateOutputSchema>
 export type ToolResult<T> = {
   ok: boolean
   data: T | null
