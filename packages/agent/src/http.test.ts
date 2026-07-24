@@ -116,6 +116,10 @@ describe('Agent HTTP API', () => {
     expect(reset.task).toMatchObject({ taskId, phase: 'collecting-information' })
     expect(reset.task.flight).toBeUndefined()
     expect(reset.task.taskRevision).toBe(cancelled.task.taskRevision + 1)
+
+    const createRetry = await post(baseUrl, '/v1/tasks', createRequest())
+    expect(createRetry.status).toBe(200)
+    expect((await createRetry.json()).task).toEqual(reset.task)
   })
 
   it('returns one error shape for invalid requests, missing tasks, and revision conflicts', async () => {

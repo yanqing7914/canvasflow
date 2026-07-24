@@ -61,6 +61,7 @@ describe('AgentGateway', () => {
     expect(reset.task.taskRevision).toBe(cancelled.task.taskRevision + 1)
     expect(reset.task.uiRevision).toBeGreaterThan(cancelled.task.uiRevision)
     expect(duplicateReset.task).toEqual(reset.task)
+    expect(gateway.createTask(createRequest('接妈妈，航班 MU5102')).task).toEqual(reset.task)
     expect(gateway.getTask(second.task.taskId).task).toEqual(second.task)
   })
 
