@@ -52,6 +52,18 @@ export const submitConfirmationRequestSchema = z.object({
   idempotencyKey: z.string().min(1),
 })
 
+export const cancelTaskRequestSchema = z.object({
+  clientRequestId: z.string().min(1),
+  expectedTaskRevision: z.number().int().nonnegative(),
+  eventId: z.string().min(1),
+  reason: z.string().trim().min(1).optional(),
+})
+
+export const resetTaskRequestSchema = z.object({
+  clientRequestId: z.string().min(1),
+  expectedTaskRevision: z.number().int().nonnegative(),
+})
+
 export const effectRecordSchema = z.object({
   effectId: z.string(),
   type: z.string(),
@@ -100,6 +112,8 @@ export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>
 export type SubmitEventRequest = z.infer<typeof submitEventRequestSchema>
 export type SubmitActionRequest = z.infer<typeof submitActionRequestSchema>
 export type SubmitConfirmationRequest = z.infer<typeof submitConfirmationRequestSchema>
+export type CancelTaskRequest = z.infer<typeof cancelTaskRequestSchema>
+export type ResetTaskRequest = z.infer<typeof resetTaskRequestSchema>
 export type EffectRecord = z.infer<typeof effectRecordSchema>
 export type AgentResponse = z.infer<typeof agentResponseSchema>
 export type AgentErrorCode = z.infer<typeof agentErrorCodeSchema>

@@ -23,6 +23,7 @@ export interface TaskStore {
   getIdempotencyResult(taskId: string, operation: string, idempotencyKey: string): StoredIdempotencyResult | undefined
   recordIdempotencyResult(taskId: string, operation: string, idempotencyKey: string, result: StoredIdempotencyResult): void
   save(value: StoredTask): StoredTask
+  reset(value: StoredTask): StoredTask
   clear(): void
 }
 
@@ -74,6 +75,20 @@ export class MemoryTaskStore implements TaskStore {
     const snapshot = structuredClone(value)
     this.#tasks.set(value.task.taskId, snapshot)
     return structuredClone(snapshot)
+  }
+
+  reset(value: StoredTask): StoredTask {
+    const taskId = value.task.taskId
+    for (const [clientRequestId, stored] of this.#createResults) {
+      if (stored.task.taskId === taskId) this.#createResults.delete(clientRequestId)
+    }
+    for (const key of this.#eventResults.keys()) {
+      if (key.startsWith(`${taskId}:`)) this.#eventResults.delete(key)
+    }
+    for (const key of this.#idempotencyResults.keys()) {
+      if (key.startsWith(`${taskId}:`)) this.#idempotencyResults.delete(key)
+    }
+    return this.save(value)
   }
 
   clear(): void {

@@ -1,13 +1,17 @@
 import {
   agentResponseSchema,
+  cancelTaskRequestSchema,
   createTaskRequestSchema,
+  resetTaskRequestSchema,
   submitActionRequestSchema,
   submitConfirmationRequestSchema,
   submitEventRequestSchema,
   type AgentErrorCode,
   type AgentResponse,
   type AirportPickupTaskState,
+  type CancelTaskRequest,
   type CreateTaskRequest,
+  type ResetTaskRequest,
   type SubmitActionRequest,
   type SubmitConfirmationRequest,
   type SubmitEventRequest,
@@ -16,6 +20,7 @@ import {
 } from '@canvasflow/schema'
 import {
   createProviderRegistry,
+  resetSideEffectRuntimeTask,
   createSideEffectRuntime,
   type MemberPreferenceRecord,
   type ProviderRegistry,
@@ -164,6 +169,51 @@ export class AgentGateway {
     const startedAt = performance.now()
     const stored = this.#requireTask(taskId)
     return this.#response(requestId, stored, [], performance.now() - startedAt)
+  }
+
+  hasCreateResult(clientRequestId: string): boolean {
+    return this.#store.getByClientRequestId(clientRequestId) !== undefined
+  }
+
+  cancelTask(taskId: string, input: CancelTaskRequest): AgentResponse {
+    const request = cancelTaskRequestSchema.parse(input)
+    const current = this.#requireTask(taskId)
+    return this.submitEvent(taskId, {
+      clientRequestId: request.clientRequestId,
+      expectedTaskRevision: request.expectedTaskRevision,
+      event: {
+        eventId: `cancel:${request.eventId}`,
+        type: 'user.cancelled-task',
+        ...(request.reason ? { reason: request.reason } : {}),
+        timestamp: this.#eventTimestamp(current.task.updatedAt),
+      },
+    })
+  }
+
+  resetTask(taskId: string, input: ResetTaskRequest): AgentResponse {
+    const startedAt = performance.now()
+    const request = resetTaskRequestSchema.parse(input)
+    const current = this.#requireTask(taskId)
+    const operation = 'task:reset'
+    const previous = this.#store.getIdempotencyResult(taskId, operation, request.clientRequestId)
+    if (previous) {
+      return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
+    }
+    this.#assertRevisions(current, request.expectedTaskRevision)
+
+    resetSideEffectRuntimeTask(this.#runtime, taskId)
+
+    const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const initial = createInitialTask(taskId, timestamp)
+    const resetTask: AirportPickupTaskState = {
+      ...initial,
+      taskRevision: current.task.taskRevision + 1,
+      uiRevision: Math.max(current.task.uiRevision, current.ui.uiRevision),
+    }
+    const stored = this.#store.reset(this.#publish(resetTask))
+    const effects: AgentResponse['effects'] = []
+    this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored, effects })
+    return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
 
   submitEvent(taskId: string, input: SubmitEventRequest): AgentResponse {
