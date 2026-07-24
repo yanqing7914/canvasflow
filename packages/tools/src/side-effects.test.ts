@@ -568,6 +568,78 @@ describe('message.send', () => {
     expect(sent.data).toMatchObject({ status: 'sent', messageId: binding.messageId })
   })
 
+  it('同时提供 authorizationId 与 confirmationId 时拒绝，避免未消费凭据二次外发', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const message = {
+      contactId: 'contact-mom',
+      messageId: 'pickup-001:MU5102:landing',
+      text: '我已到达机场接机点',
+    }
+    const authorizationId = issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-001', ...message })
+    const confirmationId = issueSendMessageConfirmation(runtime, { taskId: 'pickup-001', ...message })
+
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        authorizationId,
+        confirmationId,
+        idempotencyKey: 'pickup-001:dual-cred',
+      }).error,
+    ).toMatchObject({ code: 'INVALID_ARGUMENT', retryable: false })
+
+    // 两个凭据都未被消费：可分别走单路径成功一次
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        authorizationId,
+        idempotencyKey: 'pickup-001:dual-then-auto',
+      }).ok,
+    ).toBe(true)
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId,
+        idempotencyKey: 'pickup-001:dual-then-confirm',
+      }).ok,
+    ).toBe(true)
+  })
+
+  it('auto-notify 成功后消费授权：换幂等键不能再次外发同一 payload', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const message = {
+      contactId: 'contact-mom',
+      messageId: 'pickup-001:MU5102:landing',
+      text: '我已到达机场接机点',
+    }
+    const authorizationId = issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-001', ...message })
+
+    const first = registry['message.send'](ctx, {
+      ...message,
+      authorizationId,
+      idempotencyKey: 'pickup-001:auto-once-a',
+    })
+    expect(first.ok).toBe(true)
+
+    // 同一 key 仍可命中幂等缓存
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        authorizationId,
+        idempotencyKey: 'pickup-001:auto-once-a',
+      }),
+    ).toEqual(first)
+
+    // 换 key 不得再次外发：授权已在首次成功时消费
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        authorizationId,
+        idempotencyKey: 'pickup-001:auto-once-b',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+  })
   it('失败联系人返回 SEND_FAILED 且不写入幂等账本、不消耗确认', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
@@ -582,6 +654,20 @@ describe('message.send', () => {
     expect(registry['message.send'](ctx, input).error?.code).toBe('SEND_FAILED')
   })
 
+  it('revoke 后的 confirmationId 不能再授权发送', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const message = { contactId: 'contact-mom', messageId: 'msg-revoke-1', text: '我已到达机场' }
+    const confirmationId = issueSendMessageConfirmation(runtime, { taskId: 'pickup-001', ...message })
+    expect(runtime.confirmations.revokeSendMessageConfirmation(confirmationId)).toBe(true)
+    expect(
+      registry['message.send'](ctx, {
+        ...message,
+        confirmationId,
+        idempotencyKey: 'pickup-001:msg-revoked',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+  })
   it('opaque 确认：签发→成功发送→消费；伪造/改 payload/重复消费均失败', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
