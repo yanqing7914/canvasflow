@@ -207,6 +207,22 @@ describe('navigation.plan-route', () => {
     expect(result.data?.summary).toContain('超充')
   })
 
+  it('回家路线 sketch 几何以请求 origin 为起点、以家为终点', () => {
+    const result = planRoute(ctx, {
+      origin,
+      destination: { id: 'destination-home', name: '家' },
+    })
+    expect(result.ok).toBe(true)
+    expect(result.data?.routeId).toBe('route-home-001')
+    expect(result.data?.polyline?.[0]).toEqual(origin)
+    expect(result.data?.polyline?.at(-1)).toMatchObject({
+      latitude: 31.228,
+      longitude: 121.468,
+    })
+    expect(result.data?.waypoints?.[0]?.id).toBe('origin-demo')
+    expect(result.data?.waypoints?.at(-1)?.id).toBe('destination-home')
+  })
+
   it('直达 / 经充电站 / 避高速 / 外环改线的 sketch 几何可区分', () => {
     const direct = planRoute(ctx, { origin, destination: airport })
     const viaCharge = planRoute(ctx, {

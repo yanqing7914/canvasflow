@@ -261,12 +261,17 @@ export const routes: Record<string, RoutePlanOutput> = {
     durationMinutes: 40,
     arrivalTime: '2026-07-22T21:35:00+08:00',
     estimatedBatteryAtArrival: 32,
+    // Geometry must match plan-route request origin (DEMO_ORIGIN), not the airport —
+    // callers today plan home with the same demo origin key as outbound routes.
     summary: '返程回家',
-    waypoints: [GEO.airportT2, GEO.home],
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', ...GEO.origin },
+      GEO.home,
+    ],
     polyline: [
-      GEO.airportT2,
-      { latitude: 31.205, longitude: 121.36 },
-      { latitude: 31.218, longitude: 121.42 },
+      GEO.origin,
+      { latitude: 31.225, longitude: 121.45 },
+      { latitude: 31.22, longitude: 121.46 },
       GEO.home,
     ],
   },
