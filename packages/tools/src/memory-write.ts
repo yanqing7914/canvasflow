@@ -206,7 +206,13 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') return errorResult(ctx, REJECT, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
     const proposal = runtime.memoryProposals.get(parsed.data.proposalId)
-    if (!proposal || proposal.taskId !== ctx.taskId || proposal.confirmationId !== parsed.data.confirmationId) {
+    if (!proposal) {
+      runtime.confirmations.revokeMemoryConfirmation(parsed.data.confirmationId)
+      const result = okResult(ctx, REJECT, rejectMemoryUpdateOutputSchema.parse({ proposalId: parsed.data.proposalId, rejected: true }))
+      runtime.idempotency.set(ctx.taskId, REJECT, parsed.data.idempotencyKey, parsed.data, result)
+      return result
+    }
+    if (proposal.taskId !== ctx.taskId || proposal.confirmationId !== parsed.data.confirmationId) {
       return errorResult(ctx, REJECT, 'CONFIRMATION_REQUIRED', '确认凭据与提案不匹配', false)
     }
     runtime.confirmations.revokeMemoryConfirmation(parsed.data.confirmationId)

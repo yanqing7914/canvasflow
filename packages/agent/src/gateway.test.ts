@@ -687,6 +687,34 @@ describe('AgentGateway', () => {
     expect(providerRuntime.preferences.mom.rearTemperatureC).toBe(25)
   })
 
+  it('dismisses an expired prompt when the provider already removed the proposal', () => {
+    let providerNow = Date.parse('2026-07-22T12:00:00Z')
+    let gatewayNow = now
+    const providerRuntime = createSideEffectRuntime(() => providerNow)
+    const providers = createProviderRegistry(providerRuntime)
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => gatewayNow, createId: () => '001', providers })
+    const completed = completeTask(gateway)
+    const confirmationId = completed.pendingConfirmation!.confirmationId
+    const proposalId = completed.memoryProposal!.proposalId!
+
+    providerNow = Date.parse('2026-07-22T12:31:00Z')
+    providers['memory.confirm-update'](
+      { taskId: completed.taskId, requestId: 'provider-expiry-cleanup' },
+      { proposalId, confirmationId, idempotencyKey: 'provider-expiry-cleanup' },
+    )
+    gatewayNow = '2026-07-22T12:31:00Z'
+
+    const expired = gateway.submitConfirmation(completed.taskId, confirmationId, {
+      clientRequestId: 'client-provider-first-expiry',
+      expectedTaskRevision: completed.taskRevision,
+      decision: 'accept',
+      idempotencyKey: 'provider-first-expiry',
+    })
+
+    expect(expired.task).toMatchObject({ pendingConfirmation: undefined, memoryProposal: { status: 'expired' } })
+    expect(expired.ui.actions).toEqual([])
+  })
+
   it('preserves trusted provider context when accepting save-memory confirmation', () => {
     const store = new MemoryTaskStore()
     const gateway = new AgentGateway({ store, now: () => now, createId: () => '001' })

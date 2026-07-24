@@ -760,6 +760,20 @@ describe('memory write side effects', () => {
     expect(runtime.preferences.mom.rearTemperatureC).toBe(25)
   })
 
+  it('treats rejection of an already-removed proposal as an idempotent success', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const proposed = registry['memory.propose-update'](ctx, { memberId: 'mom', changes: { rearTemperatureC: 26 } })
+    runtime.memoryProposals.delete(proposed.data!.proposalId)
+    const rejected = registry['memory.reject-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'reject-missing-proposal',
+    })
+    expect(rejected).toMatchObject({ ok: true, data: { proposalId: proposed.data!.proposalId, rejected: true } })
+    expect(runtime.preferences.mom.rearTemperatureC).toBe(25)
+  })
+
   it('propose 后 confirm 才写入，confirm 幂等且写入对读取可见', () => {
     const registry = createProviderRegistry()
     const proposed = registry['memory.propose-update'](ctx, {
