@@ -133,6 +133,8 @@ export function composeAgentSpec(
   } else if (task.navigation) {
     density = 'compact'
     components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }]
+  } else if (task.flight && task.flight.trusted === false) {
+    components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '航班号已收到', message: '航班信息正在确认中。' } }]
   } else if (task.flight) {
     density = 'compact'
     components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival ?? task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }]
@@ -147,6 +149,48 @@ export function composeAgentSpec(
     meta: {
       generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm,
       generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${task.taskRevision}`,
+    },
+  })
+}
+
+/**
+ * Stable, schema-checked UI used when a read provider cannot produce a
+ * trustworthy result. It intentionally contains no derived provider facts.
+ */
+export function composeFallbackSpec(
+  task: AirportPickupTaskState,
+  title: string,
+  message?: string,
+  level: 'warning' | 'error' = 'warning',
+  retry?: { actionId: string; label: string; componentId: string; actionToken: string },
+): UISpec {
+  const nextUiRevision = Math.max(task.uiRevision, task.taskRevision) + 1
+  const actions: UISpec['actions'] = retry
+    ? [{ id: retry.actionId, label: retry.label, style: 'primary', event: { type: 'tool-request', actionToken: retry.actionToken } }]
+    : []
+  return uiSpecSchema.parse({
+    version: '1.0',
+    taskId: task.taskId,
+    surfaceId: task.surfaceId,
+    taskRevision: task.taskRevision,
+    uiRevision: nextUiRevision,
+    phase: task.phase,
+    title,
+    presentation: { mode: 'replace', density: 'minimal', theme: 'dark', priority: 'high' },
+    layout: { type: 'stack', gap: 'md', slots: { main: [retry?.componentId ?? 'provider-fallback'] } },
+    components: [{
+      id: retry?.componentId ?? 'provider-fallback',
+      type: 'status-banner',
+      props: { level, title, message },
+      ...(retry ? { actions: [retry.actionId] } : {}),
+    }],
+    actions,
+    meta: {
+      generatedBy: 'fallback',
+      sourceTaskRevision: task.taskRevision,
+      requiresConfirm: false,
+      generatedAt: task.updatedAt,
+      traceId: `trace-${task.taskId}-fallback-${nextUiRevision}`,
     },
   })
 }

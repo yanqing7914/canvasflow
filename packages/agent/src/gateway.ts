@@ -24,7 +24,7 @@ import {
 import { applyEvent, createInitialTask } from './index'
 import { normalizeFlightNumber } from './flight-number'
 import { mergePassengers, parsePassengerLabels, parsePassengers } from './passengers'
-import { composeAgentSpec } from './composer'
+import { composeAgentSpec, composeFallbackSpec } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import {
@@ -116,22 +116,31 @@ export class AgentGateway {
     const taskId = `pickup-${this.#createId()}`
     const timestamp = this.#now()
     const flightNumber = normalizeFlightNumber(request.input.text)
+    const parsedPassengers = parsePassengers(request.input.text)
+    let task = createInitialTask(taskId, timestamp)
+    if (parsedPassengers) {
+      task = {
+        ...task,
+        passengers: parsedPassengers,
+        message: { ...task.message, autoNotifyAuthorized: false },
+      }
+    }
+    task = applyEvent(task, {
+      eventId: `${request.clientRequestId}:input`,
+      type: 'user.input',
+      text: request.input.text,
+      timestamp,
+    }, this.#preferences)
+    let toolResults: ReadToolResults = {}
     try {
       const labels = parsePassengerLabels(request.input.text)
       const passengerReads = this.#orchestrator.resolveInitialPassengers(taskId, request.clientRequestId, labels)
-      let task = createInitialTask(taskId, timestamp)
       task = {
         ...task,
         passengers: { ...passengerReads.passengers, confirmedOnboard: false },
         message: { ...task.message, autoNotifyAuthorized: passengerReads.notificationAuthorized },
       }
-      task = applyEvent(task, {
-        eventId: `${request.clientRequestId}:input`,
-        type: 'user.input',
-        text: request.input.text,
-        timestamp,
-      }, this.#preferences)
-      let toolResults = passengerReads.toolResults
+      toolResults = passengerReads.toolResults
       if (flightNumber && task.passengers.memberIds.length > 0) {
         const prepared = this.#prepareTask(task, request.clientRequestId, flightNumber)
         task = prepared.task
@@ -140,6 +149,13 @@ export class AgentGateway {
       const stored = this.#store.create(this.#publish(task, toolResults), request.clientRequestId)
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
     } catch (error) {
+      if (error instanceof ReadToolOrchestrationError) {
+        const stored = this.#store.create(
+          this.#publishFallback(task, toolResults, error),
+          request.clientRequestId,
+        )
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+      }
       this.#throwProviderError(error)
     }
   }
@@ -201,6 +217,11 @@ export class AgentGateway {
         next = prepared.task
         toolResults = { ...toolResults, ...passengerToolResults, ...prepared.toolResults }
       } catch (error) {
+        if (error instanceof ReadToolOrchestrationError) {
+          const stored = this.#store.save(this.#publishFallback(next, current.toolResults, error))
+          this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+          return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+        }
         this.#throwProviderError(error, current)
       }
     }
@@ -267,6 +288,26 @@ export class AgentGateway {
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: execution.effect })
         return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
       } catch (error) {
+        if (error instanceof ReadToolOrchestrationError) {
+          const retryableTask: AirportPickupTaskState = {
+            ...next,
+            navigation: undefined,
+            returnTrip: {
+              workflowId: request.event.eventId,
+              route: { status: 'pending' },
+              cabin: { status: 'pending' },
+              media: { status: 'pending' },
+            },
+          }
+          const stored = this.#store.save(this.#publishFallback(retryableTask, current.toolResults, error, {
+            actionId: 'retry-return-trip',
+            label: '重试返程设置',
+            componentId: 'return-trip-provider-fallback',
+            actionToken: `${current.task.taskId}:retry-return-trip`,
+          }))
+          this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+          return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+        }
         this.#throwProviderError(error, current)
       }
     }
@@ -545,7 +586,22 @@ export class AgentGateway {
       throw new AgentGatewayError('INVALID_REQUEST', 'Retry return-trip action is not registered for the current task state', false, current)
     }
 
-    const preferences = this.#orchestrator.resolveReturnTripPreferences(taskId, request.clientRequestId, current.task.passengers.memberIds)
+    let preferences
+    try {
+      preferences = this.#orchestrator.resolveReturnTripPreferences(taskId, request.clientRequestId, current.task.passengers.memberIds)
+    } catch (error) {
+      if (error instanceof ReadToolOrchestrationError) {
+        const stored = this.#store.save(this.#publishFallback(current.task, current.toolResults, error, {
+          actionId: 'retry-return-trip',
+          label: '重试返程设置',
+          componentId: 'return-trip-provider-fallback',
+          actionToken: `${current.task.taskId}:retry-return-trip`,
+        }))
+        this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: [] })
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+      }
+      this.#throwProviderError(error, current)
+    }
     const records = preferences.data.members
     const homeDestinationId = records.find((member) => member.homeDestinationId)?.homeDestinationId ?? current.task.returnTrip.homeDestinationId
     const cabinMember = records.find((member) => member.rearTemperatureC !== undefined || member.mediaTitle !== undefined)
@@ -672,6 +728,23 @@ export class AgentGateway {
         }
       : uiWithoutStartNavigation
     return { task: { ...task, uiRevision: publishedUi.uiRevision }, ui: publishedUi, toolResults }
+  }
+
+  #publishFallback(
+    task: AirportPickupTaskState,
+    toolResults: ReadToolResults | undefined,
+    error: ReadToolOrchestrationError,
+    retry?: { actionId: string; label: string; componentId: string; actionToken: string },
+  ): StoredTask {
+    const timeout = error.code === 'PROVIDER_TIMEOUT'
+    const ui = composeFallbackSpec(
+      task,
+      timeout ? '数据暂时不可用' : '数据源暂时不可用',
+      timeout ? '正在保留当前任务信息，请稍后重试。' : '已保留当前任务信息，请稍后重试。',
+      timeout ? 'warning' : 'error',
+      retry,
+    )
+    return { task: { ...task, uiRevision: ui.uiRevision }, ui, toolResults }
   }
 
   #assertRevisions(current: StoredTask, expectedTaskRevision: number, expectedUiRevision?: number): void {

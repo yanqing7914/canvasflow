@@ -14,6 +14,8 @@ export const airportPickupPhaseSchema = z.enum([
 export const flightStateSchema = z
   .object({
     flightNumber: z.string().min(1),
+    /** False means only the locally parsed number is known; provider facts are not verified. */
+    trusted: z.boolean().optional(),
     status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
     /**
      * Original published schedule; optional for legacy task/events that only

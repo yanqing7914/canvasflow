@@ -64,6 +64,20 @@ describe('ReadToolOrchestrator', () => {
     )
   })
 
+  it('rejects a valid envelope from a different provider request', () => {
+    const registry = createMutableRegistry()
+    const original = registry['family.resolve-members']
+    registry['family.resolve-members'] = (ctx, input) => {
+      const result = original(ctx, input)
+      return { ...result, meta: { ...result.meta, requestId: 'stale-request:family.resolve-members' } }
+    }
+    const orchestrator = new ReadToolOrchestrator({ registry })
+
+    expect(() => orchestrator.resolveInitialPassengers('pickup-001', 'create-001', ['妈妈'])).toThrowError(
+      expect.objectContaining<Partial<ReadToolOrchestrationError>>({ code: 'PROVIDER_FAILED', retryable: false }),
+    )
+  })
+
   it('authorizes notification when a later contactable member has valid authorization', () => {
     const registry = createMutableRegistry()
     registry['family.resolve-members'] = (ctx) => successfulResult('family.resolve-members', {

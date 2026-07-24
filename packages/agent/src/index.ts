@@ -61,7 +61,7 @@ export function applyEvent(
         if (passengers && (flightNumber !== undefined || next.flight !== undefined || next.passengers.memberIds.length > 0)) {
           next.passengers = mergePassengers(next.passengers, passengers)
         }
-        if (flightNumber) next.flight = { flightNumber, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
+        if (flightNumber) next.flight = { flightNumber, trusted: false, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
       }
       if (/补能|充电/.test(event.text)) {
         const accepted = /先去(?:充电|补能)/.test(event.text)

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createProviderRegistry, createSideEffectRuntime } from '@canvasflow/tools'
 import { AgentGateway, AgentGatewayError } from './gateway'
-import { ReadToolOrchestrator } from './orchestration'
+import { ReadToolOrchestrationError, ReadToolOrchestrator } from './orchestration'
 import { MemoryTaskStore } from './store'
 
 const now = '2026-07-22T12:00:00+08:00'
@@ -187,7 +187,7 @@ describe('AgentGateway', () => {
     expect(updated).not.toHaveProperty('toolResults')
   })
 
-  it('leaves event state unchanged when provider preparation times out and remains retryable', () => {
+  it('leaves event state unchanged when provider preparation times out and returns deterministic fallback UI', () => {
     const store = new MemoryTaskStore()
     const gateway = new AgentGateway({ store, now: () => now, createId: () => '001', orchestrator: new ReadToolOrchestrator() })
     const created = gateway.createTask(createRequest())
@@ -197,26 +197,127 @@ describe('AgentGateway', () => {
       event: { eventId: 'flight-timeout', type: 'user.input' as const, text: 'MU0000', timestamp: '2026-07-22T12:01:00+08:00' },
     }
 
-    expect(() => gateway.submitEvent(created.task.taskId, request)).toThrowError(
-      expect.objectContaining({ code: 'PROVIDER_TIMEOUT', retryable: true, latest: expect.objectContaining({ task: created.task }) }),
-    )
-    expect(gateway.getTask(created.task.taskId).task).toEqual(created.task)
-    expect(() => gateway.submitEvent(created.task.taskId, request)).toThrowError(
-      expect.objectContaining({ code: 'PROVIDER_TIMEOUT', retryable: true }),
-    )
+    const first = gateway.submitEvent(created.task.taskId, request)
+    expect(first.task).toMatchObject({
+      uiRevision: created.task.uiRevision + 1,
+      taskRevision: created.task.taskRevision + 1,
+      phase: 'preparing',
+    })
+    expect(first.ui.meta.generatedBy).toBe('fallback')
+    expect(first.meta.fallbackUsed).toBe(true)
+    const duplicate = gateway.submitEvent(created.task.taskId, { ...request, clientRequestId: 'client-timeout-retry' })
+    expect(duplicate.task).toEqual(first.task)
+    expect(duplicate.ui).toEqual(first.ui)
+    expect(duplicate.effects).toEqual(first.effects)
   })
 
-  it('maps non-timeout provider failures without committing the event', () => {
+  it('maps non-timeout provider failures to a deterministic fallback without committing the event', () => {
     const store = new MemoryTaskStore()
     const gateway = new AgentGateway({ store, now: () => now, createId: () => '001' })
     const created = gateway.createTask(createRequest())
 
-    expect(() => gateway.submitEvent(created.task.taskId, {
+    const failed = gateway.submitEvent(created.task.taskId, {
       clientRequestId: 'client-provider-failed',
       expectedTaskRevision: 0,
       event: { eventId: 'unknown-flight', type: 'user.input', text: 'MU9999', timestamp: '2026-07-22T12:01:00+08:00' },
-    })).toThrowError(expect.objectContaining({ code: 'PROVIDER_FAILED', retryable: false, latest: expect.objectContaining({ task: created.task }) }))
-    expect(gateway.getTask(created.task.taskId).task).toEqual(created.task)
+    })
+    expect(failed.task).toMatchObject({
+      uiRevision: created.task.uiRevision + 1,
+      taskRevision: created.task.taskRevision + 1,
+      phase: 'preparing',
+    })
+    expect(failed.ui.meta.generatedBy).toBe('fallback')
+    expect(failed.meta.fallbackUsed).toBe(true)
+  })
+
+  it('stores and replays the same fallback when initial trip preparation times out', () => {
+    const gateway = createGateway()
+    const request = createRequest('接妈妈，航班 MU0000')
+
+    const first = gateway.createTask(request)
+    const duplicate = gateway.createTask(request)
+
+    expect(first.task).toMatchObject({
+      taskRevision: 1,
+      flight: { flightNumber: 'MU0000' },
+      passengers: { memberIds: ['mom'], names: ['妈妈'] },
+    })
+    expect(first.ui.meta.generatedBy).toBe('fallback')
+    expect(first.meta.fallbackUsed).toBe(true)
+    expect(duplicate.task).toEqual(first.task)
+    expect(duplicate.ui).toEqual(first.ui)
+    expect(duplicate.effects).toEqual(first.effects)
+  })
+
+  it('preserves locally parsed passenger and flight facts when initial passenger lookup fails', () => {
+    const base = new ReadToolOrchestrator()
+    let passengerReads = 0
+    const orchestrator = {
+      resolveInitialPassengers: (taskId: string, requestId: string, labels: string[]) => {
+        passengerReads += 1
+        if (passengerReads === 1) throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'family timeout', true)
+        return base.resolveInitialPassengers(taskId, requestId, labels)
+      },
+      prepareTrip: base.prepareTrip.bind(base),
+      resolveReturnTripPreferences: base.resolveReturnTripPreferences.bind(base),
+    }
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator })
+    const request = createRequest('接妈妈，航班 MU5102')
+
+    const fallback = gateway.createTask(request)
+
+    expect(fallback.task).toMatchObject({
+      phase: 'preparing',
+      passengers: { memberIds: ['mom'], names: ['妈妈'] },
+      flight: { flightNumber: 'MU5102', trusted: false },
+      message: { autoNotifyAuthorized: false },
+    })
+    expect(fallback.assistant).toBeUndefined()
+    expect(fallback.meta.fallbackUsed).toBe(true)
+
+    const recovered = gateway.submitEvent(fallback.task.taskId, {
+      clientRequestId: 'client-create-retry',
+      expectedTaskRevision: fallback.task.taskRevision,
+      event: { eventId: 'retry-input', type: 'user.input', text: request.input.text, timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(recovered.meta.fallbackUsed).toBe(false)
+    expect(recovered.task).toMatchObject({
+      passengers: { memberIds: ['mom'], names: ['妈妈'] },
+      flight: { flightNumber: 'MU5102' },
+      navigation: { routeId: 'route-airport-001' },
+      message: { autoNotifyAuthorized: true },
+    })
+  })
+
+  it('preserves an incremental flight slot when preparation fails after user input', () => {
+    const base = new ReadToolOrchestrator()
+    const orchestrator = {
+      resolveInitialPassengers: base.resolveInitialPassengers.bind(base),
+      prepareTrip: () => { throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'flight timeout', true) },
+      resolveReturnTripPreferences: base.resolveReturnTripPreferences.bind(base),
+    }
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator })
+    const created = gateway.createTask(createRequest('接妈妈'))
+
+    const fallback = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight-input',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'flight-input', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(fallback.meta.fallbackUsed).toBe(true)
+    expect(fallback.task).toMatchObject({
+      phase: 'preparing',
+      flight: { flightNumber: 'MU5102' },
+      passengers: { memberIds: ['mom'], names: ['妈妈'] },
+    })
+    const duplicate = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight-input-retry',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'flight-input', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(duplicate.task).toEqual(fallback.task)
+    expect(duplicate.ui).toEqual(fallback.ui)
   })
 
   it('returns the current snapshot through revision conflict errors', () => {
@@ -408,6 +509,7 @@ describe('AgentGateway', () => {
     const started = gateway.submitAction(created.task.taskId, { clientRequestId: 's', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 's' })
     const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'g', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'g', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
     const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'p', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'p', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    expect(waiting.task.phase).toBe('waiting-for-passengers')
     const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
     expect(failed.task).toMatchObject({
       phase: 'returning-home',
@@ -424,6 +526,39 @@ describe('AgentGateway', () => {
     expect(mediaCalls).toBe(2)
     expect(retry.task.returnTrip).toMatchObject({ route: { status: 'succeeded' }, cabin: { status: 'succeeded' }, media: { status: 'succeeded' } })
     expect(retry.effects).toContainEqual(expect.objectContaining({ type: 'media.play', status: 'succeeded' }))
+  })
+
+  it('keeps a retry action when return-trip preference lookup falls back', () => {
+    const runtime = createSideEffectRuntime()
+    const base = new ReadToolOrchestrator({ registry: createProviderRegistry(runtime) })
+    let preferenceReads = 0
+    const orchestrator = {
+      resolveInitialPassengers: base.resolveInitialPassengers.bind(base),
+      prepareTrip: base.prepareTrip.bind(base),
+      resolveReturnTripPreferences: (taskId: string, requestId: string, memberIds: string[]) => {
+        preferenceReads += 1
+        if (preferenceReads === 1) throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'preference timeout', true)
+        return base.resolveReturnTripPreferences(taskId, requestId, memberIds)
+      },
+    }
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime, orchestrator })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 's', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 's' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'g', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'g', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'p', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'p', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const fallback = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
+
+    expect(fallback.task.phase).toBe('returning-home')
+    expect(preferenceReads).toBe(1)
+    expect(fallback.meta.fallbackUsed).toBe(true)
+    expect(fallback.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
+
+    const retry = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'o-retry', expectedTaskRevision: fallback.task.taskRevision, expectedUiRevision: fallback.ui.uiRevision,
+      actionId: 'retry-return-trip', componentId: 'return-trip-provider-fallback', idempotencyKey: 'return-retry',
+    })
+    expect(retry.meta.fallbackUsed).toBe(false)
+    expect(retry.task.returnTrip?.route.status).toBe('succeeded')
   })
 
   it('marks a previously failed route succeeded when retry resumes later effects', () => {
