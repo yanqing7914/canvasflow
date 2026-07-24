@@ -3,6 +3,8 @@ dist
 coverage
 apps/*/dist
 packages/*/dist
+playwright-report
+test-results
 .DS_Store
 .env
 .env.*
