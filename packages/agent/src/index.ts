@@ -6,10 +6,12 @@ import {
 } from '@canvasflow/schema'
 import { memberPreferences, resolveAuthorizedLandingContact, type MemberPreferenceRecord } from '@canvasflow/tools'
 import { normalizeFlightNumber } from './flight-number'
+import { mergePassengers, parsePassengers } from './passengers'
 
 export * from './effects'
 export * from './effect-executor'
 export * from './flight-number'
+export * from './passengers'
 export * from './composer'
 export * from './landing-message-retry'
 export * from './gateway'
@@ -52,7 +54,13 @@ export function applyEvent(
     case 'user.input':
       {
         const flightNumber = normalizeFlightNumber(event.text)
-        handled = flightNumber !== undefined || /机场|接妈妈|接豆豆|补能|充电|座舱|偏好|温度|媒体/.test(event.text)
+        const passengers = parsePassengers(event.text)
+        handled = flightNumber !== undefined || passengers !== undefined || /机场|接妈妈|接爸爸|接豆豆|补能|充电|座舱|偏好|温度|媒体/.test(event.text)
+        // Gateway resolves passengers during task creation; the reducer only
+        // fills a passenger slot when this event can complete an existing trip.
+        if (passengers && (flightNumber !== undefined || next.flight !== undefined || next.passengers.memberIds.length > 0)) {
+          next.passengers = mergePassengers(next.passengers, passengers)
+        }
         if (flightNumber) next.flight = { flightNumber, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
       }
       if (/补能|充电/.test(event.text)) {

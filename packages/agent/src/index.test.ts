@@ -27,6 +27,17 @@ describe('airport pickup task engine', () => {
     })
   })
 
+  it('fills passenger slots from a later user.input event', () => {
+    const state = {
+      ...createInitialTask(),
+      flight: { flightNumber: 'MU5102', status: 'scheduled' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+    }
+    const next = applyEvent(state, { eventId: 'passenger-input', type: 'user.input', text: '接爸爸', timestamp: '2026-07-22T12:01:00+08:00' })
+
+    expect(next.passengers).toMatchObject({ memberIds: ['dad'], names: ['爸爸'] })
+    expect(next.phase).toBe('preparing')
+  })
+
   it('does not mutate terminal tasks when late events arrive', () => {
     const completed = { ...createInitialTask(), phase: 'completed' as const, taskRevision: 4 }
     const lateEvent = { eventId: 'late-cancel', type: 'user.cancelled-task' as const, timestamp: '2026-07-22T12:10:00+08:00' }

@@ -33,6 +33,24 @@ describe('airport pickup Planner', () => {
     })
   })
 
+  it('supports passenger names from the shared catalog, including dad', () => {
+    expect(planAirportPickup({ text: '接爸爸去机场，航班 MU5102', eventId: 'dad-1', timestamp })).toMatchObject({
+      slotUpdates: {
+        passengers: { memberIds: ['dad'], names: ['爸爸'], confirmedOnboard: false },
+        flightNumber: 'MU5102',
+      },
+      missingSlots: [],
+    })
+  })
+
+  it('fills passengers when the flight is provided before the passenger', () => {
+    const state = createInitialTask('pickup-001', timestamp)
+    const plan = planAirportPickup({ text: '航班 MU5102，接爸爸', state, eventId: 'dad-after-flight', timestamp })
+
+    expect(plan.slotUpdates).toMatchObject({ flightNumber: 'MU5102', passengers: { names: ['爸爸'] } })
+    expect(plan.missingSlots).toEqual([])
+  })
+
   it.each(['MU 5102', 'MU-5102', 'mu 5102'])('keeps %s consistent through Planner, event, and reducer', (input) => {
     const state = {
       ...createInitialTask('pickup-001', timestamp),

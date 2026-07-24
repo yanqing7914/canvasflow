@@ -22,6 +22,7 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask, resolveConfirmation } from './index'
 import { normalizeFlightNumber } from './flight-number'
+import { mergePassengers, parsePassengerLabels, parsePassengers } from './passengers'
 import { composeAgentSpec } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
@@ -115,7 +116,7 @@ export class AgentGateway {
     const timestamp = this.#now()
     const flightNumber = normalizeFlightNumber(request.input.text)
     try {
-      const labels = extractPassengerLabels(request.input.text)
+      const labels = parsePassengerLabels(request.input.text)
       const passengerReads = this.#orchestrator.resolveInitialPassengers(taskId, request.clientRequestId, labels)
       let task = createInitialTask(taskId, timestamp)
       task = {
@@ -126,7 +127,7 @@ export class AgentGateway {
       task = applyEvent(task, {
         eventId: `${request.clientRequestId}:input`,
         type: 'user.input',
-        text: flightNumber ?? request.input.text,
+        text: request.input.text,
         timestamp,
       }, this.#preferences)
       let toolResults = passengerReads.toolResults
@@ -170,11 +171,34 @@ export class AgentGateway {
     let next = applyEvent(current.task, request.event, this.#preferences)
     let toolResults = current.toolResults
     const flightNumber = request.event.type === 'user.input' ? normalizeFlightNumber(request.event.text) : undefined
-    if (flightNumber && next !== current.task && next.phase === 'preparing' && next.passengers.memberIds.length > 0) {
+    const parsedPassengers = request.event.type === 'user.input' ? parsePassengers(request.event.text) : undefined
+    const shouldPrepare = request.event.type === 'user.input'
+      && next !== current.task
+      && next.phase === 'preparing'
+      && next.passengers.memberIds.length > 0
+      && (
+        current.task.phase !== 'preparing'
+        || current.task.passengers.memberIds.length !== next.passengers.memberIds.length
+        || current.task.flight?.flightNumber !== next.flight?.flightNumber
+        || flightNumber !== undefined
+      )
+    if (shouldPrepare) {
       try {
-        const prepared = this.#prepareTask(next, request.clientRequestId, flightNumber)
+        let passengerToolResults: ReadToolResults = {}
+        if (parsedPassengers) {
+          const mergedPassengers = mergePassengers(current.task.passengers, parsedPassengers)
+          const passengerReads = this.#orchestrator.resolveInitialPassengers(
+            taskId,
+            request.clientRequestId,
+            mergedPassengers.names,
+          )
+          next.passengers = mergePassengers(current.task.passengers, passengerReads.passengers)
+          next.message = { ...next.message, autoNotifyAuthorized: passengerReads.notificationAuthorized }
+          passengerToolResults = passengerReads.toolResults
+        }
+        const prepared = this.#prepareTask(next, request.clientRequestId, next.flight!.flightNumber)
         next = prepared.task
-        toolResults = { ...toolResults, ...prepared.toolResults }
+        toolResults = { ...toolResults, ...passengerToolResults, ...prepared.toolResults }
       } catch (error) {
         this.#throwProviderError(error, current)
       }
@@ -461,7 +485,12 @@ export class AgentGateway {
     durationMs: number,
   ): AgentResponse {
     const assistant = stored.task.phase === 'collecting-information'
-      ? { text: '好的，请告诉我她们的航班号。', shouldSpeak: true }
+      ? {
+          text: stored.task.flight === undefined
+            ? '好的，请告诉我她们的航班号。'
+            : '好的，请告诉我要接哪位家人。',
+          shouldSpeak: true,
+        }
       : undefined
     return agentResponseSchema.parse({
       requestId,
@@ -472,8 +501,4 @@ export class AgentGateway {
       meta: { mode: 'fixture', durationMs, fallbackUsed: stored.ui.meta.generatedBy === 'fallback' },
     })
   }
-}
-
-function extractPassengerLabels(text: string): string[] {
-  return ['妈妈', '豆豆'].filter((name) => text.includes(name))
 }
