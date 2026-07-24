@@ -639,6 +639,31 @@ describe('AgentGateway', () => {
     expect(rejectedResult.effects).toEqual([expect.objectContaining({ type: 'memory.propose-update', status: 'cancelled', errorCode: 'USER_REJECTED' })])
   })
 
+  it('does not confirm an expired proposal when the gateway clock is ahead of the provider clock', () => {
+    const runtime = createSideEffectRuntime(() => Date.parse('2026-07-22T12:00:00Z'))
+    let gatewayNow = now
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => gatewayNow,
+      createId: () => '001',
+      runtime,
+    })
+    const completed = completeTask(gateway)
+    expect(completed.pendingConfirmation?.expiresAt).toBe('2026-07-22T12:30:00.000Z')
+    gatewayNow = '2026-07-22T12:31:00Z'
+
+    const expired = gateway.submitConfirmation(completed.taskId, completed.pendingConfirmation!.confirmationId, {
+      clientRequestId: 'client-save-memory-expired',
+      expectedTaskRevision: completed.taskRevision,
+      decision: 'accept',
+      idempotencyKey: 'save-memory-expired',
+    })
+
+    expect(expired.task).toMatchObject({ pendingConfirmation: undefined, memoryProposal: { status: 'expired', errorCode: 'PROPOSAL_EXPIRED' } })
+    expect(expired.effects).toEqual([expect.objectContaining({ type: 'memory.propose-update', status: 'failed', errorCode: 'PROPOSAL_EXPIRED' })])
+    expect(runtime.preferences.mom.rearTemperatureC).toBe(25)
+  })
+
   it('preserves trusted provider context when accepting save-memory confirmation', () => {
     const store = new MemoryTaskStore()
     const gateway = new AgentGateway({ store, now: () => now, createId: () => '001' })

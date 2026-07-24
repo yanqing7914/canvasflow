@@ -406,15 +406,8 @@ export class AgentGateway {
       throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current memory proposal is available', false, current)
     }
     if (pending.expiresAt && Date.parse(pending.expiresAt) < Date.parse(this.#now())) {
-      const expiration = this.#effectExecutor.confirmMemoryUpdate({
-        task: current.task,
-        proposalId: proposal.proposalId,
-        confirmationId,
-        memberId: proposal.memberId ?? '',
-        changes: proposal.changes ?? {},
-        idempotencyKey: request.idempotencyKey,
-        effectId: `${confirmationId}:expired`,
-      })
+      this.#runtime.confirmations.revokeMemoryConfirmation(confirmationId)
+      this.#runtime.memoryProposals.delete(proposal.proposalId)
       const expired = {
         ...current.task,
         memoryProposal: { ...proposal, status: 'expired' as const, errorCode: 'PROPOSAL_EXPIRED' },
@@ -423,9 +416,11 @@ export class AgentGateway {
         updatedAt: this.#eventTimestamp(current.task.updatedAt),
       }
       const effects: AgentResponse['effects'] = [{
-        ...expiration.effect,
+        effectId: `${confirmationId}:expired`,
+        type: 'memory.propose-update',
         status: 'failed',
-        errorCode: expiration.errorCode ?? 'PROPOSAL_EXPIRED',
+        tool: 'memory.propose-update',
+        errorCode: 'PROPOSAL_EXPIRED',
       }]
       const stored = this.#store.save(this.#publish(expired, current.toolResults))
       this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
