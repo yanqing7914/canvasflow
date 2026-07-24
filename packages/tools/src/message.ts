@@ -116,10 +116,12 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', `联系人未授权：${parsed.data.contactId}`, false)
     }
 
-    if (!autoNotifyGranted) {
-      if (!runtime.confirmations.consumeSendMessageConfirmation(parsed.data.confirmationId!, binding)) {
+    if (autoNotifyGranted) {
+      if (!runtime.confirmations.consumeAutoNotifyAuthorization(parsed.data.authorizationId!, binding)) {
         return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要任务绑定的预授权或本次确认', false)
       }
+    } else if (!runtime.confirmations.consumeSendMessageConfirmation(parsed.data.confirmationId!, binding)) {
+      return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要任务绑定的预授权或本次确认', false)
     }
 
     const result = okResult(

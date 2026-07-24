@@ -102,9 +102,9 @@ type ConfirmationRecord =
 /**
  * Opaque, runtime-issued confirmation / authorization tokens. Callers cannot
  * compute a valid token from task/message/proposal fields; they must obtain
- * one via issue* and present it. Send-message and memory tokens are one-shot;
- * auto-notify is a reusable capability grant bound to a prepared landing-message
- * payload (taskId + contactId + messageId + text), not consumed on use.
+ * one via issue* and present it. Send-message, memory, and auto-notify tokens
+ * are all one-shot; auto-notify is additionally bound to a prepared
+ * landing-message payload (taskId + contactId + messageId + text).
  */
 export class ConfirmationStore {
   private readonly grants = new Map<string, ConfirmationRecord>()
@@ -170,7 +170,7 @@ export class ConfirmationStore {
     return true
   }
 
-  /** Capability grant for a prepared payload; not consumed on successful send. */
+/** Capability grant for a prepared payload; must still be unconsumed. */
   matchesAutoNotifyAuthorization(authorizationId: string, binding: AutoNotifyBinding): boolean {
     const grant = this.grants.get(authorizationId)
     if (!grant || grant.kind !== 'auto-notify' || grant.consumed) return false
@@ -180,6 +180,16 @@ export class ConfirmationStore {
       grant.binding.messageId === binding.messageId &&
       grant.binding.text === binding.text
     )
+  }
+
+  /**
+   * Validates and consumes an auto-notify grant. Returns false for unknown,
+   * wrong-kind, already-consumed, or binding-mismatched tokens.
+   */
+  consumeAutoNotifyAuthorization(authorizationId: string, binding: AutoNotifyBinding): boolean {
+    if (!this.matchesAutoNotifyAuthorization(authorizationId, binding)) return false
+    this.grants.get(authorizationId)!.consumed = true
+    return true
   }
 }
 
