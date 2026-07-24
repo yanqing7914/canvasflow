@@ -469,6 +469,17 @@ describe('路线拥堵改线与 plan-route 超时', () => {
       destination: '虹桥机场 T2',
       status: 'active',
     })
+    // update-route 本身不回传几何；改线后再次 plan 应得外环 sketch
+    const sketched = planRoute(ctx, {
+      origin: { latitude: 31.23, longitude: 121.47 },
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      via: [{ id: 'via-ring-road-01', name: '外环快速路' }],
+    })
+    expect(sketched.data).toMatchObject({
+      routeId: 'route-airport-bypass-001',
+      summary: '经外环快速路改线前往机场',
+    })
+    expect(sketched.data?.polyline?.length).toBeGreaterThanOrEqual(3)
   })
 
   it('destination-timeout 确定性触发 PROVIDER_TIMEOUT，可走降级卡片', () => {

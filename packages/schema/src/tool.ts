@@ -90,12 +90,29 @@ export const routePlanInputSchema = z.object({
     .optional(),
 })
 
+/** Optional map-demo point shared by waypoints and simplified polylines. */
+export const routeGeoPointSchema = z.object({
+  latitude: z.number(),
+  longitude: z.number(),
+})
+
+export const routeWaypointSchema = routeGeoPointSchema.extend({
+  id: z.string().min(1),
+  name: z.string().min(1),
+})
+
 export const routePlanOutputSchema = z.object({
   routeId: z.string(),
   distanceKm: z.number().nonnegative(),
   durationMinutes: z.number().nonnegative(),
   arrivalTime: z.iso.datetime({ offset: true }),
   estimatedBatteryAtArrival: z.number().min(0).max(100),
+  /** Named endpoints / vias for static map labels (optional; UI may ignore). */
+  waypoints: z.array(routeWaypointSchema).min(1).optional(),
+  /** Simplified fictional polyline (3–8 points) for demo sketch maps. */
+  polyline: z.array(routeGeoPointSchema).min(3).max(8).optional(),
+  /** One-line human summary distinguishing route variants. */
+  summary: z.string().min(1).optional(),
 })
 
 export const chargingRecommendationInputSchema = z.object({
