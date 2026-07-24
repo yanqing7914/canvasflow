@@ -464,7 +464,7 @@ export class AgentGateway {
       workflowId,
       homeDestinationId: homeDestinationId ?? existing?.homeDestinationId,
       route: execution.navigation
-        ? { status: succeeded('navigation.update-route') ? 'succeeded' : (failed('navigation.update-route') ? 'failed' : existing?.route.status ?? 'pending'), routeId: execution.navigation.routeId, eta: execution.navigation.eta, ...(failed('navigation.update-route') ? { errorCode: failed('navigation.update-route') } : {}) }
+        ? { status: 'succeeded', routeId: execution.navigation.routeId, eta: execution.navigation.eta }
         : { ...(existing?.route ?? { status: 'pending' }), ...(failed('navigation.update-route') ? { status: 'failed' as const, errorCode: failed('navigation.update-route') } : {}) },
       cabin: { status: succeeded('vehicle.apply-cabin-profile') ? 'succeeded' : (failed('vehicle.apply-cabin-profile') ? 'failed' : existing?.cabin.status ?? 'pending'), ...(failed('vehicle.apply-cabin-profile') ? { errorCode: failed('vehicle.apply-cabin-profile') } : {}) },
       media: { status: succeeded('media.play') ? 'succeeded' : (failed('media.play') ? 'failed' : existing?.media.status ?? 'pending'), ...(failed('media.play') ? { errorCode: failed('media.play') } : {}) },

@@ -426,6 +426,17 @@ describe('AgentGateway', () => {
     expect(retry.effects).toContainEqual(expect.objectContaining({ type: 'media.play', status: 'succeeded' }))
   })
 
+  it('marks a previously failed route succeeded when retry resumes later effects', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const prepared = gateway.submitEvent(created.task.taskId, { clientRequestId: 'flight', expectedTaskRevision: created.task.taskRevision, event: { eventId: 'flight', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' } })
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'start', expectedTaskRevision: prepared.task.taskRevision, expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'start' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'g', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'g', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'p', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'p', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const first = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
+    expect(first.task.returnTrip?.route.status).toBe('succeeded')
+  })
+
   it('does not retain the outbound route when return-home address lookup fails', () => {
     const runtime = createSideEffectRuntime()
     runtime.preferences.mom = { ...runtime.preferences.mom, homeDestinationId: undefined }
