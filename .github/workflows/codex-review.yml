@@ -191,7 +191,7 @@ jobs:
           script: |
             const prNumber = Number(process.env.PR_NUMBER)
             const reviewedSha = process.env.REVIEWED_HEAD_SHA
-            const requiredChecks = ['quality', 'branch-and-files']
+            const requiredChecks = ['quality', 'e2e', 'branch-and-files']
             const timeoutMs = 20 * 60 * 1000
             const pollMs = 30 * 1000
             const startedAt = Date.now()
