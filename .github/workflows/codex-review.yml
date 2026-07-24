@@ -170,6 +170,7 @@ jobs:
     permissions:
       checks: read
       contents: write
+      issues: write
       pull-requests: write
     steps:
       - name: Wait for required checks and merge
@@ -276,8 +277,13 @@ jobs:
               return
             }
 
-            await github.rest.issues.createComment({
-              ...repo,
-              issue_number: prNumber,
-              body: 'Auto-merged: CI is green and the latest Codex review reported `CODEX-REVIEW-VERDICT: PASS`.',
-            })
+            try {
+              await github.rest.issues.createComment({
+                ...repo,
+                issue_number: prNumber,
+                body: 'Auto-merged: CI is green and the latest Codex review reported `CODEX-REVIEW-VERDICT: PASS`.',
+              })
+            } catch (error) {
+              // The merge already succeeded; a failed notification must not fail the job.
+              core.warning(`Merged, but could not post the success comment: ${error.message}`)
+            }
