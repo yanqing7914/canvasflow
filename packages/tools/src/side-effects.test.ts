@@ -113,6 +113,24 @@ describe('cabin profile side effects', () => {
     expect(firstRevert.data?.current.temperatureC).toBe(22)
   })
 
+  it('其他 task 不能撤销本任务的座舱效果', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const applied = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear',
+      temperatureC: 25,
+      sourceMemberIds: ['mom'],
+      idempotencyKey: 'pickup-001:apply-owned',
+    })
+    expect(applied.ok).toBe(true)
+    const stolen = registry['vehicle.revert-cabin-profile'](
+      { taskId: 'pickup-002' },
+      { effectId: applied.data!.effectId, idempotencyKey: 'pickup-002:steal-revert' },
+    )
+    expect(stolen.error).toMatchObject({ code: 'POLICY_DENIED', retryable: false })
+    expect(runtime.cabinCurrent.temperatureC).toBe(25)
+  })
+
   it('未授权成员返回 POLICY_DENIED', () => {
     const registry = createProviderRegistry()
     const result = registry['vehicle.apply-cabin-profile'](ctx, {
@@ -477,6 +495,27 @@ describe('memory write side effects', () => {
       idempotencyKey: 'pickup-001:confirm-wrong-token',
     })
     expect(wrong.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', retryable: false })
+  })
+
+  it('其他 task 不能确认本任务的记忆提案，偏好保持不变', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const proposed = registry['memory.propose-update'](ctx, {
+      memberId: 'mom',
+      changes: { rearTemperatureC: 29 },
+    })
+    expect(proposed.ok).toBe(true)
+    const before = runtime.preferences.mom.rearTemperatureC
+    const stolen = registry['memory.confirm-update'](
+      { taskId: 'pickup-002' },
+      {
+        proposalId: proposed.data!.proposalId,
+        confirmationId: proposed.data!.confirmationId,
+        idempotencyKey: 'pickup-002:steal-confirm',
+      },
+    )
+    expect(stolen.error).toMatchObject({ code: 'CONFIRMATION_REQUIRED', retryable: false })
+    expect(runtime.preferences.mom.rearTemperatureC).toBe(before)
   })
 
   it('相同变更幂等返回同一提案，不同变更签发新版本并使旧提案失效', () => {

@@ -59,6 +59,8 @@ export type CabinProfileValues = {
 
 export type CabinEffectRecord = {
   effectId: string
+  /** Task that created this cabin effect; revert must stay on the same task. */
+  taskId: string
   previous: CabinProfileValues
   current: CabinProfileValues
   reverted: boolean
@@ -66,6 +68,8 @@ export type CabinEffectRecord = {
 
 export type MemoryProposalRecord = {
   proposalId: string
+  /** Task that issued this proposal; confirm-update must stay on the same task. */
+  taskId: string
   memberId: string
   before: Record<string, unknown>
   after: Record<string, unknown>

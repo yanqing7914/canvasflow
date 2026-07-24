@@ -83,6 +83,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     const confirmationId = `${proposalId}:confirm`
     runtime.memoryProposals.set(proposalId, {
       proposalId,
+      taskId: ctx.taskId,
       memberId: parsed.data.memberId,
       before,
       after,
@@ -123,6 +124,11 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     if (runtime.nowMs() > proposal.expiresAtMs) {
       runtime.memoryProposals.delete(proposal.proposalId)
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案已过期：${parsed.data.proposalId}`, false)
+    }
+
+    // Task ownership is authoritative: proposalId prefixes are not a security boundary.
+    if (proposal.taskId !== ctx.taskId) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与当前任务不匹配', false)
     }
 
     // 确认凭据必须与提案签发的凭据一致，任意非空字符串不再有效。
