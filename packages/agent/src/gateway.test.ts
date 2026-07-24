@@ -24,6 +24,63 @@ function createRequest(text = '我现在要去机场接妈妈和豆豆') {
 }
 
 describe('AgentGateway', () => {
+  it('cancels and idempotently resets only the requested task', () => {
+    let id = 0
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => now,
+      createId: () => `${++id}`,
+    })
+    const first = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const second = gateway.createTask({ ...createRequest('接爸爸，航班 MU5102'), clientRequestId: 'create-second' })
+
+    const cancelled = gateway.cancelTask(first.task.taskId, {
+      clientRequestId: 'cancel-first',
+      expectedTaskRevision: first.task.taskRevision,
+      eventId: 'cancel-event',
+      reason: '用户取消',
+    })
+    const duplicateCancel = gateway.cancelTask(first.task.taskId, {
+      clientRequestId: 'cancel-first-retry',
+      expectedTaskRevision: first.task.taskRevision,
+      eventId: 'cancel-event',
+      reason: '用户取消',
+    })
+    expect(cancelled.task.phase).toBe('cancelled')
+    expect(duplicateCancel.task).toEqual(cancelled.task)
+
+    const reset = gateway.resetTask(first.task.taskId, {
+      clientRequestId: 'reset-first',
+      expectedTaskRevision: cancelled.task.taskRevision,
+    })
+    const duplicateReset = gateway.resetTask(first.task.taskId, {
+      clientRequestId: 'reset-first',
+      expectedTaskRevision: cancelled.task.taskRevision,
+    })
+    expect(reset.task.phase).toBe('collecting-information')
+    expect(reset.task.taskRevision).toBe(cancelled.task.taskRevision + 1)
+    expect(reset.task.uiRevision).toBeGreaterThan(cancelled.task.uiRevision)
+    expect(duplicateReset.task).toEqual(reset.task)
+    expect(gateway.createTask(createRequest('接妈妈，航班 MU5102')).task).toEqual(reset.task)
+    expect(gateway.getTask(second.task.taskId).task).toEqual(second.task)
+  })
+
+  it('does not replay a non-cancel event when cancel uses the same external event id', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const afterEvent = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'ordinary-event',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'shared-event-id', type: 'provider.timeout', provider: 'flight.get-status', timestamp: now },
+    })
+    const cancelled = gateway.cancelTask(created.task.taskId, {
+      clientRequestId: 'cancel-collision',
+      expectedTaskRevision: afterEvent.task.taskRevision,
+      eventId: 'shared-event-id',
+    })
+    expect(cancelled.task.phase).toBe('cancelled')
+  })
+
   it('creates a recoverable task and asks for the missing flight number', () => {
     const gateway = createGateway()
     const created = gateway.createTask(createRequest())

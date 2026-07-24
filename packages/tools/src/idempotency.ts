@@ -49,6 +49,13 @@ export class IdempotencyStore {
       result: result as ToolResult<unknown>,
     })
   }
+
+  clearTask(taskId: string): void {
+    const prefix = `${taskId}\u0000`
+    for (const key of this.results.keys()) {
+      if (key.startsWith(prefix)) this.results.delete(key)
+    }
+  }
 }
 
 export type CabinProfileValues = {
@@ -222,6 +229,12 @@ export class ConfirmationStore {
     this.grants.get(authorizationId)!.consumed = true
     return true
   }
+
+  clearTask(taskId: string): void {
+    for (const [confirmationId, grant] of this.grants) {
+      if (grant.binding.taskId === taskId) this.grants.delete(confirmationId)
+    }
+  }
 }
 
 /** Mutable fixture runtime shared by side-effect providers in one registry. */
@@ -254,5 +267,17 @@ export function createSideEffectRuntime(nowMs: () => number = () => Date.now()):
     memoryProposals: new Map(),
     preferences,
     nowMs,
+  }
+}
+
+export function resetSideEffectRuntimeTask(runtime: SideEffectRuntime, taskId: string): void {
+  runtime.idempotency.clearTask(taskId)
+  runtime.confirmations.clearTask(taskId)
+  runtime.plannedRouteIdsByTask.delete(taskId)
+  for (const [effectId, effect] of runtime.cabinEffects) {
+    if (effect.taskId === taskId) runtime.cabinEffects.delete(effectId)
+  }
+  for (const [proposalId, proposal] of runtime.memoryProposals) {
+    if (proposal.taskId === taskId) runtime.memoryProposals.delete(proposalId)
   }
 }

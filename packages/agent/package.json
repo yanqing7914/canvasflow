@@ -3,7 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./http": "./src/http.ts"
+  },
   "scripts": { "build": "tsc --noEmit", "typecheck": "tsc --noEmit", "test": "vitest run src" },
   "dependencies": { "@canvasflow/schema": "0.1.0", "@canvasflow/tools": "0.1.0" }
 }
