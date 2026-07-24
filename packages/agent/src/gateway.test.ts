@@ -1104,7 +1104,8 @@ describe('AgentGateway', () => {
     const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'failed-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'failed-nav' })
     const landed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'failed-landed', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'failed-landed-event', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' } })
     const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'failed-sent', expectedTaskRevision: landed.task.taskRevision, event: { eventId: 'failed-sent-event', type: 'message.sent', messageId: landed.task.message.pendingMessageId!, timestamp: '2026-07-22T20:41:00+08:00' } })
-    expect(failed.task).toEqual(landed.task)
+    expect(failed.task.message).toMatchObject({ status: 'failed', pendingContactId: 'contact-mom', pendingMessageId: undefined, authorizationId: undefined })
+    expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-landing-message' }))
     expect(failed.effects).toEqual([expect.objectContaining({ type: 'message.send', status: 'failed', errorCode: 'SEND_FAILED' })])
   })
 

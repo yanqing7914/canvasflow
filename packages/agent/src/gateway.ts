@@ -242,8 +242,15 @@ export class AgentGateway {
       }
       const execution = this.#effectExecutor.sendLandingMessage({ task: current.task, idempotencyKey: current.task.message.idempotencyKey ?? request.event.eventId, effectId: `${request.event.eventId}:0` })
       if (!execution.succeeded) {
-        this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [execution.effect] })
-        return this.#response(request.clientRequestId, current, [execution.effect], performance.now() - startedAt)
+        const failed = this.#store.save(this.#publish(applyEvent(current.task, {
+          eventId: request.event.eventId,
+          type: 'message.failed',
+          messageId: request.event.messageId,
+          errorCode: execution.effect.errorCode ?? 'SEND_FAILED',
+          timestamp: request.event.timestamp,
+        }, this.#preferences), current.toolResults))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored: failed, effects: [execution.effect] })
+        return this.#response(request.clientRequestId, failed, [execution.effect], performance.now() - startedAt)
       }
       const sent = this.#store.save(this.#publish(applyEvent(current.task, request.event, this.#preferences), current.toolResults))
       this.#store.recordEventResult(taskId, request.event.eventId, { stored: sent, effects: [execution.effect] })
