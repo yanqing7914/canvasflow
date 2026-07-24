@@ -88,6 +88,17 @@ describe('navigation side effects', () => {
     expect(result.ok).toBe(true)
     expect(result.data).toMatchObject({ routeId: 'route-home-001', destination: '家', status: 'active' })
   })
+
+  it('update-route 保留 plan-route 的 PROVIDER_TIMEOUT retryable', () => {
+    const registry = createProviderRegistry()
+    planAirportRoute(registry)
+    const result = registry['navigation.update-route'](ctx, {
+      routeId: 'route-airport-001',
+      destination: { id: 'destination-timeout', name: '超时目的地' },
+      idempotencyKey: 'pickup-001:update-timeout',
+    })
+    expect(result.error).toMatchObject({ code: 'PROVIDER_TIMEOUT', retryable: true })
+  })
 })
 
 describe('cabin profile side effects', () => {
@@ -629,7 +640,6 @@ describe('message.send', () => {
       }).error?.code,
     ).toBe('AUTHORIZATION_REQUIRED')
   })
-
   it('失败联系人返回 SEND_FAILED 且不写入幂等账本、不消耗确认', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
@@ -658,7 +668,6 @@ describe('message.send', () => {
       }).error?.code,
     ).toBe('AUTHORIZATION_REQUIRED')
   })
-
   it('opaque 确认：签发→成功发送→消费；伪造/改 payload/重复消费均失败', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)

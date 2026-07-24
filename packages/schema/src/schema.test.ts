@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createTaskRequestSchema } from './api'
+import { airportPickupEventSchema, flightStateSchema } from './task'
 import {
   applyCabinProfileInputSchema,
   cabinProfileValuesSchema,
@@ -63,6 +64,45 @@ describe('Agent API', () => {
       clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true },
     })
     expect(result.success).toBe(true)
+  })
+})
+
+describe('flightStateSchema legacy compatibility', () => {
+  it('derives scheduledArrival from estimatedArrival when omitted', () => {
+    const legacy = {
+      flightNumber: 'MU5102',
+      status: 'landed' as const,
+      estimatedArrival: '2026-07-22T20:40:00+08:00',
+      terminal: 'T2',
+    }
+    expect(flightStateSchema.parse(legacy)).toEqual({
+      ...legacy,
+      scheduledArrival: '2026-07-22T20:40:00+08:00',
+    })
+    const event = airportPickupEventSchema.parse({
+      eventId: 'legacy-flight',
+      type: 'flight.updated',
+      flight: legacy,
+      timestamp: '2026-07-22T20:40:00+08:00',
+    })
+    expect(event.type).toBe('flight.updated')
+    if (event.type !== 'flight.updated') return
+    expect(event.flight.scheduledArrival).toBe('2026-07-22T20:40:00+08:00')
+  })
+
+  it('keeps distinct scheduledArrival when both arrivals are present', () => {
+    expect(
+      flightStateSchema.parse({
+        flightNumber: 'MU5102',
+        status: 'delayed',
+        scheduledArrival: '2026-07-22T20:30:00+08:00',
+        estimatedArrival: '2026-07-22T21:10:00+08:00',
+        terminal: 'T1',
+      }),
+    ).toMatchObject({
+      scheduledArrival: '2026-07-22T20:30:00+08:00',
+      estimatedArrival: '2026-07-22T21:10:00+08:00',
+    })
   })
 })
 

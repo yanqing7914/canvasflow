@@ -396,6 +396,7 @@ describe('AgentGateway', () => {
         flight: {
           flightNumber: 'MU5102',
           status: 'landed',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
           estimatedArrival: '2026-07-22T20:40:00+08:00',
           terminal: 'T2',
         },
@@ -489,6 +490,7 @@ describe('AgentGateway', () => {
         flight: {
           flightNumber: 'MU5102',
           status: 'landed',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
           estimatedArrival: '2026-07-22T20:40:00+08:00',
           terminal: 'T2',
         },

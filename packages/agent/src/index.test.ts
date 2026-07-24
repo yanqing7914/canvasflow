@@ -35,12 +35,12 @@ describe('airport pickup task engine', () => {
 
   it('does not plan duplicate external effects', () => {
     const state = { ...createInitialTask(), processedEventIds: ['landed'] }
-    const event = { eventId: 'landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' }
+    const event = { eventId: 'landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' }
     expect(planEffects(state, event, {})).toEqual([])
   })
 
   it('schedules a landing notification only once across provider updates', () => {
-    const first = { eventId: 'landed-1', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' }
+    const first = { eventId: 'landed-1', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' }
     const second = { ...first, eventId: 'landed-2', timestamp: '2026-07-22T20:41:00+08:00' }
     const state = {
       ...createInitialTask(),
@@ -85,7 +85,7 @@ describe('airport pickup task engine', () => {
   })
 
   it('does not schedule landing notifications before driving', () => {
-    const event = { eventId: 'early-landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:00:00+08:00' }
+    const event = { eventId: 'early-landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:00:00+08:00' }
     const next = applyEvent(createInitialTask(), event)
     expect(next.message.status).toBe('idle')
     expect(planEffects(createInitialTask(), event, {})).toEqual([])
@@ -93,14 +93,14 @@ describe('airport pickup task engine', () => {
 
   it('rejects stale provider updates delivered after newer state', () => {
     const driving = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:30:00+08:00' }
-    const landed = applyEvent(driving, { eventId: 'landed-new', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' })
-    const stale = applyEvent(landed, { eventId: 'in-air-old', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:35:00+08:00' })
+    const landed = applyEvent(driving, { eventId: 'landed-new', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' })
+    const stale = applyEvent(landed, { eventId: 'in-air-old', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'in-air', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:35:00+08:00' })
     expect(stale).toEqual(landed)
   })
 
   it('does not plan effects for stale events', () => {
-    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:40:00+08:00', flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' } }
-    const stale = { eventId: 'stale-landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:35:00+08:00' }
+    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:40:00+08:00', flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' } }
+    const stale = { eventId: 'stale-landed', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:35:00+08:00' }
     expect(planEffects(state, stale, {})).toEqual([])
   })
 
@@ -117,9 +117,32 @@ describe('airport pickup task engine', () => {
   })
 
   it('rejects conflicting provider updates at the same timestamp', () => {
-    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:40:00+08:00', flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' } }
-    const event = { eventId: 'same-time', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'in-air' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: state.updatedAt }
+    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:40:00+08:00', flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' } }
+    const event = { eventId: 'same-time', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'in-air' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: state.updatedAt }
     expect(applyEvent(state, event)).toEqual(state)
+  })
+
+  it('records charging acceptance when charging.started fires', () => {
+    const driving = {
+      ...createInitialTask(),
+      phase: 'driving-to-airport' as const,
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+      updatedAt: '2026-07-22T20:05:00+08:00',
+    }
+    const started = applyEvent(driving, {
+      eventId: 'charge-start',
+      type: 'charging.started',
+      stationId: 'station-hongqiao-01',
+      timestamp: '2026-07-22T20:06:00+08:00',
+    })
+    expect(started.charging).toMatchObject({ recommended: true, accepted: true, status: 'active' })
+    const completed = applyEvent(started, {
+      eventId: 'charge-done',
+      type: 'charging.completed',
+      batteryPercent: 78,
+      timestamp: '2026-07-22T20:18:00+08:00',
+    })
+    expect(completed.charging).toMatchObject({ accepted: true, status: 'completed' })
   })
 
   it('plans cabin apply for media-only preferences without temperature', () => {
@@ -182,7 +205,7 @@ describe('airport pickup task engine', () => {
     const landed = applyEvent(driving, {
       eventId: 'landed-auth-contact',
       type: 'flight.updated',
-      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
       timestamp: '2026-07-22T20:40:00+08:00',
     })
     expect(landed.message.pendingContactId).toBe('contact-mom')
@@ -194,7 +217,7 @@ describe('airport pickup task engine', () => {
     const unauthorizedLandedEvent = {
       eventId: 'landed-no-auth-contact',
       type: 'flight.updated' as const,
-      flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
       timestamp: '2026-07-22T20:40:00+08:00',
     }
     expect(planEffects(unauthorizedPassengers, unauthorizedLandedEvent, {})).toEqual([])
@@ -220,7 +243,7 @@ describe('airport pickup task engine', () => {
     const dadAuthEvent = {
       eventId: 'landed-dad-auth',
       type: 'flight.updated' as const,
-      flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
       timestamp: '2026-07-22T20:40:00+08:00',
     }
     expect(planEffects(momDadPassengers, dadAuthEvent, {}, runtime.preferences)).toEqual([

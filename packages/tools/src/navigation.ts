@@ -10,7 +10,7 @@ import {
   type RoutePlanOutput,
   type ToolResult,
 } from '@canvasflow/schema'
-import { DEMO_ORIGIN, knownRouteIds, routeFixtureKey, routes } from './data'
+import { DEMO_ORIGIN, knownRouteIds, routeFixtureKey, routes, TIMEOUT_DESTINATION_ID } from './data'
 import type { SideEffectRuntime } from './idempotency'
 import { errorResult, okResult, type ToolContext } from './result'
 
@@ -25,6 +25,10 @@ export function planRoute(ctx: ToolContext, input: unknown): ToolResult<RoutePla
   }
 
   const { origin, destination, via, preferences } = parsed.data
+  if (destination.id === TIMEOUT_DESTINATION_ID) {
+    return errorResult(ctx, PLAN, 'PROVIDER_TIMEOUT', '路线数据源超时', true)
+  }
+
   const key = routeFixtureKey({
     originLatitude: origin.latitude,
     originLongitude: origin.longitude,
@@ -151,7 +155,8 @@ export function createNavigationSideEffects(runtime: SideEffectRuntime) {
         UPDATE,
         planned.error?.code ?? 'ROUTE_NOT_FOUND',
         planned.error?.message ?? '无法更新路线',
-        false,
+        // Preserve provider retryability (e.g. destination-timeout → PROVIDER_TIMEOUT).
+        planned.error?.retryable ?? false,
       )
     }
 

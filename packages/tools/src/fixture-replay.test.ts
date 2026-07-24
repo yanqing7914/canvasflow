@@ -137,6 +137,10 @@ describe('fixture toolResults contract', () => {
     }
     expect(getVehicleStatus(ctx, { snapshot: 'post-charge' }).data)
       .toEqual(toolData('charging-completed', 'vehicle.get-status'))
+    expect(getVehicleStatus(ctx, { snapshot: 'city-driving' }).data)
+      .toEqual(toolData('approaching-airport', 'vehicle.get-status'))
+    expect(getVehicleStatus(ctx, { snapshot: 'airport-parked' }).data)
+      .toEqual(toolData('waiting-for-passengers', 'vehicle.get-status'))
     expect(getVehicleStatus(ctx, { snapshot: 'rear-occupied' }).data)
       .toEqual(toolData('passengers-onboard', 'vehicle.get-status'))
     expect(getPreferences(ctx, { memberIds: ['mom', 'doubao'], scopes: ['cabin', 'media'] }).data)
@@ -172,9 +176,17 @@ describe('fixture toolResults contract', () => {
   })
 
   it('keeps hand-authored provider pushes consistent with the flight timeline', () => {
-    // in-air / landed 表示 provider 在时间线上的推送，静态 fixture 数据无法重放，只校验关键字段。
+    // in-air / landed / delayed / cancelled 表示 provider 在时间线上的推送，静态主航班数据无法重放，只校验关键字段。
     expect(toolData('flight-in-air', 'flight.get-status')).toMatchObject({ flightNumber: 'MU5102', status: 'in-air' })
     expect(toolData('flight-landed', 'flight.get-status')).toMatchObject({ flightNumber: 'MU5102', status: 'landed', baggageClaim: '12' })
+    expect(toolData('flight-delayed', 'flight.get-status')).toMatchObject({
+      flightNumber: 'MU5102',
+      status: 'delayed',
+      terminal: 'T1',
+      scheduledArrival: '2026-07-22T20:30:00+08:00',
+      estimatedArrival: '2026-07-22T21:10:00+08:00',
+    })
+    expect(toolData('flight-cancelled', 'flight.get-status')).toMatchObject({ flightNumber: 'MU5102', status: 'cancelled' })
     const timeout = fixtureById.get('provider-timeout')!.toolResults['flight.get-status'] as { error: unknown }
     expect(timeout.error).toEqual(getFlightStatus(ctx, { flightNumber: 'MU0000', date: '2026-07-22' }).error)
   })
@@ -237,13 +249,13 @@ function replayMainTimeline(): TimelineRun {
   expect(started.ok).toBe(true)
 
   step({ eventId: 'timeline-charging-started', type: 'charging.started', stationId: 'station-hongqiao-01', timestamp: '2026-07-22T20:06:00+08:00' })
-  expect(state.charging.status).toBe('active')
+  expect(state.charging).toMatchObject({ accepted: true, status: 'active' })
 
   step(event('flight-in-air'))
   expect(state.flight?.status).toBe('in-air')
 
   step(event('charging-completed'))
-  expect(state.charging.status).toBe('completed')
+  expect(state.charging).toMatchObject({ accepted: true, status: 'completed' })
 
   step(event('flight-landed'))
   expect(state.message).toMatchObject({ status: 'scheduled', idempotencyKey: 'pickup-001:MU5102:landing' })

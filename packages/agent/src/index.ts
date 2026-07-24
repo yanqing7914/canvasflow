@@ -52,7 +52,7 @@ export function applyEvent(
       {
         const flightNumber = normalizeFlightNumber(event.text)
         handled = flightNumber !== undefined || /机场|接妈妈|接豆豆|补能|充电|座舱|偏好|温度|媒体/.test(event.text)
-        if (flightNumber) next.flight = { flightNumber, status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
+        if (flightNumber) next.flight = { flightNumber, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }
       }
       if (/补能|充电/.test(event.text)) {
         const accepted = /先去(?:充电|补能)/.test(event.text)
@@ -89,7 +89,12 @@ export function applyEvent(
     case 'vehicle.parked': if (next.phase === 'approaching-airport') next.phase = 'waiting-for-passengers'; break
     case 'user.confirmed-passengers-onboard': if (next.phase === 'waiting-for-passengers') { next.passengers.confirmedOnboard = true; next.phase = 'returning-home' } break
     case 'destination.arrived': if (next.phase === 'returning-home') { next.phase = 'completed'; next.navigation = next.navigation ? { ...next.navigation, destination: event.destination, status: 'arrived' } : undefined; next.pendingConfirmation = { confirmationId: `${next.taskId}:save-memory`, action: 'save-memory' } } break
-    case 'charging.started': if (next.phase === 'driving-to-airport' && next.charging.status === 'planned') next.charging.status = 'active'; break
+    case 'charging.started':
+      if (next.phase === 'driving-to-airport' && next.charging.status === 'planned') {
+        // Starting charging records that the user accepted the recommended plan.
+        next.charging = { ...next.charging, accepted: true, status: 'active' }
+      }
+      break
     case 'charging.completed': if (next.charging.status === 'active') next.charging.status = 'completed'; break
     case 'charging.cancelled': if (next.charging.status === 'planned' || next.charging.status === 'active') next.charging = { ...next.charging, accepted: false, status: 'none' }; break
     case 'user.cancelled-task':

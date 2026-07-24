@@ -2,33 +2,18 @@ import { useMemo, useState } from 'react'
 import {
   applyEvent,
   armLandingMessageRetry,
-  createInitialTask,
   resolveConfirmation,
   resolveLandingMessageRetry,
 } from '@canvasflow/agent'
 import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
-import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
+import type { AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
+import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 
 const demoRuntime = createSideEffectRuntime()
 
-const timeline: AirportPickupEvent[] = [
-  { eventId: 'start-navigation', type: 'navigation.started', routeId: 'route-airport-001', timestamp: '2026-07-22T20:05:00+08:00' },
-  { eventId: 'flight-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' },
-  { eventId: 'airport-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T20:41:00+08:00' },
-  { eventId: 'vehicle-parked', type: 'vehicle.parked', timestamp: '2026-07-22T20:45:00+08:00' },
-  { eventId: 'passengers-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T20:55:00+08:00' },
-  { eventId: 'trip-completed', type: 'destination.arrived', destination: '家', timestamp: '2026-07-22T21:35:00+08:00' },
-]
-
 function createDemoTask(): AirportPickupTaskState {
-  return {
-    ...createInitialTask(),
-    passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-    flight: { flightNumber: 'MU5102', status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
-    phase: 'preparing',
-    taskRevision: 1,
-  }
+  return mainFlowTimeline.initialTaskState
 }
 
 function componentSummary(component: ComponentSpec): string {
@@ -38,7 +23,8 @@ function componentSummary(component: ComponentSpec): string {
     case 'status-banner': return component.props.message ?? component.props.title
     case 'flight-status': return `${component.props.flightNumber} · ${component.props.status} · ${component.props.terminal}`
     case 'navigation-summary': return `${component.props.destination} · ETA ${component.props.eta}`
-    case 'charging-recommendation': return component.props.reason
+    case 'charging-recommendation':
+      return `${component.props.reason} · ${component.props.currentBatteryPercent}% → ${component.props.estimatedFinalBatteryPercent}%`
     case 'message-preview': return `${component.props.contactLabel}：${component.props.textPreview}`
     case 'passenger-status': return component.props.meetingPoint ? `${component.props.label} · ${component.props.meetingPoint}` : component.props.label
     case 'cabin-profile': {
@@ -82,10 +68,7 @@ export default function App({
       ?? Boolean(resolveAuthorizedLandingContact(task.passengers.memberIds, demoRuntime.preferences)),
   }), [task, composeContext])
   const advance = () => {
-    const candidate = timeline
-      .map((event) => ({ event, next: applyEvent(task, event, demoRuntime.preferences) }))
-      .find(({ event, next }) => !task.processedEventIds.includes(event.eventId) && next.processedEventIds.includes(event.eventId))
-    if (candidate) setTask(candidate.next)
+    setTask((current) => advanceMainFlowStep(current, demoRuntime.preferences))
   }
   const handleAction = (actionId: string) => {
     if (actionId === 'save-trip-preferences') {

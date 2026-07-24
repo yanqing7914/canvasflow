@@ -4,8 +4,7 @@ import {
   createMessagePreparer,
   createMessageSender,
   resolveAuthorizedLandingContact,
-  revokeSendMessageConfirmation,
-  type MemberPreferenceRecord,
+  revokeSendMessageConfirmation,  type MemberPreferenceRecord,
   type SideEffectRuntime,
 } from '@canvasflow/tools'
 
@@ -55,7 +54,6 @@ export function armLandingMessageRetry(
   if (task.pendingConfirmation?.action === 'send-message') {
     revokeSendMessageConfirmation(runtime, task.pendingConfirmation.confirmationId)
   }
-
   const eta = resolveLandingMeetingEta(task)
   const prepared = createMessagePreparer(runtime)(
     { taskId: task.taskId },
@@ -95,8 +93,7 @@ export type LandingMessageRetryResolution =
 /**
  * Resolve a pending send-message confirmation.
  * Accept prepares an armed task + receipt event for the caller to apply;
- * reject clears the confirmation boundary and revokes the opaque grant.
- */
+ * reject clears the confirmation boundary and revokes the opaque grant. */
 export function resolveLandingMessageRetry(
   task: AirportPickupTaskState,
   runtime: SideEffectRuntime,
