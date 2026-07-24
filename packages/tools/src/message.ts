@@ -110,6 +110,18 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       return errorResult(ctx, SEND, 'INVALID_ARGUMENT', '需要 contactId、messageId、text 和 idempotencyKey', false)
     }
 
+    // Exclusive credential modes: supplying both leaves the unused token live for a
+    // second send under a fresh idempotency key.
+    if (parsed.data.authorizationId !== undefined && parsed.data.confirmationId !== undefined) {
+      return errorResult(
+        ctx,
+        SEND,
+        'INVALID_ARGUMENT',
+        '不能同时提供 authorizationId 与 confirmationId',
+        false,
+      )
+    }
+
     const cached = runtime.idempotency.get<MessageSendOutput>(ctx.taskId, SEND, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
@@ -124,7 +136,7 @@ export function createMessageSender(runtime: SideEffectRuntime) {
     }
 
     // 凭据必须由 runtime 签发：auto-notify 与 confirmation 均绑定到具体消息 payload；
-    // 预授权路径还要求联系人对应成员开启了落地通知授权。
+    // 预授权路径还要求联系人对应成员开启了落地通知授权。二者互斥，见上方校验。
     const member = familyMembers.find((candidate) => candidate.contactId === parsed.data.contactId)
     const autoNotifyGranted =
       parsed.data.authorizationId !== undefined &&
@@ -149,10 +161,12 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', `联系人未授权：${parsed.data.contactId}`, false)
     }
 
-    if (!autoNotifyGranted) {
-      if (!runtime.confirmations.consumeSendMessageConfirmation(parsed.data.confirmationId!, binding)) {
+    if (autoNotifyGranted) {
+      if (!runtime.confirmations.consumeAutoNotifyAuthorization(parsed.data.authorizationId!, binding)) {
         return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要任务绑定的预授权或本次确认', false)
       }
+    } else if (!runtime.confirmations.consumeSendMessageConfirmation(parsed.data.confirmationId!, binding)) {
+      return errorResult(ctx, SEND, 'AUTHORIZATION_REQUIRED', '发送消息需要任务绑定的预授权或本次确认', false)
     }
 
     const result = okResult(
