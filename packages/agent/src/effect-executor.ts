@@ -7,6 +7,7 @@ import {
   proposeMemoryUpdateOutputSchema,
   rejectMemoryUpdateOutputSchema,
   routePlanOutputSchema,
+  messageSendOutputSchema,
   toolResultSchema,
   type AirportPickupTaskState,
   type EffectRecord,
@@ -22,6 +23,7 @@ export type PolicyDecision =
 export interface PolicyGate {
   authorizeNavigationStart(task: AirportPickupTaskState, routeId: string): PolicyDecision
   authorizeReturnTrip(task: AirportPickupTaskState): PolicyDecision
+  authorizeLandingMessage(task: AirportPickupTaskState): PolicyDecision
 }
 
 export class DefaultPolicyGate implements PolicyGate {
@@ -48,6 +50,13 @@ export class DefaultPolicyGate implements PolicyGate {
     if (task.phase === 'completed' || task.phase === 'cancelled') return { allowed: false, errorCode: 'TASK_TERMINAL' }
     if (task.phase !== 'returning-home' || !task.passengers.confirmedOnboard) return { allowed: false, errorCode: 'INVALID_TASK_PHASE' }
     if (task.flight?.status === 'cancelled') return { allowed: false, errorCode: 'FLIGHT_CANCELLED' }
+    return { allowed: true }
+  }
+
+  authorizeLandingMessage(task: AirportPickupTaskState): PolicyDecision {
+    if (task.phase === 'completed' || task.phase === 'cancelled') return { allowed: false, errorCode: 'TASK_TERMINAL' }
+    if (task.flight?.status !== 'landed' || task.message.status !== 'scheduled') return { allowed: false, errorCode: 'INVALID_TASK_STATE' }
+    if (!task.message.pendingMessageId || !task.message.pendingContactId || !task.message.authorizationId) return { allowed: false, errorCode: 'AUTHORIZATION_REQUIRED' }
     return { allowed: true }
   }
 }
@@ -160,6 +169,35 @@ export class EffectExecutor {
       }
     }
     return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+  }
+
+  sendLandingMessage(input: {
+    task: AirportPickupTaskState
+    idempotencyKey: string
+    effectId: string
+  }): { succeeded: boolean; effect: EffectRecord } {
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({ effectId: input.effectId, type: 'message.send', status, tool: 'message.send', ...(errorCode ? { errorCode } : {}) })
+    const policy = this.#policy.authorizeLandingMessage(input.task)
+    if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
+    const providerRequestId = `${input.task.taskId}:message.send:${input.idempotencyKey}`
+    const result = this.#callProvider(
+      input.task.taskId,
+      'message.send',
+      providerRequestId,
+      () => this.#registry['message.send'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        {
+          contactId: input.task.message.pendingContactId!,
+          messageId: input.task.message.pendingMessageId!,
+          text: `我已到达机场接机点，航班 ${input.task.flight!.flightNumber}，预计 ${input.task.navigation?.eta ?? input.task.flight!.estimatedArrival} 会合。`,
+          authorizationId: input.task.message.authorizationId!,
+          idempotencyKey: input.idempotencyKey,
+        },
+      ),
+      toolResultSchema(messageSendOutputSchema),
+    )
+    if (!result.succeeded || result.data.messageId !== input.task.message.pendingMessageId || result.data.status !== 'sent') return { succeeded: false, effect: effect('failed', result.succeeded ? 'PROVIDER_FAILED' : result.errorCode) }
+    return { succeeded: true, effect: effect('succeeded') }
   }
 
   executeReturnTrip(input: {
