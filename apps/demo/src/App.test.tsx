@@ -55,6 +55,44 @@ describe('demo integration', () => {
     })
   })
 
+  it('selects charging station density from parked/city/highway vehicle context', () => {
+    const chargingTask = {
+      ...createInitialTask(),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+    const cases = [
+      { speedKph: 0, density: 'full', stations: 3 },
+      { speedKph: 35, density: 'compact', stations: 2 },
+      { speedKph: 80, density: 'minimal', stations: 1 },
+    ] as const
+
+    for (const { speedKph, density, stations } of cases) {
+      const fromVehicle = composePickupSpec(chargingTask, { vehicle: { speedKph } })
+      expect(fromVehicle).toMatchObject({
+        presentation: { density },
+        components: [{
+          type: 'charging-recommendation',
+          props: { reason: `完成往返后预计低于安全余量（对比 ${stations} 站）` },
+        }],
+      })
+
+      const fromToolResult = composePickupSpec(chargingTask, {
+        toolResults: {
+          'vehicle.get-status': {
+            ok: true,
+            data: { speedKph, batteryPercent: 18, remainingRangeKm: 46, gear: 'D', isNight: true, rearOccupied: false },
+          },
+        },
+      })
+      expect(fromToolResult.presentation.density).toBe(density)
+      expect(fromToolResult.components[0]).toMatchObject({
+        props: { reason: `完成往返后预计低于安全余量（对比 ${stations} 站）` },
+      })
+    }
+  })
+
   it('includes completed and cancelled terminal phases in progress', () => {
     for (const phase of ['completed', 'cancelled'] as const) {
       const spec = composePickupSpec({ ...createInitialTask(), phase })

@@ -12,6 +12,7 @@ import {
 import { applyEvent } from '@canvasflow/agent'
 import { recommendCharging } from './charging'
 import {
+  chargingDensityForSpeed,
   chargingStation,
   chargingStations,
   chargingStationsForDensity,
@@ -23,9 +24,9 @@ import {
 } from './data'
 import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
-import { createSideEffectRuntime } from './idempotency'
+import { createSideEffectRuntime, type SideEffectRuntime } from './idempotency'
 import { getPreferences } from './memory'
-import { autoNotifyAuthorizationId, prepareMessage } from './message'
+import { issueAutoNotifyAuthorization, prepareMessage } from './message'
 import { planRoute } from './navigation'
 import { createProviderRegistry, toolDefinitions, type ToolName } from './registry'
 import type { ToolContext } from './result'
@@ -49,6 +50,7 @@ function executeStepTools(
   step: DemoTimelineStep,
   state: AirportPickupTaskState,
   registry: ReturnType<typeof createProviderRegistry>,
+  runtime: SideEffectRuntime,
 ): ToolPatch {
   const patch: ToolPatch = {}
   for (const tool of step.toolCalls ?? []) {
@@ -187,7 +189,7 @@ function executeStepTools(
           contactId: prepared.data!.contactId,
           messageId: prepared.data!.messageId,
           text: prepared.data!.text,
-          authorizationId: autoNotifyAuthorizationId(state.taskId),
+          authorizationId: issueAutoNotifyAuthorization(runtime, state.taskId),
           idempotencyKey: state.message.idempotencyKey!,
         }
         const first = registry['message.send'](ctx, sendInput)
@@ -257,7 +259,8 @@ function executeStepTools(
 }
 
 function replayTimeline(): AirportPickupTaskState {
-  const registry = createProviderRegistry(createSideEffectRuntime())
+  const runtime = createSideEffectRuntime()
+  const registry = createProviderRegistry(runtime)
   let state = timeline.initialTaskState
   for (const step of timeline.steps) {
     const next = applyEvent(state, step.event)
@@ -271,7 +274,7 @@ function replayTimeline(): AirportPickupTaskState {
       // 重复投递同一事件必须是幂等 no-op
       expect(applyEvent(next, step.event), step.event.eventId).toEqual(next)
 
-      const toolPatch = executeStepTools(step, next, registry)
+      const toolPatch = executeStepTools(step, next, registry, runtime)
       if (step.statePatch) {
         // Fixture patch must match what real tools produced for overlapping keys.
         for (const key of Object.keys(step.statePatch) as Array<keyof typeof step.statePatch>) {
@@ -387,6 +390,12 @@ describe('vehicle density-control snapshots', () => {
     expect(city.speedKph).toBeGreaterThan(0)
     expect(city.speedKph).toBeLessThanOrEqual(60)
     expect(highway.speedKph).toBeGreaterThan(60)
+    expect(chargingDensityForSpeed(parked.speedKph)).toBe('full')
+    expect(chargingDensityForSpeed(city.speedKph)).toBe('compact')
+    expect(chargingDensityForSpeed(highway.speedKph)).toBe('minimal')
+    expect(chargingStationsForDensity(chargingDensityForSpeed(parked.speedKph))).toHaveLength(3)
+    expect(chargingStationsForDensity(chargingDensityForSpeed(city.speedKph))).toHaveLength(2)
+    expect(chargingStationsForDensity(chargingDensityForSpeed(highway.speedKph))).toHaveLength(1)
   })
 })
 

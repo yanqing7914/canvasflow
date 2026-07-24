@@ -189,9 +189,21 @@ export const chargingStations: ChargingStationRecord[] = [
   { stationId: 'station-hongqiao-03', name: '北翟路充电站', distanceKm: 5.8, detourMinutes: 22, availableStalls: 4, totalStalls: 10, maxPowerKw: 90, pricePerKwhYuan: 1.1, open24h: false },
 ]
 
+export type ChargingPresentationDensity = 'full' | 'compact' | 'minimal'
+
+/**
+ * Map vehicle speed to charging-list density:
+ * parked (0) → full, city (≤60) → compact, highway (>60) → minimal.
+ */
+export function chargingDensityForSpeed(speedKph: number): ChargingPresentationDensity {
+  if (speedKph <= 0) return 'full'
+  if (speedKph <= 60) return 'compact'
+  return 'minimal'
+}
+
 /** Parked/full → 3 stations; city/compact → 2; highway/minimal → nearest only. */
 export function chargingStationsForDensity(
-  density: 'full' | 'compact' | 'minimal',
+  density: ChargingPresentationDensity,
 ): ChargingStationRecord[] {
   if (density === 'full') return chargingStations.slice()
   if (density === 'compact') return chargingStations.slice(0, 2)
