@@ -1,8 +1,10 @@
 import type { AirportPickupTaskState, EffectRecord, UISpec } from '@canvasflow/schema'
+import type { ReadToolResults } from './orchestration'
 
 export type StoredTask = {
   task: AirportPickupTaskState
   ui: UISpec
+  toolResults?: ReadToolResults
 }
 
 export type StoredEventResult = {

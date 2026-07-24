@@ -1,6 +1,7 @@
 import { uiSpecSchema, type AirportPickupTaskState, type UISpec } from '@canvasflow/schema'
 import { memberPreferences, type MemberPreferenceRecord } from '@canvasflow/tools'
 import { canRetryLandingMessage } from './landing-message-retry'
+import type { ReadToolResults } from './orchestration'
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息',
@@ -13,10 +14,27 @@ const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   cancelled: '已取消',
 }
 
+export function composeAgentSpec(task: AirportPickupTaskState, toolResults?: ReadToolResults): UISpec
 export function composeAgentSpec(
   task: AirportPickupTaskState,
-  preferences: Record<string, MemberPreferenceRecord> = memberPreferences,
+  preferences?: Record<string, MemberPreferenceRecord>,
+): UISpec
+export function composeAgentSpec(
+  task: AirportPickupTaskState,
+  toolResults?: ReadToolResults,
+  preferences?: Record<string, MemberPreferenceRecord>,
+): UISpec
+export function composeAgentSpec(
+  task: AirportPickupTaskState,
+  context?: ReadToolResults | Record<string, MemberPreferenceRecord>,
+  preferences?: Record<string, MemberPreferenceRecord>,
 ): UISpec {
+  const hasExplicitPreferences = preferences !== undefined
+  const contextIsToolResults = hasExplicitPreferences || context === undefined || isReadToolResults(context)
+  const toolResults = contextIsToolResults ? (context as ReadToolResults | undefined) ?? {} : {}
+  const resolvedPreferences = contextIsToolResults
+    ? preferences ?? memberPreferences
+    : context as Record<string, MemberPreferenceRecord>
   const progress = progressComponent(task)
   let components: UISpec['components'] = [overviewComponent(task), progress]
   let title = task.passengers.names.length > 0
@@ -40,6 +58,16 @@ export function composeAgentSpec(
     actions = requiresConfirm
       ? [{ id: 'save-trip-preferences', label: '保存本次偏好', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } }]
       : []
+  } else if (task.phase === 'preparing' && task.flight && toolResults['navigation.plan-route'] && toolResults['charging.recommend'] && toolResults['vehicle.get-status']) {
+    const route = toolResults['navigation.plan-route'].data
+    const charging = toolResults['charging.recommend'].data
+    const vehicle = toolResults['vehicle.get-status'].data
+    density = 'compact'
+    components = [
+      { id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } },
+      { id: 'navigation-plan', type: 'navigation-summary', props: { routeId: route.routeId, destination: task.navigation?.destination ?? '虹桥机场 T2', eta: task.navigation?.eta ?? route.arrivalTime, distanceKm: route.distanceKm, estimatedBatteryAtArrival: route.estimatedBatteryAtArrival } },
+      { id: 'charging-plan', type: 'charging-recommendation', props: { recommended: charging.recommended, reason: charging.reason, currentBatteryPercent: vehicle.batteryPercent, estimatedFinalBatteryPercent: charging.estimatedFinalBatteryPercent, suggestedDurationMinutes: charging.suggestedDurationMinutes, etaImpactMinutes: charging.etaImpactMinutes } },
+    ]
   } else if (task.passengers.confirmedOnboard) {
     title = '返程回家'
     density = 'compact'
@@ -55,7 +83,7 @@ export function composeAgentSpec(
     priority = 'high'
     const retryAvailable =
       task.pendingConfirmation?.action === 'send-message'
-      || canRetryLandingMessage(task, preferences)
+      || canRetryLandingMessage(task, resolvedPreferences)
     if (!retryAvailable) {
       components = [{
         id: 'status-banner',
@@ -114,6 +142,19 @@ export function composeAgentSpec(
       generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${task.taskRevision}`,
     },
   })
+}
+
+function isReadToolResults(
+  value: ReadToolResults | Record<string, MemberPreferenceRecord>,
+): value is ReadToolResults {
+  return Object.values(value).some((result) => (
+    typeof result === 'object'
+    && result !== null
+    && 'ok' in result
+    && 'data' in result
+    && 'error' in result
+    && 'meta' in result
+  ))
 }
 
 function overviewComponent(task: AirportPickupTaskState): UISpec['components'][number] {

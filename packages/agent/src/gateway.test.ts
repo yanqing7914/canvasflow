@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { createSideEffectRuntime } from '@canvasflow/tools'
 import { AgentGateway, AgentGatewayError } from './gateway'
+import { ReadToolOrchestrator } from './orchestration'
 import { MemoryTaskStore } from './store'
 
 const now = '2026-07-22T12:00:00+08:00'
@@ -84,7 +85,67 @@ describe('AgentGateway', () => {
 
     expect(updated.task).toMatchObject({ phase: 'preparing', taskRevision: 1, uiRevision: 2 })
     expect(updated.ui).toMatchObject({ phase: 'preparing', taskRevision: 1, uiRevision: 2 })
-    expect(updated.ui.components).toMatchObject([{ type: 'flight-status' }])
+    expect(updated.ui.components).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'flight-status' }),
+      expect.objectContaining({ type: 'navigation-summary' }),
+      expect.objectContaining({ type: 'charging-recommendation' }),
+    ]))
+  })
+
+  it('prepares one provider-backed transaction with trusted task and UI values', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest())
+    const updated = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-flight',
+      expectedTaskRevision: 0,
+      event: { eventId: 'flight-number', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(updated.task).toMatchObject({
+      taskRevision: 1,
+      flight: { flightNumber: 'MU5102', status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+      charging: { recommended: true, status: 'planned' },
+      message: { autoNotifyAuthorized: true },
+    })
+    expect(updated.ui.components).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'flight-status', props: expect.objectContaining({ scheduledArrival: '2026-07-22T20:30:00+08:00' }) }),
+      expect.objectContaining({ id: 'navigation-plan', props: expect.objectContaining({ routeId: 'route-airport-001', distanceKm: 32 }) }),
+      expect.objectContaining({ id: 'charging-plan', props: expect.objectContaining({ estimatedFinalBatteryPercent: 18 }) }),
+    ]))
+    expect(updated).not.toHaveProperty('toolResults')
+  })
+
+  it('leaves event state unchanged when provider preparation times out and remains retryable', () => {
+    const store = new MemoryTaskStore()
+    const gateway = new AgentGateway({ store, now: () => now, createId: () => '001', orchestrator: new ReadToolOrchestrator() })
+    const created = gateway.createTask(createRequest())
+    const request = {
+      clientRequestId: 'client-timeout',
+      expectedTaskRevision: 0,
+      event: { eventId: 'flight-timeout', type: 'user.input' as const, text: 'MU0000', timestamp: '2026-07-22T12:01:00+08:00' },
+    }
+
+    expect(() => gateway.submitEvent(created.task.taskId, request)).toThrowError(
+      expect.objectContaining({ code: 'PROVIDER_TIMEOUT', retryable: true, latest: expect.objectContaining({ task: created.task }) }),
+    )
+    expect(gateway.getTask(created.task.taskId).task).toEqual(created.task)
+    expect(() => gateway.submitEvent(created.task.taskId, request)).toThrowError(
+      expect.objectContaining({ code: 'PROVIDER_TIMEOUT', retryable: true }),
+    )
+  })
+
+  it('maps non-timeout provider failures without committing the event', () => {
+    const store = new MemoryTaskStore()
+    const gateway = new AgentGateway({ store, now: () => now, createId: () => '001' })
+    const created = gateway.createTask(createRequest())
+
+    expect(() => gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'client-provider-failed',
+      expectedTaskRevision: 0,
+      event: { eventId: 'unknown-flight', type: 'user.input', text: 'MU9999', timestamp: '2026-07-22T12:01:00+08:00' },
+    })).toThrowError(expect.objectContaining({ code: 'PROVIDER_FAILED', retryable: false, latest: expect.objectContaining({ task: created.task }) }))
+    expect(gateway.getTask(created.task.taskId).task).toEqual(created.task)
   })
 
   it('returns the current snapshot through revision conflict errors', () => {
@@ -140,20 +201,20 @@ describe('AgentGateway', () => {
       id: 'start-navigation',
       event: { type: 'tool-request', actionToken: 'start-navigation' },
     }))
-    expect(prepared.ui.components).toContainEqual(expect.objectContaining({ id: 'flight-status', actions: ['start-navigation'] }))
+    expect(prepared.ui.components).toContainEqual(expect.objectContaining({ id: 'navigation-plan', actions: ['start-navigation'] }))
 
     const request = {
       clientRequestId: 'client-start-navigation',
       expectedTaskRevision: prepared.task.taskRevision,
       expectedUiRevision: prepared.ui.uiRevision,
       actionId: 'start-navigation',
-      componentId: 'flight-status',
+      componentId: 'navigation-plan',
       idempotencyKey: 'start-navigation-001',
     }
     const started = gateway.submitAction(created.task.taskId, request)
     const duplicate = gateway.submitAction(created.task.taskId, { ...request, clientRequestId: 'client-start-navigation-retry' })
 
-    expect(started.task).toMatchObject({ phase: 'driving-to-airport', taskRevision: 2, navigation: { routeId: 'route-airport-pickup-001' } })
+    expect(started.task).toMatchObject({ phase: 'driving-to-airport', taskRevision: 2, navigation: { routeId: 'route-airport-001' } })
     expect(started.effects).toMatchObject([{ type: 'navigation.start', tool: 'navigation.start' }])
     expect(duplicate.task).toEqual(started.task)
     expect(duplicate.ui).toEqual(started.ui)
@@ -173,7 +234,7 @@ describe('AgentGateway', () => {
       expectedTaskRevision: prepared.task.taskRevision,
       expectedUiRevision: prepared.ui.uiRevision,
       actionId: 'start-navigation',
-      componentId: 'flight-status',
+      componentId: 'navigation-plan',
       idempotencyKey: 'start-navigation-001',
     }
 
@@ -205,7 +266,7 @@ describe('AgentGateway', () => {
 
     const current = gateway.getTask(created.task.taskId).task
     expect(current).toMatchObject({ phase: 'preparing', taskRevision: prepared.task.taskRevision })
-    expect(current.navigation).toBeUndefined()
+    expect(current.navigation).toMatchObject({ routeId: 'route-airport-001', status: 'planned' })
   })
 
   it('clears a current save-memory confirmation for accept and reject without effects in Fixture mode', () => {
@@ -245,6 +306,24 @@ describe('AgentGateway', () => {
 
     expect(rejectedResult.task).toMatchObject({ taskRevision: rejected.taskRevision + 1, pendingConfirmation: undefined })
     expect(rejectedResult.effects).toEqual([])
+  })
+
+  it('preserves trusted provider context when accepting save-memory confirmation', () => {
+    const store = new MemoryTaskStore()
+    const gateway = new AgentGateway({ store, now: () => now, createId: () => '001' })
+    const completed = completeTask(gateway)
+
+    gateway.submitConfirmation(completed.taskId, 'pickup-001:save-memory', {
+      clientRequestId: 'client-save-memory-context',
+      expectedTaskRevision: completed.taskRevision,
+      decision: 'accept',
+      idempotencyKey: 'save-memory-context',
+    })
+
+    expect(store.get(completed.taskId)?.toolResults?.['navigation.plan-route']).toMatchObject({
+      ok: true,
+      data: { routeId: 'route-airport-001' },
+    })
   })
 
   it('does not reuse an action result for a confirmation with the same idempotency key', () => {
@@ -305,7 +384,7 @@ describe('AgentGateway', () => {
       expectedTaskRevision: created.task.taskRevision,
       expectedUiRevision: created.ui.uiRevision,
       actionId: 'start-navigation',
-      componentId: 'flight-status',
+      componentId: 'navigation-plan',
       idempotencyKey: 'start-navigation-001',
     })
     const landed = gateway.submitEvent(created.task.taskId, {
@@ -399,7 +478,7 @@ describe('AgentGateway', () => {
       expectedTaskRevision: created.task.taskRevision,
       expectedUiRevision: created.ui.uiRevision,
       actionId: 'start-navigation',
-      componentId: 'flight-status',
+      componentId: 'navigation-plan',
       idempotencyKey: 'start-navigation-001',
     })
     const landed = gateway.submitEvent(created.task.taskId, {
@@ -463,7 +542,7 @@ function completeTask(gateway: AgentGateway, navigationIdempotencyKey = 'start-n
   })
   const started = gateway.submitAction(created.task.taskId, {
     clientRequestId: 'client-start-navigation', expectedTaskRevision: prepared.task.taskRevision,
-    expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'flight-status', idempotencyKey: navigationIdempotencyKey,
+    expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: navigationIdempotencyKey,
   })
   const approaching = gateway.submitEvent(created.task.taskId, {
     clientRequestId: 'client-geofence', expectedTaskRevision: started.task.taskRevision,

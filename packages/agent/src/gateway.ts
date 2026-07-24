@@ -14,6 +14,7 @@ import {
   type UISpec,
 } from '@canvasflow/schema'
 import {
+  createProviderRegistry,
   createSideEffectRuntime,
   type MemberPreferenceRecord,
   type SideEffectRuntime,
@@ -28,6 +29,12 @@ import {
   RETRY_LANDING_MESSAGE_ACTION_ID,
   retryLandingMessageActionToken,
 } from './landing-message-retry'
+import {
+  ReadToolOrchestrationError,
+  ReadToolOrchestrator,
+  type ReadToolOrchestration,
+  type ReadToolResults,
+} from './orchestration'
 import { MemoryTaskStore, type StoredTask, type TaskStore } from './store'
 
 export class AgentGatewayError extends Error {
@@ -45,7 +52,12 @@ export type AgentGatewayOptions = {
   store?: TaskStore
   now?: () => string
   createId?: () => string
-  compose?: (task: AirportPickupTaskState) => UISpec
+  compose?: (
+    task: AirportPickupTaskState,
+    toolResults?: ReadToolResults,
+    preferences?: Record<string, MemberPreferenceRecord>,
+  ) => UISpec
+  orchestrator?: ReadToolOrchestration
   /**
    * Side-effect runtime for opaque confirmations and preference-backed notify.
    * When provided, its preferences are authoritative for landing-notify auth.
@@ -59,7 +71,12 @@ export class AgentGateway {
   readonly #store: TaskStore
   readonly #now: () => string
   readonly #createId: () => string
-  readonly #compose: (task: AirportPickupTaskState) => UISpec
+  readonly #compose: (
+    task: AirportPickupTaskState,
+    toolResults?: ReadToolResults,
+    preferences?: Record<string, MemberPreferenceRecord>,
+  ) => UISpec
+  readonly #orchestrator: ReadToolOrchestration
   readonly #runtime: SideEffectRuntime
   readonly #preferences: Record<string, MemberPreferenceRecord>
 
@@ -76,7 +93,10 @@ export class AgentGateway {
     }
     this.#runtime = runtime
     this.#preferences = runtime.preferences
-    this.#compose = options.compose ?? ((task) => composeAgentSpec(task, this.#preferences))
+    this.#compose = options.compose ?? composeAgentSpec
+    this.#orchestrator = options.orchestrator ?? new ReadToolOrchestrator({
+      registry: createProviderRegistry(runtime),
+    })
   }
 
   createTask(input: CreateTaskRequest): AgentResponse {
@@ -87,16 +107,32 @@ export class AgentGateway {
     const taskId = `pickup-${this.#createId()}`
     const timestamp = this.#now()
     const flightNumber = normalizeFlightNumber(request.input.text)
-    let task = createInitialTask(taskId, timestamp)
-    task = { ...task, passengers: extractPassengers(request.input.text) }
-    task = applyEvent(task, {
-      eventId: `${request.clientRequestId}:input`,
-      type: 'user.input',
-      text: flightNumber ?? request.input.text,
-      timestamp,
-    }, this.#preferences)
-    const stored = this.#store.create(this.#publish(task), request.clientRequestId)
-    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+    try {
+      const labels = extractPassengerLabels(request.input.text)
+      const passengerReads = this.#orchestrator.resolveInitialPassengers(taskId, request.clientRequestId, labels)
+      let task = createInitialTask(taskId, timestamp)
+      task = {
+        ...task,
+        passengers: { ...passengerReads.passengers, confirmedOnboard: false },
+        message: { ...task.message, autoNotifyAuthorized: passengerReads.notificationAuthorized },
+      }
+      task = applyEvent(task, {
+        eventId: `${request.clientRequestId}:input`,
+        type: 'user.input',
+        text: flightNumber ?? request.input.text,
+        timestamp,
+      }, this.#preferences)
+      let toolResults = passengerReads.toolResults
+      if (flightNumber && task.passengers.memberIds.length > 0) {
+        const prepared = this.#prepareTask(task, request.clientRequestId, flightNumber)
+        task = prepared.task
+        toolResults = { ...toolResults, ...prepared.toolResults }
+      }
+      const stored = this.#store.create(this.#publish(task, toolResults), request.clientRequestId)
+      return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+    } catch (error) {
+      this.#throwProviderError(error)
+    }
   }
 
   getTask(taskId: string, requestId = this.#createId()): AgentResponse {
@@ -123,11 +159,22 @@ export class AgentGateway {
       )
     }
 
-    const effects = planEffects(current.task, request.event, {}, this.#preferences)
-    const next = applyEvent(current.task, request.event, this.#preferences)
+    const effects = planEffects(current.task, request.event, current.toolResults ?? {}, this.#preferences)
+    let next = applyEvent(current.task, request.event, this.#preferences)
+    let toolResults = current.toolResults
+    const flightNumber = request.event.type === 'user.input' ? normalizeFlightNumber(request.event.text) : undefined
+    if (flightNumber && next !== current.task && next.phase === 'preparing' && next.passengers.memberIds.length > 0) {
+      try {
+        const prepared = this.#prepareTask(next, request.clientRequestId, flightNumber)
+        next = prepared.task
+        toolResults = { ...toolResults, ...prepared.toolResults }
+      } catch (error) {
+        this.#throwProviderError(error, current)
+      }
+    }
     const stored = next === current.task
       ? current
-      : this.#store.save(this.#publish(next))
+      : this.#store.save(this.#publish(next, toolResults))
     const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${request.event.eventId}:${index}` }))
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: effectRecords })
     return this.#response(
@@ -158,7 +205,9 @@ export class AgentGateway {
       || action?.event.type !== 'tool-request'
       || action.event.actionToken !== 'start-navigation'
       || request.actionId !== 'start-navigation'
-      || !component?.actions?.includes(request.actionId)
+      || component?.id !== 'navigation-plan'
+      || !component.actions?.includes(request.actionId)
+      || !current.toolResults?.['navigation.plan-route']
     ) {
       throw new AgentGatewayError('INVALID_REQUEST', 'Action is not registered for the current task state', false, current)
     }
@@ -167,7 +216,7 @@ export class AgentGateway {
     const event = {
       eventId: `action:${request.idempotencyKey}`,
       type: 'navigation.started' as const,
-      routeId: `route-airport-${current.task.taskId}`,
+      routeId: current.toolResults['navigation.plan-route'].data.routeId,
       timestamp,
     }
     const { stored, effectRecords } = this.#applyAuthorizedEvent(current, event)
@@ -202,7 +251,10 @@ export class AgentGateway {
 
     // Fixture mode only: both decisions close the prompt without writing long-term memory.
     const resolved = resolveConfirmation(current.task, confirmationId)
-    const stored = this.#store.save(this.#publish({ ...resolved, updatedAt: this.#eventTimestamp(current.task.updatedAt) }))
+    const stored = this.#store.save(this.#publish(
+      { ...resolved, updatedAt: this.#eventTimestamp(current.task.updatedAt) },
+      current.toolResults,
+    ))
     const effects: AgentResponse['effects'] = []
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
@@ -235,7 +287,7 @@ export class AgentGateway {
     }
 
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
-    const stored = this.#store.save(this.#publish({ ...armed, updatedAt: timestamp }))
+    const stored = this.#store.save(this.#publish({ ...armed, updatedAt: timestamp }, current.toolResults))
     const effects: AgentResponse['effects'] = []
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
@@ -276,17 +328,20 @@ export class AgentGateway {
       }]
     }
 
-    const stored = this.#store.save(this.#publish(nextTask))
+    const stored = this.#store.save(this.#publish(nextTask, current.toolResults))
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
 
-  #publish(task: AirportPickupTaskState): StoredTask {
-    const ui = this.#compose(task)
-    const publishedUi = task.phase === 'preparing'
+  #publish(task: AirportPickupTaskState, toolResults?: ReadToolResults): StoredTask {
+    const ui = this.#compose(task, toolResults, this.#preferences)
+    const canStartNavigation = task.phase === 'preparing'
+      && toolResults?.['navigation.plan-route'] !== undefined
+      && ui.components.some((component) => component.id === 'navigation-plan')
+    const publishedUi = canStartNavigation
       ? {
           ...ui,
-          components: ui.components.map((component) => component.id === 'flight-status'
+          components: ui.components.map((component) => component.id === 'navigation-plan'
             ? { ...component, actions: [...(component.actions ?? []), 'start-navigation'] }
             : component),
           actions: [
@@ -300,13 +355,13 @@ export class AgentGateway {
           ],
         }
       : ui
-    return { task: { ...task, uiRevision: publishedUi.uiRevision }, ui: publishedUi }
+    return { task: { ...task, uiRevision: publishedUi.uiRevision }, ui: publishedUi, toolResults }
   }
 
   #applyAuthorizedEvent(current: StoredTask, event: Parameters<typeof applyEvent>[1]): { stored: StoredTask; effectRecords: AgentResponse['effects'] } {
-    const effects = planEffects(current.task, event, {}, this.#preferences)
+    const effects = planEffects(current.task, event, current.toolResults ?? {}, this.#preferences)
     const next = applyEvent(current.task, event, this.#preferences)
-    const stored = next === current.task ? current : this.#store.save(this.#publish(next))
+    const stored = next === current.task ? current : this.#store.save(this.#publish(next, current.toolResults))
     const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${event.eventId}:${index}` }))
     return { stored, effectRecords }
   }
@@ -335,6 +390,42 @@ export class AgentGateway {
     return Date.parse(now) < Date.parse(updatedAt) ? updatedAt : now
   }
 
+  #prepareTask(task: AirportPickupTaskState, requestId: string, flightNumber: string) {
+    const reads = this.#orchestrator.prepareTrip(task.taskId, requestId, flightNumber)
+    return {
+      task: {
+        ...task,
+        flight: {
+          flightNumber: reads.flight.flightNumber,
+          status: reads.flight.status,
+          scheduledArrival: reads.flight.scheduledArrival,
+          estimatedArrival: reads.flight.estimatedArrival,
+          terminal: reads.flight.terminal,
+          baggageClaim: reads.flight.baggageClaim,
+        },
+        navigation: {
+          routeId: reads.route.routeId,
+          destination: '虹桥机场 T2',
+          eta: reads.route.arrivalTime,
+          status: 'planned' as const,
+        },
+        charging: {
+          ...task.charging,
+          recommended: reads.charging.recommended,
+          status: reads.charging.recommended ? 'planned' as const : 'none' as const,
+        },
+      },
+      toolResults: reads.toolResults,
+    }
+  }
+
+  #throwProviderError(error: unknown, latest?: StoredTask): never {
+    if (error instanceof ReadToolOrchestrationError) {
+      throw new AgentGatewayError(error.code, error.message, error.retryable, latest)
+    }
+    throw error
+  }
+
   #requireTask(taskId: string): StoredTask {
     const stored = this.#store.get(taskId)
     if (!stored) throw new AgentGatewayError('TASK_NOT_FOUND', `Task not found: ${taskId}`)
@@ -361,11 +452,6 @@ export class AgentGateway {
   }
 }
 
-function extractPassengers(text: string): AirportPickupTaskState['passengers'] {
-  const names = ['妈妈', '豆豆'].filter((name) => text.includes(name))
-  return {
-    memberIds: names.map((name) => name === '妈妈' ? 'mom' : 'doubao'),
-    names,
-    confirmedOnboard: false,
-  }
+function extractPassengerLabels(text: string): string[] {
+  return ['妈妈', '豆豆'].filter((name) => text.includes(name))
 }

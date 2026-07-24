@@ -2,10 +2,33 @@ import { describe, expect, it } from 'vitest'
 import { memberPreferences } from '@canvasflow/tools'
 import { composeAgentSpec } from './composer'
 import { applyEvent, createInitialTask } from './index'
+import { ReadToolOrchestrator } from './orchestration'
 
 const timestamp = '2026-07-22T20:00:00+08:00'
 
 describe('Agent UISpec composer', () => {
+  it('combines provider-backed flight, route, and charging cards while preparing', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const spec = composeAgentSpec(task, reads.toolResults)
+
+    expect(spec.components.map((component) => component.type)).toEqual([
+      'flight-status', 'navigation-summary', 'charging-recommendation',
+    ])
+    expect(spec.components).toContainEqual(expect.objectContaining({
+      id: 'flight-status',
+      props: expect.objectContaining({ scheduledArrival: reads.flight.scheduledArrival }),
+    }))
+  })
+
   it('projects a scheduled landing notification into a cancellable message preview', () => {
     const task = {
       ...createInitialTask('pickup-001', timestamp),
@@ -79,6 +102,26 @@ describe('Agent UISpec composer', () => {
           message: '没有已授权的落地通知联系人',
         },
       }],
+      actions: [],
+    })
+  })
+
+  it('treats an empty second argument as an authoritative preference map', () => {
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: timestamp, estimatedArrival: timestamp, terminal: 'T2' },
+      message: {
+        ...createInitialTask().message,
+        status: 'failed' as const,
+        landingNoticeSent: false,
+        pendingContactId: 'contact-mom',
+      },
+    }
+
+    expect(composeAgentSpec(task, {})).toMatchObject({
+      components: [{ type: 'status-banner', props: { title: '无法重试发送' } }],
       actions: [],
     })
   })

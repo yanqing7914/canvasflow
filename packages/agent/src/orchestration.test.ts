@@ -1,0 +1,159 @@
+import type { FlightStatusOutput, GetPreferencesOutput, ToolResult } from '@canvasflow/schema'
+import { createProviderRegistry, type ProviderRegistry, type ToolContext } from '@canvasflow/tools'
+import { describe, expect, it, vi } from 'vitest'
+import { ReadToolOrchestrationError, ReadToolOrchestrator } from './orchestration'
+
+type MutableProviderRegistry = { -readonly [K in keyof ProviderRegistry]: ProviderRegistry[K] }
+
+function createMutableRegistry(): MutableProviderRegistry {
+  return { ...createProviderRegistry() }
+}
+
+function successfulResult<T>(tool: string, data: T): ToolResult<T> {
+  return {
+    ok: true,
+    data,
+    error: null,
+    meta: {
+      requestId: `request:${tool}`,
+      taskId: 'pickup-001',
+      tool,
+      provider: 'fixture',
+      durationMs: 1,
+      generatedAt: '2026-07-22T12:00:00+08:00',
+    },
+  }
+}
+
+describe('ReadToolOrchestrator', () => {
+  it('wires passenger and trip reads through validated provider results', () => {
+    const base = createProviderRegistry()
+    const registry = Object.fromEntries(Object.entries(base).map(([name, handler]) => [name, vi.fn(handler)])) as unknown as MutableProviderRegistry
+    const orchestrator = new ReadToolOrchestrator({ registry })
+
+    const passengers = orchestrator.resolveInitialPassengers('pickup-001', 'create-001', ['妈妈', '豆豆'])
+    const prepared = orchestrator.prepareTrip('pickup-001', 'event-001', 'MU5102')
+
+    expect(passengers).toMatchObject({
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'] },
+      notificationAuthorized: true,
+    })
+    expect(prepared).toMatchObject({
+      flight: { flightNumber: 'MU5102', terminal: 'T2' },
+      route: { routeId: 'route-airport-001', distanceKm: 32, arrivalTime: '2026-07-22T20:25:00+08:00' },
+      vehicle: { batteryPercent: 42, remainingRangeKm: 112 },
+      charging: { recommended: true, estimatedFinalBatteryPercent: 18 },
+    })
+    expect(registry['memory.get-preferences']).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: 'pickup-001' }),
+      { memberIds: ['mom', 'doubao'], scopes: ['notification'] },
+    )
+    expect(registry['charging.recommend']).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: 'pickup-001' }),
+      { batteryPercent: 42, remainingRangeKm: 112, outboundDistanceKm: 32, returnDistanceKm: 32, safetyReservePercent: 20 },
+    )
+  })
+
+  it('rejects invalid envelopes before using provider data', () => {
+    const registry = createMutableRegistry()
+    registry['family.resolve-members'] = () => ({ ok: true, data: { members: [] } }) as unknown as ReturnType<ProviderRegistry['family.resolve-members']>
+    const orchestrator = new ReadToolOrchestrator({ registry })
+
+    expect(() => orchestrator.resolveInitialPassengers('pickup-001', 'create-001', ['妈妈'])).toThrowError(
+      expect.objectContaining<Partial<ReadToolOrchestrationError>>({ code: 'PROVIDER_FAILED', retryable: false }),
+    )
+  })
+
+  it('authorizes notification when a later contactable member has valid authorization', () => {
+    const registry = createMutableRegistry()
+    registry['family.resolve-members'] = () => successfulResult('family.resolve-members', {
+      members: [
+        { memberId: 'doubao', displayName: '豆豆' },
+        { memberId: 'mom', displayName: '妈妈', contactId: 'contact-mom' },
+      ],
+      unresolvedLabels: [],
+    })
+    registry['memory.get-preferences'] = (_ctx: ToolContext, input?: unknown) => {
+      expect(input).toEqual({ memberIds: ['doubao', 'mom'], scopes: ['notification'] })
+      return successfulResult<GetPreferencesOutput>('memory.get-preferences', {
+        members: [
+          { memberId: 'doubao', landingNotificationAuthorized: false },
+          { memberId: 'mom', landingNotificationAuthorized: true },
+        ],
+      })
+    }
+
+    expect(new ReadToolOrchestrator({ registry }).resolveInitialPassengers(
+      'pickup-001',
+      'create-001',
+      ['妈妈', '豆豆'],
+    ).notificationAuthorized).toBe(true)
+  })
+
+  it('does not authorize notification for an authorized member without a contact id', () => {
+    const registry = createMutableRegistry()
+    registry['memory.get-preferences'] = () => successfulResult<GetPreferencesOutput>('memory.get-preferences', {
+      members: [{ memberId: 'doubao', landingNotificationAuthorized: true }],
+    })
+
+    expect(new ReadToolOrchestrator({ registry }).resolveInitialPassengers(
+      'pickup-001',
+      'create-001',
+      ['豆豆'],
+    ).notificationAuthorized).toBe(false)
+  })
+
+  it('retries flight status exactly once after a retryable failure', () => {
+    const registry = createMutableRegistry()
+    const success = registry['flight.get-status']
+    registry['flight.get-status'] = vi.fn()
+      .mockReturnValueOnce({
+        ...successfulResult<FlightStatusOutput>('flight.get-status', {
+          flightNumber: 'MU5102',
+          status: 'scheduled',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: '2026-07-22T20:40:00+08:00',
+          terminal: 'T2',
+          sourceUpdatedAt: '2026-07-22T12:00:00+08:00',
+        }),
+        ok: false,
+        data: null,
+        error: { code: 'PROVIDER_TIMEOUT', message: 'temporary timeout', retryable: true },
+      })
+      .mockImplementation(success)
+
+    expect(new ReadToolOrchestrator({ registry }).prepareTrip('pickup-001', 'event-001', 'MU5102').flight.flightNumber)
+      .toBe('MU5102')
+    expect(registry['flight.get-status']).toHaveBeenCalledTimes(2)
+  })
+
+  it('retries route planning once, then returns the second retryable failure', () => {
+    const registry = createMutableRegistry()
+    const failure = {
+      ok: false,
+      data: null,
+      error: { code: 'PROVIDER_TIMEOUT', message: 'route timeout', retryable: true },
+      meta: {
+        requestId: 'request:navigation.plan-route', taskId: 'pickup-001', tool: 'navigation.plan-route',
+        provider: 'fixture' as const, durationMs: 1, generatedAt: '2026-07-22T12:00:00+08:00',
+      },
+    }
+    registry['navigation.plan-route'] = vi.fn().mockReturnValue(failure)
+
+    expect(() => new ReadToolOrchestrator({ registry }).prepareTrip('pickup-001', 'event-001', 'MU5102')).toThrowError(
+      expect.objectContaining<Partial<ReadToolOrchestrationError>>({ code: 'PROVIDER_TIMEOUT', retryable: true }),
+    )
+    expect(registry['navigation.plan-route']).toHaveBeenCalledTimes(2)
+  })
+
+  it('maps provider timeout results to a retryable typed error', () => {
+    const registry = createMutableRegistry()
+    registry['flight.get-status'] = vi.fn(registry['flight.get-status'])
+    const orchestrator = new ReadToolOrchestrator({ registry })
+
+    expect(() => orchestrator.prepareTrip('pickup-001', 'event-001', 'MU0000')).toThrowError(
+      expect.objectContaining<Partial<ReadToolOrchestrationError>>({ code: 'PROVIDER_TIMEOUT', retryable: true }),
+    )
+    expect(registry['flight.get-status']).toHaveBeenCalledTimes(2)
+  })
+})
