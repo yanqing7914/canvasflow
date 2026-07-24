@@ -17,6 +17,44 @@ describe('demo integration', () => {
     expect(spec.components[0]).toMatchObject({ type: 'status-banner', props: { title: '请补充航班号' } })
   })
 
+  it('surfaces the terminal meeting point while approaching / waiting', () => {
+    const approaching = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'approaching-airport',
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+    })
+    expect(approaching.components[0]).toMatchObject({
+      type: 'passenger-status',
+      props: { status: 'landed', meetingPoint: 'P2 停车场到达层 3 号门' },
+    })
+
+    const waiting = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'waiting-for-passengers',
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+    })
+    expect(waiting.components[0]).toMatchObject({
+      type: 'passenger-status',
+      props: { status: 'waiting', meetingPoint: 'P2 停车场到达层 3 号门' },
+    })
+  })
+
+  it('projects charging comparison station count into the recommendation reason', () => {
+    const spec = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'preparing',
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      charging: { recommended: true, accepted: false, status: 'planned' },
+    })
+    expect(spec.components[0]).toMatchObject({
+      type: 'charging-recommendation',
+      props: { recommended: true, reason: '完成往返后预计低于安全余量（对比 3 站）' },
+    })
+  })
+
   it('includes completed and cancelled terminal phases in progress', () => {
     for (const phase of ['completed', 'cancelled'] as const) {
       const spec = composePickupSpec({ ...createInitialTask(), phase })
@@ -53,5 +91,92 @@ describe('demo integration', () => {
     render(<App initialTask={{ ...createInitialTask(), phase: 'driving-to-airport', updatedAt: '2026-07-22T20:30:00+08:00' }} />)
     await user.click(screen.getByRole('button', { name: '推进下一事件' }))
     expect(screen.getByText(/taskRevision 1/)).toBeInTheDocument()
+  })
+
+  it('renders fallback status banner without a blank screen', () => {
+    render(
+      <App
+        composeContext={{
+          fallback: { title: '界面暂时降级', message: '已切换到安全模板。', level: 'error' },
+        }}
+      />,
+    )
+    expect(screen.getByText('界面暂时降级')).toBeInTheDocument()
+    expect(screen.getByText('已切换到安全模板。')).toBeInTheDocument()
+    expect(screen.getByText('status-banner')).toBeInTheDocument()
+  })
+
+  it('renders media-only cabin preferences without inventing temperature', () => {
+    render(
+      <App
+        initialTask={{
+          ...createInitialTask(),
+          phase: 'returning-home',
+          passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: true },
+          updatedAt: '2026-07-22T20:56:00+08:00',
+        }}
+        composeContext={{
+          toolResults: {
+            'memory.get-preferences': {
+              ok: true,
+              data: { members: [{ memberId: 'doubao', mediaTitle: '豆豆故事' }] },
+            },
+          },
+        }}
+      />,
+    )
+    expect(screen.getByText('豆豆故事')).toBeInTheDocument()
+    expect(screen.queryByText(/undefined/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/°C/)).not.toBeInTheDocument()
+  })
+
+  it('wires the failed-message retry action through prepare → confirm → send', async () => {
+    const user = userEvent.setup()
+    render(
+      <App
+        initialTask={{
+          ...createInitialTask(),
+          phase: 'driving-to-airport',
+          passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+          message: {
+            autoNotifyAuthorized: true,
+            status: 'failed',
+            landingNoticeSent: false,
+            pendingContactId: 'contact-mom',
+          },
+          updatedAt: '2026-07-22T20:41:00+08:00',
+        }}
+      />,
+    )
+    expect(screen.getByRole('button', { name: '重试发送' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重试发送' }))
+    // First click only arms an opaque confirmation; send waits for explicit accept.
+    expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '确认发送' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '确认发送' }))
+    expect(screen.queryByRole('button', { name: '确认发送' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
+    expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
+  })
+
+  it('does not retry landing notify when no authorized contact remains', async () => {
+    const user = userEvent.setup()
+    render(
+      <App
+        initialTask={{
+          ...createInitialTask(),
+          phase: 'driving-to-airport',
+          passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
+          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
+          updatedAt: '2026-07-22T20:41:00+08:00',
+        }}
+      />,
+    )
+    await user.click(screen.getByRole('button', { name: '重试发送' }))
+    // No authorized contact → handler no-ops; retry action remains.
+    expect(screen.getByRole('button', { name: '重试发送' })).toBeInTheDocument()
   })
 })

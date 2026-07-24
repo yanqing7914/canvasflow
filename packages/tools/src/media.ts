@@ -18,7 +18,7 @@ export function createMediaPlayer(runtime: SideEffectRuntime) {
       return errorResult(ctx, TOOL, 'INVALID_ARGUMENT', '需要 mediaTitle 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<MediaPlayOutput>(TOOL, parsed.data.idempotencyKey, parsed.data)
+    const cached = runtime.idempotency.get<MediaPlayOutput>(ctx.taskId, TOOL, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, TOOL, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
@@ -30,8 +30,10 @@ export function createMediaPlayer(runtime: SideEffectRuntime) {
 
     // sourceMemberId 表示"以某成员的偏好为依据播放"，必须与该成员存储的偏好一致。
     if (parsed.data.sourceMemberId !== undefined) {
-      const record = runtime.preferences[parsed.data.sourceMemberId]
-      if (!record || record.mediaTitle !== parsed.data.mediaTitle) {
+      if (
+        !Object.hasOwn(runtime.preferences, parsed.data.sourceMemberId) ||
+        runtime.preferences[parsed.data.sourceMemberId].mediaTitle !== parsed.data.mediaTitle
+      ) {
         return errorResult(
           ctx,
           TOOL,
@@ -52,7 +54,7 @@ export function createMediaPlayer(runtime: SideEffectRuntime) {
         reversible: true,
       }),
     )
-    runtime.idempotency.set(TOOL, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, TOOL, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 }

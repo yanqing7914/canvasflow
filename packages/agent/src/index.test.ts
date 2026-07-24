@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { memberPreferences, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { applyEvent, createInitialTask, planEffects, resolveConfirmation } from './index'
 
 describe('airport pickup task engine', () => {
@@ -28,7 +29,11 @@ describe('airport pickup task engine', () => {
   it('schedules a landing notification only once across provider updates', () => {
     const first = { eventId: 'landed-1', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' }
     const second = { ...first, eventId: 'landed-2', timestamp: '2026-07-22T20:41:00+08:00' }
-    const state = { ...createInitialTask(), phase: 'driving-to-airport' as const }
+    const state = {
+      ...createInitialTask(),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+    }
     expect(planEffects(state, first, {})).toHaveLength(1)
     const scheduled = applyEvent(state, first)
     expect(planEffects(scheduled, second, {})).toEqual([])
@@ -102,5 +107,143 @@ describe('airport pickup task engine', () => {
     const state = { ...createInitialTask(), phase: 'driving-to-airport' as const, updatedAt: '2026-07-22T20:40:00+08:00', flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' } }
     const event = { eventId: 'same-time', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'in-air' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: state.updatedAt }
     expect(applyEvent(state, event)).toEqual(state)
+  })
+
+  it('records charging acceptance when charging.started fires', () => {
+    const driving = {
+      ...createInitialTask(),
+      phase: 'driving-to-airport' as const,
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+      updatedAt: '2026-07-22T20:05:00+08:00',
+    }
+    const started = applyEvent(driving, {
+      eventId: 'charge-start',
+      type: 'charging.started',
+      stationId: 'station-hongqiao-01',
+      timestamp: '2026-07-22T20:06:00+08:00',
+    })
+    expect(started.charging).toMatchObject({ recommended: true, accepted: true, status: 'active' })
+    const completed = applyEvent(started, {
+      eventId: 'charge-done',
+      type: 'charging.completed',
+      batteryPercent: 78,
+      timestamp: '2026-07-22T20:18:00+08:00',
+    })
+    expect(completed.charging).toMatchObject({ accepted: true, status: 'completed' })
+  })
+
+  it('plans cabin apply for media-only preferences without temperature', () => {
+    const state = {
+      ...createInitialTask(),
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: true },
+      updatedAt: '2026-07-22T20:55:00+08:00',
+    }
+    const event = {
+      eventId: 'apply-media',
+      type: 'user.input' as const,
+      text: '播放豆豆的媒体偏好',
+      timestamp: '2026-07-22T20:56:00+08:00',
+    }
+    const toolResults = {
+      'memory.get-preferences': {
+        ok: true,
+        data: { members: [{ memberId: 'doubao', mediaTitle: '豆豆故事' }] },
+        error: null,
+      },
+    }
+    expect(planEffects(state, event, toolResults)).toEqual([
+      { type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
+    ])
+  })
+
+  it('schedules landing notify with the first authorized contact, not a hard-coded mom', () => {
+    const driving = {
+      ...createInitialTask(),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      updatedAt: '2026-07-22T20:30:00+08:00',
+    }
+    const landed = applyEvent(driving, {
+      eventId: 'landed-auth-contact',
+      type: 'flight.updated',
+      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      timestamp: '2026-07-22T20:40:00+08:00',
+    })
+    expect(landed.message.pendingContactId).toBe('contact-mom')
+
+    const unauthorizedPassengers = {
+      ...driving,
+      passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
+    }
+    const unauthorizedLandedEvent = {
+      eventId: 'landed-no-auth-contact',
+      type: 'flight.updated' as const,
+      flight: { flightNumber: 'MU5102', status: 'landed' as const, estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      timestamp: '2026-07-22T20:40:00+08:00',
+    }
+    expect(planEffects(unauthorizedPassengers, unauthorizedLandedEvent, {})).toEqual([])
+    const unauthorizedOnly = applyEvent(unauthorizedPassengers, unauthorizedLandedEvent)
+    expect(unauthorizedOnly.message.status).toBe('idle')
+    expect(unauthorizedOnly.message.pendingContactId).toBeUndefined()
+    expect(unauthorizedOnly.message.pendingMessageId).toBeUndefined()
+
+    // mom unauthorized + dad authorized → agent retains dad, not a hard-coded mom contact.
+    const momWasAuthorized = memberPreferences.mom.landingNotificationAuthorized
+    const dadWasAuthorized = memberPreferences.dad.landingNotificationAuthorized
+    memberPreferences.mom.landingNotificationAuthorized = false
+    memberPreferences.dad.landingNotificationAuthorized = true
+    try {
+      expect(resolveAuthorizedLandingContact(['mom', 'dad'])).toBe('contact-dad')
+      const dadPreferred = applyEvent(
+        {
+          ...driving,
+          passengers: { memberIds: ['mom', 'dad'], names: ['妈妈', '爸爸'], confirmedOnboard: false },
+        },
+        {
+          eventId: 'landed-dad-auth',
+          type: 'flight.updated',
+          flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          timestamp: '2026-07-22T20:40:00+08:00',
+        },
+      )
+      expect(dadPreferred.message.pendingContactId).toBe('contact-dad')
+    } finally {
+      memberPreferences.mom.landingNotificationAuthorized = momWasAuthorized
+      memberPreferences.dad.landingNotificationAuthorized = dadWasAuthorized
+    }
+  })
+
+  it('plans cabin apply from memory.get-preferences members shape', () => {
+    const state = {
+      ...createInitialTask(),
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: true },
+      updatedAt: '2026-07-22T20:55:00+08:00',
+    }
+    const event = {
+      eventId: 'apply-cabin',
+      type: 'user.input' as const,
+      text: '应用家庭座舱偏好',
+      timestamp: '2026-07-22T20:56:00+08:00',
+    }
+    const toolResults = {
+      'memory.get-preferences': {
+        ok: true,
+        data: {
+          members: [
+            { memberId: 'mom', rearTemperatureC: 25 },
+            { memberId: 'doubao', mediaTitle: '豆豆故事' },
+          ],
+        },
+        error: null,
+      },
+    }
+    expect(planEffects(state, event, toolResults)).toEqual([
+      { type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
+    ])
+    expect(planEffects(state, event, {
+      'memory.get-preferences': { ok: true, data: { temperatureC: 25 }, error: null },
+    })).toEqual([])
   })
 })

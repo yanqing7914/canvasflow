@@ -235,7 +235,7 @@ export const memoryPreferenceChangeSchema = z.object({
   mediaTitle: z.string().optional(),
   homeDestinationId: z.string().optional(),
   landingNotificationAuthorized: z.boolean().optional(),
-})
+}).strict()
 
 export const proposeMemoryUpdateInputSchema = z.object({
   memberId: z.string().min(1),

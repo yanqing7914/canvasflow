@@ -21,7 +21,7 @@ export function getVehicleStatus(ctx: ToolContext, input?: unknown): ToolResult<
   }
 
   const snapshotName = parsed.data?.snapshot ?? DEFAULT_VEHICLE_SNAPSHOT
-  if (!(snapshotName in vehicleSnapshots)) {
+  if (!Object.hasOwn(vehicleSnapshots, snapshotName)) {
     return errorResult(ctx, TOOL, 'VEHICLE_STATE_UNAVAILABLE', `未知车辆状态快照：${snapshotName}`, false)
   }
   return okResult(ctx, TOOL, vehicleStatusOutputSchema.parse(vehicleSnapshots[snapshotName as VehicleSnapshotName]))

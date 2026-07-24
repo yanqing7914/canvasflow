@@ -32,7 +32,7 @@ import { getPreferences } from './memory'
 import { autoNotifyAuthorizationId, prepareMessage } from './message'
 import { planRoute } from './navigation'
 import { createSideEffectRuntime } from './idempotency'
-import { createToolRegistry, toolDefinitions, type ToolName } from './registry'
+import { createProviderRegistry, toolDefinitions, type ToolName } from './registry'
 import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
 
@@ -142,7 +142,13 @@ describe('fixture toolResults contract', () => {
   })
 
   it('regenerates side-effect tool results from the fixture providers', () => {
-    const registry = createToolRegistry(createSideEffectRuntime())
+    const registry = createProviderRegistry(createSideEffectRuntime())
+    expect(
+      registry['navigation.plan-route'](ctx, {
+        origin: { latitude: 31.23, longitude: 121.47 },
+        destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      }).ok,
+    ).toBe(true)
     expect(registry['navigation.start'](ctx, { routeId: 'route-airport-001', idempotencyKey: 'nav-start-airport' }).data)
       .toEqual(toolData('route-airport', 'navigation.start'))
     expect(
@@ -193,7 +199,7 @@ type TimelineRun = {
  */
 function replayMainTimeline(): TimelineRun {
   const event = (id: string): AirportPickupEvent => fixtureById.get(id)!.inputEvent
-  const registry = createToolRegistry(createSideEffectRuntime())
+  const registry = createProviderRegistry(createSideEffectRuntime())
 
   let state = fixtureById.get('task-created')!.initialTaskState
   const trace: TimelineRun['trace'] = []
@@ -225,17 +231,23 @@ function replayMainTimeline(): TimelineRun {
 
   step(event('route-airport'))
   expect(state.phase).toBe('driving-to-airport')
+  const planned = registry['navigation.plan-route'](ctx, {
+    origin: { latitude: 31.23, longitude: 121.47 },
+    destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+  })
+  expect(planned.ok).toBe(true)
+  expect(planned.data?.routeId).toBe(state.navigation!.routeId)
   const started = registry['navigation.start'](ctx, { routeId: state.navigation!.routeId, idempotencyKey: `${state.taskId}:nav-start` })
   expect(started.ok).toBe(true)
 
   step({ eventId: 'timeline-charging-started', type: 'charging.started', stationId: 'station-hongqiao-01', timestamp: '2026-07-22T20:06:00+08:00' })
-  expect(state.charging.status).toBe('active')
+  expect(state.charging).toMatchObject({ accepted: true, status: 'active' })
 
   step(event('flight-in-air'))
   expect(state.flight?.status).toBe('in-air')
 
   step(event('charging-completed'))
-  expect(state.charging.status).toBe('completed')
+  expect(state.charging).toMatchObject({ accepted: true, status: 'completed' })
 
   step(event('flight-landed'))
   expect(state.message).toMatchObject({ status: 'scheduled', idempotencyKey: 'pickup-001:MU5102:landing' })

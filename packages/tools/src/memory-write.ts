@@ -37,10 +37,10 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, PROPOSE, 'INVALID_ARGUMENT', '需要 memberId 和 changes', false)
     }
 
-    const record = runtime.preferences[parsed.data.memberId]
-    if (!record) {
+    if (!Object.hasOwn(runtime.preferences, parsed.data.memberId)) {
       return errorResult(ctx, PROPOSE, 'PREFERENCE_UNAVAILABLE', `无可用偏好：${parsed.data.memberId}`, false)
     }
+    const record = runtime.preferences[parsed.data.memberId]
 
     const changes = pickWhitelist(parsed.data.changes as Record<string, unknown>)
     if (Object.keys(changes).length === 0) {
@@ -80,9 +80,13 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
     }
 
     const proposalId = related.length === 0 ? baseId : `${baseId}:v${related.length + 1}`
-    const confirmationId = `${proposalId}:confirm`
+    const confirmationId = runtime.confirmations.issueMemoryConfirmation({
+      taskId: ctx.taskId,
+      proposalId,
+    })
     runtime.memoryProposals.set(proposalId, {
       proposalId,
+      taskId: ctx.taskId,
       memberId: parsed.data.memberId,
       before,
       after,
@@ -110,12 +114,6 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '需要 proposalId、confirmationId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(CONFIRM, parsed.data.idempotencyKey, parsed.data)
-    if (cached.kind === 'hit') return cached.result
-    if (cached.kind === 'conflict') {
-      return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
-    }
-
     const proposal = runtime.memoryProposals.get(parsed.data.proposalId)
     if (!proposal) {
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案不存在或已过期：${parsed.data.proposalId}`, false)
@@ -125,16 +123,50 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, CONFIRM, 'PROPOSAL_EXPIRED', `提案已过期：${parsed.data.proposalId}`, false)
     }
 
-    // 确认凭据必须与提案签发的凭据一致，任意非空字符串不再有效。
-    if (parsed.data.confirmationId !== proposal.confirmationId) {
-      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案不匹配', false)
+    // Task ownership is authoritative: proposalId prefixes are not a security boundary.
+    if (proposal.taskId !== ctx.taskId || parsed.data.confirmationId !== proposal.confirmationId) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据与提案或当前任务不匹配', false)
     }
 
-    if (!proposal.confirmed) {
-      const record = runtime.preferences[proposal.memberId]
-      Object.assign(record, proposal.after)
-      proposal.confirmed = true
+    // Unspent opaque tokens must still match the confirmation store before apply.
+    if (
+      !proposal.confirmed &&
+      !runtime.confirmations.matchesMemoryConfirmation(parsed.data.confirmationId, {
+        taskId: ctx.taskId,
+        proposalId: proposal.proposalId,
+      })
+    ) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据无效或已使用', false)
     }
+
+    const cached = runtime.idempotency.get<ConfirmMemoryUpdateOutput>(ctx.taskId, CONFIRM, parsed.data.idempotencyKey, parsed.data)
+    if (cached.kind === 'hit') {
+      if (cached.result.meta.taskId !== ctx.taskId) {
+        return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '幂等结果与当前任务不匹配', false)
+      }
+      return cached.result
+    }
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, CONFIRM, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
+
+    // After the first successful confirm the token is spent: only the original
+    // idempotency key may replay success. Fresh keys must not mint new oks.
+    if (proposal.confirmed) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据已使用', false)
+    }
+
+    if (
+      !runtime.confirmations.consumeMemoryConfirmation(parsed.data.confirmationId, {
+        taskId: ctx.taskId,
+        proposalId: proposal.proposalId,
+      })
+    ) {
+      return errorResult(ctx, CONFIRM, 'CONFIRMATION_REQUIRED', '确认凭据无效或已使用', false)
+    }
+    const record = runtime.preferences[proposal.memberId]
+    Object.assign(record, proposal.after)
+    proposal.confirmed = true
 
     const result = okResult(
       ctx,
@@ -145,7 +177,7 @@ export function createMemoryWriteTools(runtime: SideEffectRuntime) {
         applied: proposal.after,
       }),
     )
-    runtime.idempotency.set(CONFIRM, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, CONFIRM, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 

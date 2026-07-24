@@ -4,6 +4,7 @@ import {
   type AirportPickupEvent,
   type AirportPickupTaskState,
 } from '@canvasflow/schema'
+import { resolveAuthorizedLandingContact } from '@canvasflow/tools'
 
 export * from './effects'
 
@@ -44,9 +45,15 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'flight.updated':
       next.flight = event.flight
       if (next.phase === 'driving-to-airport' && event.flight.status === 'landed' && next.message.autoNotifyAuthorized && !next.message.landingNoticeSent && next.message.status === 'idle') {
-        next.message.status = 'scheduled'
-        next.message.pendingMessageId = `${event.flight.flightNumber}:landing`
-        next.message.idempotencyKey = `${next.taskId}:${event.flight.flightNumber}:landing`
+        // Never enter scheduled without a currently authorized recipient — otherwise
+        // planEffects/UI can trap the task in a high-priority notify state with no recovery.
+        const contactId = resolveAuthorizedLandingContact(next.passengers.memberIds)
+        if (contactId) {
+          next.message.status = 'scheduled'
+          next.message.pendingMessageId = `${event.flight.flightNumber}:landing`
+          next.message.idempotencyKey = `${next.taskId}:${event.flight.flightNumber}:landing`
+          next.message.pendingContactId = contactId
+        }
       }
       break
     case 'navigation.started':
@@ -59,13 +66,32 @@ export function applyEvent(state: AirportPickupTaskState, input: AirportPickupEv
     case 'vehicle.parked': if (next.phase === 'approaching-airport') next.phase = 'waiting-for-passengers'; break
     case 'user.confirmed-passengers-onboard': if (next.phase === 'waiting-for-passengers') { next.passengers.confirmedOnboard = true; next.phase = 'returning-home' } break
     case 'destination.arrived': if (next.phase === 'returning-home') { next.phase = 'completed'; next.navigation = next.navigation ? { ...next.navigation, destination: event.destination, status: 'arrived' } : undefined; next.pendingConfirmation = { confirmationId: `${next.taskId}:save-memory`, action: 'save-memory' } } break
-    case 'charging.started': if (next.phase === 'driving-to-airport' && next.charging.status === 'planned') next.charging.status = 'active'; break
+    case 'charging.started':
+      if (next.phase === 'driving-to-airport' && next.charging.status === 'planned') {
+        // Starting charging records that the user accepted the recommended plan.
+        next.charging = { ...next.charging, accepted: true, status: 'active' }
+      }
+      break
     case 'charging.completed': if (next.charging.status === 'active') next.charging.status = 'completed'; break
     case 'charging.cancelled': if (next.charging.status === 'planned' || next.charging.status === 'active') next.charging = { ...next.charging, accepted: false, status: 'none' }; break
     case 'user.cancelled-task': next.phase = 'cancelled'; next.pendingConfirmation = undefined; next.message.pendingMessageId = undefined; break
     case 'provider.timeout': handled = true; break
-    case 'message.sent': if (next.message.pendingMessageId === event.messageId) { next.message.status = 'sent'; next.message.landingNoticeSent = true; next.message.sentAt = event.timestamp; next.message.pendingMessageId = undefined } break
-    case 'message.failed': if (next.message.pendingMessageId === event.messageId) { next.message.status = 'failed'; next.message.pendingMessageId = undefined } break
+    case 'message.sent':
+      if (next.message.pendingMessageId === event.messageId) {
+        next.message.status = 'sent'
+        next.message.landingNoticeSent = true
+        next.message.sentAt = event.timestamp
+        next.message.pendingMessageId = undefined
+        next.message.pendingContactId = undefined
+      }
+      break
+    case 'message.failed':
+      if (next.message.pendingMessageId === event.messageId) {
+        next.message.status = 'failed'
+        next.message.pendingMessageId = undefined
+        // Keep pendingContactId so explicit retry targets the original recipient.
+      }
+      break
     default: break
   }
   const afterFacts = taskFacts(next)

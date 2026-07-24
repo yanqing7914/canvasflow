@@ -28,14 +28,17 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', '需要 zone、sourceMemberIds 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<ApplyCabinProfileOutput>(APPLY, parsed.data.idempotencyKey, parsed.data)
+    const cached = runtime.idempotency.get<ApplyCabinProfileOutput>(ctx.taskId, APPLY, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, APPLY, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
     }
 
     // 授权基于 runtime 的可变偏好副本，与 memory.confirm-update 的写入保持一致。
-    const unknownMembers = parsed.data.sourceMemberIds.filter((memberId) => !(memberId in runtime.preferences))
+    // 必须用 own-property 判断：普通对象上的 `in` 会把 toString/constructor 等原型键误判为成员。
+    const unknownMembers = parsed.data.sourceMemberIds.filter(
+      (memberId) => !Object.hasOwn(runtime.preferences, memberId),
+    )
     if (unknownMembers.length > 0) {
       return errorResult(ctx, APPLY, 'POLICY_DENIED', `未授权成员：${unknownMembers.join('、')}`, false)
     }
@@ -72,7 +75,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
     }
     const effectId = `${ctx.taskId}:cabin:${parsed.data.idempotencyKey}`
     runtime.cabinCurrent = current
-    runtime.cabinEffects.set(effectId, { effectId, previous, current, reverted: false })
+    runtime.cabinEffects.set(effectId, { effectId, taskId: ctx.taskId, previous, current, reverted: false })
 
     const result = okResult(
       ctx,
@@ -85,7 +88,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
         reversible: true,
       }),
     )
-    runtime.idempotency.set(APPLY, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, APPLY, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 
@@ -95,7 +98,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
       return errorResult(ctx, REVERT, 'INVALID_ARGUMENT', '需要 effectId 和 idempotencyKey', false)
     }
 
-    const cached = runtime.idempotency.get<RevertCabinProfileOutput>(REVERT, parsed.data.idempotencyKey, parsed.data)
+    const cached = runtime.idempotency.get<RevertCabinProfileOutput>(ctx.taskId, REVERT, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {
       return errorResult(ctx, REVERT, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
@@ -104,6 +107,11 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
     const effect = runtime.cabinEffects.get(parsed.data.effectId)
     if (!effect) {
       return errorResult(ctx, REVERT, 'APPLY_FAILED', `未知座舱效果：${parsed.data.effectId}`, false)
+    }
+
+    // effectId embedding the task id is not authorization; enforce ownership explicitly.
+    if (effect.taskId !== ctx.taskId) {
+      return errorResult(ctx, REVERT, 'POLICY_DENIED', `座舱效果不属于当前任务：${parsed.data.effectId}`, false)
     }
 
     // 只允许撤销仍然生效的效果：若座舱状态已被后续 apply 覆盖，
@@ -126,7 +134,7 @@ export function createCabinProfileTools(runtime: SideEffectRuntime) {
         current: cloneProfile(runtime.cabinCurrent),
       }),
     )
-    runtime.idempotency.set(REVERT, parsed.data.idempotencyKey, parsed.data, result)
+    runtime.idempotency.set(ctx.taskId, REVERT, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 

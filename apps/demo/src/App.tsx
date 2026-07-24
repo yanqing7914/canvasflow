@@ -1,7 +1,17 @@
 import { useMemo, useState } from 'react'
 import { applyEvent, createInitialTask, resolveConfirmation } from '@canvasflow/agent'
-import { composePickupSpec } from '@canvasflow/ui'
+import {
+  createProviderRegistry,
+  createSideEffectRuntime,
+  issueSendMessageConfirmation,
+  prepareMessage,
+  resolveAuthorizedLandingContact,
+} from '@canvasflow/tools'
+import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
 import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
+
+const demoRuntime = createSideEffectRuntime()
+const demoRegistry = createProviderRegistry(demoRuntime)
 
 const timeline: AirportPickupEvent[] = [
   { eventId: 'start-navigation', type: 'navigation.started', routeId: 'route-airport-001', timestamp: '2026-07-22T20:05:00+08:00' },
@@ -32,7 +42,13 @@ function componentSummary(component: ComponentSpec): string {
     case 'charging-recommendation': return component.props.reason
     case 'message-preview': return `${component.props.contactLabel}：${component.props.textPreview}`
     case 'passenger-status': return component.props.meetingPoint ? `${component.props.label} · ${component.props.meetingPoint}` : component.props.label
-    case 'cabin-profile': return `${component.props.temperatureC}°C${component.props.mediaTitle ? ` · ${component.props.mediaTitle}` : ''}`
+    case 'cabin-profile': {
+      const parts: string[] = []
+      if (component.props.temperatureC !== undefined) parts.push(`${component.props.temperatureC}°C`)
+      if (component.props.fanLevel !== undefined) parts.push(`风速 ${component.props.fanLevel}`)
+      if (component.props.mediaTitle) parts.push(component.props.mediaTitle)
+      return parts.join(' · ')
+    }
     case 'alert': return component.props.message ?? component.props.title
   }
 }
@@ -52,9 +68,15 @@ function componentTitle(component: ComponentSpec): string {
   }
 }
 
-export default function App({ initialTask = createDemoTask() }: { initialTask?: AirportPickupTaskState }) {
+export default function App({
+  initialTask = createDemoTask(),
+  composeContext = {},
+}: {
+  initialTask?: AirportPickupTaskState
+  composeContext?: ComposerContext
+}) {
   const [task, setTask] = useState<AirportPickupTaskState>(initialTask)
-  const spec = useMemo(() => composePickupSpec(task), [task])
+  const spec = useMemo(() => composePickupSpec(task, composeContext), [task, composeContext])
   const advance = () => {
     const candidate = timeline
       .map((event) => ({ event, next: applyEvent(task, event) }))
@@ -64,6 +86,99 @@ export default function App({ initialTask = createDemoTask() }: { initialTask?: 
   const handleAction = (actionId: string) => {
     if (actionId === 'save-trip-preferences') {
       setTask((current) => resolveConfirmation(current, `${current.taskId}:save-memory`))
+      return
+    }
+    if (actionId === 'retry-landing-message') {
+      setTask((current) => {
+        if (current.message.status !== 'failed' || !current.flight) return current
+        // Always re-resolve from authorization prefs; do not trust a stale pendingContactId.
+        const contactId = resolveAuthorizedLandingContact(current.passengers.memberIds)
+        if (!contactId) return current
+        const ctx = { taskId: current.taskId }
+        const prepared = prepareMessage(ctx, {
+          contactId,
+          flightNumber: current.flight.flightNumber,
+          eta: '20:40',
+        })
+        if (!prepared.ok || !prepared.data) return current
+
+        const binding = {
+          taskId: current.taskId,
+          contactId: prepared.data.contactId,
+          messageId: prepared.data.messageId,
+          text: prepared.data.text,
+        }
+        const confirmationId = issueSendMessageConfirmation(demoRuntime, binding)
+        // Arm an explicit confirmation boundary; do not send until the user accepts.
+        return {
+          ...current,
+          message: {
+            ...current.message,
+            pendingContactId: contactId,
+            pendingMessageId: `${current.flight.flightNumber}:landing`,
+            idempotencyKey: prepared.data.messageId,
+          },
+          pendingConfirmation: {
+            confirmationId,
+            action: 'send-message',
+          },
+        }
+      })
+      return
+    }
+    if (actionId === 'confirm-retry-landing-message') {
+      setTask((current) => {
+        if (
+          current.message.status !== 'failed' ||
+          !current.flight ||
+          current.pendingConfirmation?.action !== 'send-message' ||
+          !current.message.pendingContactId
+        ) {
+          return current
+        }
+        const ctx = { taskId: current.taskId }
+        const prepared = prepareMessage(ctx, {
+          contactId: current.message.pendingContactId,
+          flightNumber: current.flight.flightNumber,
+          eta: '20:40',
+        })
+        if (!prepared.ok || !prepared.data) return current
+
+        const pendingMessageId = current.message.pendingMessageId ?? `${current.flight.flightNumber}:landing`
+        const armed: AirportPickupTaskState = {
+          ...current,
+          pendingConfirmation: undefined,
+          message: {
+            ...current.message,
+            status: 'scheduled',
+            pendingMessageId,
+            idempotencyKey: prepared.data.messageId,
+            landingNoticeSent: false,
+          },
+        }
+        const sent = demoRegistry['message.send'](ctx, {
+          contactId: prepared.data.contactId,
+          messageId: prepared.data.messageId,
+          text: prepared.data.text,
+          confirmationId: current.pendingConfirmation.confirmationId,
+          idempotencyKey: `${prepared.data.messageId}:retry`,
+        })
+        if (!sent.ok) {
+          return applyEvent(armed, {
+            eventId: `retry-failed-${current.taskRevision}`,
+            type: 'message.failed',
+            messageId: pendingMessageId,
+            errorCode: sent.error?.code ?? 'SEND_FAILED',
+            timestamp: '2026-07-22T20:42:00+08:00',
+          })
+        }
+        return applyEvent(armed, {
+          eventId: `retry-sent-${current.taskRevision}`,
+          type: 'message.sent',
+          messageId: pendingMessageId,
+          timestamp: '2026-07-22T20:42:00+08:00',
+        })
+      })
     }
   }
 
