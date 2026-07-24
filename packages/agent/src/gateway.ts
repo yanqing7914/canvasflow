@@ -203,7 +203,11 @@ export class AgentGateway {
         this.#throwProviderError(error, current)
       }
     }
-    if (request.event.type === 'user.confirmed-passengers-onboard' && current.task.phase === 'waiting-for-passengers' && next.phase === 'returning-home') {
+    if (
+      request.event.type === 'user.confirmed-passengers-onboard'
+      && (current.task.phase === 'waiting-for-passengers' || current.task.phase === 'returning-home')
+      && next.phase === 'returning-home'
+    ) {
       try {
         const preferences = this.#orchestrator.resolveReturnTripPreferences(
           taskId,
@@ -227,9 +231,6 @@ export class AgentGateway {
           idempotencyKey: request.event.eventId,
           effectIdPrefix: `${request.event.eventId}:effect`,
         })
-        if (!execution.succeeded) {
-          return this.#response(request.clientRequestId, current, execution.effect, performance.now() - startedAt)
-        }
         if (execution.navigation) {
           next.navigation = {
             routeId: execution.navigation.routeId,
@@ -237,6 +238,14 @@ export class AgentGateway {
             eta: execution.navigation.eta,
             status: 'active',
           }
+        }
+        if (!execution.succeeded) {
+          // Keep the task aligned with effects that already reached providers.
+          // A later event can retry the remaining providers without claiming
+          // that passengers are still waiting at the airport.
+          const stored = this.#store.save(this.#publish(next, toolResults))
+          this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: execution.effect })
+          return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
         }
         const stored = this.#store.save(this.#publish(next, toolResults))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: execution.effect })

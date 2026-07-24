@@ -52,6 +52,24 @@ export type ReturnTripExecution = {
   navigation?: { routeId: string; destination: string; eta: string }
 }
 
+type ProviderResult<T> =
+  | { succeeded: true; data: T }
+  | { succeeded: false; errorCode: string }
+
+type ProviderResultSchema<T> = {
+  safeParse(value: unknown):
+    | {
+        success: true
+        data: {
+          ok: boolean
+          data: T | null
+          error: { code: string } | null
+          meta: { taskId: string; tool: string; requestId: string }
+        }
+      }
+    | { success: false }
+}
+
 export class EffectExecutor {
   readonly #registry: ProviderRegistry
   readonly #policy: PolicyGate
@@ -124,9 +142,11 @@ export class EffectExecutor {
     effectIdPrefix: string
   }): ReturnTripExecution {
     const effects: EffectRecord[] = []
+    const navigation = { routeId: '', destination: '', eta: '' }
     const failed = (type: string, errorCode: string): ReturnTripExecution => ({
       succeeded: false,
       effect: [...effects, { effectId: `${input.effectIdPrefix}:${effects.length}`, type, status: 'failed', tool: type, errorCode }],
+      ...(navigation.routeId ? { navigation } : {}),
     })
     if (input.task.phase !== 'returning-home' || input.task.passengers.confirmedOnboard === false) {
       return failed('return-trip', 'POLICY_DENIED')
@@ -135,64 +155,99 @@ export class EffectExecutor {
     if (!destinationId) return failed('navigation.update-route', 'PREFERENCE_UNAVAILABLE')
 
     const providerRequestId = `${input.task.taskId}:return-trip:${input.idempotencyKey}`
-    const planRaw = this.#registry['navigation.plan-route'](
-      { taskId: input.task.taskId, requestId: `${providerRequestId}:plan` },
-      { origin: { latitude: 31.23, longitude: 121.47 }, destination: { id: destinationId, name: '家' } },
+    const plan = this.#callProvider(
+      input.task.taskId,
+      'navigation.plan-route',
+      `${providerRequestId}:plan`,
+      () => this.#registry['navigation.plan-route'](
+        { taskId: input.task.taskId, requestId: `${providerRequestId}:plan` },
+        { origin: { latitude: 31.23, longitude: 121.47 }, destination: { id: destinationId, name: '家' } },
+      ),
+      toolResultSchema(routePlanOutputSchema),
     )
-    const plan = toolResultSchema(routePlanOutputSchema).safeParse(planRaw)
-    if (!plan.success || !plan.data.ok || plan.data.data === null || plan.data.error !== null) {
-      return failed('navigation.update-route', plan.success && plan.data.error ? plan.data.error.code : 'PROVIDER_FAILED')
-    }
-    const route = plan.data.data
-    const updateRaw = this.#registry['navigation.update-route'](
-      { taskId: input.task.taskId, requestId: `${providerRequestId}:update` },
-      { routeId: route.routeId, destination: { id: destinationId, name: '家' }, idempotencyKey: `${input.idempotencyKey}:route` },
+    if (!plan.succeeded) return failed('navigation.update-route', plan.errorCode)
+    const route = plan.data
+    const update = this.#callProvider(
+      input.task.taskId,
+      'navigation.update-route',
+      `${providerRequestId}:update`,
+      () => this.#registry['navigation.update-route'](
+        { taskId: input.task.taskId, requestId: `${providerRequestId}:update` },
+        { routeId: route.routeId, destination: { id: destinationId, name: '家' }, idempotencyKey: `${input.idempotencyKey}:route` },
+      ),
+      toolResultSchema(navigationUpdateRouteOutputSchema),
     )
-    const update = toolResultSchema(navigationUpdateRouteOutputSchema).safeParse(updateRaw)
-    if (!update.success || !update.data.ok || update.data.data === null || update.data.error !== null) {
-      return failed('navigation.update-route', update.success && update.data.error ? update.data.error.code : 'PROVIDER_FAILED')
-    }
+    if (!update.succeeded) return failed('navigation.update-route', update.errorCode)
+    navigation.routeId = route.routeId
+    navigation.destination = '家'
+    navigation.eta = route.arrivalTime
     effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'navigation.update-route', status: 'succeeded', tool: 'navigation.update-route' })
 
-    let cabinEffectId: string | undefined
     if (input.preferences.temperatureC !== undefined || input.preferences.mediaTitle !== undefined) {
-      const cabinRaw = this.#registry['vehicle.apply-cabin-profile'](
-        { taskId: input.task.taskId, requestId: `${providerRequestId}:cabin` },
-        {
-          zone: 'rear',
-          ...(input.preferences.temperatureC !== undefined ? { temperatureC: input.preferences.temperatureC } : {}),
-          ...(input.preferences.mediaTitle !== undefined ? { mediaTitle: input.preferences.mediaTitle } : {}),
-          sourceMemberIds: input.memberIds,
-          idempotencyKey: `${input.idempotencyKey}:cabin`,
-        },
+      const cabin = this.#callProvider(
+        input.task.taskId,
+        'vehicle.apply-cabin-profile',
+        `${providerRequestId}:cabin`,
+        () => this.#registry['vehicle.apply-cabin-profile'](
+          { taskId: input.task.taskId, requestId: `${providerRequestId}:cabin` },
+          {
+            zone: 'rear',
+            ...(input.preferences.temperatureC !== undefined ? { temperatureC: input.preferences.temperatureC } : {}),
+            ...(input.preferences.mediaTitle !== undefined ? { mediaTitle: input.preferences.mediaTitle } : {}),
+            sourceMemberIds: input.memberIds,
+            idempotencyKey: `${input.idempotencyKey}:cabin`,
+          },
+        ),
+        toolResultSchema(applyCabinProfileOutputSchema),
       )
-      const cabin = toolResultSchema(applyCabinProfileOutputSchema).safeParse(cabinRaw)
-      if (!cabin.success || !cabin.data.ok || cabin.data.data === null || cabin.data.error !== null) {
-        return failed('vehicle.apply-cabin-profile', cabin.success && cabin.data.error ? cabin.data.error.code : 'PROVIDER_FAILED')
-      }
-      cabinEffectId = cabin.data.data.effectId
+      if (!cabin.succeeded) return failed('vehicle.apply-cabin-profile', cabin.errorCode)
       effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' })
     }
 
     if (input.preferences.mediaTitle !== undefined && input.preferences.mediaMemberId !== undefined) {
-      const mediaRaw = this.#registry['media.play'](
-        { taskId: input.task.taskId, requestId: `${providerRequestId}:media` },
-        { mediaTitle: input.preferences.mediaTitle, sourceMemberId: input.preferences.mediaMemberId, idempotencyKey: `${input.idempotencyKey}:media` },
+      const media = this.#callProvider(
+        input.task.taskId,
+        'media.play',
+        `${providerRequestId}:media`,
+        () => this.#registry['media.play'](
+          { taskId: input.task.taskId, requestId: `${providerRequestId}:media` },
+          { mediaTitle: input.preferences.mediaTitle, sourceMemberId: input.preferences.mediaMemberId, idempotencyKey: `${input.idempotencyKey}:media` },
+        ),
+        toolResultSchema(mediaPlayOutputSchema),
       )
-      const media = toolResultSchema(mediaPlayOutputSchema).safeParse(mediaRaw)
-      if (!media.success || !media.data.ok || media.data.data === null || media.data.error !== null) {
-        if (cabinEffectId) {
-          this.#registry['vehicle.revert-cabin-profile'](
-            { taskId: input.task.taskId, requestId: `${providerRequestId}:cabin-revert` },
-            { effectId: cabinEffectId, idempotencyKey: `${input.idempotencyKey}:cabin-revert` },
-          )
-        }
-        return failed('media.play', media.success && media.data.error ? media.data.error.code : 'PROVIDER_FAILED')
-      }
+      if (!media.succeeded) return failed('media.play', media.errorCode)
       effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'media.play', status: 'succeeded', tool: 'media.play' })
     }
 
-    return { succeeded: true, effect: effects, navigation: { routeId: route.routeId, destination: '家', eta: route.arrivalTime } }
+    return { succeeded: true, effect: effects, navigation }
+  }
+
+  #callProvider<T>(
+    taskId: string,
+    tool: string,
+    requestId: string,
+    call: () => unknown,
+    schema: ProviderResultSchema<T>,
+  ): ProviderResult<T> {
+    let raw: unknown
+    try {
+      raw = call()
+    } catch (error) {
+      return { succeeded: false, errorCode: providerErrorCode(error) }
+    }
+    const parsed = schema.safeParse(raw)
+    if (!parsed.success) return { succeeded: false, errorCode: 'PROVIDER_FAILED' }
+    const result = parsed.data
+    if (result.meta.taskId !== taskId || result.meta.tool !== tool || result.meta.requestId !== requestId) {
+      return { succeeded: false, errorCode: 'PROVIDER_FAILED' }
+    }
+    if (result.ok && result.data !== null && result.error === null) {
+      return { succeeded: true, data: result.data }
+    }
+    if (!result.ok && result.data === null && result.error !== null) {
+      return { succeeded: false, errorCode: result.error.code }
+    }
+    return { succeeded: false, errorCode: 'PROVIDER_FAILED' }
   }
 }
 
