@@ -6,6 +6,7 @@ on:
       - opened
       - synchronize
       - reopened
+      - ready_for_review
   workflow_dispatch:
     inputs:
       pr_number:
@@ -33,6 +34,9 @@ jobs:
       number: ${{ steps.metadata.outputs.number }}
       head-repository: ${{ steps.metadata.outputs.head-repository }}
       base-sha: ${{ steps.metadata.outputs.base-sha }}
+      head-sha: ${{ steps.metadata.outputs.head-sha }}
+      base-ref: ${{ steps.metadata.outputs.base-ref }}
+      draft: ${{ steps.metadata.outputs.draft }}
     steps:
       - name: Resolve pull request metadata
         id: metadata
@@ -50,12 +54,17 @@ jobs:
             core.setOutput('number', String(pullRequest.number))
             core.setOutput('head-repository', pullRequest.head.repo.full_name)
             core.setOutput('base-sha', pullRequest.base.sha)
+            core.setOutput('head-sha', pullRequest.head.sha)
+            core.setOutput('base-ref', pullRequest.base.ref)
+            core.setOutput('draft', String(pullRequest.draft))
 
   review:
     needs: resolve-pr
     # Never expose the upstream API key to a fork PR. Review fork changes locally.
     if: needs.resolve-pr.outputs.head-repository == github.repository
     runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       - name: Checkout PR
         uses: actions/checkout@v4
@@ -114,6 +123,22 @@ jobs:
           sandbox: read-only
           model: ${{ vars.CODEX_REVIEW_MODEL }}
 
+      - name: Extract review verdict
+        id: verdict
+        run: |
+          set -euo pipefail
+          # Anti-injection: PR content flows into the review output, so a
+          # quoted verdict line must never count. Accept the verdict only if
+          # exactly one anchored verdict line exists and it is the last line.
+          pattern='^CODEX-REVIEW-VERDICT: (PASS|BLOCK)$'
+          count="$(grep -cE "$pattern" codex-review.md || true)"
+          last_line="$(tail -n 1 codex-review.md | tr -d '\r')"
+          verdict=""
+          if [ "$count" -eq 1 ] && printf '%s\n' "$last_line" | grep -qE "$pattern"; then
+            verdict="${last_line#CODEX-REVIEW-VERDICT: }"
+          fi
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+
       - name: Upload review output
         if: always()
         uses: actions/upload-artifact@v4
@@ -138,3 +163,136 @@ jobs:
         env:
           CODEX_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}
           PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+
+  auto-merge:
+    name: auto-merge
+    needs:
+      - resolve-pr
+      - review
+    # Auto-merge only ordinary same-repo PRs into dev. The dev -> main release
+    # PR stays owner-managed and is never merged automatically.
+    if: >-
+      needs.review.outputs.verdict == 'PASS' &&
+      needs.resolve-pr.outputs.base-ref == 'dev' &&
+      needs.resolve-pr.outputs.draft == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Wait for required checks and merge
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+          REVIEWED_HEAD_SHA: ${{ needs.resolve-pr.outputs.head-sha }}
+        with:
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER)
+            const reviewedSha = process.env.REVIEWED_HEAD_SHA
+            const requiredChecks = ['quality', 'e2e', 'branch-and-files']
+            const timeoutMs = 20 * 60 * 1000
+            const pollMs = 30 * 1000
+            const startedAt = Date.now()
+
+            const repo = { owner: context.repo.owner, repo: context.repo.repo }
+
+            // Check runs for pull_request workflows are normally associated
+            // with the PR head SHA, but look at the synthetic merge commit
+            // too so the lookup is robust to either association.
+            const latestCheckStates = async (mergeSha) => {
+              const refs = [...new Set([reviewedSha, mergeSha].filter(Boolean))]
+              const checkRuns = []
+              for (const ref of refs) {
+                checkRuns.push(...await github.paginate(github.rest.checks.listForRef, {
+                  ...repo,
+                  ref,
+                  per_page: 100,
+                }))
+              }
+              const states = {}
+              for (const name of requiredChecks) {
+                const runs = checkRuns
+                  .filter((run) => run.name === name)
+                  .sort((a, b) => new Date(b.started_at) - new Date(a.started_at))
+                states[name] = runs[0] ?? null
+              }
+              return states
+            }
+
+            while (true) {
+              const { data: pullRequest } = await github.rest.pulls.get({
+                ...repo,
+                pull_number: prNumber,
+              })
+              if (pullRequest.state !== 'open') {
+                core.notice(`PR #${prNumber} is no longer open; skipping auto-merge.`)
+                return
+              }
+              if (pullRequest.head.sha !== reviewedSha) {
+                core.notice(`PR #${prNumber} head moved after the review; skipping auto-merge.`)
+                return
+              }
+
+              const states = await latestCheckStates(pullRequest.merge_commit_sha)
+              const failed = requiredChecks.filter((name) => {
+                const run = states[name]
+                return run && run.status === 'completed' && run.conclusion !== 'success'
+              })
+              if (failed.length > 0) {
+                core.setFailed(`Required checks did not pass: ${failed.join(', ')}. Not merging.`)
+                return
+              }
+
+              const pending = requiredChecks.filter((name) => {
+                const run = states[name]
+                return !run || run.status !== 'completed'
+              })
+              if (pending.length === 0) break
+
+              if (Date.now() - startedAt > timeoutMs) {
+                core.setFailed(`Timed out waiting for required checks: ${pending.join(', ')}. Not merging.`)
+                return
+              }
+              core.info(`Waiting for checks: ${pending.join(', ')}`)
+              await new Promise((resolve) => setTimeout(resolve, pollMs))
+            }
+
+            let mergeFailure
+            try {
+              // Passing sha makes GitHub reject the merge if the head moved
+              // between our last look and the merge call.
+              const { data: mergeResult } = await github.rest.pulls.merge({
+                ...repo,
+                pull_number: prNumber,
+                merge_method: 'squash',
+                sha: reviewedSha,
+              })
+              // The endpoint can report a non-merge in a 200 response.
+              if (!mergeResult.merged) {
+                mergeFailure = mergeResult.message ?? 'GitHub reported the PR as not merged.'
+              }
+            } catch (error) {
+              mergeFailure = error.message
+            }
+            if (mergeFailure) {
+              core.setFailed(`Auto-merge failed: ${mergeFailure}`)
+              await github.rest.issues.createComment({
+                ...repo,
+                issue_number: prNumber,
+                body: `Auto-merge failed even though CI and the Codex review passed: ${mergeFailure}\n\nResolve the problem (for example a merge conflict) and push again, or merge manually.`,
+              })
+              return
+            }
+
+            try {
+              await github.rest.issues.createComment({
+                ...repo,
+                issue_number: prNumber,
+                body: 'Auto-merged: CI is green and the latest Codex review reported `CODEX-REVIEW-VERDICT: PASS`.',
+              })
+            } catch (error) {
+              // The merge already succeeded; a failed notification must not fail the job.
+              core.warning(`Merged, but could not post the success comment: ${error.message}`)
+            }

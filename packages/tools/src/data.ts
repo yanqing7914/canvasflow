@@ -140,7 +140,6 @@ export type VehicleSnapshotName =
   | 'low-battery-parked'
   | 'low-battery-city'
   | 'low-battery-highway'
-
 export const DEFAULT_VEHICLE_SNAPSHOT: VehicleSnapshotName = 'parked'
 
 /**

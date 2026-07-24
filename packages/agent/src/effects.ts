@@ -41,6 +41,9 @@ function isSuccessfulPreferences(value: unknown): boolean {
   return Array.isArray(members) && members.some((member) => {
     if (typeof member !== 'object' || member === null) return false
     const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown }
-    return typeof record.rearTemperatureC === 'number' || typeof record.mediaTitle === 'string'
-  })
+    // Align with schema/composer: empty mediaTitle is not an applicable preference.
+    return (
+      typeof record.rearTemperatureC === 'number' ||
+      (typeof record.mediaTitle === 'string' && record.mediaTitle.length > 0)
+    )  })
 }

@@ -131,7 +131,6 @@ describe('airport pickup task engine', () => {
     })
     expect(completed.charging).toMatchObject({ accepted: true, status: 'completed' })
   })
-
   it('plans cabin apply for media-only preferences without temperature', () => {
     const state = {
       ...createInitialTask(),
@@ -157,6 +156,30 @@ describe('airport pickup task engine', () => {
     ])
   })
 
+
+  it('does not plan cabin apply for empty mediaTitle preferences', () => {
+    const state = {
+      ...createInitialTask(),
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: true },
+      updatedAt: '2026-07-22T20:55:00+08:00',
+    }
+    const event = {
+      eventId: 'apply-empty-media',
+      type: 'user.input' as const,
+      text: '应用家庭座舱偏好',
+      timestamp: '2026-07-22T20:56:00+08:00',
+    }
+    expect(
+      planEffects(state, event, {
+        'memory.get-preferences': {
+          ok: true,
+          data: { members: [{ memberId: 'doubao', mediaTitle: '' }] },
+          error: null,
+        },
+      }),
+    ).toEqual([])
+  })
   it('schedules landing notify from runtime preferences, not module defaults', () => {
     const driving = {
       ...createInitialTask(),
