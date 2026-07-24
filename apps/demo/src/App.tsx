@@ -6,7 +6,7 @@ import {
   resolveConfirmation,
   resolveLandingMessageRetry,
 } from '@canvasflow/agent'
-import { createSideEffectRuntime } from '@canvasflow/tools'
+import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
 import type { AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
 
@@ -75,7 +75,12 @@ export default function App({
   composeContext?: ComposerContext
 }) {
   const [task, setTask] = useState<AirportPickupTaskState>(initialTask)
-  const spec = useMemo(() => composePickupSpec(task, composeContext), [task, composeContext])
+  const spec = useMemo(() => composePickupSpec(task, {
+    ...composeContext,
+    landingMessageRetryAvailable:
+      composeContext.landingMessageRetryAvailable
+      ?? Boolean(resolveAuthorizedLandingContact(task.passengers.memberIds, demoRuntime.preferences)),
+  }), [task, composeContext])
   const advance = () => {
     const candidate = timeline
       .map((event) => ({ event, next: applyEvent(task, event, demoRuntime.preferences) }))

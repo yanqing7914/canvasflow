@@ -123,8 +123,7 @@ describe('demo integration', () => {
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
   })
 
-  it('does not retry landing notify when no authorized contact remains', async () => {
-    const user = userEvent.setup()
+  it('shows unavailable state instead of retry when no authorized contact remains', () => {
     render(
       <App
         initialTask={{
@@ -137,8 +136,8 @@ describe('demo integration', () => {
         }}
       />,
     )
-    await user.click(screen.getByRole('button', { name: '重试发送' }))
-    // No authorized contact → handler no-ops; retry action remains.
-    expect(screen.getByRole('button', { name: '重试发送' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
+    expect(screen.getByText('无法重试发送')).toBeInTheDocument()
+    expect(screen.getByText('没有已授权的落地通知联系人')).toBeInTheDocument()
   })
 })

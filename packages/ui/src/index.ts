@@ -5,7 +5,15 @@ const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'approaching-airport': '接近机场', 'waiting-for-passengers': '等待家人', 'returning-home': '返程中', completed: '已完成', cancelled: '已取消',
 }
 
-export type ComposerContext = { toolResults?: Record<string, unknown>; fallback?: { title: string; message?: string; level?: 'warning' | 'error' } }
+export type ComposerContext = {
+  toolResults?: Record<string, unknown>
+  fallback?: { title: string; message?: string; level?: 'warning' | 'error' }
+  /**
+   * When set, gates the failed-message retry action.
+   * When omitted, retry is offered only if `pendingContactId` was retained from scheduling.
+   */
+  landingMessageRetryAvailable?: boolean
+}
 
 export function composePickupSpec(task: AirportPickupTaskState, context: ComposerContext = {}): UISpec {
   if (context.fallback) return composeFallbackSpec(task, context.fallback.title, context.fallback.message, context.fallback.level)
@@ -48,18 +56,35 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     title = '落地通知失败'
     density = 'minimal'
     priority = 'high'
-    components = [{
-      id: 'message-preview',
-      type: 'message-preview',
-      props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'failed', cancellable: false },
-      actions: task.pendingConfirmation?.action === 'send-message'
-        ? ['confirm-retry-landing-message']
-        : ['retry-landing-message'],
-    }]
-    actions =
+    const retryAvailable =
       task.pendingConfirmation?.action === 'send-message'
-        ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
-        : [{ id: 'retry-landing-message', label: '重试发送', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-landing-message` } }]
+      || (context.landingMessageRetryAvailable
+        ?? Boolean(task.message.pendingContactId))
+    if (!retryAvailable) {
+      components = [{
+        id: 'status-banner',
+        type: 'status-banner',
+        props: {
+          level: 'error',
+          title: '无法重试发送',
+          message: '没有已授权的落地通知联系人',
+        },
+      }]
+      actions = []
+    } else {
+      components = [{
+        id: 'message-preview',
+        type: 'message-preview',
+        props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'failed', cancellable: false },
+        actions: task.pendingConfirmation?.action === 'send-message'
+          ? ['confirm-retry-landing-message']
+          : ['retry-landing-message'],
+      }]
+      actions =
+        task.pendingConfirmation?.action === 'send-message'
+          ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
+          : [{ id: 'retry-landing-message', label: '重试发送', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-landing-message` } }]
+    }
   }
   else if (
     task.charging.status === 'completed' &&
