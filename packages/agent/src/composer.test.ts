@@ -19,6 +19,56 @@ describe('Agent UISpec composer', () => {
     })
   })
 
+  it('projects a failed landing notification into an explicit retry action', () => {
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' as const },
+      message: { ...createInitialTask().message, status: 'failed' as const, landingNoticeSent: false },
+    }
+
+    expect(composeAgentSpec(task)).toMatchObject({
+      title: '落地通知失败',
+      presentation: { density: 'minimal', priority: 'high' },
+      components: [{
+        id: 'message-preview',
+        type: 'message-preview',
+        props: { status: 'failed', cancellable: false },
+        actions: ['retry-landing-message'],
+      }],
+      actions: [{
+        id: 'retry-landing-message',
+        event: { type: 'tool-request', actionToken: 'pickup-001:retry-landing-message' },
+      }],
+    })
+  })
+
+  it('projects a failed landing notification into an explicit retry action', () => {
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: { flightNumber: 'MU5102', status: 'landed' as const, scheduledArrival: timestamp, estimatedArrival: timestamp, terminal: 'T2' },
+      message: { ...createInitialTask().message, status: 'failed' as const, landingNoticeSent: false },
+    }
+
+    expect(composeAgentSpec(task)).toMatchObject({
+      title: '落地通知失败',
+      presentation: { density: 'minimal', priority: 'high' },
+      components: [{
+        id: 'message-preview',
+        type: 'message-preview',
+        props: { status: 'failed', cancellable: false },
+        actions: ['retry-landing-message'],
+      }],
+      actions: [{
+        id: 'retry-landing-message',
+        event: { type: 'tool-request', actionToken: 'pickup-001:retry-landing-message' },
+      }],
+    })
+  })
+
   it('projects the completion confirmation into a confirmation action', () => {
     const task = {
       ...createInitialTask('pickup-001', timestamp),

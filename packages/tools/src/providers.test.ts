@@ -21,7 +21,6 @@ const readOnlyTools = [
   'navigation.plan-route',
   'vehicle.get-status',
   'charging.recommend',
-  'message.prepare',
 ] as const satisfies readonly ToolName[]
 
 const canonicalInputs: Record<(typeof readOnlyTools)[number], unknown> = {
@@ -40,7 +39,6 @@ const canonicalInputs: Record<(typeof readOnlyTools)[number], unknown> = {
     returnDistanceKm: 32,
     safetyReservePercent: 20,
   },
-  'message.prepare': { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:45' },
 }
 
 describe('provider registry (ctx, input)', () => {
@@ -54,6 +52,22 @@ describe('provider registry (ctx, input)', () => {
       expect(() => toolResultSchema(z.unknown()).parse(first)).not.toThrow()
       expect(first.meta).toMatchObject({ taskId: 'pickup-001', tool: name, provider: 'fixture' })
     }
+  })
+
+  it('message.prepare 签发 opaque confirmationId，稳定字段可复现', () => {
+    const registry = createProviderRegistry()
+    const input = { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:45' }
+    const first = registry['message.prepare'](ctx, input)
+    const second = registry['message.prepare'](ctx, input)
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    expect(first.data!.confirmationId.startsWith('cnf_')).toBe(true)
+    expect(second.data!.confirmationId).not.toBe(first.data!.confirmationId)
+    expect({ ...first.data!, confirmationId: undefined }).toEqual({
+      ...second.data!,
+      confirmationId: undefined,
+    })
+    expect(() => toolResultSchema(z.unknown()).parse(first)).not.toThrow()
   })
 
   it('工具定义的风险级别和超时符合契约 P0 表', () => {

@@ -11,15 +11,23 @@ export const airportPickupPhaseSchema = z.enum([
   'cancelled',
 ])
 
-export const flightStateSchema = z.object({
-  flightNumber: z.string().min(1),
-  status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
-  /** Original published schedule; must not be overwritten by delay ETAs. */
-  scheduledArrival: z.iso.datetime({ offset: true }),
-  estimatedArrival: z.iso.datetime({ offset: true }),
-  terminal: z.string().min(1),
-  baggageClaim: z.string().optional(),
-})
+export const flightStateSchema = z
+  .object({
+    flightNumber: z.string().min(1),
+    status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
+    /**
+     * Original published schedule; optional for legacy task/events that only
+     * stored estimatedArrival. Normalize fills it from estimatedArrival.
+     */
+    scheduledArrival: z.iso.datetime({ offset: true }).optional(),
+    estimatedArrival: z.iso.datetime({ offset: true }),
+    terminal: z.string().min(1),
+    baggageClaim: z.string().optional(),
+  })
+  .transform((flight) => ({
+    ...flight,
+    scheduledArrival: flight.scheduledArrival ?? flight.estimatedArrival,
+  }))
 
 export const airportPickupTaskStateSchema = z.object({
   taskId: z.string().min(1),

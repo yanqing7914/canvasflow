@@ -60,7 +60,14 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     title = '落地通知失败'
     density = 'minimal'
     priority = 'high'
-    components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'failed', cancellable: false } }]
+    components = [{
+      id: 'message-preview',
+      type: 'message-preview',
+      props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'failed', cancellable: false },
+      actions: task.pendingConfirmation?.action === 'send-message'
+        ? ['confirm-retry-landing-message']
+        : ['retry-landing-message'],
+    }]
     actions =
       task.pendingConfirmation?.action === 'send-message'
         ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
@@ -82,7 +89,9 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
       data: { members: Array<{ rearTemperatureC?: number; mediaTitle?: string; fanLevel?: number }> }
     }).data.members
     const temperatureC = members.find((member) => typeof member.rearTemperatureC === 'number')?.rearTemperatureC
-    const mediaTitle = members.find((member) => typeof member.mediaTitle === 'string')?.mediaTitle
+    const mediaTitle = members.find(
+      (member) => typeof member.mediaTitle === 'string' && member.mediaTitle.length > 0,
+    )?.mediaTitle
     const fanLevel = members.find((member) => typeof member.fanLevel === 'number')?.fanLevel
     title = '已应用家庭偏好'
     density = 'compact'
@@ -117,11 +126,10 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
       },
     }]
   }
-  else if (task.navigation) { density = 'compact'; components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }] }
   else if (task.flight && (task.flight.status === 'cancelled' || task.flight.status === 'delayed')) {
-    // Exception flight states outrank a pending charging recommendation.
+    // Exception flight states outrank active navigation and pending charging.
     density = 'compact'
-    components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }]
+    components = [{ id: 'flight-status', type: 'flight-status', props: flightStatusProps(task.flight) }]
   }
   else if (task.charging.recommended && task.charging.status === 'planned' && task.phase === 'preparing') {
     density = chargingDensityFromContext(context)
@@ -139,13 +147,27 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
       },
     }]
   }
-  else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }] }
+  else if (task.navigation) { density = 'compact'; components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }] }
+  else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: flightStatusProps(task.flight) }] }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,
     phase: task.phase, title, presentation: { mode: 'replace', density, theme: 'dark', priority },
     layout: { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } }, components, actions,
     meta: { generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm, generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${nextUiRevision}` },
   })
+}
+
+function flightStatusProps(flight: NonNullable<AirportPickupTaskState['flight']>) {
+  return {
+    flightNumber: flight.flightNumber,
+    status: flight.status,
+    // Legacy task/events may omit scheduledArrival; UI still needs a concrete schedule value.
+    scheduledArrival: flight.scheduledArrival ?? flight.estimatedArrival,
+    estimatedArrival: flight.estimatedArrival,
+    terminal: flight.terminal,
+    baggageClaim: flight.baggageClaim,
+    freshness: 'fixture' as const,
+  }
 }
 
 /** Parked→full, city→compact, highway→minimal; missing vehicle context defaults to full. */
@@ -175,8 +197,11 @@ function successfulPreferences(value: unknown): boolean {
   return Array.isArray(members) && members.some((member) => {
     if (typeof member !== 'object' || member === null) return false
     const record = member as { rearTemperatureC?: unknown; mediaTitle?: unknown }
-    // memory.get-preferences does not emit fanLevel; only temperature/media count.
-    return typeof record.rearTemperatureC === 'number' || typeof record.mediaTitle === 'string'
+    // memory.get-preferences does not emit fanLevel; only temperature/non-empty media count.
+    return (
+      typeof record.rearTemperatureC === 'number' ||
+      (typeof record.mediaTitle === 'string' && record.mediaTitle.length > 0)
+    )
   })
 }
 

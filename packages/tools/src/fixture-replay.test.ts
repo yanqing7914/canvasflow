@@ -29,7 +29,7 @@ import { recommendCharging } from './charging'
 import { resolveMembers } from './family'
 import { getFlightStatus } from './flight'
 import { getPreferences } from './memory'
-import { issueAutoNotifyAuthorization, prepareMessage } from './message'
+import { createMessagePreparer, issueAutoNotifyAuthorization } from './message'
 import { planRoute } from './navigation'
 import { createSideEffectRuntime } from './idempotency'
 import { createProviderRegistry, toolDefinitions, type ToolName } from './registry'
@@ -125,9 +125,15 @@ describe('fixture toolResults contract', () => {
         destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
       }).data,
     ).toEqual(toolData('route-airport', 'navigation.plan-route'))
+    const prepareMessage = createMessagePreparer(createSideEffectRuntime())
     for (const fixtureId of ['flight-landed', 'message-scheduled']) {
-      expect(prepareMessage(ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' }).data)
-        .toEqual(toolData(fixtureId, 'message.prepare'))
+      const prepared = prepareMessage(ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' })
+      expect(prepared.ok).toBe(true)
+      expect(prepared.data!.confirmationId.startsWith('cnf_')).toBe(true)
+      expect({ ...prepared.data!, confirmationId: '<opaque>' }).toEqual({
+        ...(toolData(fixtureId, 'message.prepare') as Record<string, unknown>),
+        confirmationId: '<opaque>',
+      })
     }
     expect(getVehicleStatus(ctx, { snapshot: 'post-charge' }).data)
       .toEqual(toolData('charging-completed', 'vehicle.get-status'))
@@ -253,8 +259,9 @@ function replayMainTimeline(): TimelineRun {
 
   step(event('flight-landed'))
   expect(state.message).toMatchObject({ status: 'scheduled', idempotencyKey: 'pickup-001:MU5102:landing' })
-  const prepared = prepareMessage(ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' })
+  const prepared = registry['message.prepare'](ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' })
   expect(prepared.ok).toBe(true)
+  expect(prepared.data!.confirmationId.startsWith('cnf_')).toBe(true)
   const sendInput = {
     contactId: 'contact-mom',
     messageId: prepared.data!.messageId,

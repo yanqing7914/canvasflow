@@ -44,6 +44,27 @@ export function composeAgentSpec(task: AirportPickupTaskState): UISpec {
     density = 'minimal'
     priority = 'high'
     components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true, scheduledAt: task.message.scheduledAt } }]
+  } else if (task.message.status === 'failed') {
+    title = '落地通知失败'
+    density = 'minimal'
+    priority = 'high'
+    components = [{
+      id: 'message-preview',
+      type: 'message-preview',
+      props: {
+        contactLabel: task.passengers.names[0] ?? '乘客',
+        textPreview: '我已到达机场，正在接你们。',
+        status: 'failed',
+        cancellable: false,
+      },
+      actions: task.pendingConfirmation?.action === 'send-message'
+        ? ['confirm-retry-landing-message']
+        : ['retry-landing-message'],
+    }]
+    actions =
+      task.pendingConfirmation?.action === 'send-message'
+        ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
+        : [{ id: 'retry-landing-message', label: '重试发送', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-landing-message` } }]
   } else if (task.charging.status === 'completed') {
     density = 'compact'
     components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: false, reason: '补能完成，已恢复机场路线', currentBatteryPercent: 78, estimatedFinalBatteryPercent: 42 } }]
@@ -54,7 +75,7 @@ export function composeAgentSpec(task: AirportPickupTaskState): UISpec {
     components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: true, reason: '完成往返后预计低于安全余量', currentBatteryPercent: 42, estimatedFinalBatteryPercent: 18, suggestedDurationMinutes: 10, etaImpactMinutes: 12 } }]
   } else if (task.flight) {
     density = 'compact'
-    components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }]
+    components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival ?? task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }]
   }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId,

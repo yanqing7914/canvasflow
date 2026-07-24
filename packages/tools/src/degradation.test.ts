@@ -5,7 +5,7 @@ import { composeFallbackSpec, composePickupSpec } from '@canvasflow/ui'
 import { TIMEOUT_DESTINATION_ID } from './data'
 import { getFlightStatus } from './flight'
 import { planRoute } from './navigation'
-import { FAILING_CONTACT_ID, issueAutoNotifyAuthorization, issueSendMessageConfirmation, prepareMessage } from './message'
+import { FAILING_CONTACT_ID, issueAutoNotifyAuthorization, issueSendMessageConfirmation } from './message'
 import { createSideEffectRuntime } from './idempotency'
 import { createProviderRegistry } from './registry'
 import type { ToolContext } from './result'
@@ -83,7 +83,7 @@ describe('重复航班落地事件：消息重复发送率 0%', () => {
 
     // 完整消息生命周期：message.prepare 生成预览，其 messageId 与任务侧
     // idempotencyKey 同构（`${taskId}:${pendingMessageId}`），不允许手写标识
-    const prepared = prepareMessage(ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' })
+    const prepared = registry['message.prepare'](ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' })
     expect(prepared.ok).toBe(true)
     expect(prepared.data!.messageId).toBe(scheduled.message.idempotencyKey)
     expect(prepared.data!.messageId).toBe(`${scheduled.taskId}:${scheduled.message.pendingMessageId}`)
@@ -214,7 +214,7 @@ describe('message.failed：不自动重试，只允许用户显式重试', () =>
     // Agent 处理 tool-request：重新 prepare、签发一次性确认、用新幂等键发送
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
-    const prepared = prepareMessage(ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' })
+    const prepared = registry['message.prepare'](ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' })
     expect(prepared.ok).toBe(true)
 
     const binding = {
@@ -223,7 +223,7 @@ describe('message.failed：不自动重试，只允许用户显式重试', () =>
       messageId: prepared.data!.messageId,
       text: prepared.data!.text,
     }
-    const confirmationId = issueSendMessageConfirmation(runtime, binding)
+    const confirmationId = prepared.data!.confirmationId
     const retried = registry['message.send'](ctx, {
       ...binding,
       confirmationId,

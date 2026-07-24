@@ -191,7 +191,8 @@ export type SideEffectRuntime = {
   nowMs: () => number
 }
 
-export function createSideEffectRuntime(nowMs: () => number = () => Date.parse('2026-07-22T12:00:00+08:00')): SideEffectRuntime {
+/** Live wall clock by default so proposal TTLs elapse; inject a fixed clock in tests. */
+export function createSideEffectRuntime(nowMs: () => number = () => Date.now()): SideEffectRuntime {
   // Null-prototype map so `in` / accidental prototype lookups cannot treat
   // Object.prototype keys as family members.
   const preferences = Object.create(null) as Record<string, MemberPreferenceRecord>

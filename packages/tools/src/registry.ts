@@ -8,7 +8,7 @@ import { createSideEffectRuntime, type SideEffectRuntime } from './idempotency'
 import { createMediaPlayer } from './media'
 import { createPreferenceReader } from './memory'
 import { createMemoryWriteTools } from './memory-write'
-import { createMessageSender, prepareMessage } from './message'
+import { createMessagePreparer, createMessageSender } from './message'
 import { createNavigationSideEffects } from './navigation'
 import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
@@ -133,6 +133,7 @@ export function createProviderRegistry(runtime: SideEffectRuntime = createSideEf
   const cabin = createCabinProfileTools(runtime)
   const memoryWrite = createMemoryWriteTools(runtime)
   const playMedia = createMediaPlayer(runtime)
+  const prepareMessage = createMessagePreparer(runtime)
   const sendMessage = createMessageSender(runtime)
 
   return {
