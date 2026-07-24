@@ -127,8 +127,17 @@ jobs:
         id: verdict
         run: |
           set -euo pipefail
-          verdict="$(grep -oE 'CODEX-REVIEW-VERDICT: (PASS|BLOCK)' codex-review.md | tail -n 1 || true)"
-          echo "verdict=${verdict#CODEX-REVIEW-VERDICT: }" >> "$GITHUB_OUTPUT"
+          # Anti-injection: PR content flows into the review output, so a
+          # quoted verdict line must never count. Accept the verdict only if
+          # exactly one anchored verdict line exists and it is the last line.
+          pattern='^CODEX-REVIEW-VERDICT: (PASS|BLOCK)$'
+          count="$(grep -cE "$pattern" codex-review.md || true)"
+          last_line="$(tail -n 1 codex-review.md | tr -d '\r')"
+          verdict=""
+          if [ "$count" -eq 1 ] && printf '%s\n' "$last_line" | grep -qE "$pattern"; then
+            verdict="${last_line#CODEX-REVIEW-VERDICT: }"
+          fi
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
       - name: Upload review output
         if: always()
