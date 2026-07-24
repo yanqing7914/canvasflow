@@ -1,12 +1,26 @@
 import { uiSpecSchema, type AirportPickupTaskState, type UISpec } from '@canvasflow/schema'
+import {
+  chargingDensityForSpeed,
+  chargingStation,
+  chargingStationsForDensity,
+  estimateFinalBatteryPercent,
+  recommendedMeetingPoints,
+  vehicleSnapshots,
+  type ChargingPresentationDensity,
+} from '@canvasflow/tools'
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息', preparing: '准备出发', 'driving-to-airport': '前往机场',
   'approaching-airport': '接近机场', 'waiting-for-passengers': '等待家人', 'returning-home': '返程中', completed: '已完成', cancelled: '已取消',
 }
 
+/** Canonical demo round-trip distances used when charging.recommend output is absent. */
+const DEMO_LEG_KM = 32
+
 export type ComposerContext = {
   toolResults?: Record<string, unknown>
+  /** Explicit vehicle snapshot; wins over toolResults['vehicle.get-status'] when set. */
+  vehicle?: { speedKph: number; batteryPercent?: number; remainingRangeKm?: number }
   fallback?: { title: string; message?: string; level?: 'warning' | 'error' }
   /**
    * When set, gates the failed-message retry action.
@@ -91,7 +105,17 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     (task.phase === 'driving-to-airport' || task.phase === 'approaching-airport')
   ) {
     density = 'compact'
-    components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: false, reason: '补能完成，机场路线上下文保持', currentBatteryPercent: 78, estimatedFinalBatteryPercent: 42 } }]
+    const battery = resolveChargingBatteryProps(context, vehicleSnapshots['post-charge'])
+    components = [{
+      id: 'charging-plan',
+      type: 'charging-recommendation',
+      props: {
+        recommended: false,
+        reason: '补能完成，机场路线上下文保持',
+        currentBatteryPercent: battery.currentBatteryPercent,
+        estimatedFinalBatteryPercent: battery.estimatedFinalBatteryPercent,
+      },
+    }]
   }
   else if (
     task.phase === 'returning-home' &&
@@ -126,8 +150,37 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     components = [{ id: 'cabin-profile', type: 'cabin-profile', props: cabinProps }]
   }
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
+  else if (task.phase === 'approaching-airport' || task.phase === 'waiting-for-passengers') {
+    density = 'compact'
+    const meeting = task.flight?.terminal ? recommendedMeetingPoints[task.flight.terminal] : undefined
+    components = [{
+      id: 'passenger-status',
+      type: 'passenger-status',
+      props: {
+        label: task.phase === 'waiting-for-passengers' ? '已停稳，等待家人' : '接近接机点',
+        status: task.phase === 'waiting-for-passengers' ? 'waiting' : 'landed',
+        ...(meeting ? { meetingPoint: meeting.name } : {}),
+      },
+    }]
+  }
+  else if (task.charging.recommended && task.charging.status === 'planned' && task.phase === 'preparing') {
+    density = chargingDensityFromContext(context)
+    const stations = chargingStationsForDensity(density)
+    const battery = resolveChargingBatteryProps(context, vehicleSnapshots.parked)
+    components = [{
+      id: 'charging-plan',
+      type: 'charging-recommendation',
+      props: {
+        recommended: true,
+        reason: `完成往返后预计低于安全余量（对比 ${stations.length} 站）`,
+        currentBatteryPercent: battery.currentBatteryPercent,
+        estimatedFinalBatteryPercent: battery.estimatedFinalBatteryPercent,
+        suggestedDurationMinutes: chargingStation.suggestedDurationMinutes,
+        etaImpactMinutes: chargingStation.etaImpactMinutes,
+      },
+    }]
+  }
   else if (task.navigation) { density = 'compact'; components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }] }
-  else if (task.charging.recommended && !task.flight) components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: true, reason: '完成往返后预计低于安全余量', currentBatteryPercent: 42, estimatedFinalBatteryPercent: 18, suggestedDurationMinutes: 10, etaImpactMinutes: 12 } }]
   else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }] }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,
@@ -135,6 +188,74 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     layout: { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } }, components, actions,
     meta: { generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm, generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${nextUiRevision}` },
   })
+}
+
+/** Parked→full, city→compact, highway→minimal; missing vehicle context defaults to full. */
+function chargingDensityFromContext(context: ComposerContext): ChargingPresentationDensity {
+  const speedKph = resolveVehicleSpeedKph(context)
+  return speedKph === undefined ? 'full' : chargingDensityForSpeed(speedKph)
+}
+
+function resolveVehicleSpeedKph(context: ComposerContext): number | undefined {
+  const status = resolveVehicleStatus(context)
+  return status?.speedKph
+}
+
+function resolveVehicleStatus(
+  context: ComposerContext,
+): { speedKph: number; batteryPercent?: number; remainingRangeKm?: number } | undefined {
+  if (typeof context.vehicle?.speedKph === 'number' && Number.isFinite(context.vehicle.speedKph)) {
+    return {
+      speedKph: Math.max(0, context.vehicle.speedKph),
+      batteryPercent: finitePercent(context.vehicle.batteryPercent),
+      remainingRangeKm: finiteNonNegative(context.vehicle.remainingRangeKm),
+    }
+  }
+  const result = context.toolResults?.['vehicle.get-status']
+  if (typeof result !== 'object' || result === null || (result as { ok?: unknown }).ok !== true) return undefined
+  const data = (result as { data?: unknown }).data
+  if (typeof data !== 'object' || data === null) return undefined
+  const speedKph = (data as { speedKph?: unknown }).speedKph
+  if (typeof speedKph !== 'number' || !Number.isFinite(speedKph)) return undefined
+  return {
+    speedKph: Math.max(0, speedKph),
+    batteryPercent: finitePercent((data as { batteryPercent?: unknown }).batteryPercent),
+    remainingRangeKm: finiteNonNegative((data as { remainingRangeKm?: unknown }).remainingRangeKm),
+  }
+}
+
+/**
+ * Project charging-card battery from vehicle tool output / explicit snapshot.
+ * Prefer `charging.recommend` for the estimated final when present; otherwise
+ * recompute with the same round-trip estimate the fixture providers use.
+ */
+function resolveChargingBatteryProps(
+  context: ComposerContext,
+  fallback: { batteryPercent: number; remainingRangeKm: number },
+): { currentBatteryPercent: number; estimatedFinalBatteryPercent: number } {
+  const status = resolveVehicleStatus(context)
+  const currentBatteryPercent = status?.batteryPercent ?? fallback.batteryPercent
+  const remainingRangeKm = status?.remainingRangeKm ?? fallback.remainingRangeKm
+  const fromRecommend = resolveEstimatedFinalFromRecommend(context)
+  const estimatedFinalBatteryPercent = fromRecommend
+    ?? estimateFinalBatteryPercent(currentBatteryPercent, remainingRangeKm, DEMO_LEG_KM, DEMO_LEG_KM)
+  return { currentBatteryPercent, estimatedFinalBatteryPercent }
+}
+
+function resolveEstimatedFinalFromRecommend(context: ComposerContext): number | undefined {
+  const result = context.toolResults?.['charging.recommend']
+  if (typeof result !== 'object' || result === null || (result as { ok?: unknown }).ok !== true) return undefined
+  const data = (result as { data?: unknown }).data
+  if (typeof data !== 'object' || data === null) return undefined
+  return finitePercent((data as { estimatedFinalBatteryPercent?: unknown }).estimatedFinalBatteryPercent)
+}
+
+function finitePercent(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.min(100, Math.max(0, value)) : undefined
+}
+
+function finiteNonNegative(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : undefined
 }
 
 /** Matches the memory.get-preferences output contract: any applicable cabin/media preference counts. */

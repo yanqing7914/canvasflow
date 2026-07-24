@@ -137,6 +137,10 @@ describe('fixture toolResults contract', () => {
     }
     expect(getVehicleStatus(ctx, { snapshot: 'post-charge' }).data)
       .toEqual(toolData('charging-completed', 'vehicle.get-status'))
+    expect(getVehicleStatus(ctx, { snapshot: 'city-driving' }).data)
+      .toEqual(toolData('approaching-airport', 'vehicle.get-status'))
+    expect(getVehicleStatus(ctx, { snapshot: 'airport-parked' }).data)
+      .toEqual(toolData('waiting-for-passengers', 'vehicle.get-status'))
     expect(getVehicleStatus(ctx, { snapshot: 'rear-occupied' }).data)
       .toEqual(toolData('passengers-onboard', 'vehicle.get-status'))
     expect(getPreferences(ctx, { memberIds: ['mom', 'doubao'], scopes: ['cabin', 'media'] }).data)
@@ -237,14 +241,12 @@ function replayMainTimeline(): TimelineRun {
   expect(started.ok).toBe(true)
 
   step({ eventId: 'timeline-charging-started', type: 'charging.started', stationId: 'station-hongqiao-01', timestamp: '2026-07-22T20:06:00+08:00' })
-  expect(state.charging.status).toBe('active')
-
+  expect(state.charging).toMatchObject({ accepted: true, status: 'active' })
   step(event('flight-in-air'))
   expect(state.flight?.status).toBe('in-air')
 
   step(event('charging-completed'))
-  expect(state.charging.status).toBe('completed')
-
+  expect(state.charging).toMatchObject({ accepted: true, status: 'completed' })
   step(event('flight-landed'))
   expect(state.message).toMatchObject({ status: 'scheduled', idempotencyKey: 'pickup-001:MU5102:landing' })
   const prepared = registry['message.prepare'](ctx, { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' })

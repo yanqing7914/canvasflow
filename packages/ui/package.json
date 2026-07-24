@@ -5,5 +5,5 @@
   "type": "module",
   "exports": "./src/index.ts",
   "scripts": { "build": "tsc --noEmit", "typecheck": "tsc --noEmit" },
-  "dependencies": { "@canvasflow/schema": "0.1.0" }
+  "dependencies": { "@canvasflow/schema": "0.1.0", "@canvasflow/tools": "0.1.0" }
 }

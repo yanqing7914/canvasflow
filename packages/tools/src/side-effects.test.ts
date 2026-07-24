@@ -629,7 +629,6 @@ describe('message.send', () => {
       }).error?.code,
     ).toBe('AUTHORIZATION_REQUIRED')
   })
-
   it('失败联系人返回 SEND_FAILED 且不写入幂等账本、不消耗确认', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
@@ -658,7 +657,6 @@ describe('message.send', () => {
       }).error?.code,
     ).toBe('AUTHORIZATION_REQUIRED')
   })
-
   it('opaque 确认：签发→成功发送→消费；伪造/改 payload/重复消费均失败', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)

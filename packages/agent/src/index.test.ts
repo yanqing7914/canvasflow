@@ -109,6 +109,28 @@ describe('airport pickup task engine', () => {
     expect(applyEvent(state, event)).toEqual(state)
   })
 
+  it('records charging acceptance when charging.started fires', () => {
+    const driving = {
+      ...createInitialTask(),
+      phase: 'driving-to-airport' as const,
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+      updatedAt: '2026-07-22T20:05:00+08:00',
+    }
+    const started = applyEvent(driving, {
+      eventId: 'charge-start',
+      type: 'charging.started',
+      stationId: 'station-hongqiao-01',
+      timestamp: '2026-07-22T20:06:00+08:00',
+    })
+    expect(started.charging).toMatchObject({ recommended: true, accepted: true, status: 'active' })
+    const completed = applyEvent(started, {
+      eventId: 'charge-done',
+      type: 'charging.completed',
+      batteryPercent: 78,
+      timestamp: '2026-07-22T20:18:00+08:00',
+    })
+    expect(completed.charging).toMatchObject({ accepted: true, status: 'completed' })
+  })
   it('plans cabin apply for media-only preferences without temperature', () => {
     const state = {
       ...createInitialTask(),
@@ -158,7 +180,6 @@ describe('airport pickup task engine', () => {
       }),
     ).toEqual([])
   })
-
   it('schedules landing notify from runtime preferences, not module defaults', () => {
     const driving = {
       ...createInitialTask(),

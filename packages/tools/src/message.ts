@@ -45,7 +45,6 @@ export function issueSendMessageConfirmation(runtime: SideEffectRuntime, binding
 export function revokeSendMessageConfirmation(runtime: SideEffectRuntime, confirmationId: string): boolean {
   return runtime.confirmations.revokeSendMessageConfirmation(confirmationId)
 }
-
 /**
  * Issue an opaque auto-notify capability grant bound to a prepared landing-message
  * payload (taskId + contactId + messageId + text). Not forgeable from taskId alone.
@@ -126,7 +125,6 @@ export function createMessageSender(runtime: SideEffectRuntime) {
         false,
       )
     }
-
     const cached = runtime.idempotency.get<MessageSendOutput>(ctx.taskId, SEND, parsed.data.idempotencyKey, parsed.data)
     if (cached.kind === 'hit') return cached.result
     if (cached.kind === 'conflict') {

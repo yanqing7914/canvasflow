@@ -2,10 +2,39 @@ import { describe, expect, it } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
+import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { createInitialTask } from '@canvasflow/agent'
+import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
 
 describe('demo integration', () => {
+  it('loads the shared main-flow timeline for the demo player', () => {
+    expect(mainFlowTimeline.id).toBe('main-flow')
+    expect(mainFlowTimeline.steps[0]?.event.eventId).toBe('event-task-created')
+    expect(mainFlowTimeline.steps.some((step) => step.event.eventId === 'event-charging-recommended')).toBe(true)
+
+    let task = mainFlowTimeline.initialTaskState
+    expect(task.phase).toBe('collecting-information')
+
+    // Create task + resolve passengers (statePatch from shared timeline).
+    task = advanceMainFlowStep(task)
+    expect(task.passengers.names).toEqual(['妈妈', '豆豆'])
+    expect(task.processedEventIds).toContain('event-task-created')
+
+    // Flight number → preparing.
+    task = advanceMainFlowStep(task)
+    expect(task.phase).toBe('preparing')
+    expect(task.flight?.flightNumber).toBe('MU5102')
+
+    // Charging recommend step from main-flow (not a hard-coded skip-ahead).
+    task = advanceMainFlowStep(task)
+    expect(task.charging).toMatchObject({ recommended: true, status: 'planned' })
+    expect(task.processedEventIds).toContain('event-charging-recommended')
+
+    const chargingStep = mainFlowTimeline.steps.find((step) => step.event.eventId === 'event-charging-recommended')
+    expect(chargingStep?.toolCalls).toEqual(expect.arrayContaining(['vehicle.get-status', 'charging.recommend']))
+  })
+
   it('composes a valid UI from task state', () => {
     const spec = composePickupSpec(createInitialTask())
     expect(spec.surfaceId).toBe('airport-pickup-main')
@@ -15,6 +44,165 @@ describe('demo integration', () => {
   it('shows the information request for the initial phase', () => {
     const spec = composePickupSpec(createInitialTask())
     expect(spec.components[0]).toMatchObject({ type: 'status-banner', props: { title: '请补充航班号' } })
+  })
+
+  it('surfaces the terminal meeting point while approaching / waiting', () => {
+    const approaching = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'approaching-airport',
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+    })
+    expect(approaching.components[0]).toMatchObject({
+      type: 'passenger-status',
+      props: { status: 'landed', meetingPoint: 'P2 停车场到达层 3 号门' },
+    })
+
+    const waiting = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'waiting-for-passengers',
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: 'MU5102', status: 'landed', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+    })
+    expect(waiting.components[0]).toMatchObject({
+      type: 'passenger-status',
+      props: { status: 'waiting', meetingPoint: 'P2 停车场到达层 3 号门' },
+    })
+  })
+
+  it('projects charging comparison station count into the recommendation reason', () => {
+    const spec = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'preparing',
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      charging: { recommended: true, accepted: false, status: 'planned' },
+    })
+    expect(spec.components[0]).toMatchObject({
+      type: 'charging-recommendation',
+      props: {
+        recommended: true,
+        reason: '完成往返后预计低于安全余量（对比 3 站）',
+        currentBatteryPercent: vehicleSnapshots.parked.batteryPercent,
+        estimatedFinalBatteryPercent: 18,
+      },
+    })
+  })
+
+  it('keeps preparing charging recommendation after a flight is attached', () => {
+    const spec = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'preparing',
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: {
+        flightNumber: 'MU5102',
+        status: 'in-air',
+        estimatedArrival: '2026-07-22T20:40:00+08:00',
+        terminal: 'T2',
+      },
+      navigation: {
+        routeId: 'route-airport-001',
+        destination: '虹桥机场 T2',
+        eta: '2026-07-22T20:25:00+08:00',
+        status: 'active',
+      },
+      charging: { recommended: true, accepted: false, status: 'planned' },
+    })
+    expect(spec.components[0]).toMatchObject({
+      type: 'charging-recommendation',
+      props: { recommended: true, reason: '完成往返后预计低于安全余量（对比 3 站）' },
+    })
+    expect(spec.components.map((component) => component.type)).not.toContain('flight-status')
+    expect(spec.components.map((component) => component.type)).not.toContain('navigation-summary')
+  })
+
+  it('selects charging station density from parked/city/highway vehicle context', () => {
+    const chargingTask = {
+      ...createInitialTask(),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+    const cases = [
+      { snapshot: vehicleSnapshots['low-battery-parked'], density: 'full', stations: 3 },
+      { snapshot: vehicleSnapshots['low-battery-city'], density: 'compact', stations: 2 },
+      { snapshot: vehicleSnapshots['low-battery-highway'], density: 'minimal', stations: 1 },
+    ] as const
+
+    for (const { snapshot, density, stations } of cases) {
+      const expectedFinal = estimateFinalBatteryPercent(
+        snapshot.batteryPercent,
+        snapshot.remainingRangeKm,
+        32,
+        32,
+      )
+      const fromVehicle = composePickupSpec(chargingTask, {
+        vehicle: {
+          speedKph: snapshot.speedKph,
+          batteryPercent: snapshot.batteryPercent,
+          remainingRangeKm: snapshot.remainingRangeKm,
+        },
+      })
+      expect(fromVehicle).toMatchObject({
+        presentation: { density },
+        components: [{
+          type: 'charging-recommendation',
+          props: {
+            reason: `完成往返后预计低于安全余量（对比 ${stations} 站）`,
+            currentBatteryPercent: snapshot.batteryPercent,
+            estimatedFinalBatteryPercent: expectedFinal,
+          },
+        }],
+      })
+
+      const fromToolResult = composePickupSpec(chargingTask, {
+        toolResults: {
+          'vehicle.get-status': {
+            ok: true,
+            data: snapshot,
+          },
+        },
+      })
+      expect(fromToolResult.presentation.density).toBe(density)
+      expect(fromToolResult.components[0]).toMatchObject({
+        props: {
+          reason: `完成往返后预计低于安全余量（对比 ${stations} 站）`,
+          currentBatteryPercent: snapshot.batteryPercent,
+          estimatedFinalBatteryPercent: expectedFinal,
+        },
+      })
+    }
+  })
+
+  it('prefers charging.recommend estimated final over recomputation', () => {
+    const snapshot = vehicleSnapshots['low-battery-parked']
+    const spec = composePickupSpec({
+      ...createInitialTask(),
+      phase: 'preparing',
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      charging: { recommended: true, accepted: false, status: 'planned' },
+    }, {
+      toolResults: {
+        'vehicle.get-status': { ok: true, data: snapshot },
+        'charging.recommend': {
+          ok: true,
+          data: {
+            recommended: true,
+            reason: '完成往返后预计低于安全余量',
+            estimatedFinalBatteryPercent: 12,
+            suggestedDurationMinutes: 10,
+            stationId: 'station-hongqiao-01',
+            etaImpactMinutes: 12,
+          },
+        },
+      },
+    })
+    expect(spec.components[0]).toMatchObject({
+      props: {
+        currentBatteryPercent: snapshot.batteryPercent,
+        estimatedFinalBatteryPercent: 12,
+      },
+    })
   })
 
   it('includes completed and cancelled terminal phases in progress', () => {
@@ -31,12 +219,21 @@ describe('demo integration', () => {
     expect(second.uiRevision).toBeGreaterThan(first.uiRevision)
   })
 
-  it('advances the rendered demo and disables terminal controls', async () => {
+  it('advances the rendered demo from main-flow through the charging step', async () => {
     const user = userEvent.setup()
     render(<App />)
     const advance = screen.getByRole('button', { name: '推进下一事件' })
+    expect(screen.getByText(/collecting-information/)).toBeInTheDocument()
+
+    await user.click(advance) // passengers
+    await user.click(advance) // flight → preparing
     expect(screen.getByText(/preparing/)).toBeInTheDocument()
-    await user.click(advance)
+
+    await user.click(advance) // charging recommend
+    expect(screen.getByText('charging-recommendation')).toBeInTheDocument()
+    expect(screen.getByText(/42% → 18%/)).toBeInTheDocument()
+
+    await user.click(advance) // navigation.started
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
   })
 

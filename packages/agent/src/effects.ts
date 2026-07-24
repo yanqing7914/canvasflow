@@ -45,6 +45,5 @@ function isSuccessfulPreferences(value: unknown): boolean {
     return (
       typeof record.rearTemperatureC === 'number' ||
       (typeof record.mediaTitle === 'string' && record.mediaTitle.length > 0)
-    )
-  })
+    )  })
 }
