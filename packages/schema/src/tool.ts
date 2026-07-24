@@ -213,6 +213,12 @@ export const messagePrepareOutputSchema = z.object({
   messageId: z.string().min(1),
   contactId: z.string().min(1),
   text: z.string().min(1),
+  /**
+   * Opaque, single-use credential issued into the registry runtime's ConfirmationStore.
+   * Pass the same id to `message.send` for the explicit confirm path; bound to this
+   * prepared message (taskId + contactId + messageId + text). Auto-notify may omit it.
+   */
+  confirmationId: z.string().min(1),
 })
 
 export const messageSendInputSchema = z.object({

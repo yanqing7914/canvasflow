@@ -27,29 +27,43 @@ export function issueAutoNotifyAuthorization(runtime: SideEffectRuntime, taskId:
   return runtime.confirmations.issueAutoNotifyAuthorization(taskId)
 }
 
-export function prepareMessage(ctx: ToolContext, input: unknown): ToolResult<MessagePrepareOutput> {
-  const parsed = messagePrepareInputSchema.safeParse(input)
-  if (!parsed.success) {
-    return errorResult(ctx, PREPARE, 'INVALID_ARGUMENT', '需要 contactId 和 flightNumber', false)
-  }
+/**
+ * Prepare a landing message and mint a single-use confirmation bound to the
+ * prepared contactId / messageId / text. Callers pass the returned
+ * `confirmationId` to `message.send` (auto-notify still works without it).
+ */
+export function createMessagePreparer(runtime: SideEffectRuntime) {
+  return function prepareMessage(ctx: ToolContext, input: unknown): ToolResult<MessagePrepareOutput> {
+    const parsed = messagePrepareInputSchema.safeParse(input)
+    if (!parsed.success) {
+      return errorResult(ctx, PREPARE, 'INVALID_ARGUMENT', '需要 contactId 和 flightNumber', false)
+    }
 
-  const known = familyMembers.some((member) => member.contactId === parsed.data.contactId)
-  if (!known && parsed.data.contactId !== FAILING_CONTACT_ID) {
-    return errorResult(ctx, PREPARE, 'AUTHORIZATION_REQUIRED', `联系人未授权：${parsed.data.contactId}`, false)
-  }
+    const known = familyMembers.some((member) => member.contactId === parsed.data.contactId)
+    if (!known && parsed.data.contactId !== FAILING_CONTACT_ID) {
+      return errorResult(ctx, PREPARE, 'AUTHORIZATION_REQUIRED', `联系人未授权：${parsed.data.contactId}`, false)
+    }
 
-  const eta = parsed.data.eta ?? '即将到达'
-  const text = `我已到达机场接机点，航班 ${parsed.data.flightNumber.toUpperCase()}，预计 ${eta} 会合。`
-  const messageId = `${ctx.taskId}:${parsed.data.flightNumber.toUpperCase()}:landing`
-  return okResult(
-    ctx,
-    PREPARE,
-    messagePrepareOutputSchema.parse({
-      messageId,
+    const eta = parsed.data.eta ?? '即将到达'
+    const text = `我已到达机场接机点，航班 ${parsed.data.flightNumber.toUpperCase()}，预计 ${eta} 会合。`
+    const messageId = `${ctx.taskId}:${parsed.data.flightNumber.toUpperCase()}:landing`
+    const confirmationId = runtime.confirmations.issueSendMessageConfirmation({
+      taskId: ctx.taskId,
       contactId: parsed.data.contactId,
+      messageId,
       text,
-    }),
-  )
+    })
+    return okResult(
+      ctx,
+      PREPARE,
+      messagePrepareOutputSchema.parse({
+        messageId,
+        contactId: parsed.data.contactId,
+        text,
+        confirmationId,
+      }),
+    )
+  }
 }
 
 export function createMessageSender(runtime: SideEffectRuntime) {

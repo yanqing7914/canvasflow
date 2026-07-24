@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEMO_ORIGIN } from './data'
 import { createSideEffectRuntime } from './idempotency'
 import { FAILING_CONTACT_ID, issueAutoNotifyAuthorization, issueSendMessageConfirmation } from './message'
 import { createProviderRegistry, type ProviderRegistry } from './registry'
 import type { ToolContext } from './result'
+
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 const ctx: ToolContext = { taskId: 'pickup-001' }
 
@@ -356,6 +360,48 @@ describe('message.send', () => {
     expect(second).toEqual(first)
   })
 
+  it('默认 registry：prepare 返回 confirmationId → send 成功；伪造凭据被拒绝', () => {
+    const registry = createProviderRegistry()
+    const prepared = registry['message.prepare'](ctx, {
+      contactId: 'contact-mom',
+      flightNumber: 'MU5102',
+      eta: '20:40',
+    })
+    expect(prepared.ok).toBe(true)
+    expect(prepared.data!.confirmationId.startsWith('cnf_')).toBe(true)
+
+    expect(
+      registry['message.send'](ctx, {
+        contactId: prepared.data!.contactId,
+        messageId: prepared.data!.messageId,
+        text: prepared.data!.text,
+        confirmationId: 'cnf_forged_token',
+        idempotencyKey: 'pickup-001:prepare-send-forged',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+
+    const sent = registry['message.send'](ctx, {
+      contactId: prepared.data!.contactId,
+      messageId: prepared.data!.messageId,
+      text: prepared.data!.text,
+      confirmationId: prepared.data!.confirmationId,
+      idempotencyKey: 'pickup-001:prepare-send-ok',
+    })
+    expect(sent.ok).toBe(true)
+    expect(sent.data).toMatchObject({ status: 'sent', messageId: prepared.data!.messageId })
+
+    // single-use: 同一 prepare 签发的 token 不可再发
+    expect(
+      registry['message.send'](ctx, {
+        contactId: prepared.data!.contactId,
+        messageId: prepared.data!.messageId,
+        text: prepared.data!.text,
+        confirmationId: prepared.data!.confirmationId,
+        idempotencyKey: 'pickup-001:prepare-send-replay',
+      }).error?.code,
+    ).toBe('AUTHORIZATION_REQUIRED')
+  })
+
   it('缺少授权返回 AUTHORIZATION_REQUIRED', () => {
     const registry = createProviderRegistry()
     const result = registry['message.send'](ctx, {
@@ -658,6 +704,24 @@ describe('memory write side effects', () => {
       proposalId: proposed.data!.proposalId,
       confirmationId: proposed.data!.confirmationId,
       idempotencyKey: 'pickup-001:save-late',
+    })
+    expect(confirmed.error).toMatchObject({ code: 'PROPOSAL_EXPIRED', retryable: false })
+  })
+
+  it('默认时钟（Date.now）下提案超过 TTL 后过期', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-22T12:00:00+08:00'))
+    const registry = createProviderRegistry()
+    const proposed = registry['memory.propose-update'](ctx, {
+      memberId: 'mom',
+      changes: { mediaTitle: '轻音乐' },
+    })
+    expect(proposed.ok).toBe(true)
+    vi.advanceTimersByTime(31 * 60 * 1000)
+    const confirmed = registry['memory.confirm-update'](ctx, {
+      proposalId: proposed.data!.proposalId,
+      confirmationId: proposed.data!.confirmationId,
+      idempotencyKey: 'pickup-001:default-clock-late',
     })
     expect(confirmed.error).toMatchObject({ code: 'PROPOSAL_EXPIRED', retryable: false })
   })
