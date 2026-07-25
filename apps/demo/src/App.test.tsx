@@ -349,10 +349,10 @@ describe('demo integration', () => {
 
     const advance = screen.getByRole('button', { name: '推进下一事件' })
     await user.click(advance)
-    expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventId: 'event-charging-started' }))
+    expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventId: 'event-charging-started', timestamp: undefined }))
     await user.click(advance)
     await screen.findByRole('alert')
-    expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventId: 'event-flight-in-air' }))
+    expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventId: 'event-flight-in-air', timestamp: undefined }))
     await user.click(advance)
     expect(flightUpdateAttempts).toBe(2)
   })

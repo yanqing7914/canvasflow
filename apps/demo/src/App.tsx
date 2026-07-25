@@ -134,7 +134,7 @@ export default function App({
     const index = mainFlowTimeline.steps.indexOf(step)
     const request = step.event.type === 'navigation.started'
       ? api.action(response, 'start-navigation', 'navigation-plan')
-      : api.event(response.task, step.event)
+      : api.event(response.task, { ...step.event, timestamp: undefined })
     void run(() => request).then((next) => {
       if (next) setStepIndex(index + 1)
     })
