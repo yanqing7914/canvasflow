@@ -3,8 +3,11 @@ import {
   messagePrepareOutputSchema,
   messageSendInputSchema,
   messageSendOutputSchema,
+  revokeMessageConfirmationInputSchema,
+  revokeMessageConfirmationOutputSchema,
   type MessagePrepareOutput,
   type MessageSendOutput,
+  type RevokeMessageConfirmationOutput,
   type ToolResult,
 } from '@canvasflow/schema'
 import { familyMembers, type MemberPreferenceRecord } from './data'
@@ -13,6 +16,7 @@ import { errorResult, FIXTURE_GENERATED_AT, okResult, type ToolContext } from '.
 
 const PREPARE = 'message.prepare'
 const SEND = 'message.send'
+const REVOKE_CONFIRMATION = 'message.revoke-confirmation'
 
 /** Fixture contact that deterministically fails send. */
 export const FAILING_CONTACT_ID = 'contact-fail'
@@ -182,6 +186,39 @@ export function createMessageSender(runtime: SideEffectRuntime) {
       }),
     )
     runtime.idempotency.set(ctx.taskId, SEND, parsed.data.idempotencyKey, parsed.data, result)
+    return result
+  }
+}
+
+export function createMessageConfirmationRevoker(runtime: SideEffectRuntime) {
+  return function revokeMessageConfirmation(
+    ctx: ToolContext,
+    input: unknown,
+  ): ToolResult<RevokeMessageConfirmationOutput> {
+    const parsed = revokeMessageConfirmationInputSchema.safeParse(input)
+    if (!parsed.success) {
+      return errorResult(ctx, REVOKE_CONFIRMATION, 'INVALID_ARGUMENT', '需要 confirmationId 和 idempotencyKey', false)
+    }
+    const cached = runtime.idempotency.get<RevokeMessageConfirmationOutput>(
+      ctx.taskId,
+      REVOKE_CONFIRMATION,
+      parsed.data.idempotencyKey,
+      parsed.data,
+    )
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, REVOKE_CONFIRMATION, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
+    const revoked = runtime.confirmations.revokeSendMessageConfirmation(parsed.data.confirmationId)
+    if (!revoked) {
+      return errorResult(ctx, REVOKE_CONFIRMATION, 'CONFIRMATION_REQUIRED', '确认凭据无效或已使用', false)
+    }
+    const result = okResult(
+      ctx,
+      REVOKE_CONFIRMATION,
+      revokeMessageConfirmationOutputSchema.parse({ confirmationId: parsed.data.confirmationId, revoked: true }),
+    )
+    runtime.idempotency.set(ctx.taskId, REVOKE_CONFIRMATION, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 }

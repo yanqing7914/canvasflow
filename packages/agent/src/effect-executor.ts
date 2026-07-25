@@ -8,13 +8,15 @@ import {
   rejectMemoryUpdateOutputSchema,
   revertCabinProfileOutputSchema,
   routePlanOutputSchema,
+  messagePrepareOutputSchema,
   messageSendOutputSchema,
+  revokeMessageConfirmationOutputSchema,
   toolResultSchema,
   type AirportPickupTaskState,
   type EffectRecord,
   type VehicleContext,
 } from '@canvasflow/schema'
-import type { ProviderRegistry } from '@canvasflow/tools'
+import { buildLandingNotifyContent, type ProviderRegistry } from '@canvasflow/tools'
 
 const NAVIGATION_START = 'navigation.start'
 
@@ -26,6 +28,7 @@ export interface PolicyGate {
   authorizeNavigationStart(task: AirportPickupTaskState, routeId: string, vehicle?: VehicleContext): PolicyDecision
   authorizeReturnTrip(task: AirportPickupTaskState): PolicyDecision
   authorizeLandingMessage(task: AirportPickupTaskState): PolicyDecision
+  authorizeLandingMessageRetry(task: AirportPickupTaskState, confirmationId?: string): PolicyDecision
 }
 
 export class DefaultPolicyGate implements PolicyGate {
@@ -64,6 +67,17 @@ export class DefaultPolicyGate implements PolicyGate {
     if (!task.message.pendingMessageId || !task.message.pendingContactId || !task.message.authorizationId) return { allowed: false, errorCode: 'AUTHORIZATION_REQUIRED' }
     return { allowed: true }
   }
+
+  authorizeLandingMessageRetry(task: AirportPickupTaskState, confirmationId?: string): PolicyDecision {
+    if (task.phase === 'completed' || task.phase === 'cancelled') return { allowed: false, errorCode: 'TASK_TERMINAL' }
+    if (task.message.status !== 'failed' || !task.flight) return { allowed: false, errorCode: 'INVALID_TASK_STATE' }
+    if (task.flight.status === 'cancelled') return { allowed: false, errorCode: 'FLIGHT_CANCELLED' }
+    if (confirmationId !== undefined && (
+      task.pendingConfirmation?.action !== 'send-message'
+      || task.pendingConfirmation.confirmationId !== confirmationId
+    )) return { allowed: false, errorCode: 'AUTHORIZATION_REQUIRED' }
+    return { allowed: true }
+  }
 }
 
 export type NavigationStartExecution = {
@@ -92,6 +106,23 @@ export type MemoryProposalExecution = {
 }
 
 export type MemoryConfirmationExecution = {
+  succeeded: boolean
+  effect: EffectRecord
+  errorCode?: string
+}
+
+export type LandingMessagePrepareExecution = {
+  succeeded: boolean
+  effect: EffectRecord
+  prepared?: {
+    contactId: string
+    messageId: string
+    text: string
+    confirmationId: string
+  }
+}
+
+export type LandingMessageRevocationExecution = {
   succeeded: boolean
   effect: EffectRecord
   errorCode?: string
@@ -207,6 +238,184 @@ export class EffectExecutor {
     )
     if (!result.succeeded || result.data.messageId !== input.task.message.pendingMessageId || result.data.status !== 'sent') return { succeeded: false, effect: effect('failed', result.succeeded ? 'PROVIDER_FAILED' : result.errorCode) }
     return { succeeded: true, effect: effect('succeeded') }
+  }
+
+  prepareLandingMessageRetry(input: {
+    task: AirportPickupTaskState
+    contactId: string
+    idempotencyKey: string
+    effectId: string
+    eta?: string
+  }): LandingMessagePrepareExecution {
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
+      effectId: input.effectId,
+      type: 'message.prepare',
+      status,
+      tool: 'message.prepare',
+      ...(errorCode ? { errorCode } : {}),
+    })
+    const policy = this.#policy.authorizeLandingMessageRetry(input.task)
+    if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
+
+    const eta = input.eta ?? resolveLandingMeetingEta(input.task)
+    const expected = buildLandingNotifyContent(
+      input.task.taskId, input.contactId, input.task.flight!.flightNumber, eta ?? '即将到达',
+    )
+    const providerRequestId = `${input.task.taskId}:message.prepare:${input.idempotencyKey}`
+    let raw: unknown
+    try {
+      raw = this.#registry['message.prepare'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        {
+          contactId: input.contactId,
+          flightNumber: input.task.flight!.flightNumber,
+          ...(eta !== undefined ? { eta } : {}),
+        },
+      )
+    } catch (error) {
+      return { succeeded: false, effect: effect('failed', providerErrorCode(error)) }
+    }
+    const parsed = toolResultSchema(messagePrepareOutputSchema).safeParse(raw)
+    if (!parsed.success) return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+    const providerResult = parsed.data
+    const invalidMetadata = providerResult.meta.taskId !== input.task.taskId
+      || providerResult.meta.tool !== 'message.prepare'
+      || providerResult.meta.requestId !== providerRequestId
+    const invalidSemantics = providerResult.ok
+      && providerResult.data !== null
+      && (
+        providerResult.data.contactId !== expected.contactId
+        || providerResult.data.messageId !== expected.messageId
+        || providerResult.data.text !== expected.text
+      )
+    if ((invalidMetadata || invalidSemantics) && providerResult.data?.confirmationId) {
+      const compensated = this.#revokePreparedConfirmation(
+        input.task.taskId,
+        providerResult.data.confirmationId,
+        `${input.idempotencyKey}:invalid-prepare`,
+      )
+      return { succeeded: false, effect: effect('failed', compensated ? 'PROVIDER_FAILED' : 'COMPENSATION_FAILED') }
+    }
+    if (invalidMetadata) return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+    if (!providerResult.ok && providerResult.data === null && providerResult.error !== null) {
+      return { succeeded: false, effect: effect('failed', providerResult.error.code) }
+    }
+    if (!providerResult.ok || providerResult.data === null || providerResult.error !== null) {
+      return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+    }
+    const result = providerResult.data
+    if (
+      result.contactId !== expected.contactId
+      || result.messageId !== expected.messageId
+      || result.text !== expected.text
+    ) {
+      return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+    }
+    return {
+      succeeded: true,
+      effect: effect('pending-confirmation'),
+      prepared: result,
+    }
+  }
+
+  sendConfirmedLandingMessage(input: {
+    task: AirportPickupTaskState
+    contactId: string
+    messageId: string
+    text: string
+    confirmationId: string
+    idempotencyKey: string
+    effectId: string
+  }): { succeeded: boolean; effect: EffectRecord } {
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
+      effectId: input.effectId,
+      type: 'message.send',
+      status,
+      tool: 'message.send',
+      ...(errorCode ? { errorCode } : {}),
+    })
+    const policy = this.#policy.authorizeLandingMessageRetry(input.task, input.confirmationId)
+    if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
+    const expected = input.task.message.pendingText
+      ? { contactId: input.contactId, messageId: input.task.message.pendingMessageId, text: input.task.message.pendingText }
+      : buildLandingNotifyContent(
+          input.task.taskId,
+          input.contactId,
+          input.task.flight!.flightNumber,
+          resolveLandingMeetingEta(input.task) ?? '即将到达',
+        )
+    if (
+      input.messageId !== expected.messageId
+      || input.text !== expected.text
+      || (input.task.message.pendingContactId !== undefined && input.task.message.pendingContactId !== input.contactId)
+      || (input.task.message.pendingMessageId !== undefined && input.task.message.pendingMessageId !== input.messageId)
+    ) {
+      return { succeeded: false, effect: effect('failed', 'INVALID_TASK_STATE') }
+    }
+
+    const providerRequestId = `${input.task.taskId}:message.send:${input.idempotencyKey}`
+    const result = this.#callProvider(
+      input.task.taskId,
+      'message.send',
+      providerRequestId,
+      () => this.#registry['message.send'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        {
+          contactId: input.contactId,
+          messageId: input.messageId,
+          text: input.text,
+          confirmationId: input.confirmationId,
+          idempotencyKey: input.idempotencyKey,
+        },
+      ),
+      toolResultSchema(messageSendOutputSchema),
+    )
+    if (!result.succeeded) {
+      return { succeeded: false, effect: effect('failed', result.errorCode) }
+    }
+    if (result.data.messageId !== input.messageId || result.data.status !== 'sent') {
+      return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+    }
+    return { succeeded: true, effect: effect('succeeded') }
+  }
+
+  revokeLandingMessageConfirmation(input: {
+    task: AirportPickupTaskState
+    confirmationId: string
+    idempotencyKey: string
+    effectId: string
+  }): LandingMessageRevocationExecution {
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
+      effectId: input.effectId,
+      type: 'message.revoke-confirmation',
+      status,
+      tool: 'message.revoke-confirmation',
+      ...(errorCode ? { errorCode } : {}),
+    })
+    if (
+      input.task.pendingConfirmation?.action !== 'send-message'
+      || input.task.pendingConfirmation.confirmationId !== input.confirmationId
+    ) {
+      return { succeeded: false, errorCode: 'AUTHORIZATION_REQUIRED', effect: effect('failed', 'AUTHORIZATION_REQUIRED') }
+    }
+    const providerRequestId = `${input.task.taskId}:message.revoke-confirmation:${input.idempotencyKey}`
+    const result = this.#callProvider(
+      input.task.taskId,
+      'message.revoke-confirmation',
+      providerRequestId,
+      () => this.#registry['message.revoke-confirmation'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        { confirmationId: input.confirmationId, idempotencyKey: input.idempotencyKey },
+      ),
+      toolResultSchema(revokeMessageConfirmationOutputSchema),
+    )
+    if (!result.succeeded) {
+      return { succeeded: false, errorCode: result.errorCode, effect: effect('failed', result.errorCode) }
+    }
+    if (result.data.confirmationId !== input.confirmationId || !result.data.revoked) {
+      return { succeeded: false, errorCode: 'PROVIDER_FAILED', effect: effect('failed', 'PROVIDER_FAILED') }
+    }
+    return { succeeded: true, effect: effect('cancelled', 'USER_REJECTED') }
   }
 
   executeReturnTrip(input: {
@@ -576,6 +785,21 @@ export class EffectExecutor {
     }
     return { succeeded: false, errorCode: 'PROVIDER_FAILED' }
   }
+
+  #revokePreparedConfirmation(taskId: string, confirmationId: string, idempotencyKey: string): boolean {
+    const requestId = `${taskId}:message.revoke-confirmation:${idempotencyKey}`
+    const result = this.#callProvider(
+      taskId,
+      'message.revoke-confirmation',
+      requestId,
+      () => this.#registry['message.revoke-confirmation'](
+        { taskId, requestId },
+        { confirmationId, idempotencyKey },
+      ),
+      toolResultSchema(revokeMessageConfirmationOutputSchema),
+    )
+    return result.succeeded && result.data.confirmationId === confirmationId && result.data.revoked
+  }
 }
 
 function providerErrorCode(error: unknown): string {
@@ -583,4 +807,11 @@ function providerErrorCode(error: unknown): string {
     return error.code
   }
   return 'PROVIDER_FAILED'
+}
+
+function resolveLandingMeetingEta(task: AirportPickupTaskState): string | undefined {
+  const iso = task.navigation?.eta ?? task.flight?.estimatedArrival
+  if (!iso || Number.isNaN(Date.parse(iso))) return undefined
+  const match = /T(\d{2}):(\d{2})/.exec(iso)
+  return match ? `${match[1]}:${match[2]}` : undefined
 }

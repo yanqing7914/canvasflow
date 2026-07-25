@@ -84,8 +84,24 @@ describe('provider registry (ctx, input)', () => {
     expect(toolDefinitions['charging.recommend'].timeoutMs).toBe(1000)
     expect(toolDefinitions['navigation.start'].riskLevel).toBe('reversible')
     expect(toolDefinitions['message.send'].riskLevel).toBe('external')
+    expect(toolDefinitions['message.revoke-confirmation'].riskLevel).toBe('reversible')
     expect(toolDefinitions['memory.confirm-update'].riskLevel).toBe('persistent')
     expect(toolDefinitions['message.send'].timeoutMs).toBe(3000)
+  })
+
+  it('revokes provider-issued message confirmations through the registry', () => {
+    const registry = createProviderRegistry()
+    const prepared = registry['message.prepare'](ctx, {
+      contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:45',
+    })
+    const revoked = registry['message.revoke-confirmation'](ctx, {
+      confirmationId: prepared.data!.confirmationId, idempotencyKey: 'revoke-message-001',
+    })
+    expect(revoked).toMatchObject({
+      ok: true,
+      data: { confirmationId: prepared.data!.confirmationId, revoked: true },
+      meta: { tool: 'message.revoke-confirmation' },
+    })
   })
 })
 

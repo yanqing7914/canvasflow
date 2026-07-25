@@ -1,9 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
+  buildLandingNotifyContent,
   createMessagePreparer,
-  createMessageSender,
   createSideEffectRuntime,
-  FAILING_CONTACT_ID,
 } from '@canvasflow/tools'
 import { createInitialTask } from './index'
 import {
@@ -38,18 +37,25 @@ describe('landing-message retry ETA', () => {
     expect(resolveLandingMeetingEta(task)).toBe('21:15')
 
     const runtime = createSideEffectRuntime()
-    const armed = armLandingMessageRetry(task, runtime)
+    const prepared = createMessagePreparer(runtime)(
+      { taskId: task.taskId },
+      { contactId: 'contact-mom', flightNumber: 'CA1831', eta: '21:15' },
+    )
+    const armed = armLandingMessageRetry(task, prepared.data!)
     expect(armed?.pendingConfirmation?.action).toBe('send-message')
 
     const resolved = resolveLandingMessageRetry(
       armed!,
-      runtime,
-      armed!.pendingConfirmation!.confirmationId,
-      'accept',
-      '2026-07-22T21:16:00+08:00',
+      {
+        confirmationId: armed!.pendingConfirmation!.confirmationId,
+        decision: 'accept',
+        timestamp: '2026-07-22T21:16:00+08:00',
+      },
     )
-    // Prepare and confirm must share the derived 21:15 ETA or the payload-bound token fails.
-    expect(resolved).toMatchObject({ decision: 'accept', sendSucceeded: true })
+    expect(resolved).toMatchObject({
+      decision: 'accept',
+      event: { type: 'message.sent', messageId: prepared.data!.messageId },
+    })
   })
 
   it('prefers route ETA over flight arrival when both exist', () => {
@@ -79,16 +85,24 @@ describe('landing-message retry ETA', () => {
     expect(resolveLandingMeetingEta(task)).toBe('20:55')
 
     const runtime = createSideEffectRuntime()
-    const armed = armLandingMessageRetry(task, runtime)
+    const prepared = createMessagePreparer(runtime)(
+      { taskId: task.taskId },
+      { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:55' },
+    )
+    const armed = armLandingMessageRetry(task, prepared.data!)
     expect(armed).toBeDefined()
     const resolved = resolveLandingMessageRetry(
       armed!,
-      runtime,
-      armed!.pendingConfirmation!.confirmationId,
-      'accept',
-      '2026-07-22T20:56:00+08:00',
+      {
+        confirmationId: armed!.pendingConfirmation!.confirmationId,
+        decision: 'accept',
+        timestamp: '2026-07-22T20:56:00+08:00',
+      },
     )
-    expect(resolved).toMatchObject({ decision: 'accept', sendSucceeded: true })
+    expect(resolved).toMatchObject({
+      decision: 'accept',
+      event: { type: 'message.sent', messageId: prepared.data!.messageId },
+    })
   })
 
   it('omits meeting ETA when neither route nor flight ETA is available', () => {
@@ -124,72 +138,49 @@ describe('landing-message retry confirmation lifecycle', () => {
     }
   }
 
-  it('revokes the opaque grant on reject so a retained confirmationId cannot send', () => {
+  it('clears the pending confirmation on reject without reporting a send event', () => {
     const runtime = createSideEffectRuntime()
-    const armed = armLandingMessageRetry(failedLandingTask(), runtime)
+    const prepared = createMessagePreparer(runtime)(
+      { taskId: 'pickup-001' },
+      { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' },
+    )
+    const armed = armLandingMessageRetry(failedLandingTask(), prepared.data!)
     expect(armed?.pendingConfirmation?.confirmationId).toBeTruthy()
     const confirmationId = armed!.pendingConfirmation!.confirmationId
 
     const rejected = resolveLandingMessageRetry(
       armed!,
-      runtime,
-      confirmationId,
-      'reject',
-      '2026-07-22T20:42:00+08:00',
+      { confirmationId, decision: 'reject', timestamp: '2026-07-22T20:42:00+08:00' },
     )
     expect(rejected).toMatchObject({ decision: 'reject' })
     expect(rejected?.task.pendingConfirmation).toBeUndefined()
-
-    const staleSend = createMessageSender(runtime)(
-      { taskId: 'pickup-001' },
-      {
-        contactId: 'contact-mom',
-        messageId: 'pickup-001:MU5102:landing',
-        text: '我已到达机场接机点，航班 MU5102，预计 20:40 会合。',
-        confirmationId,
-        idempotencyKey: 'pickup-001:MU5102:landing:stale-after-reject',
-      },
-    )
-    expect(staleSend.ok).toBe(false)
-    expect(staleSend.error?.code).toBe('AUTHORIZATION_REQUIRED')
+    expect(rejected?.task.message).toMatchObject({ pendingMessageId: undefined, pendingText: undefined })
   })
 
-  it('revokes a superseded confirmation when re-arming retry', () => {
-    const runtime = createSideEffectRuntime()
-    const first = armLandingMessageRetry(failedLandingTask(), runtime)
-    const firstId = first!.pendingConfirmation!.confirmationId
-    const second = armLandingMessageRetry(first!, runtime)
-    const secondId = second!.pendingConfirmation!.confirmationId
-    expect(secondId).not.toBe(firstId)
-
-    const staleSend = createMessageSender(runtime)(
-      { taskId: 'pickup-001' },
-      {
-        contactId: 'contact-mom',
-        messageId: 'pickup-001:MU5102:landing',
-        text: '我已到达机场接机点，航班 MU5102，预计 20:40 会合。',
-        confirmationId: firstId,
-        idempotencyKey: 'pickup-001:MU5102:landing:stale-after-supersede',
-      },
-    )
-    expect(staleSend.error?.code).toBe('AUTHORIZATION_REQUIRED')
-  })
-
-  it('revokes the grant after a failed confirmed send so the UI must re-arm', () => {
+  it('commits the exact provider-prepared message identity', () => {
     const runtime = createSideEffectRuntime()
     const prepared = createMessagePreparer(runtime)(
       { taskId: 'pickup-001' },
-      { contactId: FAILING_CONTACT_ID, flightNumber: 'MU5102', eta: '20:40' },
+      { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:40' },
     )
-    expect(prepared.ok).toBe(true)
-    const confirmationId = prepared.data!.confirmationId
+    const armed = armLandingMessageRetry(failedLandingTask(), prepared.data!)
+    expect(armed?.message).toMatchObject({
+      pendingContactId: prepared.data!.contactId,
+      pendingMessageId: prepared.data!.messageId,
+      idempotencyKey: prepared.data!.messageId,
+    })
+  })
+
+  it('projects a failed confirmed send into the reducer event without executing a provider', () => {
+    const content = buildLandingNotifyContent('pickup-001', 'contact-mom', 'MU5102', '20:40')
+    const confirmationId = 'cnf-retry'
     const armed = {
       ...failedLandingTask(),
       message: {
         ...failedLandingTask().message,
-        pendingContactId: FAILING_CONTACT_ID,
-        pendingMessageId: 'MU5102:landing',
-        idempotencyKey: prepared.data!.messageId,
+        pendingContactId: content.contactId,
+        pendingMessageId: content.messageId,
+        idempotencyKey: content.messageId,
       },
       pendingConfirmation: {
         confirmationId,
@@ -199,23 +190,17 @@ describe('landing-message retry confirmation lifecycle', () => {
 
     const resolved = resolveLandingMessageRetry(
       armed,
-      runtime,
-      confirmationId,
-      'accept',
-      '2026-07-22T20:42:00+08:00',
-    )
-    expect(resolved).toMatchObject({ decision: 'accept', sendSucceeded: false })
-
-    const staleSend = createMessageSender(runtime)(
-      { taskId: 'pickup-001' },
       {
-        contactId: FAILING_CONTACT_ID,
-        messageId: prepared.data!.messageId,
-        text: prepared.data!.text,
         confirmationId,
-        idempotencyKey: 'pickup-001:MU5102:landing:stale-after-failed-accept',
+        decision: 'accept',
+        timestamp: '2026-07-22T20:42:00+08:00',
+        sendSucceeded: false,
+        errorCode: 'SEND_FAILED',
       },
     )
-    expect(staleSend.error?.code).toBe('AUTHORIZATION_REQUIRED')
+    expect(resolved).toMatchObject({
+      decision: 'accept',
+      event: { type: 'message.failed', messageId: content.messageId, errorCode: 'SEND_FAILED' },
+    })
   })
 })

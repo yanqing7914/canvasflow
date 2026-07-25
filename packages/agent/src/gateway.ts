@@ -20,8 +20,10 @@ import {
   type ProviderMode,
 } from '@canvasflow/schema'
 import {
+  buildLandingNotifyContent,
   createProviderRegistry,
   issueAutoNotifyAuthorization,
+  resolveAuthorizedLandingContact,
   resetSideEffectRuntimeTask,
   createSideEffectRuntime,
   type MemberPreferenceRecord,
@@ -36,6 +38,7 @@ import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import {
   armLandingMessageRetry,
+  resolveLandingMeetingEta,
   resolveLandingMessageRetry,
   RETRY_LANDING_MESSAGE_ACTION_ID,
   retryLandingMessageActionToken,
@@ -47,6 +50,21 @@ import {
   type ReadToolResults,
 } from './orchestration'
 import { MemoryTaskStore, type StoredTask, type TaskStore, type TaskUpdateRead } from './store'
+
+function enforceGatewayProviderMode(registry: ProviderRegistry, mode: ProviderMode): ProviderRegistry {
+  return Object.fromEntries(
+    Object.entries(registry).map(([name, provider]) => [
+      name,
+      (context: Parameters<typeof provider>[0], input?: unknown) => {
+        const result = provider(context, input)
+        if (!result || typeof result !== 'object' || result.meta?.provider !== mode) {
+          throw Object.assign(new Error(`Provider ${name} returned an unexpected mode`), { code: 'PROVIDER_FAILED' })
+        }
+        return result
+      },
+    ]),
+  ) as ProviderRegistry
+}
 
 export class AgentGatewayError extends Error {
   constructor(
@@ -111,7 +129,10 @@ export class AgentGateway {
     this.#runtime = runtime
     this.#preferences = runtime.preferences
     this.#compose = options.compose ?? composeAgentSpec
-    const providers = options.providers ?? createProviderRegistry(runtime)
+    const providers = enforceGatewayProviderMode(
+      options.providers ?? createProviderRegistry(runtime, this.#mode === 'live' ? 'fixture' : this.#mode),
+      this.#mode,
+    )
     this.#orchestrator = options.orchestrator ?? new ReadToolOrchestrator({
       registry: providers,
     })
@@ -222,6 +243,21 @@ export class AgentGateway {
     }
     this.#assertRevisions(current, request.expectedTaskRevision)
 
+    let effects: AgentResponse['effects'] = []
+    if (current.task.pendingConfirmation?.action === 'send-message') {
+      const revocation = this.#effectExecutor.revokeLandingMessageConfirmation({
+        task: current.task,
+        confirmationId: current.task.pendingConfirmation.confirmationId,
+        idempotencyKey: `${request.clientRequestId}:reset`,
+        effectId: `${current.task.pendingConfirmation.confirmationId}:reset`,
+      })
+      effects = [revocation.effect]
+      if (!revocation.succeeded) {
+        this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: current, effects })
+        return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+      }
+    }
+
     resetSideEffectRuntimeTask(this.#runtime, taskId)
 
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
@@ -241,7 +277,6 @@ export class AgentGateway {
         }
       : undefined
     const stored = this.#store.reset(this.#publish(resetTask, undefined, requestContext))
-    const effects: AgentResponse['effects'] = []
     this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
@@ -264,7 +299,34 @@ export class AgentGateway {
       )
     }
 
+    let preEffects: AgentResponse['effects'] = []
+    if (
+      (
+        request.event.type === 'user.cancelled-task'
+        || (
+          request.event.type === 'message.failed'
+          && current.task.message.pendingMessageId === request.event.messageId
+        )
+      )
+      && current.task.pendingConfirmation?.action === 'send-message'
+    ) {
+      const revocation = this.#effectExecutor.revokeLandingMessageConfirmation({
+        task: current.task,
+        confirmationId: current.task.pendingConfirmation.confirmationId,
+        idempotencyKey: `${request.event.eventId}:terminal-message`,
+        effectId: `${current.task.pendingConfirmation.confirmationId}:terminal-message`,
+      })
+      preEffects = [revocation.effect]
+      if (!revocation.succeeded) {
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: preEffects })
+        return this.#response(request.clientRequestId, current, preEffects, performance.now() - startedAt)
+      }
+    }
+
     let next = applyEvent(current.task, request.event, this.#preferences)
+    if (request.event.type === 'message.failed' && preEffects.length > 0) {
+      next = { ...next, pendingConfirmation: undefined }
+    }
     const taskChanged = JSON.stringify(next) !== JSON.stringify(current.task)
     const accepted = taskChanged
       || this.#acceptsContextOnlyEvent(current.task, current.requestContext, request.event)
@@ -274,7 +336,10 @@ export class AgentGateway {
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
     }
     const requestContext = this.#contextAfterEvent(current.requestContext, request.event)
-    const effects = planEffects(current.task, request.event, current.toolResults ?? {}, this.#preferences)
+    const effects = [
+      ...preEffects,
+      ...planEffects(current.task, request.event, current.toolResults ?? {}, this.#preferences),
+    ]
     if (request.event.type === 'message.sent') {
       if (current.task.message.pendingMessageId !== request.event.messageId) {
         throw new AgentGatewayError('INVALID_REQUEST', 'Message is not pending for this task', false, current)
@@ -686,14 +751,31 @@ export class AgentGateway {
       throw new AgentGatewayError('INVALID_REQUEST', 'Retry landing-message action is not registered for the current task state', false, current)
     }
 
-    const armed = armLandingMessageRetry(current.task, this.#runtime)
-    if (!armed) {
+    const contactId = resolveAuthorizedLandingContact(current.task.passengers.memberIds, this.#preferences)
+    if (!contactId) {
       throw new AgentGatewayError('INVALID_REQUEST', 'Landing-message retry is not available for the current authorization state', false, current)
+    }
+
+    const execution = this.#effectExecutor.prepareLandingMessageRetry({
+      task: current.task,
+      contactId,
+      idempotencyKey: request.idempotencyKey,
+      effectId: `action:${request.idempotencyKey}:0`,
+    })
+    if (!execution.succeeded || !execution.prepared) {
+      const effects = [execution.effect]
+      this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored: current, effects })
+      return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+    }
+
+    const armed = armLandingMessageRetry(current.task, execution.prepared)
+    if (!armed) {
+      throw new AgentGatewayError('INVALID_REQUEST', 'Landing-message retry is not available for the current task state', false, current)
     }
 
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
     const stored = this.#store.save(this.#publish({ ...armed, updatedAt: timestamp }, current.toolResults, current.requestContext))
-    const effects: AgentResponse['effects'] = []
+    const effects: AgentResponse['effects'] = [execution.effect]
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
@@ -888,12 +970,69 @@ export class AgentGateway {
     startedAt: number,
   ): AgentResponse {
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const pendingMessageId = current.task.message.pendingMessageId
+    const pendingContactId = current.task.message.pendingContactId
+    const flight = current.task.flight
+    if (!pendingMessageId || !pendingContactId || !flight) {
+      throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current send-message confirmation is available', false, current)
+    }
+
+    const content = current.task.message.pendingText
+      ? { contactId: pendingContactId, messageId: pendingMessageId, text: current.task.message.pendingText }
+      : buildLandingNotifyContent(
+          current.task.taskId,
+          pendingContactId,
+          flight.flightNumber,
+          resolveLandingMeetingEta(current.task) ?? '即将到达',
+        )
+    const execution = request.decision === 'accept'
+      ? this.#effectExecutor.sendConfirmedLandingMessage({
+          task: current.task,
+          contactId: pendingContactId,
+          messageId: content.messageId,
+          text: content.text,
+          confirmationId,
+          idempotencyKey: request.idempotencyKey,
+          effectId: `${confirmationId}:send`,
+        })
+      : this.#effectExecutor.revokeLandingMessageConfirmation({
+          task: current.task,
+          confirmationId,
+          idempotencyKey: request.idempotencyKey,
+          effectId: `${confirmationId}:revoke`,
+        })
+
+    if (request.decision === 'reject' && !execution.succeeded) {
+      const effects = [execution.effect]
+      this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored: current, effects })
+      return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+    }
+
+    let cleanupEffect: AgentResponse['effects'][number] | undefined
+    if (request.decision === 'accept' && !execution.succeeded) {
+      const revocation = this.#effectExecutor.revokeLandingMessageConfirmation({
+        task: current.task,
+        confirmationId,
+        idempotencyKey: `${request.idempotencyKey}:failed-send`,
+        effectId: `${confirmationId}:revoke`,
+      })
+      if (!revocation.succeeded) {
+        const effects = [execution.effect, revocation.effect]
+        this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored: current, effects })
+        return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+      }
+      cleanupEffect = revocation.effect
+    }
+
     const resolved = resolveLandingMessageRetry(
       current.task,
-      this.#runtime,
-      confirmationId,
-      request.decision,
-      timestamp,
+      {
+        confirmationId,
+        decision: request.decision,
+        timestamp,
+        sendSucceeded: request.decision === 'reject' ? true : execution.succeeded,
+        errorCode: execution.effect.errorCode,
+      },
     )
     if (!resolved) {
       throw new AgentGatewayError('CONFIRMATION_EXPIRED', 'No current send-message confirmation is available', false, current)
@@ -903,15 +1042,10 @@ export class AgentGateway {
     let effects: AgentResponse['effects'] = []
     if (resolved.decision === 'reject') {
       nextTask = resolved.task
+      effects = [execution.effect]
     } else {
       nextTask = applyEvent(resolved.task, resolved.event, this.#preferences)
-      effects = [{
-        effectId: `${resolved.event.eventId}:0`,
-        type: 'message.send',
-        status: resolved.sendSucceeded ? 'succeeded' : 'failed',
-        tool: 'message.send',
-        ...(resolved.sendSucceeded ? {} : { errorCode: resolved.event.type === 'message.failed' ? resolved.event.errorCode : 'SEND_FAILED' }),
-      }]
+      effects = cleanupEffect ? [execution.effect, cleanupEffect] : [execution.effect]
     }
 
     const stored = this.#store.save(this.#publish(nextTask, current.toolResults, current.requestContext))

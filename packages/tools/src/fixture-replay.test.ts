@@ -11,6 +11,7 @@ import {
   mediaPlayOutputSchema,
   messagePrepareOutputSchema,
   messageSendOutputSchema,
+  revokeMessageConfirmationOutputSchema,
   navigationStartOutputSchema,
   navigationUpdateRouteOutputSchema,
   proposeMemoryUpdateOutputSchema,
@@ -59,6 +60,7 @@ const outputSchemas: Record<ToolName, z.ZodType> = {
   'media.play': mediaPlayOutputSchema,
   'message.prepare': messagePrepareOutputSchema,
   'message.send': messageSendOutputSchema,
+  'message.revoke-confirmation': revokeMessageConfirmationOutputSchema,
 }
 
 function loadFixtures(): ScenarioFixture[] {

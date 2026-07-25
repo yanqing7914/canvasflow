@@ -113,6 +113,7 @@ export function applyEvent(
       next.phase = 'cancelled'
       next.pendingConfirmation = undefined
       next.message.pendingMessageId = undefined
+      next.message.pendingText = undefined
       next.message.authorizationId = undefined
       if (next.message.status === 'scheduled') next.message.status = 'cancelled'
       break
@@ -123,6 +124,7 @@ export function applyEvent(
         next.message.landingNoticeSent = true
         next.message.sentAt = event.timestamp
         next.message.pendingMessageId = undefined
+        next.message.pendingText = undefined
         next.message.pendingContactId = undefined
         next.message.authorizationId = undefined
       }
@@ -131,6 +133,7 @@ export function applyEvent(
       if (next.message.pendingMessageId === event.messageId) {
         next.message.status = 'failed'
         next.message.pendingMessageId = undefined
+        next.message.pendingText = undefined
         next.message.authorizationId = undefined
         // Keep pendingContactId so explicit retry targets the original recipient.
       }

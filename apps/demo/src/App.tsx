@@ -1,9 +1,7 @@
 import { useMemo, useRef, useState } from 'react'
 import {
   applyEvent,
-  armLandingMessageRetry,
   resolveConfirmation,
-  resolveLandingMessageRetry,
 } from '@canvasflow/agent'
 import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
@@ -145,14 +143,8 @@ export default function App({
       setLocalTask((current) => {
         if (!current) return current
         if (actionId === 'save-trip-preferences') return resolveConfirmation(current, `${current.taskId}:save-memory`)
-        if (actionId === 'retry-landing-message') return armLandingMessageRetry(current, demoRuntime) ?? current
-        if (actionId === 'confirm-retry-landing-message') {
-          const confirmationId = current.pendingConfirmation?.confirmationId
-          if (!confirmationId) return current
-          const resolved = resolveLandingMessageRetry(current, demoRuntime, confirmationId, 'accept', new Date().toISOString())
-          if (!resolved || resolved.decision === 'reject') return resolved?.task ?? current
-          return applyEvent(resolved.task, resolved.event, demoRuntime.preferences)
-        }
+        // Provider-backed retries are only executable through the Agent API.
+        if (actionId === 'retry-landing-message' || actionId === 'confirm-retry-landing-message') return current
         return current
       })
       return
