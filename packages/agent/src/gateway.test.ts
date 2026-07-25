@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createProviderRegistry, createSideEffectRuntime } from '@canvasflow/tools'
 import { AgentGateway, AgentGatewayError } from './gateway'
 import { ReadToolOrchestrationError, ReadToolOrchestrator } from './orchestration'
+import { Planner } from './planner'
 import { MemoryTaskStore } from './store'
 
 const now = '2026-07-22T12:00:00+08:00'
@@ -53,6 +54,133 @@ function failedLandingMessageTask(gateway: AgentGateway) {
 }
 
 describe('AgentGateway', () => {
+  it('uses the injected Planner as the create slot-filling boundary', () => {
+    const planner = new Planner()
+    const plan = vi.spyOn(planner, 'plan').mockReturnValue({
+      intent: 'create-airport-pickup',
+      confidence: 0.95,
+      slotUpdates: {
+        passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+        flightNumber: 'MU5102',
+      },
+      missingSlots: [],
+      proposedEvents: [{
+        eventId: 'client-create:input', type: 'user.input', text: '接妈妈，航班 MU5102', timestamp: now,
+      }],
+      assistantText: '接机信息已齐全。',
+    })
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', planner,
+    })
+
+    const created = gateway.createTask(createRequest('模型可理解但规则无法解析的创建请求'))
+
+    expect(plan).toHaveBeenCalledWith(expect.objectContaining({
+      text: '模型可理解但规则无法解析的创建请求',
+      eventId: 'client-create:input',
+      timestamp: now,
+    }))
+    expect(created.task).toMatchObject({
+      phase: 'preparing', passengers: { memberIds: ['mom'], names: ['妈妈'] }, flight: { flightNumber: 'MU5102' },
+    })
+  })
+
+  it('uses the injected Planner to fill slots from later user input', () => {
+    const planner = new Planner()
+    const plan = vi.spyOn(planner, 'plan')
+    plan.mockReturnValueOnce({
+      intent: 'unknown', confidence: 0.2, slotUpdates: {}, missingSlots: ['passengers', 'flightNumber'],
+      proposedEvents: [], assistantText: '请补充接机信息。',
+    })
+    plan.mockReturnValueOnce({
+      intent: 'create-airport-pickup',
+      confidence: 0.95,
+      slotUpdates: {
+        passengers: { memberIds: ['dad'], names: ['爸爸'], confirmedOnboard: false },
+        flightNumber: 'MU5102',
+      },
+      missingSlots: [],
+      proposedEvents: [{
+        eventId: 'planned-event', type: 'user.input', text: '接爸爸，航班 MU5102', timestamp: '2026-07-22T12:01:00+08:00',
+      }],
+      assistantText: '接机信息已齐全。',
+    })
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', planner,
+    })
+    const created = gateway.createTask(createRequest('先创建一个空任务'))
+
+    const updated = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'planned-update', expectedTaskRevision: created.task.taskRevision,
+      event: {
+        eventId: 'planned-event', type: 'user.input', text: '模型可理解但规则无法解析的补充信息',
+        timestamp: '2026-07-22T12:01:00+08:00',
+      },
+    })
+
+    expect(plan).toHaveBeenLastCalledWith(expect.objectContaining({
+      text: '模型可理解但规则无法解析的补充信息', state: created.task, eventId: 'planned-event',
+    }))
+    expect(updated.task).toMatchObject({
+      phase: 'preparing', passengers: { memberIds: ['dad'], names: ['爸爸'] }, flight: { flightNumber: 'MU5102' },
+    })
+  })
+
+  it('does not bypass an authoritative Planner result with direct text parsing', () => {
+    const planner = new Planner()
+    const plan = vi.spyOn(planner, 'plan').mockReturnValue({
+      intent: 'unknown', confidence: 0.2, slotUpdates: {}, missingSlots: ['passengers', 'flightNumber'],
+      proposedEvents: [], assistantText: '请补充接机信息。',
+    })
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', planner,
+    })
+
+    const created = gateway.createTask(createRequest('接爸爸，航班 MU5102'))
+
+    expect(plan).toHaveBeenCalledTimes(1)
+    expect(created.task.passengers.names).toEqual([])
+    expect(created.task.flight).toBeUndefined()
+    expect(created.task.phase).toBe('collecting-information')
+  })
+
+  it('does not invoke the Planner again for create or event replays', () => {
+    const planner = new Planner()
+    const plan = vi.spyOn(planner, 'plan')
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', planner,
+    })
+    const create = createRequest('接妈妈')
+    const created = gateway.createTask(create)
+    gateway.createTask(create)
+    const event = {
+      clientRequestId: 'planner-event', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'planner-event', type: 'user.input' as const, text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    }
+    gateway.submitEvent(created.task.taskId, event)
+    gateway.submitEvent(created.task.taskId, event)
+
+    expect(plan).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects a revision conflict before invoking the Planner', () => {
+    const planner = new Planner()
+    const plan = vi.spyOn(planner, 'plan')
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', planner,
+    })
+    const created = gateway.createTask(createRequest('接妈妈'))
+    plan.mockClear()
+
+    expect(() => gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'stale-planner-event', expectedTaskRevision: created.task.taskRevision + 1,
+      event: {
+        eventId: 'stale-planner-event', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00',
+      },
+    })).toThrow(AgentGatewayError)
+    expect(plan).not.toHaveBeenCalled()
+  })
+
   it('cancels and idempotently resets only the requested task', () => {
     let id = 0
     const gateway = new AgentGateway({

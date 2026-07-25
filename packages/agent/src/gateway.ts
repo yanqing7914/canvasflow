@@ -31,11 +31,11 @@ import {
   type SideEffectRuntime,
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
-import { normalizeFlightNumber } from './flight-number'
-import { mergePassengers, parsePassengerLabels, parsePassengers } from './passengers'
+import { mergePassengers } from './passengers'
 import { applyRequestPresentation, composeAgentSpec, composeFallbackSpec } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
+import { Planner, type Plan, type PlannerInput } from './planner'
 import {
   armLandingMessageRetry,
   resolveLandingMeetingEta,
@@ -89,6 +89,7 @@ export type AgentGatewayOptions = {
   orchestrator?: ReadToolOrchestration
   providers?: ProviderRegistry
   policyGate?: PolicyGate
+  planner?: Pick<Planner, 'plan'>
   mode?: ProviderMode
   /**
    * Side-effect runtime for opaque confirmations and preference-backed notify.
@@ -110,6 +111,7 @@ export class AgentGateway {
   ) => UISpec
   readonly #orchestrator: ReadToolOrchestration
   readonly #effectExecutor: EffectExecutor
+  readonly #planner: Pick<Planner, 'plan'>
   readonly #runtime: SideEffectRuntime
   readonly #preferences: Record<string, MemberPreferenceRecord>
   readonly #mode: ProviderMode
@@ -137,6 +139,7 @@ export class AgentGateway {
       registry: providers,
     })
     this.#effectExecutor = new EffectExecutor(providers, options.policyGate)
+    this.#planner = options.planner ?? new Planner()
   }
 
   createTask(input: CreateTaskRequest): AgentResponse {
@@ -157,9 +160,10 @@ export class AgentGateway {
       const stored = this.#store.create(this.#publish(createInitialTask(taskId, timestamp), {}, requestContext), request.clientRequestId)
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
     }
-    const flightNumber = normalizeFlightNumber(request.input.text)
-    const parsedPassengers = parsePassengers(request.input.text)
     let task = createInitialTask(taskId, timestamp)
+    const plan = this.#planUserInput(request.input.text, task, `${request.clientRequestId}:input`, timestamp)
+    const flightNumber = plan.slotUpdates.flightNumber
+    const parsedPassengers = plan.slotUpdates.passengers
     if (parsedPassengers) {
       task = {
         ...task,
@@ -172,10 +176,10 @@ export class AgentGateway {
       type: 'user.input',
       text: request.input.text,
       timestamp,
-    }, this.#preferences)
+    }, this.#preferences, { userInputSlots: { passengers: parsedPassengers, flightNumber } })
     let toolResults: ReadToolResults = {}
     try {
-      const labels = parsePassengerLabels(request.input.text)
+      const labels = parsedPassengers?.names ?? []
       const passengerReads = this.#orchestrator.resolveInitialPassengers(taskId, request.clientRequestId, labels)
       task = {
         ...task,
@@ -323,7 +327,18 @@ export class AgentGateway {
       }
     }
 
-    let next = applyEvent(current.task, request.event, this.#preferences)
+    const plan = request.event.type === 'user.input'
+      ? this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
+      : undefined
+    let next = applyEvent(
+      current.task,
+      request.event,
+      this.#preferences,
+      plan ? { userInputSlots: {
+        passengers: plan.slotUpdates.passengers,
+        flightNumber: plan.slotUpdates.flightNumber,
+      } } : undefined,
+    )
     if (request.event.type === 'message.failed' && preEffects.length > 0) {
       next = { ...next, pendingConfirmation: undefined }
     }
@@ -369,8 +384,8 @@ export class AgentGateway {
       })
     }
     let toolResults = current.toolResults
-    const flightNumber = request.event.type === 'user.input' ? normalizeFlightNumber(request.event.text) : undefined
-    const parsedPassengers = request.event.type === 'user.input' ? parsePassengers(request.event.text) : undefined
+    const flightNumber = plan?.slotUpdates.flightNumber
+    const parsedPassengers = plan?.slotUpdates.passengers
     try {
       if (request.event.type === 'user.input' && parsedPassengers) {
         const mergedPassengers = mergePassengers(current.task.passengers, parsedPassengers)
@@ -1243,6 +1258,11 @@ export class AgentGateway {
     const stored = this.#store.get(taskId)
     if (!stored) throw new AgentGatewayError('TASK_NOT_FOUND', `Task not found: ${taskId}`)
     return stored
+  }
+
+  #planUserInput(text: string, state: AirportPickupTaskState, eventId: string, timestamp: string): Plan {
+    const input: PlannerInput = { text, state, eventId, timestamp }
+    return this.#planner.plan(input)
   }
 
   #response(

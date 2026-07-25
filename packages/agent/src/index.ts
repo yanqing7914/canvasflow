@@ -21,6 +21,14 @@ export * from './orchestration'
 export * from './planner'
 export * from './store'
 
+export type ApplyEventOptions = {
+  /** Gateway-provided Planner output; presence makes these slots authoritative for user.input. */
+  userInputSlots?: {
+    passengers?: AirportPickupTaskState['passengers']
+    flightNumber?: string
+  }
+}
+
 export function createInitialTask(taskId = 'pickup-001', updatedAt = '2026-07-22T12:00:00+08:00'): AirportPickupTaskState {
   return airportPickupTaskStateSchema.parse({
     taskId, surfaceId: 'airport-pickup-main', taskRevision: 0, uiRevision: 0, phase: 'collecting-information',
@@ -42,6 +50,7 @@ export function applyEvent(
   state: AirportPickupTaskState,
   input: AirportPickupEvent,
   preferences: Record<string, MemberPreferenceRecord> = memberPreferences,
+  options: ApplyEventOptions = {},
 ): AirportPickupTaskState {
   const event = airportPickupEventSchema.parse(input)
   if (state.processedEventIds.includes(event.eventId)) return state
@@ -55,8 +64,12 @@ export function applyEvent(
   switch (event.type) {
     case 'user.input':
       {
-        const flightNumber = normalizeFlightNumber(event.text)
-        const passengers = parsePassengers(event.text)
+        const flightNumber = options.userInputSlots
+          ? options.userInputSlots.flightNumber
+          : normalizeFlightNumber(event.text)
+        const passengers = options.userInputSlots
+          ? options.userInputSlots.passengers
+          : parsePassengers(event.text)
         handled = flightNumber !== undefined || passengers !== undefined || /机场|接妈妈|接爸爸|接豆豆|补能|充电|座舱|偏好|温度|媒体/.test(event.text)
         // Gateway resolves passengers during task creation; the reducer only
         // fills a passenger slot when this event can complete an existing trip.
