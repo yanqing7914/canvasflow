@@ -296,7 +296,8 @@ describe('demo integration', () => {
 
     await user.click(advance) // charging recommend
     expect(screen.getByText('charging-recommendation')).toBeInTheDocument()
-    expect(screen.getByText(/42% → 18%/)).toBeInTheDocument()
+    expect(screen.getByLabelText('当前电量 42%')).toBeInTheDocument()
+    expect(screen.getByText('18%')).toBeInTheDocument()
 
     await user.click(advance) // navigation.started
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
