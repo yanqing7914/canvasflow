@@ -10,6 +10,7 @@ import type {
   SubmitActionRequest,
   SubmitConfirmationRequest,
   SubmitEventRequest,
+  TaskUpdateEnvelope,
 } from '@canvasflow/schema'
 import {
   createProviderRegistry,
@@ -22,7 +23,8 @@ import {
 } from '@canvasflow/tools'
 import { AgentGateway, type AgentGatewayOptions } from './gateway'
 import type { AgentHttpGateway } from './http'
-import type { StoredEventResult, StoredIdempotencyResult, StoredTask, TaskStore } from './store'
+import type { StoredEventResult, StoredIdempotencyResult, StoredTask, TaskStore, TaskUpdateRead } from './store'
+import { createTaskUpdate } from './task-updates'
 
 type SqlRow = Record<string, unknown>
 
@@ -52,9 +54,14 @@ function enforceProviderMode(registry: ProviderRegistry, mode: ProviderMode): Pr
 
 export class SqliteTaskStore implements TaskStore {
   readonly #database: DatabaseSync
+  readonly #maxTaskUpdatesPerTask: number
 
-  constructor(database: DatabaseSync) {
+  constructor(database: DatabaseSync, maxTaskUpdatesPerTask = 1_000) {
+    if (!Number.isSafeInteger(maxTaskUpdatesPerTask) || maxTaskUpdatesPerTask <= 0) {
+      throw new TypeError('maxTaskUpdatesPerTask must be a positive safe integer')
+    }
     this.#database = database
+    this.#maxTaskUpdatesPerTask = maxTaskUpdatesPerTask
   }
 
   create(value: StoredTask, clientRequestId?: string): StoredTask {
@@ -128,10 +135,28 @@ export class SqliteTaskStore implements TaskStore {
 
   save(value: StoredTask): StoredTask {
     const snapshot = structuredClone(value)
+    const current = this.get(value.task.taskId)
     this.#database.prepare(`
       INSERT INTO agent_tasks (task_id, stored_json) VALUES (?, ?)
       ON CONFLICT(task_id) DO UPDATE SET stored_json = excluded.stored_json
     `).run(value.task.taskId, JSON.stringify(snapshot))
+    if (current && JSON.stringify({ task: current.task, ui: current.ui }) === JSON.stringify({ task: snapshot.task, ui: snapshot.ui })) {
+      return structuredClone(snapshot)
+    }
+    const cursorRow = statementRow(this.#database.prepare(`
+      INSERT INTO agent_task_update_cursors (task_id, latest_cursor) VALUES (?, 1)
+      ON CONFLICT(task_id) DO UPDATE SET latest_cursor = latest_cursor + 1
+      RETURNING latest_cursor
+    `), value.task.taskId)
+    const cursor = Number(cursorRow?.latest_cursor)
+    const update = createTaskUpdate(snapshot, cursor)
+    this.#database.prepare(`
+      INSERT INTO agent_task_updates (task_id, cursor, envelope_json) VALUES (?, ?, ?)
+    `).run(value.task.taskId, cursor, JSON.stringify(update))
+    this.#database.prepare(`
+      DELETE FROM agent_task_updates
+      WHERE task_id = ? AND cursor <= ?
+    `).run(value.task.taskId, cursor - this.#maxTaskUpdatesPerTask)
     return structuredClone(snapshot)
   }
 
@@ -145,11 +170,44 @@ export class SqliteTaskStore implements TaskStore {
     return stored
   }
 
+  readTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead {
+    const cursorRow = statementRow(
+      this.#database.prepare('SELECT latest_cursor FROM agent_task_update_cursors WHERE task_id = ?'),
+      taskId,
+    )
+    const latestCursor = Number(cursorRow?.latest_cursor ?? 0)
+    const earliestRow = statementRow(
+      this.#database.prepare('SELECT MIN(cursor) AS earliest_cursor FROM agent_task_updates WHERE task_id = ?'),
+      taskId,
+    )
+    const earliestCursor = earliestRow?.earliest_cursor === null || earliestRow?.earliest_cursor === undefined
+      ? undefined
+      : Number(earliestRow.earliest_cursor)
+    const staleCursor = afterCursor !== undefined
+      && earliestCursor !== undefined
+      && afterCursor < earliestCursor - 1
+    const rows = staleCursor || afterCursor === undefined
+      ? this.#database.prepare(`
+          SELECT envelope_json FROM agent_task_updates WHERE task_id = ? ORDER BY cursor DESC LIMIT 1
+        `).all(taskId) as SqlRow[]
+      : this.#database.prepare(`
+          SELECT envelope_json FROM agent_task_updates WHERE task_id = ? AND cursor > ? ORDER BY cursor ASC
+        `).all(taskId, afterCursor) as SqlRow[]
+    const orderedRows = staleCursor || afterCursor === undefined ? rows.reverse() : rows
+    return {
+      updates: orderedRows.map((row) => parseJson<TaskUpdateEnvelope>(row.envelope_json)),
+      latestCursor,
+      staleCursor,
+    }
+  }
+
   clear(): void {
     this.#database.exec(`
       DELETE FROM agent_event_results;
       DELETE FROM agent_idempotency_results;
       DELETE FROM agent_create_results;
+      DELETE FROM agent_task_updates;
+      DELETE FROM agent_task_update_cursors;
       DELETE FROM agent_tasks;
     `)
   }
@@ -169,6 +227,8 @@ export type PersistentAgentRuntimeOptions = {
   createId?: AgentGatewayOptions['createId']
   compose?: AgentGatewayOptions['compose']
   policyGate?: AgentGatewayOptions['policyGate']
+  /** Maximum retained SSE snapshots for each task; stale cursors receive an authoritative resync snapshot. */
+  maxTaskUpdatesPerTask?: number
 }
 
 export function providerModeFromEnvironment(environment: NodeJS.ProcessEnv = process.env): ProviderMode {
@@ -200,6 +260,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       createId: options.createId,
       compose: options.compose,
       policyGate: options.policyGate,
+      maxTaskUpdatesPerTask: options.maxTaskUpdatesPerTask,
     }
     if (options.databasePath !== ':memory:') mkdirSync(dirname(resolve(options.databasePath)), { recursive: true })
     this.#database = new DatabaseSync(options.databasePath)
@@ -245,6 +306,10 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     return this.#run((gateway) => gateway.resetTask(taskId, input))
   }
 
+  getTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead {
+    return this.#read((gateway) => gateway.getTaskUpdates(taskId, afterCursor))
+  }
+
   close(): void {
     if (this.#closed) return
     this.#database.close()
@@ -261,7 +326,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       if (row) restoreSideEffectRuntime(runtime, parseJson<SideEffectRuntimeSnapshot>(row.snapshot_json))
       const providers = enforceProviderMode(this.#providerFactory(runtime, this.#mode), this.#mode)
       const gateway = new AgentGateway({
-        store: new SqliteTaskStore(this.#database),
+        store: new SqliteTaskStore(this.#database, this.#options.maxTaskUpdatesPerTask),
         runtime,
         providers,
         mode: this.#mode,
@@ -291,48 +356,95 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     if (row) restoreSideEffectRuntime(runtime, parseJson<SideEffectRuntimeSnapshot>(row.snapshot_json))
     const providers = enforceProviderMode(this.#providerFactory(runtime, this.#mode), this.#mode)
     return operation(new AgentGateway({
-      store: new SqliteTaskStore(this.#database), runtime, providers, mode: this.#mode,
+      store: new SqliteTaskStore(this.#database, this.#options.maxTaskUpdatesPerTask), runtime, providers, mode: this.#mode,
       now: this.#options.now, createId: this.#options.createId, compose: this.#options.compose,
       policyGate: this.#options.policyGate,
     }))
   }
 
   #migrate(): void {
-    this.#database.exec(`
-      CREATE TABLE IF NOT EXISTS agent_metadata (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS agent_tasks (
-        task_id TEXT PRIMARY KEY,
-        stored_json TEXT NOT NULL
-      );
-      CREATE TABLE IF NOT EXISTS agent_create_results (
-        client_request_id TEXT PRIMARY KEY,
-        task_id TEXT NOT NULL,
-        stored_json TEXT NOT NULL,
-        FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
-      );
-      CREATE TABLE IF NOT EXISTS agent_event_results (
-        task_id TEXT NOT NULL,
-        event_id TEXT NOT NULL,
-        result_json TEXT NOT NULL,
-        PRIMARY KEY(task_id, event_id),
-        FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
-      );
-      CREATE TABLE IF NOT EXISTS agent_idempotency_results (
-        task_id TEXT NOT NULL,
-        operation TEXT NOT NULL,
-        idempotency_key TEXT NOT NULL,
-        result_json TEXT NOT NULL,
-        PRIMARY KEY(task_id, operation, idempotency_key),
-        FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
-      );
-      CREATE TABLE IF NOT EXISTS agent_runtime_state (
-        id INTEGER PRIMARY KEY CHECK(id = 1),
-        snapshot_json TEXT NOT NULL
-      );
-    `)
+    // Keep schema creation and legacy stream backfill recoverable as one unit.
+    this.#database.exec('SAVEPOINT agent_schema_migration')
+    try {
+      this.#database.exec(`
+        CREATE TABLE IF NOT EXISTS agent_metadata (
+          key TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS agent_tasks (
+          task_id TEXT PRIMARY KEY,
+          stored_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS agent_create_results (
+          client_request_id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          stored_json TEXT NOT NULL,
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS agent_event_results (
+          task_id TEXT NOT NULL,
+          event_id TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          PRIMARY KEY(task_id, event_id),
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS agent_idempotency_results (
+          task_id TEXT NOT NULL,
+          operation TEXT NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          result_json TEXT NOT NULL,
+          PRIMARY KEY(task_id, operation, idempotency_key),
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS agent_runtime_state (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          snapshot_json TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS agent_task_update_cursors (
+          task_id TEXT PRIMARY KEY,
+          latest_cursor INTEGER NOT NULL CHECK(latest_cursor >= 1),
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
+        );
+        CREATE TABLE IF NOT EXISTS agent_task_updates (
+          task_id TEXT NOT NULL,
+          cursor INTEGER NOT NULL CHECK(cursor >= 1),
+          envelope_json TEXT NOT NULL,
+          PRIMARY KEY(task_id, cursor),
+          FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
+        );
+      `)
+      const missingUpdates = this.#database.prepare(`
+        SELECT tasks.stored_json, COALESCE(cursors.latest_cursor, 1) AS cursor
+        FROM agent_tasks AS tasks
+        LEFT JOIN agent_task_update_cursors AS cursors ON cursors.task_id = tasks.task_id
+        WHERE NOT EXISTS (
+          SELECT 1 FROM agent_task_updates AS updates
+          WHERE updates.task_id = tasks.task_id
+            AND updates.cursor = COALESCE(cursors.latest_cursor, 1)
+        )
+      `).all() as SqlRow[]
+      for (const row of missingUpdates) {
+        const stored = parseJson<StoredTask>(row.stored_json)
+        const cursor = Number(row.cursor)
+        const update = createTaskUpdate(stored, cursor)
+        this.#database.prepare(`
+          INSERT INTO agent_task_update_cursors (task_id, latest_cursor) VALUES (?, ?)
+          ON CONFLICT(task_id) DO NOTHING
+        `).run(stored.task.taskId, cursor)
+        this.#database.prepare(`
+          INSERT INTO agent_task_updates (task_id, cursor, envelope_json) VALUES (?, ?, ?)
+          ON CONFLICT(task_id, cursor) DO NOTHING
+        `).run(stored.task.taskId, cursor, JSON.stringify(update))
+      }
+      this.#database.exec('RELEASE SAVEPOINT agent_schema_migration')
+    } catch (error) {
+      try {
+        this.#database.exec('ROLLBACK TO SAVEPOINT agent_schema_migration; RELEASE SAVEPOINT agent_schema_migration;')
+      } catch {
+        // Preserve the migration error.
+      }
+      throw error
+    }
   }
 
   #persistRuntime(runtime: SideEffectRuntime): void {

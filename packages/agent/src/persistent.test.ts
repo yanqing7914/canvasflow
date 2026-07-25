@@ -2,6 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DatabaseSync } from 'node:sqlite'
 import { createProviderRegistry, type ProviderRegistry } from '@canvasflow/tools'
 import { PersistentAgentRuntime, providerModeFromEnvironment } from './persistent'
 
@@ -59,6 +60,75 @@ describe('PersistentAgentRuntime', () => {
     const restarted = runtime(path)
     expect(restarted.getTask(created.task.taskId).task).toEqual(updated.task)
     expect(restarted.createTask(createRequest()).task).toEqual(created.task)
+  })
+
+  it('restores update cursors after restart and exposes cross-runtime writes', async () => {
+    const path = await databasePath()
+    const firstRuntime = runtime(path)
+    const secondRuntime = runtime(path)
+    const created = firstRuntime.createTask(createRequest())
+    expect(secondRuntime.getTaskUpdates(created.task.taskId)).toMatchObject({
+      latestCursor: 1, updates: [expect.objectContaining({ cursor: 1 })],
+    })
+    const moving = firstRuntime.submitEvent(created.task.taskId, {
+      clientRequestId: 'moving', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'moving', type: 'vehicle.moving', speedKph: 80, timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(moving.task.taskRevision).toBe(created.task.taskRevision)
+    expect(secondRuntime.getTaskUpdates(created.task.taskId, 1).updates).toEqual([
+      expect.objectContaining({ cursor: 2, snapshot: expect.objectContaining({ ui: moving.ui }) }),
+    ])
+    firstRuntime.close()
+    secondRuntime.close()
+
+    const restarted = runtime(path)
+    expect(restarted.getTaskUpdates(created.task.taskId, 1)).toMatchObject({
+      latestCursor: 2, updates: [expect.objectContaining({ cursor: 2 })],
+    })
+  })
+
+  it('backfills an authoritative stream snapshot for databases created before task updates', async () => {
+    const path = await databasePath()
+    const firstRuntime = runtime(path)
+    const created = firstRuntime.createTask(createRequest())
+    firstRuntime.close()
+    const database = new DatabaseSync(path)
+    database.exec('DROP TABLE agent_task_updates; DROP TABLE agent_task_update_cursors;')
+    database.close()
+
+    const migrated = runtime(path)
+    expect(migrated.getTaskUpdates(created.task.taskId)).toMatchObject({
+      latestCursor: 1,
+      updates: [expect.objectContaining({ cursor: 1, snapshot: expect.objectContaining({ task: created.task }) })],
+    })
+    const secondOpening = runtime(path)
+    expect(secondOpening.getTaskUpdates(created.task.taskId)).toMatchObject({
+      latestCursor: 1,
+      updates: [expect.objectContaining({ cursor: 1 })],
+    })
+  })
+
+  it('repairs an interrupted migration with a cursor but no matching envelope', async () => {
+    const path = await databasePath()
+    const firstRuntime = runtime(path)
+    const created = firstRuntime.createTask(createRequest())
+    firstRuntime.close()
+    const database = new DatabaseSync(path)
+    database.prepare('UPDATE agent_task_update_cursors SET latest_cursor = 4 WHERE task_id = ?')
+      .run(created.task.taskId)
+    database.prepare('DELETE FROM agent_task_updates WHERE task_id = ?').run(created.task.taskId)
+    database.close()
+
+    const repaired = runtime(path)
+    expect(repaired.getTaskUpdates(created.task.taskId)).toMatchObject({
+      latestCursor: 4,
+      updates: [expect.objectContaining({ cursor: 4, snapshot: expect.objectContaining({ task: created.task }) })],
+    })
+    const reopened = runtime(path)
+    expect(reopened.getTaskUpdates(created.task.taskId)).toMatchObject({
+      latestCursor: 4,
+      updates: [expect.objectContaining({ cursor: 4 })],
+    })
   })
 
   it('restores request presentation context after a process restart', async () => {
@@ -241,6 +311,25 @@ describe('PersistentAgentRuntime', () => {
     databaseAfter.close()
     const recovered = runtime(path)
     expect(recovered.getTask(created.task.taskId).task).toEqual(created.task)
+    expect(recovered.getTaskUpdates(created.task.taskId)).toMatchObject({
+      latestCursor: 1, updates: [expect.objectContaining({ cursor: 1 })],
+    })
+  })
+
+  it('keeps stream history across reset and returns an authoritative snapshot for stale retained cursors', async () => {
+    const path = await databasePath()
+    const instance = runtime(path, { maxTaskUpdatesPerTask: 2 })
+    const created = instance.createTask(createRequest())
+    const cancelled = instance.cancelTask(created.task.taskId, {
+      clientRequestId: 'cancel-retained', expectedTaskRevision: created.task.taskRevision, eventId: 'cancel-retained',
+    })
+    const reset = instance.resetTask(created.task.taskId, {
+      clientRequestId: 'reset-retained', expectedTaskRevision: cancelled.task.taskRevision,
+    })
+    expect(instance.getTaskUpdates(created.task.taskId, 0)).toMatchObject({
+      latestCursor: 3, staleCursor: true,
+      updates: [expect.objectContaining({ cursor: 3, snapshot: expect.objectContaining({ task: reset.task }) })],
+    })
   })
 
   it('binds a database to one explicit provider mode', async () => {

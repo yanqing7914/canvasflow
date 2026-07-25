@@ -1,5 +1,15 @@
-import type { AgentDestination, AirportPickupTaskState, ClientCapabilities, EffectRecord, UISpec, VehicleContext } from '@canvasflow/schema'
+import type { AgentDestination, AirportPickupTaskState, ClientCapabilities, EffectRecord, TaskUpdateEnvelope, UISpec, VehicleContext } from '@canvasflow/schema'
 import type { ReadToolResults } from './orchestration'
+import { createTaskUpdate } from './task-updates'
+
+const DEFAULT_MAX_TASK_UPDATES = 1_000
+
+function validateMaxTaskUpdates(value: number): number {
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    throw new TypeError('maxTaskUpdatesPerTask must be a positive safe integer')
+  }
+  return value
+}
 
 export type StoredTask = {
   task: AirportPickupTaskState
@@ -22,6 +32,13 @@ export type StoredEventResult = {
 
 export type StoredIdempotencyResult = StoredEventResult
 
+export type TaskUpdateRead = {
+  updates: TaskUpdateEnvelope[]
+  latestCursor: number
+  /** The requested cursor predates retained rows; updates contains one authoritative resync snapshot. */
+  staleCursor: boolean
+}
+
 export interface TaskStore {
   create(value: StoredTask, clientRequestId?: string): StoredTask
   get(taskId: string): StoredTask | undefined
@@ -32,6 +49,7 @@ export interface TaskStore {
   recordIdempotencyResult(taskId: string, operation: string, idempotencyKey: string, result: StoredIdempotencyResult): void
   save(value: StoredTask): StoredTask
   reset(value: StoredTask): StoredTask
+  readTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead
   clear(): void
 }
 
@@ -40,6 +58,13 @@ export class MemoryTaskStore implements TaskStore {
   readonly #createResults = new Map<string, StoredTask>()
   readonly #eventResults = new Map<string, StoredEventResult>()
   readonly #idempotencyResults = new Map<string, StoredIdempotencyResult>()
+  readonly #updates = new Map<string, TaskUpdateEnvelope[]>()
+  readonly #latestCursors = new Map<string, number>()
+  readonly #maxTaskUpdatesPerTask: number
+
+  constructor(options: { maxTaskUpdatesPerTask?: number } = {}) {
+    this.#maxTaskUpdatesPerTask = validateMaxTaskUpdates(options.maxTaskUpdatesPerTask ?? DEFAULT_MAX_TASK_UPDATES)
+  }
 
   create(value: StoredTask, clientRequestId?: string): StoredTask {
     if (this.#tasks.has(value.task.taskId)) throw new Error(`Task already exists: ${value.task.taskId}`)
@@ -81,7 +106,9 @@ export class MemoryTaskStore implements TaskStore {
 
   save(value: StoredTask): StoredTask {
     const snapshot = structuredClone(value)
+    const current = this.#tasks.get(value.task.taskId)
     this.#tasks.set(value.task.taskId, snapshot)
+    if (!current || !samePublicSnapshot(current, snapshot)) this.#appendTaskUpdate(snapshot)
     return structuredClone(snapshot)
   }
 
@@ -103,10 +130,41 @@ export class MemoryTaskStore implements TaskStore {
     return stored
   }
 
+  readTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead {
+    const updates = this.#updates.get(taskId) ?? []
+    const latestCursor = this.#latestCursors.get(taskId) ?? 0
+    if (afterCursor === undefined) {
+      return { updates: updates.length > 0 ? [structuredClone(updates.at(-1)!)] : [], latestCursor, staleCursor: false }
+    }
+    const earliestCursor = updates[0]?.cursor
+    const staleCursor = earliestCursor !== undefined && afterCursor < earliestCursor - 1
+    const selected = staleCursor
+      ? updates.length > 0 ? [updates.at(-1)!] : []
+      : updates.filter((update) => update.cursor > afterCursor)
+    return { updates: structuredClone(selected), latestCursor, staleCursor }
+  }
+
   clear(): void {
     this.#tasks.clear()
     this.#createResults.clear()
     this.#eventResults.clear()
     this.#idempotencyResults.clear()
+    this.#updates.clear()
+    this.#latestCursors.clear()
   }
+
+  #appendTaskUpdate(stored: StoredTask): void {
+    const taskId = stored.task.taskId
+    const cursor = (this.#latestCursors.get(taskId) ?? 0) + 1
+    const updates = [...(this.#updates.get(taskId) ?? []), createTaskUpdate(stored, cursor)]
+    if (updates.length > this.#maxTaskUpdatesPerTask) {
+      updates.splice(0, updates.length - this.#maxTaskUpdatesPerTask)
+    }
+    this.#latestCursors.set(taskId, cursor)
+    this.#updates.set(taskId, updates)
+  }
+}
+
+function samePublicSnapshot(left: StoredTask, right: StoredTask): boolean {
+  return JSON.stringify({ task: left.task, ui: left.ui }) === JSON.stringify({ task: right.task, ui: right.ui })
 }
