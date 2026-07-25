@@ -137,6 +137,10 @@ jobs:
           if [ "$count" -eq 1 ] && printf '%s\n' "$last_line" | grep -qE "$pattern"; then
             verdict="${last_line#CODEX-REVIEW-VERDICT: }"
           fi
+          if [ -z "$verdict" ]; then
+            echo "Codex review completed without a valid final PASS or BLOCK verdict." >&2
+            exit 1
+          fi
           echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
       - name: Upload review output
