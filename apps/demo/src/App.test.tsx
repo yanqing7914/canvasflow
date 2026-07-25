@@ -1,13 +1,34 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
-import { createInitialTask } from '@canvasflow/agent'
+import { applyEvent, createInitialTask } from '@canvasflow/agent'
+import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState } from '@canvasflow/schema'
 import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
 
 describe('demo integration', () => {
+  function apiResponse(task: AirportPickupTaskState): AgentResponse {
+    const ui = composePickupSpec(task)
+    const withNavigationAction = task.phase === 'preparing'
+      ? {
+          ...ui,
+          components: ui.components.map((component) => component.id === 'flight-status'
+            ? { ...component, actions: ['start-navigation'] }
+            : component),
+          actions: [{ id: 'start-navigation', label: '开始导航', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'start-navigation' } }],
+        }
+      : ui
+    return {
+      requestId: `request-${task.taskRevision}`,
+      task,
+      ui: withNavigationAction,
+      effects: [],
+      meta: { mode: 'fixture', durationMs: 1, fallbackUsed: false },
+    }
+  }
+
   it('loads the shared main-flow timeline for the demo player', () => {
     expect(mainFlowTimeline.id).toBe('main-flow')
     expect(mainFlowTimeline.steps[0]?.event.eventId).toBe('event-task-created')
@@ -44,6 +65,15 @@ describe('demo integration', () => {
   it('shows the information request for the initial phase', () => {
     const spec = composePickupSpec(createInitialTask())
     expect(spec.components[0]).toMatchObject({ type: 'status-banner', props: { title: '请补充航班号' } })
+  })
+
+  it('does not fabricate a task before the Agent API creates one', () => {
+    const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<App api={api} />)
+    expect(screen.getByText('等待创建任务')).toBeInTheDocument()
+    expect(screen.getByText('尚无任务')).toBeInTheDocument()
+    expect(screen.queryByText('status-banner')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '推进下一事件' })).toBeDisabled()
   })
 
   it('surfaces the terminal meeting point while approaching / waiting', () => {
@@ -256,7 +286,7 @@ describe('demo integration', () => {
 
   it('advances the rendered demo from main-flow through the charging step', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    render(<App initialTask={mainFlowTimeline.initialTaskState} />)
     const advance = screen.getByRole('button', { name: '推进下一事件' })
     expect(screen.getByText(/collecting-information/)).toBeInTheDocument()
 
@@ -270,6 +300,141 @@ describe('demo integration', () => {
 
     await user.click(advance) // navigation.started
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
+  })
+
+  it('keeps the API timeline cursor synchronized and retries a failed advance', async () => {
+    const user = userEvent.setup()
+    let task = applyEvent(createInitialTask(), mainFlowTimeline.steps[0]!.event)
+    task = {
+      ...task,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+    }
+    let flightUpdateAttempts = 0
+    const event = vi.fn(async (current: AirportPickupTaskState, input: AirportPickupEvent) => {
+      const eventId = input.eventId ?? (input.type === 'user.input' ? 'event-flight-number' : `event-${input.type}`)
+      const normalized = {
+        ...input,
+        eventId,
+        timestamp: input.timestamp ?? (input.type === 'user.input' ? '2026-07-22T20:01:00+08:00' : '2026-07-22T20:10:00+08:00'),
+      } as AirportPickupEvent
+      if (eventId === 'event-flight-in-air') {
+        flightUpdateAttempts += 1
+        if (flightUpdateAttempts === 1) throw new Error('temporary network failure')
+      }
+      task = applyEvent(current, normalized)
+      return apiResponse(task)
+    })
+    const action = vi.fn(async (current: AgentResponse) => {
+      task = applyEvent({
+        ...current.task,
+        charging: { ...current.task.charging, recommended: true, status: 'planned' },
+      }, mainFlowTimeline.steps[3]!.event)
+      return apiResponse(task)
+    })
+    const api = {
+      create: vi.fn(async () => apiResponse(task)),
+      event,
+      action,
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await user.clear(screen.getByLabelText('任务输入'))
+    await user.type(screen.getByLabelText('任务输入'), 'MU5102')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByText(/preparing/)
+    await user.click(screen.getByRole('button', { name: '开始导航' }))
+    await screen.findByText(/driving-to-airport/)
+
+    const advance = screen.getByRole('button', { name: '推进下一事件' })
+    await user.click(advance)
+    expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventId: 'event-charging-started' }))
+    await user.click(advance)
+    await screen.findByRole('alert')
+    expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventId: 'event-flight-in-air' }))
+    await user.click(advance)
+    expect(flightUpdateAttempts).toBe(2)
+  })
+
+  it('serializes API mutations and disables controls while a request is pending', async () => {
+    const user = userEvent.setup()
+    let resolveCreate!: (response: AgentResponse) => void
+    const create = vi.fn(() => new Promise<AgentResponse>((resolve) => { resolveCreate = resolve }))
+    const api = {
+      create,
+      event: vi.fn(),
+      action: vi.fn(),
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    const send = screen.getByRole('button', { name: '发送' })
+    await user.click(send)
+    expect(send).toBeDisabled()
+    await user.click(send)
+    expect(create).toHaveBeenCalledTimes(1)
+
+    resolveCreate(apiResponse(createInitialTask()))
+    await screen.findByText(/collecting-information/)
+    expect(send).toBeEnabled()
+  })
+
+  it('keeps create input after a failure and allows a direct retry', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary create failure'))
+      .mockResolvedValueOnce(apiResponse(createInitialTask()))
+    const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<App api={api} />)
+
+    const input = screen.getByLabelText('任务输入')
+    await user.clear(input)
+    await user.type(input, '接妈妈')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByRole('alert')
+    expect(input).toHaveValue('接妈妈')
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByText(/collecting-information/)
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(input).toHaveValue('')
+  })
+
+  it('keeps event input after a failure and allows a direct retry', async () => {
+    const user = userEvent.setup()
+    const createdTask = {
+      ...createInitialTask(),
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+    }
+    const preparedTask = applyEvent(createdTask, {
+      eventId: 'event-flight-number',
+      type: 'user.input',
+      text: 'MU5102',
+      timestamp: '2026-07-22T20:01:00+08:00',
+    })
+    const event = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary event failure'))
+      .mockResolvedValueOnce(apiResponse(preparedTask))
+    const api = {
+      create: vi.fn().mockResolvedValue(apiResponse(createdTask)),
+      event,
+      action: vi.fn(),
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    const input = screen.getByLabelText('任务输入')
+    await user.type(input, 'MU5102')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByRole('alert')
+    expect(input).toHaveValue('MU5102')
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByText(/preparing/)
+    expect(event).toHaveBeenCalledTimes(2)
+    expect(input).toHaveValue('')
   })
 
   it('renders and resolves the completion confirmation action', async () => {
