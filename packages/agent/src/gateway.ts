@@ -31,7 +31,7 @@ import {
 import { applyEvent, createInitialTask } from './index'
 import { normalizeFlightNumber } from './flight-number'
 import { mergePassengers, parsePassengerLabels, parsePassengers } from './passengers'
-import { composeAgentSpec, composeFallbackSpec } from './composer'
+import { applyRequestPresentation, composeAgentSpec, composeFallbackSpec } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import {
@@ -125,6 +125,17 @@ export class AgentGateway {
     if (existing) return this.#response(request.clientRequestId, existing, [], performance.now() - startedAt)
     const taskId = `pickup-${this.#createId()}`
     const timestamp = this.#now()
+    const requestContext: NonNullable<StoredTask['requestContext']> = {
+      vehicle: request.vehicleContext,
+      clientCapabilities: request.clientCapabilities,
+      destination: request.destination ?? { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      ...(request.input.confidence === undefined ? {} : { inputConfidence: request.input.confidence }),
+      updatedAt: timestamp,
+    }
+    if (request.input.confidence !== undefined && request.input.confidence < 0.6) {
+      const stored = this.#store.create(this.#publish(createInitialTask(taskId, timestamp), {}, requestContext), request.clientRequestId)
+      return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+    }
     const flightNumber = normalizeFlightNumber(request.input.text)
     const parsedPassengers = parsePassengers(request.input.text)
     let task = createInitialTask(taskId, timestamp)
@@ -152,16 +163,16 @@ export class AgentGateway {
       }
       toolResults = passengerReads.toolResults
       if (flightNumber && task.passengers.memberIds.length > 0) {
-        const prepared = this.#prepareTask(task, request.clientRequestId, flightNumber)
+        const prepared = this.#prepareTask(task, request.clientRequestId, flightNumber, requestContext)
         task = prepared.task
         toolResults = { ...toolResults, ...prepared.toolResults }
       }
-      const stored = this.#store.create(this.#publish(task, toolResults), request.clientRequestId)
+      const stored = this.#store.create(this.#publish(task, toolResults, requestContext), request.clientRequestId)
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
     } catch (error) {
       if (error instanceof ReadToolOrchestrationError) {
         const stored = this.#store.create(
-          this.#publishFallback(task, toolResults, error),
+          this.#publishFallback(task, toolResults, error, undefined, requestContext),
           request.clientRequestId,
         )
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
@@ -215,7 +226,10 @@ export class AgentGateway {
       taskRevision: current.task.taskRevision + 1,
       uiRevision: Math.max(current.task.uiRevision, current.ui.uiRevision),
     }
-    const stored = this.#store.reset(this.#publish(resetTask))
+    const requestContext = current.requestContext
+      ? { ...current.requestContext, inputConfidence: undefined, updatedAt: timestamp }
+      : undefined
+    const stored = this.#store.reset(this.#publish(resetTask, undefined, requestContext))
     const effects: AgentResponse['effects'] = []
     this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
@@ -239,6 +253,16 @@ export class AgentGateway {
       )
     }
 
+    let next = applyEvent(current.task, request.event, this.#preferences)
+    const taskChanged = JSON.stringify(next) !== JSON.stringify(current.task)
+    const accepted = taskChanged
+      || this.#acceptsContextOnlyEvent(current.task, current.requestContext, request.event)
+    if (!accepted) {
+      const stored = current
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+      return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+    }
+    const requestContext = this.#contextAfterEvent(current.requestContext, request.event)
     const effects = planEffects(current.task, request.event, current.toolResults ?? {}, this.#preferences)
     if (request.event.type === 'message.sent') {
       if (current.task.message.pendingMessageId !== request.event.messageId) {
@@ -252,15 +276,14 @@ export class AgentGateway {
           messageId: request.event.messageId,
           errorCode: execution.effect.errorCode ?? 'SEND_FAILED',
           timestamp: request.event.timestamp,
-        }, this.#preferences), current.toolResults))
+        }, this.#preferences), current.toolResults, requestContext))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored: failed, effects: [execution.effect] })
         return this.#response(request.clientRequestId, failed, [execution.effect], performance.now() - startedAt)
       }
-      const sent = this.#store.save(this.#publish(applyEvent(current.task, request.event, this.#preferences), current.toolResults))
+      const sent = this.#store.save(this.#publish(next, current.toolResults, requestContext))
       this.#store.recordEventResult(taskId, request.event.eventId, { stored: sent, effects: [execution.effect] })
       return this.#response(request.clientRequestId, sent, [execution.effect], performance.now() - startedAt)
     }
-    let next = applyEvent(current.task, request.event, this.#preferences)
     if (request.event.type === 'flight.updated' && request.event.flight.status === 'landed' && next.message.pendingContactId && next.message.pendingMessageId) {
       next.message.authorizationId = issueAutoNotifyAuthorization(this.#runtime, {
         taskId,
@@ -272,6 +295,39 @@ export class AgentGateway {
     let toolResults = current.toolResults
     const flightNumber = request.event.type === 'user.input' ? normalizeFlightNumber(request.event.text) : undefined
     const parsedPassengers = request.event.type === 'user.input' ? parsePassengers(request.event.text) : undefined
+    try {
+      if (request.event.type === 'user.input' && parsedPassengers) {
+        const mergedPassengers = mergePassengers(current.task.passengers, parsedPassengers)
+        const passengerReads = this.#orchestrator.resolveInitialPassengers(
+          taskId,
+          request.clientRequestId,
+          mergedPassengers.names,
+        )
+        const resolvedPassengers = mergePassengers(current.task.passengers, passengerReads.passengers)
+        const changedByResolution = JSON.stringify(next.passengers) !== JSON.stringify(resolvedPassengers)
+          || next.message.autoNotifyAuthorized !== passengerReads.notificationAuthorized
+        next.passengers = resolvedPassengers
+        next.message = { ...next.message, autoNotifyAuthorized: passengerReads.notificationAuthorized }
+        toolResults = { ...toolResults, ...passengerReads.toolResults }
+        if (next.flight && next.phase === 'collecting-information') next.phase = 'preparing'
+        if (changedByResolution && next.taskRevision === current.task.taskRevision) {
+          next.taskRevision += 1
+        }
+      }
+    } catch (error) {
+      if (error instanceof ReadToolOrchestrationError) {
+        const stored = this.#store.save(this.#publishFallback(
+          current.task,
+          current.toolResults,
+          error,
+          undefined,
+          current.requestContext,
+        ))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+      }
+      this.#throwProviderError(error, current)
+    }
     const shouldPrepare = request.event.type === 'user.input'
       && next !== current.task
       && next.phase === 'preparing'
@@ -284,24 +340,18 @@ export class AgentGateway {
       )
     if (shouldPrepare) {
       try {
-        let passengerToolResults: ReadToolResults = {}
-        if (parsedPassengers) {
-          const mergedPassengers = mergePassengers(current.task.passengers, parsedPassengers)
-          const passengerReads = this.#orchestrator.resolveInitialPassengers(
-            taskId,
-            request.clientRequestId,
-            mergedPassengers.names,
-          )
-          next.passengers = mergePassengers(current.task.passengers, passengerReads.passengers)
-          next.message = { ...next.message, autoNotifyAuthorized: passengerReads.notificationAuthorized }
-          passengerToolResults = passengerReads.toolResults
-        }
-        const prepared = this.#prepareTask(next, request.clientRequestId, next.flight!.flightNumber)
+        const prepared = this.#prepareTask(next, request.clientRequestId, next.flight!.flightNumber, requestContext)
         next = prepared.task
-        toolResults = { ...toolResults, ...passengerToolResults, ...prepared.toolResults }
+        toolResults = { ...toolResults, ...prepared.toolResults }
       } catch (error) {
         if (error instanceof ReadToolOrchestrationError) {
-          const stored = this.#store.save(this.#publishFallback(next, current.toolResults, error))
+          const stored = this.#store.save(this.#publishFallback(
+            current.task,
+            current.toolResults,
+            error,
+            undefined,
+            current.requestContext,
+          ))
           this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
           return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
         }
@@ -366,7 +416,7 @@ export class AgentGateway {
         }
         next = this.#applyReturnTripExecution(next, request.event.eventId, homeDestinationId, execution)
         next.uiRevision = Math.max(next.uiRevision, current.ui.uiRevision)
-        const stored = this.#store.save(this.#publish(next, toolResults))
+        const stored = this.#store.save(this.#publish(next, toolResults, requestContext))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: execution.effect })
         return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
       } catch (error) {
@@ -388,7 +438,7 @@ export class AgentGateway {
       if (!memberId) {
         next.pendingConfirmation = undefined
         next.memoryProposal = { status: 'skipped', errorCode: 'PREFERENCE_UNAVAILABLE' }
-        const stored = this.#store.save(this.#publish(next, toolResults))
+        const stored = this.#store.save(this.#publish(next, toolResults, requestContext))
         const skipped: AgentResponse['effects'] = [{ effectId: `${request.event.eventId}:0`, type: 'memory.propose-update', status: 'cancelled', tool: 'memory.propose-update', errorCode: 'PREFERENCE_UNAVAILABLE' }]
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: skipped })
         return this.#response(request.clientRequestId, stored, skipped, performance.now() - startedAt)
@@ -405,7 +455,7 @@ export class AgentGateway {
           ...next,
           memoryProposal: { status: 'failed', errorCode: proposal.effect.errorCode ?? 'PROVIDER_FAILED' },
           pendingConfirmation: undefined,
-        }, toolResults))
+        }, toolResults, requestContext))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [proposal.effect] })
         return this.#response(request.clientRequestId, stored, [proposal.effect], performance.now() - startedAt)
       }
@@ -422,13 +472,11 @@ export class AgentGateway {
         action: 'save-memory',
         expiresAt: proposal.proposal.expiresAt,
       }
-      const stored = this.#store.save(this.#publish(next, toolResults))
+      const stored = this.#store.save(this.#publish(next, toolResults, requestContext))
       this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [proposal.effect] })
       return this.#response(request.clientRequestId, stored, [proposal.effect], performance.now() - startedAt)
     }
-    const stored = next === current.task
-      ? current
-      : this.#store.save(this.#publish(next, toolResults))
+    const stored = this.#store.save(this.#publish(next, toolResults, requestContext))
     const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${request.event.eventId}:${index}` }))
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: effectRecords })
     return this.#response(
@@ -447,7 +495,6 @@ export class AgentGateway {
     const previous = this.#store.getIdempotencyResult(taskId, operation, request.idempotencyKey)
     if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
     this.#assertRevisions(current, request.expectedTaskRevision, request.expectedUiRevision)
-
     if (request.actionId === RETRY_LANDING_MESSAGE_ACTION_ID) {
       return this.#submitRetryLandingMessage(taskId, current, request, operation, startedAt)
     }
@@ -481,9 +528,10 @@ export class AgentGateway {
       routeId: event.routeId,
       idempotencyKey: request.idempotencyKey,
       effectId: `${event.eventId}:0`,
+      vehicle: current.requestContext?.vehicle ?? current.toolResults?.['vehicle.get-status']?.data,
     })
     const stored = execution.succeeded
-      ? this.#store.save(this.#publish(applyEvent(current.task, event, this.#preferences), current.toolResults))
+      ? this.#store.save(this.#publish(applyEvent(current.task, event, this.#preferences), current.toolResults, current.requestContext))
       : current
     const effectRecords = [execution.effect]
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: effectRecords })
@@ -539,7 +587,7 @@ export class AgentGateway {
         updatedAt: this.#eventTimestamp(current.task.updatedAt),
       }
       const effects: AgentResponse['effects'] = [{ ...expiration.effect, status: 'failed', errorCode: 'PROPOSAL_EXPIRED' }]
-      const stored = this.#store.save(this.#publish(expired, current.toolResults))
+      const stored = this.#store.save(this.#publish(expired, current.toolResults, current.requestContext))
       this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
       return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
     }
@@ -588,7 +636,7 @@ export class AgentGateway {
           updatedAt: this.#eventTimestamp(current.task.updatedAt),
         }
         effects = [execution.effect]
-        const stored = this.#store.save(this.#publish(failed, current.toolResults))
+        const stored = this.#store.save(this.#publish(failed, current.toolResults, current.requestContext))
         this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
         return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
       }
@@ -601,7 +649,7 @@ export class AgentGateway {
       }
       effects = [execution.effect]
     }
-    const stored = this.#store.save(this.#publish(next, current.toolResults))
+    const stored = this.#store.save(this.#publish(next, current.toolResults, current.requestContext))
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
@@ -633,7 +681,7 @@ export class AgentGateway {
     }
 
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
-    const stored = this.#store.save(this.#publish({ ...armed, updatedAt: timestamp }, current.toolResults))
+    const stored = this.#store.save(this.#publish({ ...armed, updatedAt: timestamp }, current.toolResults, current.requestContext))
     const effects: AgentResponse['effects'] = []
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
@@ -729,7 +777,7 @@ export class AgentGateway {
       ...executedTask,
       uiRevision: Math.max(executionTask.uiRevision, current.ui.uiRevision),
     }
-    const stored = this.#store.save(this.#publish(next, { ...current.toolResults, 'memory.get-preferences': preferences }))
+    const stored = this.#store.save(this.#publish(next, { ...current.toolResults, 'memory.get-preferences': preferences }, current.requestContext))
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: execution.effect })
     return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
   }
@@ -803,7 +851,7 @@ export class AgentGateway {
       ...task,
       uiRevision: Math.max(task.uiRevision, current.ui.uiRevision),
     }
-    const ui = composeFallbackSpec(
+    const ui = applyRequestPresentation(composeFallbackSpec(
       uiBase,
       error?.code === 'PROVIDER_TIMEOUT' ? '返程设置暂时不可用' : '返程设置失败',
       taskChanged
@@ -816,8 +864,8 @@ export class AgentGateway {
         componentId: 'return-trip-provider-fallback',
         actionToken: this.#returnTripRetryActionToken(current.task.taskId, workflowId),
       },
-    )
-    return { task, ui, toolResults }
+    ), current.requestContext)
+    return { task, ui, toolResults, requestContext: current.requestContext }
   }
 
   #submitSendMessageConfirmation(
@@ -855,13 +903,17 @@ export class AgentGateway {
       }]
     }
 
-    const stored = this.#store.save(this.#publish(nextTask, current.toolResults))
+    const stored = this.#store.save(this.#publish(nextTask, current.toolResults, current.requestContext))
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
 
-  #publish(task: AirportPickupTaskState, toolResults?: ReadToolResults): StoredTask {
-    const ui = this.#compose(task, toolResults, this.#preferences)
+  #publish(
+    task: AirportPickupTaskState,
+    toolResults?: ReadToolResults,
+    requestContext?: StoredTask['requestContext'],
+  ): StoredTask {
+    const ui = applyRequestPresentation(this.#compose(task, toolResults, this.#preferences), requestContext)
     const uiWithoutStartNavigation = {
       ...ui,
       components: ui.components.map((component) => component.actions?.includes('start-navigation')
@@ -897,7 +949,7 @@ export class AgentGateway {
           ],
         }
       : uiWithoutStartNavigation
-    return { task: { ...task, uiRevision: publishedUi.uiRevision }, ui: publishedUi, toolResults }
+    return { task: { ...task, uiRevision: publishedUi.uiRevision }, ui: publishedUi, toolResults, requestContext }
   }
 
   #publishFallback(
@@ -905,6 +957,7 @@ export class AgentGateway {
     toolResults: ReadToolResults | undefined,
     error: ReadToolOrchestrationError,
     retry?: { actionId: string; label: string; componentId: string; actionToken: string },
+    requestContext?: StoredTask['requestContext'],
   ): StoredTask {
     const timeout = error.code === 'PROVIDER_TIMEOUT'
     const ui = composeFallbackSpec(
@@ -914,7 +967,12 @@ export class AgentGateway {
       timeout ? 'warning' : 'error',
       retry,
     )
-    return { task: { ...task, uiRevision: ui.uiRevision }, ui, toolResults }
+    return {
+      task: { ...task, uiRevision: ui.uiRevision },
+      ui: applyRequestPresentation(ui, requestContext),
+      toolResults,
+      requestContext,
+    }
   }
 
   #assertRevisions(current: StoredTask, expectedTaskRevision: number, expectedUiRevision?: number): void {
@@ -941,8 +999,62 @@ export class AgentGateway {
     return Date.parse(now) < Date.parse(updatedAt) ? updatedAt : now
   }
 
-  #prepareTask(task: AirportPickupTaskState, requestId: string, flightNumber: string) {
-    const reads = this.#orchestrator.prepareTrip(task.taskId, requestId, flightNumber)
+  #contextAfterEvent(
+    context: StoredTask['requestContext'],
+    event: SubmitEventRequest['event'],
+  ): StoredTask['requestContext'] {
+    if (!context) return undefined
+    const updatedAt = Date.parse(event.timestamp) > Date.parse(context.updatedAt ?? event.timestamp)
+      ? event.timestamp
+      : context.updatedAt ?? event.timestamp
+    if (event.type === 'user.input') return { ...context, inputConfidence: undefined }
+    if (event.type === 'vehicle.moving') {
+      return {
+        ...context,
+        vehicle: {
+          ...context.vehicle,
+          speedKph: event.speedKph,
+          gear: event.speedKph > 0 ? 'D' : context.vehicle.gear,
+        },
+        updatedAt,
+      }
+    }
+    if (event.type === 'vehicle.parked') {
+      return { ...context, vehicle: { ...context.vehicle, speedKph: 0, gear: 'P' }, updatedAt }
+    }
+    if (event.type === 'charging.completed') {
+      return {
+        ...context,
+        vehicle: { ...context.vehicle, batteryPercent: event.batteryPercent },
+        updatedAt,
+      }
+    }
+    return context
+  }
+
+  #acceptsContextOnlyEvent(
+    task: AirportPickupTaskState,
+    context: StoredTask['requestContext'],
+    event: SubmitEventRequest['event'],
+  ): boolean {
+    if (task.phase === 'completed' || task.phase === 'cancelled') return false
+    if (Date.parse(event.timestamp) < Date.parse(task.updatedAt)) return false
+    if (context?.updatedAt && Date.parse(event.timestamp) < Date.parse(context.updatedAt)) return false
+    return event.type === 'vehicle.moving'
+      || event.type === 'vehicle.parked'
+      || event.type === 'charging.completed'
+  }
+
+  #prepareTask(
+    task: AirportPickupTaskState,
+    requestId: string,
+    flightNumber: string,
+    requestContext?: StoredTask['requestContext'],
+  ) {
+    const reads = this.#orchestrator.prepareTrip(task.taskId, requestId, flightNumber, requestContext ? {
+      vehicle: requestContext.vehicle,
+      destination: requestContext.destination,
+    } : undefined)
     return {
       task: {
         ...task,
@@ -956,7 +1068,7 @@ export class AgentGateway {
         },
         navigation: {
           routeId: reads.route.routeId,
-          destination: '虹桥机场 T2',
+          destination: requestContext?.destination.name ?? reads.route.waypoints?.at(-1)?.name ?? '虹桥机场 T2',
           eta: reads.route.arrivalTime,
           status: 'planned' as const,
         },
@@ -991,10 +1103,12 @@ export class AgentGateway {
   ): AgentResponse {
     const assistant = stored.task.phase === 'collecting-information'
       ? {
-          text: stored.task.flight === undefined
+          text: stored.requestContext?.inputConfidence !== undefined && stored.requestContext.inputConfidence < 0.6
+            ? '我不太确定刚才的内容，请确认或编辑后再试一次。'
+            : stored.task.flight === undefined
             ? '好的，请告诉我她们的航班号。'
             : '好的，请告诉我要接哪位家人。',
-          shouldSpeak: true,
+          shouldSpeak: stored.requestContext?.clientCapabilities.supportsTts ?? true,
         }
       : undefined
     return agentResponseSchema.parse({

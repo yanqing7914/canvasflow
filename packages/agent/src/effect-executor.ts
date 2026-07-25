@@ -12,6 +12,7 @@ import {
   toolResultSchema,
   type AirportPickupTaskState,
   type EffectRecord,
+  type VehicleContext,
 } from '@canvasflow/schema'
 import type { ProviderRegistry } from '@canvasflow/tools'
 
@@ -22,13 +23,13 @@ export type PolicyDecision =
   | { allowed: false; errorCode: string }
 
 export interface PolicyGate {
-  authorizeNavigationStart(task: AirportPickupTaskState, routeId: string): PolicyDecision
+  authorizeNavigationStart(task: AirportPickupTaskState, routeId: string, vehicle?: VehicleContext): PolicyDecision
   authorizeReturnTrip(task: AirportPickupTaskState): PolicyDecision
   authorizeLandingMessage(task: AirportPickupTaskState): PolicyDecision
 }
 
 export class DefaultPolicyGate implements PolicyGate {
-  authorizeNavigationStart(task: AirportPickupTaskState, routeId: string): PolicyDecision {
+  authorizeNavigationStart(task: AirportPickupTaskState, routeId: string, vehicle?: VehicleContext): PolicyDecision {
     if (task.phase === 'completed' || task.phase === 'cancelled') {
       return { allowed: false, errorCode: 'TASK_TERMINAL' }
     }
@@ -43,6 +44,9 @@ export class DefaultPolicyGate implements PolicyGate {
     }
     if (task.navigation.routeId !== routeId) {
       return { allowed: false, errorCode: 'ROUTE_MISMATCH' }
+    }
+    if (vehicle && (vehicle.speedKph > 0 || vehicle.gear !== 'P')) {
+      return { allowed: false, errorCode: 'VEHICLE_MOVING' }
     }
     return { allowed: true }
   }
@@ -125,6 +129,7 @@ export class EffectExecutor {
     routeId: string
     idempotencyKey: string
     effectId: string
+    vehicle?: VehicleContext
   }): NavigationStartExecution {
     const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
       effectId: input.effectId,
@@ -133,7 +138,7 @@ export class EffectExecutor {
       tool: NAVIGATION_START,
       ...(errorCode ? { errorCode } : {}),
     })
-    const policy = this.#policy.authorizeNavigationStart(input.task, input.routeId)
+    const policy = this.#policy.authorizeNavigationStart(input.task, input.routeId, input.vehicle)
     if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
 
     const providerRequestId = `${input.task.taskId}:${NAVIGATION_START}:${input.idempotencyKey}`

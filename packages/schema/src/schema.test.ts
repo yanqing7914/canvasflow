@@ -107,8 +107,10 @@ describe('Agent API', () => {
       input: { type: 'text', text: '去机场接妈妈' },
       vehicleContext: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P', isNight: true },
       clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true },
+      destination: { id: 'destination-hongqiao-t1', name: '虹桥机场 T1' },
     })
     expect(result.success).toBe(true)
+    if (result.success) expect(result.data.destination?.name).toBe('虹桥机场 T1')
   })
 })
 

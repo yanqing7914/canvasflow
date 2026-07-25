@@ -61,6 +61,26 @@ describe('PersistentAgentRuntime', () => {
     expect(restarted.createTask(createRequest()).task).toEqual(created.task)
   })
 
+  it('restores request presentation context after a process restart', async () => {
+    const path = await databasePath()
+    const firstRuntime = runtime(path)
+    const created = firstRuntime.createTask({
+      ...createRequest(),
+      input: { type: 'text', text: '接妈妈，航班 MU5102' },
+      vehicleContext: { speedKph: 0, batteryPercent: 90, remainingRangeKm: 240, gear: 'P', isNight: false },
+    })
+    expect(created.ui.presentation.theme).toBe('light')
+    firstRuntime.close()
+
+    const restarted = runtime(path)
+    const moving = restarted.submitEvent(created.task.taskId, {
+      clientRequestId: 'restart-moving',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'restart-moving', type: 'vehicle.moving', speedKph: 80, timestamp: now },
+    })
+    expect(moving.ui.presentation).toMatchObject({ density: 'minimal', theme: 'light' })
+  })
+
   it('replays an action receipt after restart without invoking the provider again', async () => {
     const path = await databasePath()
     let startCalls = 0

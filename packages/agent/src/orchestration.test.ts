@@ -54,6 +54,37 @@ describe('ReadToolOrchestrator', () => {
     )
   })
 
+  it('uses request vehicle context and destination for trip preparation', () => {
+    const base = createProviderRegistry()
+    const registry = Object.fromEntries(Object.entries(base).map(([name, handler]) => [name, vi.fn(handler)])) as unknown as MutableProviderRegistry
+    registry['navigation.plan-route'] = vi.fn((ctx) => successfulResult('navigation.plan-route', {
+      routeId: 'route-airport-t1',
+      distanceKm: 30,
+      durationMinutes: 18,
+      arrivalTime: '2026-07-22T20:23:00+08:00',
+      estimatedBatteryAtArrival: 78,
+      waypoints: [
+        { id: 'origin-demo', name: '出发地', latitude: 31.23, longitude: 121.47 },
+        { id: 'destination-hongqiao-t1', name: '虹桥机场 T1', latitude: 31.19, longitude: 121.34 },
+      ],
+    }, ctx.requestId))
+    const orchestrator = new ReadToolOrchestrator({ registry })
+
+    orchestrator.prepareTrip('pickup-001', 'event-context', 'MU5102', {
+      vehicle: { speedKph: 0, batteryPercent: 90, remainingRangeKm: 240, gear: 'P', isNight: false },
+      destination: { id: 'destination-hongqiao-t1', name: '虹桥机场 T1' },
+    })
+
+    expect(registry['vehicle.get-status']).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: 'pickup-001' }),
+      { context: { speedKph: 0, batteryPercent: 90, remainingRangeKm: 240, gear: 'P', isNight: false } },
+    )
+    expect(registry['navigation.plan-route']).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: 'pickup-001' }),
+      expect.objectContaining({ destination: { id: 'destination-hongqiao-t1', name: '虹桥机场 T1' } }),
+    )
+  })
+
   it('rejects invalid envelopes before using provider data', () => {
     const registry = createMutableRegistry()
     registry['family.resolve-members'] = () => ({ ok: true, data: { members: [] } }) as unknown as ReturnType<ProviderRegistry['family.resolve-members']>

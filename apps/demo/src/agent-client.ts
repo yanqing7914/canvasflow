@@ -25,6 +25,7 @@ export type CreateOptions = {
   confidence?: number
   vehicleContext?: CreateTaskRequest['vehicleContext']
   clientCapabilities?: CreateTaskRequest['clientCapabilities']
+  destination?: CreateTaskRequest['destination']
 }
 
 export type AgentApiClientOptions = {
@@ -117,6 +118,7 @@ export class AgentApiClient {
       },
       vehicleContext: options.vehicleContext ?? this.#vehicleContext,
       clientCapabilities: options.clientCapabilities ?? this.#clientCapabilities,
+      ...(options.destination ? { destination: options.destination } : {}),
     }
     return this.createTask(input)
   }

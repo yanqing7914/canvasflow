@@ -16,6 +16,11 @@ export const clientCapabilitiesSchema = z.object({
   supportsTts: z.boolean(),
 })
 
+export const agentDestinationSchema = z.object({
+  id: z.string().trim().min(1),
+  name: z.string().trim().min(1),
+})
+
 export const agentInputSchema = z.object({
   type: z.literal('text'),
   text: z.string().trim().min(1),
@@ -28,6 +33,7 @@ export const createTaskRequestSchema = z.object({
   input: agentInputSchema,
   vehicleContext: vehicleContextSchema,
   clientCapabilities: clientCapabilitiesSchema,
+  destination: agentDestinationSchema.optional(),
 })
 
 export const submitEventRequestSchema = z.object({
@@ -109,6 +115,9 @@ export const agentErrorResponseSchema = z.object({
 })
 
 export type CreateTaskRequest = z.infer<typeof createTaskRequestSchema>
+export type AgentDestination = z.infer<typeof agentDestinationSchema>
+export type VehicleContext = z.infer<typeof vehicleContextSchema>
+export type ClientCapabilities = z.infer<typeof clientCapabilitiesSchema>
 export type SubmitEventRequest = z.infer<typeof submitEventRequestSchema>
 export type SubmitActionRequest = z.infer<typeof submitActionRequestSchema>
 export type SubmitConfirmationRequest = z.infer<typeof submitConfirmationRequestSchema>
