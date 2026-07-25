@@ -551,10 +551,14 @@ describe('AgentGateway', () => {
     const runtime = createSideEffectRuntime()
     const base = createProviderRegistry(runtime)
     let mediaCalls = 0
+    const updateRoute = vi.fn(base['navigation.update-route'])
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
     const gateway = new AgentGateway({
       store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
       providers: {
         ...base,
+        'navigation.update-route': updateRoute,
+        'vehicle.revert-cabin-profile': revertCabin,
         'media.play': (ctx, input) => {
           mediaCalls += 1
           if (mediaCalls === 1) return { ok: false, data: null, error: { code: 'MEDIA_UNAVAILABLE', message: 'offline', retryable: false }, meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'media.play', provider: 'fixture', durationMs: 1, generatedAt: now } }
@@ -570,6 +574,14 @@ describe('AgentGateway', () => {
     const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
     expect(failed.task).toEqual(waiting.task)
     expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'media.play', status: 'failed', errorCode: 'MEDIA_UNAVAILABLE' }))
+    expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'vehicle.revert-cabin-profile', status: 'succeeded' }))
+    expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'navigation.update-route.rollback', status: 'succeeded' }))
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(updateRoute).toHaveBeenCalledTimes(2)
+    expect(updateRoute).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+      routeId: 'route-airport-001',
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+    }))
     expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
     const retry = gateway.submitAction(created.task.taskId, {
       clientRequestId: 'o-retry', expectedTaskRevision: failed.task.taskRevision, expectedUiRevision: failed.ui.uiRevision,
@@ -589,6 +601,54 @@ describe('AgentGateway', () => {
     expect(retry.effects).toContainEqual(expect.objectContaining({ type: 'media.play', status: 'succeeded' }))
     expect(duplicateRetry.task).toEqual(retry.task)
     expect(duplicateRetry.effects).toEqual(retry.effects)
+  })
+
+  it('publishes remaining side effects when compensation cannot restore navigation', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const updateRoute = vi.fn((ctx: { taskId: string; requestId?: string }, input: unknown) => {
+      const parsed = input as { idempotencyKey: string }
+      if (parsed.idempotencyKey.endsWith(':rollback:route')) {
+        return {
+          ok: false as const,
+          data: null,
+          error: { code: 'ROLLBACK_FAILED', message: 'cannot restore route', retryable: false },
+          meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'navigation.update-route', provider: 'fixture' as const, durationMs: 1, generatedAt: now },
+        }
+      }
+      return base['navigation.update-route'](ctx, input)
+    })
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'navigation.update-route': updateRoute,
+        'media.play': (ctx) => ({
+          ok: false as const,
+          data: null,
+          error: { code: 'MEDIA_UNAVAILABLE', message: 'offline', retryable: false },
+          meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'media.play', provider: 'fixture' as const, durationMs: 1, generatedAt: now },
+        }),
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'rollback-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'rollback-start' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'rollback-geofence', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'rollback-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'rollback-parked', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'rollback-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+
+    const failed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'rollback-onboard', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'rollback-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' },
+    })
+
+    expect(failed.task).toMatchObject({
+      phase: 'returning-home',
+      passengers: { confirmedOnboard: true },
+      navigation: { routeId: 'route-home-001', destination: '家', status: 'active' },
+      returnTrip: { route: { status: 'succeeded' }, cabin: { status: 'pending' }, media: { status: 'failed' } },
+    })
+    expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'navigation.update-route.rollback', status: 'failed', errorCode: 'ROLLBACK_FAILED' }))
+    expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
   })
 
   it.each([

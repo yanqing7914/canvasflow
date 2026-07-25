@@ -6,6 +6,7 @@ import {
   navigationUpdateRouteOutputSchema,
   proposeMemoryUpdateOutputSchema,
   rejectMemoryUpdateOutputSchema,
+  revertCabinProfileOutputSchema,
   routePlanOutputSchema,
   messageSendOutputSchema,
   toolResultSchema,
@@ -70,6 +71,8 @@ export type ReturnTripExecution = {
   succeeded: boolean
   effect: EffectRecord[]
   navigation?: { routeId: string; destination: string; eta: string }
+  rolledBack?: boolean
+  applied: { route: boolean; cabin: boolean; media: boolean }
 }
 
 export type MemoryProposalExecution = {
@@ -204,17 +207,112 @@ export class EffectExecutor {
     task: AirportPickupTaskState
     memberIds: string[]
     preferences: { homeDestinationId?: string; temperatureC?: number; mediaTitle?: string; mediaMemberId?: string }
+    rollbackNavigation?: { routeId: string; destination: { id: string; name: string }; eta: string }
     idempotencyKey: string
     effectIdPrefix: string
     completed?: { route: boolean; cabin: boolean; media: boolean }
   }): ReturnTripExecution {
     const effects: EffectRecord[] = []
     const navigation = { routeId: '', destination: '', eta: '' }
-    const failed = (type: string, errorCode: string): ReturnTripExecution => ({
-      succeeded: false,
-      effect: [...effects, { effectId: `${input.effectIdPrefix}:${effects.length}`, type, status: 'failed', tool: type, errorCode }],
-      ...(navigation.routeId ? { navigation } : {}),
-    })
+    const applied = {
+      route: input.completed?.route === true,
+      cabin: input.completed?.cabin === true,
+      media: input.completed?.media === true,
+    }
+    const newlyApplied = { route: false, cabin: false, media: false }
+    let cabinEffectId: string | undefined
+    const append = (type: string, status: EffectRecord['status'], tool = type, errorCode?: string) => {
+      effects.push({
+        effectId: `${input.effectIdPrefix}:${effects.length}`,
+        type,
+        status,
+        tool,
+        ...(errorCode ? { errorCode } : {}),
+      })
+    }
+    const failed = (type: string, errorCode: string): ReturnTripExecution => {
+      append(type, 'failed', type, errorCode)
+
+      if (newlyApplied.cabin && cabinEffectId) {
+        const revert = this.#callProvider(
+          input.task.taskId,
+          'vehicle.revert-cabin-profile',
+          `${input.task.taskId}:return-trip:${input.idempotencyKey}:rollback:cabin`,
+          () => this.#registry['vehicle.revert-cabin-profile'](
+            {
+              taskId: input.task.taskId,
+              requestId: `${input.task.taskId}:return-trip:${input.idempotencyKey}:rollback:cabin`,
+            },
+            {
+              effectId: cabinEffectId!,
+              idempotencyKey: `${input.idempotencyKey}:rollback:cabin`,
+            },
+          ),
+          toolResultSchema(revertCabinProfileOutputSchema),
+        )
+        if (revert.succeeded && revert.data.effectId === cabinEffectId && revert.data.reverted) {
+          applied.cabin = false
+          newlyApplied.cabin = false
+          append('vehicle.revert-cabin-profile', 'succeeded')
+        } else {
+          append(
+            'vehicle.revert-cabin-profile',
+            'failed',
+            'vehicle.revert-cabin-profile',
+            revert.succeeded ? 'PROVIDER_FAILED' : revert.errorCode,
+          )
+        }
+      }
+
+      if (newlyApplied.route) {
+        const rollback = input.rollbackNavigation
+        if (!rollback) {
+          append('navigation.update-route.rollback', 'failed', 'navigation.update-route', 'ROLLBACK_UNAVAILABLE')
+        } else {
+          const rollbackRequestId = `${input.task.taskId}:return-trip:${input.idempotencyKey}:rollback:route`
+          const restored = this.#callProvider(
+            input.task.taskId,
+            'navigation.update-route',
+            rollbackRequestId,
+            () => this.#registry['navigation.update-route'](
+              { taskId: input.task.taskId, requestId: rollbackRequestId },
+              {
+                routeId: rollback.routeId,
+                destination: rollback.destination,
+                idempotencyKey: `${input.idempotencyKey}:rollback:route`,
+              },
+            ),
+            toolResultSchema(navigationUpdateRouteOutputSchema),
+          )
+          if (
+            restored.succeeded
+            && restored.data.routeId === rollback.routeId
+            && restored.data.destination === rollback.destination.name
+            && restored.data.status === 'active'
+          ) {
+            applied.route = false
+            newlyApplied.route = false
+            append('navigation.update-route.rollback', 'succeeded', 'navigation.update-route')
+          } else {
+            append(
+              'navigation.update-route.rollback',
+              'failed',
+              'navigation.update-route',
+              restored.succeeded ? 'PROVIDER_FAILED' : restored.errorCode,
+            )
+          }
+        }
+      }
+
+      const rolledBack = !newlyApplied.route && !newlyApplied.cabin
+      return {
+        succeeded: false,
+        effect: effects,
+        rolledBack,
+        applied,
+        ...(applied.route && navigation.routeId ? { navigation } : {}),
+      }
+    }
     const policy = this.#policy.authorizeReturnTrip(input.task)
     if (!policy.allowed) return failed('return-trip', policy.errorCode)
     const destinationId = input.preferences.homeDestinationId
@@ -249,12 +347,17 @@ export class EffectExecutor {
         )
     if (!update.succeeded) return failed('navigation.update-route', update.errorCode)
     if (!input.completed?.route && (update.data.routeId !== route.routeId || update.data.destination !== '家' || update.data.status !== 'active')) {
+      newlyApplied.route = true
       return failed('navigation.update-route', 'PROVIDER_FAILED')
     }
     navigation.routeId = route.routeId
     navigation.destination = '家'
     navigation.eta = route.arrivalTime
-    if (!input.completed?.route) effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'navigation.update-route', status: 'succeeded', tool: 'navigation.update-route' })
+    applied.route = true
+    if (!input.completed?.route) {
+      newlyApplied.route = true
+      append('navigation.update-route', 'succeeded')
+    }
 
     if (!input.completed?.cabin && (input.preferences.temperatureC !== undefined || input.preferences.mediaTitle !== undefined)) {
       const cabin = this.#callProvider(
@@ -279,9 +382,15 @@ export class EffectExecutor {
         || (input.preferences.temperatureC !== undefined && cabin.data.current.temperatureC !== input.preferences.temperatureC)
         || (input.preferences.mediaTitle !== undefined && cabin.data.current.mediaTitle !== input.preferences.mediaTitle)
       ) {
+        cabinEffectId = cabin.data.effectId
+        applied.cabin = true
+        newlyApplied.cabin = true
         return failed('vehicle.apply-cabin-profile', 'PROVIDER_FAILED')
       }
-      effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' })
+      cabinEffectId = cabin.data.effectId
+      applied.cabin = true
+      newlyApplied.cabin = true
+      append('vehicle.apply-cabin-profile', 'succeeded')
     }
 
     if (!input.completed?.media && input.preferences.mediaTitle !== undefined && input.preferences.mediaMemberId !== undefined) {
@@ -297,12 +406,15 @@ export class EffectExecutor {
       )
       if (!media.succeeded) return failed('media.play', media.errorCode)
       if (media.data.title !== input.preferences.mediaTitle || media.data.status !== 'playing') {
-        return failed('media.play', 'PROVIDER_FAILED')
+        applied.media = true
+        append('media.play', 'failed', 'media.play', 'PROVIDER_FAILED')
+        return { succeeded: false, effect: effects, rolledBack: false, applied, navigation }
       }
-      effects.push({ effectId: `${input.effectIdPrefix}:${effects.length}`, type: 'media.play', status: 'succeeded', tool: 'media.play' })
+      applied.media = true
+      append('media.play', 'succeeded')
     }
 
-    return { succeeded: true, effect: effects, navigation }
+    return { succeeded: true, effect: effects, navigation, applied }
   }
 
   proposeMemoryUpdate(input: {

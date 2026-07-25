@@ -329,6 +329,7 @@ export class AgentGateway {
             mediaTitle: mediaMember?.mediaTitle,
             mediaMemberId: mediaMember?.memberId,
           },
+          rollbackNavigation: this.#rollbackNavigation(current),
           idempotencyKey: request.event.eventId,
           effectIdPrefix: `${request.event.eventId}:effect`,
           completed: next.returnTrip ? {
@@ -346,23 +347,20 @@ export class AgentGateway {
           return this.#response(request.clientRequestId, current, execution.effect, performance.now() - startedAt)
         }
         if (!execution.succeeded) {
+          const failedTask = execution.rolledBack
+            ? current.task
+            : this.#applyReturnTripExecution(next, request.event.eventId, homeDestinationId, execution)
           const stored = this.#store.save(this.#publishReturnTripFailure(
             current,
             current.toolResults,
             request.event.eventId,
+            undefined,
+            failedTask,
           ))
           this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: execution.effect })
           return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
         }
-        next.returnTrip = this.#returnTripState(next, request.event.eventId, homeDestinationId, execution)
-        if (execution.navigation) {
-          next.navigation = {
-            routeId: execution.navigation.routeId,
-            destination: execution.navigation.destination,
-            eta: execution.navigation.eta,
-            status: 'active',
-          }
-        }
+        next = this.#applyReturnTripExecution(next, request.event.eventId, homeDestinationId, execution)
         next.uiRevision = Math.max(next.uiRevision, current.ui.uiRevision)
         const stored = this.#store.save(this.#publish(next, toolResults))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: execution.effect })
@@ -699,7 +697,8 @@ export class AgentGateway {
         mediaTitle: mediaMember?.mediaTitle,
         mediaMemberId: mediaMember?.memberId,
       },
-      idempotencyKey: workflowId,
+      rollbackNavigation: this.#rollbackNavigation(current),
+      idempotencyKey: `${workflowId}:retry:${request.idempotencyKey}`,
       effectIdPrefix: `${workflowId}:retry:${request.idempotencyKey}`,
       completed: current.task.returnTrip ? {
         route: current.task.returnTrip.route.status === 'succeeded',
@@ -708,20 +707,23 @@ export class AgentGateway {
       } : undefined,
     })
     if (!execution.succeeded) {
+      const failedTask = execution.rolledBack
+        ? current.task
+        : this.#applyReturnTripExecution(executionTask, workflowId, homeDestinationId, execution)
       const stored = this.#store.save(this.#publishReturnTripFailure(
         current,
         current.toolResults,
         workflowId,
+        undefined,
+        failedTask,
       ))
       this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: execution.effect })
       return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
     }
-    const nextReturnTrip = this.#returnTripState(executionTask, workflowId, homeDestinationId, execution)
+    const executedTask = this.#applyReturnTripExecution(executionTask, workflowId, homeDestinationId, execution)
     const next = {
-      ...executionTask,
+      ...executedTask,
       uiRevision: Math.max(executionTask.uiRevision, current.ui.uiRevision),
-      returnTrip: nextReturnTrip,
-      ...(execution.navigation ? { navigation: { routeId: execution.navigation.routeId, destination: execution.navigation.destination, eta: execution.navigation.eta, status: 'active' as const } } : {}),
     }
     const stored = this.#store.save(this.#publish(next, { ...current.toolResults, 'memory.get-preferences': preferences }))
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: execution.effect })
@@ -735,16 +737,49 @@ export class AgentGateway {
     execution: ReturnType<EffectExecutor['executeReturnTrip']>,
   ): ReturnTripState {
     const existing = task.returnTrip
-    const succeeded = (tool: string) => execution.effect.some((effect) => effect.tool === tool && effect.status === 'succeeded')
     const failed = (tool: string) => execution.effect.find((effect) => effect.tool === tool && effect.status === 'failed')?.errorCode
     return {
       workflowId,
       homeDestinationId: homeDestinationId ?? existing?.homeDestinationId,
-      route: execution.navigation
+      route: execution.applied.route && execution.navigation
         ? { status: 'succeeded', routeId: execution.navigation.routeId, eta: execution.navigation.eta }
         : { ...(existing?.route ?? { status: 'pending' }), ...(failed('navigation.update-route') ? { status: 'failed' as const, errorCode: failed('navigation.update-route') } : {}) },
-      cabin: { status: succeeded('vehicle.apply-cabin-profile') ? 'succeeded' : (failed('vehicle.apply-cabin-profile') ? 'failed' : existing?.cabin.status ?? 'pending'), ...(failed('vehicle.apply-cabin-profile') ? { errorCode: failed('vehicle.apply-cabin-profile') } : {}) },
-      media: { status: succeeded('media.play') ? 'succeeded' : (failed('media.play') ? 'failed' : existing?.media.status ?? 'pending'), ...(failed('media.play') ? { errorCode: failed('media.play') } : {}) },
+      cabin: { status: execution.applied.cabin ? 'succeeded' : (failed('vehicle.apply-cabin-profile') ? 'failed' : 'pending'), ...(failed('vehicle.apply-cabin-profile') ? { errorCode: failed('vehicle.apply-cabin-profile') } : {}) },
+      media: { status: execution.applied.media ? 'succeeded' : (failed('media.play') ? 'failed' : 'pending'), ...(failed('media.play') ? { errorCode: failed('media.play') } : {}) },
+    }
+  }
+
+  #applyReturnTripExecution(
+    task: AirportPickupTaskState,
+    workflowId: string,
+    homeDestinationId: string | undefined,
+    execution: ReturnType<EffectExecutor['executeReturnTrip']>,
+  ): AirportPickupTaskState {
+    return {
+      ...task,
+      returnTrip: this.#returnTripState(task, workflowId, homeDestinationId, execution),
+      ...(execution.applied.route && execution.navigation
+        ? {
+            navigation: {
+              routeId: execution.navigation.routeId,
+              destination: execution.navigation.destination,
+              eta: execution.navigation.eta,
+              status: 'active' as const,
+            },
+          }
+        : {}),
+    }
+  }
+
+  #rollbackNavigation(current: StoredTask) {
+    const navigation = current.task.navigation
+    const route = current.toolResults?.['navigation.plan-route']?.data
+    const destination = route?.waypoints?.at(-1)
+    if (!navigation || !destination) return undefined
+    return {
+      routeId: navigation.routeId,
+      destination: { id: destination.id, name: destination.name },
+      eta: navigation.eta,
     }
   }
 
@@ -757,10 +792,11 @@ export class AgentGateway {
     toolResults: ReadToolResults | undefined,
     workflowId: string,
     error?: ReadToolOrchestrationError,
+    task: AirportPickupTaskState = current.task,
   ): StoredTask {
     const uiBase = {
-      ...current.task,
-      uiRevision: Math.max(current.task.uiRevision, current.ui.uiRevision),
+      ...task,
+      uiRevision: Math.max(task.uiRevision, current.ui.uiRevision),
     }
     const ui = composeFallbackSpec(
       uiBase,
@@ -774,7 +810,7 @@ export class AgentGateway {
         actionToken: this.#returnTripRetryActionToken(current.task.taskId, workflowId),
       },
     )
-    return { task: current.task, ui, toolResults }
+    return { task, ui, toolResults }
   }
 
   #submitSendMessageConfirmation(
