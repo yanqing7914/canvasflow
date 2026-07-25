@@ -8,7 +8,7 @@ import { createSideEffectRuntime, type SideEffectRuntime } from './idempotency'
 import { createMediaPlayer } from './media'
 import { createPreferenceReader } from './memory'
 import { createMemoryWriteTools } from './memory-write'
-import { createMessagePreparer, createMessageSender } from './message'
+import { createMessageConfirmationRevoker, createMessagePreparer, createMessageSender } from './message'
 import { createNavigationSideEffects } from './navigation'
 import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
@@ -127,6 +127,13 @@ export const toolDefinitions = {
     riskLevel: 'external',
     timeoutMs: 3000,
   },
+  'message.revoke-confirmation': {
+    name: 'message.revoke-confirmation',
+    version: '1.0',
+    description: '撤销尚未使用的消息确认凭据',
+    riskLevel: 'reversible',
+    timeoutMs: 1000,
+  },
 } satisfies Record<string, ToolDefinition>
 
 export type ToolName = keyof typeof toolDefinitions
@@ -145,6 +152,7 @@ export function createProviderRegistry(
   const playMedia = createMediaPlayer(runtime)
   const prepareMessage = createMessagePreparer(runtime)
   const sendMessage = createMessageSender(runtime)
+  const revokeMessageConfirmation = createMessageConfirmationRevoker(runtime)
 
   const registry = {
     'family.resolve-members': resolveMembers,
@@ -164,6 +172,7 @@ export function createProviderRegistry(
     'media.play': playMedia,
     'message.prepare': prepareMessage,
     'message.send': sendMessage,
+    'message.revoke-confirmation': revokeMessageConfirmation,
   } as const satisfies Record<ToolName, (ctx: ToolContext, input?: unknown) => ToolResult<unknown>>
 
   return Object.fromEntries(

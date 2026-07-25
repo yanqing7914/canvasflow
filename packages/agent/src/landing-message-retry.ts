@@ -1,11 +1,8 @@
 import type { AirportPickupEvent, AirportPickupTaskState } from '@canvasflow/schema'
 import {
   buildLandingNotifyContent,
-  createMessagePreparer,
-  createMessageSender,
   resolveAuthorizedLandingContact,
-  revokeSendMessageConfirmation,  type MemberPreferenceRecord,
-  type SideEffectRuntime,
+  type MemberPreferenceRecord,
 } from '@canvasflow/tools'
 
 export const RETRY_LANDING_MESSAGE_ACTION_ID = 'retry-landing-message'
@@ -39,43 +36,33 @@ export function canRetryLandingMessage(
 }
 
 /**
- * Arm an explicit send-message confirmation after a failed landing notify.
- * Does not send; uses runtime preferences + opaque prepare confirmation.
+ * Commit a provider-prepared retry confirmation after a failed landing notify.
+ * Provider execution and validation belong to EffectExecutor; this helper only
+ * applies the already-validated receipt to task state.
  */
 export function armLandingMessageRetry(
   task: AirportPickupTaskState,
-  runtime: SideEffectRuntime,
+  prepared: {
+    contactId: string
+    messageId: string
+    text: string
+    confirmationId: string
+  },
 ): AirportPickupTaskState | undefined {
-  if (!canRetryLandingMessage(task, runtime.preferences) || !task.flight) return undefined
-  const contactId = resolveAuthorizedLandingContact(task.passengers.memberIds, runtime.preferences)
-  if (!contactId) return undefined
-
-  // Superseding an in-flight confirmation must kill the previous opaque grant.
-  if (task.pendingConfirmation?.action === 'send-message') {
-    revokeSendMessageConfirmation(runtime, task.pendingConfirmation.confirmationId)
-  }
-  const eta = resolveLandingMeetingEta(task)
-  const prepared = createMessagePreparer(runtime)(
-    { taskId: task.taskId },
-    {
-      contactId,
-      flightNumber: task.flight.flightNumber,
-      ...(eta !== undefined ? { eta } : {}),
-    },
-  )
-  if (!prepared.ok || !prepared.data) return undefined
+  if (task.message.status !== 'failed' || !task.flight) return undefined
 
   return {
     ...task,
     taskRevision: task.taskRevision + 1,
     message: {
       ...task.message,
-      pendingContactId: contactId,
-      pendingMessageId: `${task.flight.flightNumber}:landing`,
-      idempotencyKey: prepared.data.messageId,
+      pendingContactId: prepared.contactId,
+      pendingMessageId: prepared.messageId,
+      pendingText: prepared.text,
+      idempotencyKey: prepared.messageId,
     },
     pendingConfirmation: {
-      confirmationId: prepared.data.confirmationId,
+      confirmationId: prepared.confirmationId,
       action: 'send-message',
     },
   }
@@ -87,20 +74,27 @@ export type LandingMessageRetryResolution =
       decision: 'accept'
       task: AirportPickupTaskState
       event: AirportPickupEvent
-      sendSucceeded: boolean
     }
+
+type RetryResolutionInput = {
+  confirmationId: string
+  decision: 'accept' | 'reject'
+  timestamp: string
+  sendSucceeded?: boolean
+  errorCode?: string
+}
 
 /**
  * Resolve a pending send-message confirmation.
- * Accept prepares an armed task + receipt event for the caller to apply;
- * reject clears the confirmation boundary and revokes the opaque grant. */
+ * Accept prepares an armed task + receipt event for the caller to apply after
+ * EffectExecutor has successfully sent; reject only closes task state. */
 export function resolveLandingMessageRetry(
   task: AirportPickupTaskState,
-  runtime: SideEffectRuntime,
-  confirmationId: string,
-  decision: 'accept' | 'reject',
-  timestamp: string,
+  input: RetryResolutionInput,
 ): LandingMessageRetryResolution | undefined {
+  const { confirmationId, decision, timestamp } = input
+  const sendSucceeded = input.sendSucceeded ?? true
+  const errorCode = input.errorCode ?? 'SEND_FAILED'
   const pending = task.pendingConfirmation
   if (
     task.message.status !== 'failed'
@@ -112,29 +106,38 @@ export function resolveLandingMessageRetry(
   }
 
   if (decision === 'reject') {
-    revokeSendMessageConfirmation(runtime, confirmationId)
     return {
       decision: 'reject',
       task: {
         ...task,
         taskRevision: task.taskRevision + 1,
         pendingConfirmation: undefined,
+        message: {
+          ...task.message,
+          pendingMessageId: undefined,
+          pendingText: undefined,
+          idempotencyKey: undefined,
+        },
         updatedAt: timestamp,
       },
     }
   }
 
   const contactId = task.message.pendingContactId
-    ?? resolveAuthorizedLandingContact(task.passengers.memberIds, runtime.preferences)
   if (!contactId) return undefined
 
-  const eta = resolveLandingMeetingEta(task)
-  const content = buildLandingNotifyContent(
-    task.taskId,
-    contactId,
-    task.flight.flightNumber,
-    eta ?? '即将到达',
-  )
+  const content = task.message.pendingText
+    ? {
+        contactId,
+        messageId: task.message.pendingMessageId ?? `${task.taskId}:${task.flight.flightNumber}:landing`,
+        text: task.message.pendingText,
+      }
+    : buildLandingNotifyContent(
+        task.taskId,
+        contactId,
+        task.flight.flightNumber,
+        resolveLandingMeetingEta(task) ?? '即将到达',
+      )
   const pendingMessageId = task.message.pendingMessageId ?? `${task.flight.flightNumber}:landing`
   const armed: AirportPickupTaskState = {
     ...task,
@@ -149,28 +152,15 @@ export function resolveLandingMessageRetry(
     },
   }
 
-  const sent = createMessageSender(runtime)(
-    { taskId: task.taskId },
-    {
-      ...content,
-      confirmationId,
-      idempotencyKey: `${content.messageId}:retry`,
-    },
-  )
-
-  if (!sent.ok) {
-    // Provider may leave the grant live for a same-token retry; this confirmation
-    // boundary is closed — UI must re-arm — so revoke any leftover capability.
-    revokeSendMessageConfirmation(runtime, confirmationId)
+  if (!sendSucceeded) {
     return {
       decision: 'accept',
       task: armed,
-      sendSucceeded: false,
       event: {
         eventId: `retry-failed-${task.taskRevision}`,
         type: 'message.failed',
         messageId: pendingMessageId,
-        errorCode: sent.error?.code ?? 'SEND_FAILED',
+        errorCode,
         timestamp,
       },
     }
@@ -179,7 +169,6 @@ export function resolveLandingMessageRetry(
   return {
     decision: 'accept',
     task: armed,
-    sendSucceeded: true,
     event: {
       eventId: `retry-sent-${task.taskRevision}`,
       type: 'message.sent',

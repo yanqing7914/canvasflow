@@ -23,6 +23,35 @@ function createRequest(text = '我现在要去机场接妈妈和豆豆') {
   }
 }
 
+function failedLandingMessageTask(gateway: AgentGateway) {
+  const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+  const started = gateway.submitAction(created.task.taskId, {
+    clientRequestId: 'helper-start', expectedTaskRevision: created.task.taskRevision,
+    expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation',
+    componentId: 'navigation-plan', idempotencyKey: 'helper-start',
+  })
+  const landed = gateway.submitEvent(created.task.taskId, {
+    clientRequestId: 'helper-landed', expectedTaskRevision: started.task.taskRevision,
+    event: {
+      eventId: 'helper-landed', type: 'flight.updated',
+      flight: {
+        flightNumber: 'MU5102', status: 'landed',
+        scheduledArrival: '2026-07-22T20:30:00+08:00',
+        estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+      },
+      timestamp: '2026-07-22T20:40:00+08:00',
+    },
+  })
+  return gateway.submitEvent(created.task.taskId, {
+    clientRequestId: 'helper-failed', expectedTaskRevision: landed.task.taskRevision,
+    event: {
+      eventId: 'helper-failed', type: 'message.failed',
+      messageId: landed.task.message.pendingMessageId!, errorCode: 'SEND_FAILED',
+      timestamp: '2026-07-22T20:41:00+08:00',
+    },
+  })
+}
+
 describe('AgentGateway', () => {
   it('cancels and idempotently resets only the requested task', () => {
     let id = 0
@@ -1479,11 +1508,15 @@ describe('AgentGateway', () => {
 
   it('retries a failed landing message through action → confirmation → send', () => {
     const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const prepareMessage = vi.fn(base['message.prepare'])
+    const sendMessage = vi.fn(base['message.send'])
     const gateway = new AgentGateway({
       store: new MemoryTaskStore(),
       now: () => now,
       createId: () => '001',
       runtime,
+      providers: { ...base, 'message.prepare': prepareMessage, 'message.send': sendMessage },
     })
     const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆，航班 MU5102'))
     const started = gateway.submitAction(created.task.taskId, {
@@ -1541,10 +1574,18 @@ describe('AgentGateway', () => {
       idempotencyKey: 'retry-landing-001',
     })
     expect(armed.task.pendingConfirmation).toMatchObject({ action: 'send-message' })
+    expect(armed.effects).toEqual([expect.objectContaining({
+      type: 'message.prepare', status: 'pending-confirmation', tool: 'message.prepare',
+    })])
+    expect(prepareMessage).toHaveBeenCalledWith(
+      { taskId: created.task.taskId, requestId: 'pickup-001:message.prepare:retry-landing-001' },
+      { contactId: 'contact-mom', flightNumber: 'MU5102', eta: '20:25' },
+    )
     expect(armed.task.message).toMatchObject({
       status: 'failed',
       pendingContactId: 'contact-mom',
       idempotencyKey: 'pickup-001:MU5102:landing',
+      pendingText: '我已到达机场接机点，航班 MU5102，预计 20:25 会合。',
     })
     expect(armed.ui.actions).toContainEqual(expect.objectContaining({
       id: 'confirm-retry-landing-message',
@@ -1568,7 +1609,180 @@ describe('AgentGateway', () => {
     expect(sent.task.message).toMatchObject({ status: 'sent', landingNoticeSent: true })
     expect(sent.task.pendingConfirmation).toBeUndefined()
     expect(sent.effects).toMatchObject([{ type: 'message.send', status: 'succeeded', tool: 'message.send' }])
+    expect(sendMessage).toHaveBeenCalledWith(
+      { taskId: created.task.taskId, requestId: 'pickup-001:message.send:confirm-retry-001' },
+      expect.objectContaining({
+        contactId: 'contact-mom',
+        messageId: 'pickup-001:MU5102:landing',
+        confirmationId: armed.task.pendingConfirmation!.confirmationId,
+        idempotencyKey: 'confirm-retry-001',
+      }),
+    )
     expect(sent.ui.actions.some((action) => action.id === 'retry-landing-message')).toBe(false)
+
+    const duplicate = gateway.submitConfirmation(
+      created.task.taskId,
+      armed.task.pendingConfirmation!.confirmationId,
+      {
+        clientRequestId: 'client-confirm-retry-duplicate',
+        expectedTaskRevision: armed.task.taskRevision,
+        decision: 'accept',
+        idempotencyKey: 'confirm-retry-001',
+      },
+    )
+    expect(duplicate.task).toEqual(sent.task)
+    expect(duplicate.effects).toEqual(sent.effects)
+    expect(prepareMessage).toHaveBeenCalledTimes(1)
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('rejects a retry through the injected confirmation revoker without sending', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revoke = vi.fn(base['message.revoke-confirmation'])
+    const send = vi.fn(base['message.send'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'message.revoke-confirmation': revoke, 'message.send': send },
+    })
+    const failed = failedLandingMessageTask(gateway)
+    const armed = gateway.submitAction(failed.task.taskId, {
+      clientRequestId: 'reject-retry-arm', expectedTaskRevision: failed.task.taskRevision,
+      expectedUiRevision: failed.ui.uiRevision, actionId: 'retry-landing-message',
+      componentId: 'message-preview', idempotencyKey: 'reject-retry-arm',
+    })
+    const rejected = gateway.submitConfirmation(armed.task.taskId, armed.task.pendingConfirmation!.confirmationId, {
+      clientRequestId: 'reject-retry', expectedTaskRevision: armed.task.taskRevision,
+      decision: 'reject', idempotencyKey: 'reject-retry',
+    })
+    expect(revoke).toHaveBeenCalledTimes(1)
+    expect(send).not.toHaveBeenCalled()
+    expect(rejected.task.pendingConfirmation).toBeUndefined()
+    expect(rejected.effects).toEqual([expect.objectContaining({
+      type: 'message.revoke-confirmation', status: 'cancelled', errorCode: 'USER_REJECTED',
+    })])
+  })
+
+  it('revokes an armed retry before cancelling the task', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revoke = vi.fn(base['message.revoke-confirmation'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'message.revoke-confirmation': revoke },
+    })
+    const failed = failedLandingMessageTask(gateway)
+    const armed = gateway.submitAction(failed.task.taskId, {
+      clientRequestId: 'cancel-retry-arm', expectedTaskRevision: failed.task.taskRevision,
+      expectedUiRevision: failed.ui.uiRevision, actionId: 'retry-landing-message',
+      componentId: 'message-preview', idempotencyKey: 'cancel-retry-arm',
+    })
+    const cancelled = gateway.cancelTask(armed.task.taskId, {
+      clientRequestId: 'cancel-armed-retry', expectedTaskRevision: armed.task.taskRevision,
+      eventId: 'cancel-armed-retry',
+    })
+    expect(revoke).toHaveBeenCalledTimes(1)
+    expect(cancelled.task.phase).toBe('cancelled')
+    expect(cancelled.task.pendingConfirmation).toBeUndefined()
+    expect(cancelled.effects).toEqual([expect.objectContaining({ type: 'message.revoke-confirmation' })])
+  })
+
+  it('revokes an armed retry before accepting a matching external message failure', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revoke = vi.fn(base['message.revoke-confirmation'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'message.revoke-confirmation': revoke },
+    })
+    const failed = failedLandingMessageTask(gateway)
+    const armed = gateway.submitAction(failed.task.taskId, {
+      clientRequestId: 'external-failure-arm', expectedTaskRevision: failed.task.taskRevision,
+      expectedUiRevision: failed.ui.uiRevision, actionId: 'retry-landing-message',
+      componentId: 'message-preview', idempotencyKey: 'external-failure-arm',
+    })
+    const afterFailure = gateway.submitEvent(armed.task.taskId, {
+      clientRequestId: 'external-failure', expectedTaskRevision: armed.task.taskRevision,
+      event: {
+        eventId: 'external-failure', type: 'message.failed',
+        messageId: armed.task.message.pendingMessageId!, errorCode: 'SEND_FAILED',
+        timestamp: '2026-07-22T20:42:00+08:00',
+      },
+    })
+    expect(revoke).toHaveBeenCalledTimes(1)
+    expect(afterFailure.task.pendingConfirmation).toBeUndefined()
+    expect(afterFailure.task.message.pendingMessageId).toBeUndefined()
+    expect(afterFailure.effects).toEqual([expect.objectContaining({ type: 'message.revoke-confirmation' })])
+  })
+
+  it('keeps an armed retry when provider revocation fails during reset', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'message.revoke-confirmation': (ctx) => ({
+          ok: false, data: null,
+          error: { code: 'REVOKE_FAILED', message: 'failed', retryable: true },
+          meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'message.revoke-confirmation', provider: 'fixture', durationMs: 1, generatedAt: now },
+        }),
+      },
+    })
+    const failed = failedLandingMessageTask(gateway)
+    const armed = gateway.submitAction(failed.task.taskId, {
+      clientRequestId: 'reset-retry-arm', expectedTaskRevision: failed.task.taskRevision,
+      expectedUiRevision: failed.ui.uiRevision, actionId: 'retry-landing-message',
+      componentId: 'message-preview', idempotencyKey: 'reset-retry-arm',
+    })
+    const reset = gateway.resetTask(armed.task.taskId, {
+      clientRequestId: 'reset-armed-retry', expectedTaskRevision: armed.task.taskRevision,
+    })
+    expect(reset.task).toEqual(armed.task)
+    expect(reset.effects).toEqual([expect.objectContaining({
+      type: 'message.revoke-confirmation', status: 'failed', errorCode: 'REVOKE_FAILED',
+    })])
+  })
+
+  it('preserves the failed retry snapshot when message.prepare returns invalid metadata', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revoke = vi.fn(base['message.revoke-confirmation'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'message.prepare': (ctx, input) => {
+          const result = base['message.prepare'](ctx, input)
+          return { ...result, meta: { ...result.meta, requestId: 'wrong-request' } }
+        },
+        'message.revoke-confirmation': revoke,
+      },
+    })
+    const failed = failedLandingMessageTask(gateway)
+    const retry = gateway.submitAction(failed.task.taskId, {
+      clientRequestId: 'invalid-prepare-retry', expectedTaskRevision: failed.task.taskRevision,
+      expectedUiRevision: failed.ui.uiRevision, actionId: 'retry-landing-message',
+      componentId: 'message-preview', idempotencyKey: 'invalid-prepare-retry',
+    })
+    expect(retry.task).toEqual(failed.task)
+    expect(retry.ui).toEqual(failed.ui)
+    expect(retry.effects).toEqual([expect.objectContaining({
+      type: 'message.prepare', status: 'failed', errorCode: 'PROVIDER_FAILED',
+    })])
+    expect(revoke).toHaveBeenCalledTimes(1)
+  })
+
+  it('fails closed when direct Gateway providers do not match the configured mode', () => {
+    const runtime = createSideEffectRuntime()
+    const fixtureProviders = createProviderRegistry(runtime, 'fixture')
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      mode: 'live', providers: fixtureProviders,
+    })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    expect(created.meta).toMatchObject({ mode: 'live', fallbackUsed: true })
+    expect(created.task.phase).toBe('preparing')
   })
 
   it('executes the scheduled landing message before committing the sent state', () => {
