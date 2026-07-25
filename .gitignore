@@ -6,6 +6,7 @@ packages/*/dist
 playwright-report
 test-results
 .DS_Store
+.canvasflow/
 .env
 .env.*
 !.env.example

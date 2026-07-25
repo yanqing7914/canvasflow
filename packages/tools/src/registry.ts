@@ -1,4 +1,4 @@
-import type { ToolDefinition, ToolResult } from '@canvasflow/schema'
+import type { ProviderMode, ToolDefinition, ToolResult } from '@canvasflow/schema'
 import { createCabinProfileTools } from './cabin'
 import { getFixtureChargingRecommendation, getFixtureFlightStatus } from './compat'
 import { recommendCharging } from './charging'
@@ -135,7 +135,10 @@ export type ToolName = keyof typeof toolDefinitions
  * Provider registry: every handler takes `(ctx, input)` and returns a contract
  * `ToolResult`. Prefer this over the legacy `createToolRegistry`.
  */
-export function createProviderRegistry(runtime: SideEffectRuntime = createSideEffectRuntime()) {
+export function createProviderRegistry(
+  runtime: SideEffectRuntime = createSideEffectRuntime(),
+  mode: Exclude<ProviderMode, 'live'> = 'fixture',
+) {
   const navigation = createNavigationSideEffects(runtime)
   const cabin = createCabinProfileTools(runtime)
   const memoryWrite = createMemoryWriteTools(runtime)
@@ -143,7 +146,7 @@ export function createProviderRegistry(runtime: SideEffectRuntime = createSideEf
   const prepareMessage = createMessagePreparer(runtime)
   const sendMessage = createMessageSender(runtime)
 
-  return {
+  const registry = {
     'family.resolve-members': resolveMembers,
     // 绑定 runtime 的可变偏好副本，让 memory.confirm-update 的写入对读取可见。
     'memory.get-preferences': createPreferenceReader(runtime.preferences),
@@ -162,6 +165,13 @@ export function createProviderRegistry(runtime: SideEffectRuntime = createSideEf
     'message.prepare': prepareMessage,
     'message.send': sendMessage,
   } as const satisfies Record<ToolName, (ctx: ToolContext, input?: unknown) => ToolResult<unknown>>
+
+  return Object.fromEntries(
+    Object.entries(registry).map(([name, provider]) => [
+      name,
+      (context: ToolContext, input?: unknown) => provider({ ...context, provider: mode }, input),
+    ]),
+  ) as typeof registry
 }
 
 /**

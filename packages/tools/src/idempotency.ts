@@ -56,7 +56,31 @@ export class IdempotencyStore {
       if (key.startsWith(prefix)) this.results.delete(key)
     }
   }
+
+  exportState(): IdempotencyState {
+    return [...this.results.entries()].map(([key, entry]) => ({
+      key,
+      fingerprint: entry.fingerprint,
+      result: structuredClone(entry.result),
+    }))
+  }
+
+  importState(state: IdempotencyState): void {
+    this.results.clear()
+    for (const entry of state) {
+      this.results.set(entry.key, {
+        fingerprint: entry.fingerprint,
+        result: structuredClone(entry.result),
+      })
+    }
+  }
 }
+
+export type IdempotencyState = Array<{
+  key: string
+  fingerprint: string
+  result: ToolResult<unknown>
+}>
 
 export type CabinProfileValues = {
   temperatureC?: number
@@ -235,6 +259,29 @@ export class ConfirmationStore {
       if (grant.binding.taskId === taskId) this.grants.delete(confirmationId)
     }
   }
+
+  exportState(): ConfirmationState {
+    return {
+      counter: this.counter,
+      grants: [...this.grants.entries()].map(([confirmationId, grant]) => [
+        confirmationId,
+        structuredClone(grant),
+      ]),
+    }
+  }
+
+  importState(state: ConfirmationState): void {
+    this.counter = state.counter
+    this.grants.clear()
+    for (const [confirmationId, grant] of state.grants) {
+      this.grants.set(confirmationId, structuredClone(grant))
+    }
+  }
+}
+
+export type ConfirmationState = {
+  counter: number
+  grants: Array<[string, ConfirmationRecord]>
 }
 
 /** Mutable fixture runtime shared by side-effect providers in one registry. */
@@ -248,6 +295,17 @@ export type SideEffectRuntime = {
   memoryProposals: Map<string, MemoryProposalRecord>
   preferences: Record<string, MemberPreferenceRecord>
   nowMs: () => number
+}
+
+export type SideEffectRuntimeSnapshot = {
+  version: 1
+  idempotency: IdempotencyState
+  confirmations: ConfirmationState
+  plannedRouteIdsByTask: Array<[string, string[]]>
+  cabinEffects: Array<[string, CabinEffectRecord]>
+  cabinCurrent: CabinProfileValues
+  memoryProposals: Array<[string, MemoryProposalRecord]>
+  preferences: Record<string, MemberPreferenceRecord>
 }
 
 /** Live wall clock by default so proposal TTLs elapse; inject a fixed clock in tests. */
@@ -270,14 +328,76 @@ export function createSideEffectRuntime(nowMs: () => number = () => Date.now()):
   }
 }
 
+export function snapshotSideEffectRuntime(runtime: SideEffectRuntime): SideEffectRuntimeSnapshot {
+  return {
+    version: 1,
+    idempotency: runtime.idempotency.exportState(),
+    confirmations: runtime.confirmations.exportState(),
+    plannedRouteIdsByTask: [...runtime.plannedRouteIdsByTask.entries()].map(([taskId, routeIds]) => [taskId, [...routeIds]]),
+    cabinEffects: [...runtime.cabinEffects.entries()].map(([effectId, effect]) => [effectId, structuredClone(effect)]),
+    cabinCurrent: structuredClone(runtime.cabinCurrent),
+    memoryProposals: [...runtime.memoryProposals.entries()].map(([proposalId, proposal]) => [proposalId, structuredClone(proposal)]),
+    preferences: structuredClone(runtime.preferences),
+  }
+}
+
+export function restoreSideEffectRuntime(runtime: SideEffectRuntime, snapshot: SideEffectRuntimeSnapshot): void {
+  if (snapshot.version !== 1) throw new Error(`Unsupported side-effect runtime snapshot version: ${String(snapshot.version)}`)
+  runtime.idempotency.importState(snapshot.idempotency)
+  runtime.confirmations.importState(snapshot.confirmations)
+
+  runtime.plannedRouteIdsByTask.clear()
+  for (const [taskId, routeIds] of snapshot.plannedRouteIdsByTask) {
+    runtime.plannedRouteIdsByTask.set(taskId, new Set(routeIds))
+  }
+
+  runtime.cabinEffects.clear()
+  for (const [effectId, effect] of snapshot.cabinEffects) {
+    runtime.cabinEffects.set(effectId, structuredClone(effect))
+  }
+
+  for (const key of Object.keys(runtime.cabinCurrent)) delete runtime.cabinCurrent[key as keyof CabinProfileValues]
+  Object.assign(runtime.cabinCurrent, structuredClone(snapshot.cabinCurrent))
+
+  runtime.memoryProposals.clear()
+  for (const [proposalId, proposal] of snapshot.memoryProposals) {
+    runtime.memoryProposals.set(proposalId, structuredClone(proposal))
+  }
+
+  for (const memberId of Object.keys(runtime.preferences)) delete runtime.preferences[memberId]
+  for (const [memberId, preference] of Object.entries(snapshot.preferences)) {
+    runtime.preferences[memberId] = structuredClone(preference)
+  }
+}
+
 export function resetSideEffectRuntimeTask(runtime: SideEffectRuntime, taskId: string): void {
   runtime.idempotency.clearTask(taskId)
   runtime.confirmations.clearTask(taskId)
   runtime.plannedRouteIdsByTask.delete(taskId)
-  for (const [effectId, effect] of runtime.cabinEffects) {
-    if (effect.taskId === taskId) runtime.cabinEffects.delete(effectId)
+  const taskCabinEffects = [...runtime.cabinEffects.entries()].filter(([, effect]) => effect.taskId === taskId)
+  for (const [, effect] of taskCabinEffects) {
+    if (effect.reverted) continue
+    if (cabinProfilesEqual(runtime.cabinCurrent, effect.current)) replaceCabinProfile(runtime.cabinCurrent, effect.previous)
+    for (const other of runtime.cabinEffects.values()) {
+      if (other === effect || other.reverted || !cabinProfilesEqual(other.previous, effect.current)) continue
+      other.previous = structuredClone(effect.previous)
+    }
+  }
+  for (const [effectId] of taskCabinEffects) {
+    runtime.cabinEffects.delete(effectId)
   }
   for (const [proposalId, proposal] of runtime.memoryProposals) {
     if (proposal.taskId === taskId) runtime.memoryProposals.delete(proposalId)
   }
+}
+
+function cabinProfilesEqual(left: CabinProfileValues, right: CabinProfileValues): boolean {
+  return left.temperatureC === right.temperatureC
+    && left.fanLevel === right.fanLevel
+    && left.mediaTitle === right.mediaTitle
+}
+
+function replaceCabinProfile(target: CabinProfileValues, source: CabinProfileValues): void {
+  for (const key of Object.keys(target)) delete target[key as keyof CabinProfileValues]
+  Object.assign(target, structuredClone(source))
 }
