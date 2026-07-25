@@ -1,13 +1,34 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
-import { createInitialTask } from '@canvasflow/agent'
+import { applyEvent, createInitialTask } from '@canvasflow/agent'
+import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState } from '@canvasflow/schema'
 import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
 
 describe('demo integration', () => {
+  function apiResponse(task: AirportPickupTaskState): AgentResponse {
+    const ui = composePickupSpec(task)
+    const withNavigationAction = task.phase === 'preparing'
+      ? {
+          ...ui,
+          components: ui.components.map((component) => component.id === 'flight-status'
+            ? { ...component, actions: ['start-navigation'] }
+            : component),
+          actions: [{ id: 'start-navigation', label: '开始导航', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'start-navigation' } }],
+        }
+      : ui
+    return {
+      requestId: `request-${task.taskRevision}`,
+      task,
+      ui: withNavigationAction,
+      effects: [],
+      meta: { mode: 'fixture', durationMs: 1, fallbackUsed: false },
+    }
+  }
+
   it('loads the shared main-flow timeline for the demo player', () => {
     expect(mainFlowTimeline.id).toBe('main-flow')
     expect(mainFlowTimeline.steps[0]?.event.eventId).toBe('event-task-created')
@@ -270,6 +291,61 @@ describe('demo integration', () => {
 
     await user.click(advance) // navigation.started
     expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
+  })
+
+  it('keeps the API timeline cursor synchronized and retries a failed advance', async () => {
+    const user = userEvent.setup()
+    let task = applyEvent(createInitialTask(), mainFlowTimeline.steps[0]!.event)
+    task = {
+      ...task,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+    }
+    let flightUpdateAttempts = 0
+    const event = vi.fn(async (current: AirportPickupTaskState, input: AirportPickupEvent) => {
+      const eventId = input.eventId ?? (input.type === 'user.input' ? 'event-flight-number' : `event-${input.type}`)
+      const normalized = {
+        ...input,
+        eventId,
+        timestamp: input.timestamp ?? (input.type === 'user.input' ? '2026-07-22T20:01:00+08:00' : '2026-07-22T20:10:00+08:00'),
+      } as AirportPickupEvent
+      if (eventId === 'event-flight-in-air') {
+        flightUpdateAttempts += 1
+        if (flightUpdateAttempts === 1) throw new Error('temporary network failure')
+      }
+      task = applyEvent(current, normalized)
+      return apiResponse(task)
+    })
+    const action = vi.fn(async (current: AgentResponse) => {
+      task = applyEvent({
+        ...current.task,
+        charging: { ...current.task.charging, recommended: true, status: 'planned' },
+      }, mainFlowTimeline.steps[3]!.event)
+      return apiResponse(task)
+    })
+    const api = {
+      create: vi.fn(async () => apiResponse(task)),
+      event,
+      action,
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await user.clear(screen.getByLabelText('任务输入'))
+    await user.type(screen.getByLabelText('任务输入'), 'MU5102')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByText(/preparing/)
+    await user.click(screen.getByRole('button', { name: '开始导航' }))
+    await screen.findByText(/driving-to-airport/)
+
+    const advance = screen.getByRole('button', { name: '推进下一事件' })
+    await user.click(advance)
+    expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventId: 'event-charging-started' }))
+    await user.click(advance)
+    await screen.findByRole('alert')
+    expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventId: 'event-flight-in-air' }))
+    await user.click(advance)
+    expect(flightUpdateAttempts).toBe(2)
   })
 
   it('renders and resolves the completion confirmation action', async () => {

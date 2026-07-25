@@ -7,11 +7,12 @@ import {
 } from '@canvasflow/agent'
 import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
-import type { AgentResponse, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
+import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient } from './agent-client'
 
 const defaultClient = new AgentApiClient('/v1')
+type DemoAgentApi = Pick<AgentApiClient, 'create' | 'event' | 'action' | 'confirmation'>
 
 function componentSummary(component: ComponentSpec): string {
   switch (component.type) {
@@ -50,7 +51,7 @@ export default function App({
   initialTask,
   composeContext = {},
 }: {
-  api?: AgentApiClient
+  api?: DemoAgentApi
   initialTask?: AirportPickupTaskState
   composeContext?: ComposerContext
 }) {
@@ -94,7 +95,10 @@ export default function App({
         timestamp: new Date().toISOString(),
       }, demoRuntime.preferences))
     } else {
-      void run(() => api.event(response.task, { type: 'user.input', text: value }))
+      const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
+      void run(() => api.event(response.task, { type: 'user.input', text: value })).then((next) => {
+        if (next && nextTimelineIndex !== undefined) setStepIndex(nextTimelineIndex)
+      })
     }
     setText('')
   }
@@ -107,9 +111,12 @@ export default function App({
     const step = mainFlowTimeline.steps.slice(stepIndex).find((candidate) => !candidate.advisory)
     if (!step) return
     const index = mainFlowTimeline.steps.indexOf(step)
-    setStepIndex(index + 1)
-    if (step.event.type === 'navigation.started') void run(() => api.action(response, 'start-navigation', 'navigation-plan'))
-    else void run(() => api.event(response.task, step.event))
+    const request = step.event.type === 'navigation.started'
+      ? api.action(response, 'start-navigation', 'navigation-plan')
+      : api.event(response.task, step.event)
+    void run(() => request).then((next) => {
+      if (next) setStepIndex(index + 1)
+    })
   }
 
   function handleAction(actionId: string, componentId: string) {
@@ -133,8 +140,20 @@ export default function App({
     if (actionEvent?.type === 'confirmation') {
       void run(() => api.confirmation(response.task, actionEvent.confirmationId, actionEvent.decision))
     } else {
-      void run(() => api.action(response, actionId, componentId))
+      const nextTimelineIndex = actionId === 'start-navigation'
+        ? nextIndexForTimelineEvent('navigation.started')
+        : undefined
+      void run(() => api.action(response, actionId, componentId)).then((next) => {
+        if (next && nextTimelineIndex !== undefined) setStepIndex(nextTimelineIndex)
+      })
     }
+  }
+
+  function nextIndexForTimelineEvent(type: AirportPickupEvent['type']): number | undefined {
+    const index = mainFlowTimeline.steps.findIndex((step, candidateIndex) =>
+      candidateIndex >= stepIndex && !step.advisory && step.event.type === type,
+    )
+    return index === -1 ? undefined : index + 1
   }
 
   return <main className="demo-shell">
