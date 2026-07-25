@@ -277,7 +277,7 @@ describe('demo integration', () => {
 
   it('advances the rendered demo from main-flow through the charging step', async () => {
     const user = userEvent.setup()
-    render(<App />)
+    render(<App initialTask={mainFlowTimeline.initialTaskState} />)
     const advance = screen.getByRole('button', { name: '推进下一事件' })
     expect(screen.getByText(/collecting-information/)).toBeInTheDocument()
 
@@ -369,6 +369,63 @@ describe('demo integration', () => {
     resolveCreate(apiResponse(createInitialTask()))
     await screen.findByText(/collecting-information/)
     expect(send).toBeEnabled()
+  })
+
+  it('keeps create input after a failure and allows a direct retry', async () => {
+    const user = userEvent.setup()
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary create failure'))
+      .mockResolvedValueOnce(apiResponse(createInitialTask()))
+    const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<App api={api} />)
+
+    const input = screen.getByLabelText('任务输入')
+    await user.clear(input)
+    await user.type(input, '接妈妈')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByRole('alert')
+    expect(input).toHaveValue('接妈妈')
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByText(/collecting-information/)
+    expect(create).toHaveBeenCalledTimes(2)
+    expect(input).toHaveValue('')
+  })
+
+  it('keeps event input after a failure and allows a direct retry', async () => {
+    const user = userEvent.setup()
+    const createdTask = {
+      ...createInitialTask(),
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+    }
+    const preparedTask = applyEvent(createdTask, {
+      eventId: 'event-flight-number',
+      type: 'user.input',
+      text: 'MU5102',
+      timestamp: '2026-07-22T20:01:00+08:00',
+    })
+    const event = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary event failure'))
+      .mockResolvedValueOnce(apiResponse(preparedTask))
+    const api = {
+      create: vi.fn().mockResolvedValue(apiResponse(createdTask)),
+      event,
+      action: vi.fn(),
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    const input = screen.getByLabelText('任务输入')
+    await user.type(input, 'MU5102')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByRole('alert')
+    expect(input).toHaveValue('MU5102')
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByText(/preparing/)
+    expect(event).toHaveBeenCalledTimes(2)
+    expect(input).toHaveValue('')
   })
 
   it('renders and resolves the completion confirmation action', async () => {
