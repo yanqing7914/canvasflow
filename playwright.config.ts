@@ -19,18 +19,10 @@ export default defineConfig({
       },
     },
   ],
-  webServer: [
-    {
-      command: 'npm run agent --workspace @canvasflow/demo',
-      reuseExistingServer: !process.env.CI,
-      url: 'http://127.0.0.1:8787/health',
-      timeout: 120_000,
-    },
-    {
-      command: 'npm run build && npm run preview',
-      reuseExistingServer: !process.env.CI,
-      url: 'http://127.0.0.1:4173',
-      timeout: 120_000,
-    },
-  ],
+  webServer: {
+    command: 'npm run build && npm run preview',
+    reuseExistingServer: !process.env.CI,
+    url: 'http://127.0.0.1:4173',
+    timeout: 120_000,
+  },
 })

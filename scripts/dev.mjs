@@ -1,9 +1,10 @@
 import { spawn } from 'node:child_process'
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const webCommand = process.argv[2] === 'preview' ? 'preview' : 'dev'
 const commands = [
   ['agent', ['run', 'agent', '--workspace', '@canvasflow/demo']],
-  ['vite', ['run', 'dev', '--workspace', '@canvasflow/demo']],
+  ['vite', ['run', webCommand, '--workspace', '@canvasflow/demo']],
 ]
 
 const children = commands.map(([name, args]) => {
