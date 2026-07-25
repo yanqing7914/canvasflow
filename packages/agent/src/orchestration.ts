@@ -12,6 +12,7 @@ import {
   type ResolveMembersOutput,
   type RoutePlanOutput,
   type ToolResult,
+  type VehicleContext,
   type VehicleStatusOutput,
 } from '@canvasflow/schema'
 import { createProviderRegistry, DEMO_ORIGIN, type ProviderRegistry, type ToolName } from '@canvasflow/tools'
@@ -63,7 +64,10 @@ export type ReturnTripPreferenceReads = SuccessfulToolResult<GetPreferencesOutpu
 
 export interface ReadToolOrchestration {
   resolveInitialPassengers(taskId: string, requestId: string, labels: string[]): InitialPassengerReads
-  prepareTrip(taskId: string, requestId: string, flightNumber: string): TripPreparationReads
+  prepareTrip(taskId: string, requestId: string, flightNumber: string, context?: {
+    vehicle?: VehicleContext
+    destination?: { id: string; name: string }
+  }): TripPreparationReads
   resolveReturnTripPreferences(taskId: string, requestId: string, memberIds: string[]): ReturnTripPreferenceReads
 }
 
@@ -123,7 +127,11 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
     }
   }
 
-  prepareTrip(taskId: string, requestId: string, flightNumber: string): TripPreparationReads {
+  prepareTrip(taskId: string, requestId: string, flightNumber: string, context?: {
+    vehicle?: VehicleContext
+    destination?: { id: string; name: string }
+  }): TripPreparationReads {
+    const destination = context?.destination ?? this.#destination
     const flight = this.#call(
       'flight.get-status',
       taskId,
@@ -135,14 +143,14 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       'navigation.plan-route',
       taskId,
       requestId,
-      { origin: this.#origin, destination: this.#destination },
+      { origin: this.#origin, destination },
       toolResultSchema(routePlanOutputSchema),
     )
     const vehicle = this.#call(
       'vehicle.get-status',
       taskId,
       requestId,
-      undefined,
+      context?.vehicle ? { context: context.vehicle } : undefined,
       toolResultSchema(vehicleStatusOutputSchema),
     )
     const charging = this.#call(

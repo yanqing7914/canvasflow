@@ -96,6 +96,314 @@ describe('AgentGateway', () => {
     expect(gateway.getTask(created.task.taskId).task).toEqual(created.task)
   })
 
+  it('keeps low-confidence input recoverable without applying parsed slots', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask({
+      ...createRequest('接妈妈，航班 MU5102'),
+      input: { type: 'text', text: '接妈妈，航班 MU5102', source: 'voice', confidence: 0.59 },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: false },
+    })
+
+    expect(created.task).toMatchObject({ phase: 'collecting-information', passengers: { memberIds: [] } })
+    expect(created.task.flight).toBeUndefined()
+    expect(created.assistant).toEqual({ text: '我不太确定刚才的内容，请确认或编辑后再试一次。', shouldSpeak: false })
+
+    const corrected = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'correct-low-confidence',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'correct-low-confidence', type: 'user.input', text: '接妈妈', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(corrected.task.passengers).toMatchObject({ memberIds: ['mom'], names: ['妈妈'] })
+    expect(corrected.task.taskRevision).toBe(created.task.taskRevision + 1)
+    expect(corrected.assistant).toEqual({ text: '好的，请告诉我她们的航班号。', shouldSpeak: false })
+  })
+
+  it('does not let stale or terminal events mutate request context or passenger facts', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask({
+      ...createRequest('接妈妈，航班 MU5102'),
+      vehicleContext: { speedKph: 80, batteryPercent: 90, remainingRangeKm: 240, gear: 'D', isNight: false },
+    })
+    const stale = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'stale-parked', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'stale-parked', type: 'vehicle.parked', timestamp: '2026-07-22T11:59:00+08:00' },
+    })
+    expect(stale.task).toEqual(created.task)
+    expect(stale.ui).toEqual(created.ui)
+
+    const cancelled = gateway.cancelTask(created.task.taskId, {
+      clientRequestId: 'cancel-terminal-input', expectedTaskRevision: created.task.taskRevision,
+      eventId: 'cancel-terminal-input',
+    })
+    const terminal = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'terminal-passenger', expectedTaskRevision: cancelled.task.taskRevision,
+      event: { eventId: 'terminal-passenger', type: 'user.input', text: '接爸爸', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(terminal.task).toEqual(cancelled.task)
+    expect(terminal.ui).toEqual(cancelled.ui)
+  })
+
+  it('uses vehicle context for charging and preserves presentation across events', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask({
+      ...createRequest('接妈妈，航班 MU5102'),
+      vehicleContext: { speedKph: 0, batteryPercent: 90, remainingRangeKm: 240, gear: 'P', isNight: false },
+    })
+
+    expect(created.task.charging.recommended).toBe(false)
+    expect(created.ui.presentation).toMatchObject({ density: 'full', theme: 'light' })
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'vehicle-moving', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'vehicle-moving', type: 'vehicle.moving', speedKph: 80, timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(moving.ui.presentation).toMatchObject({ density: 'minimal', theme: 'light' })
+    const denied = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'moving-navigation', expectedTaskRevision: moving.task.taskRevision,
+      expectedUiRevision: moving.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'moving-navigation',
+    })
+    expect(denied.task).toEqual(moving.task)
+    expect(denied.effects).toEqual([expect.objectContaining({ status: 'failed', errorCode: 'VEHICLE_MOVING' })])
+
+    const parked = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'vehicle-parked', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'vehicle-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    expect(parked.ui.presentation).toMatchObject({ density: 'full', theme: 'light' })
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'parked-navigation', expectedTaskRevision: parked.task.taskRevision,
+      expectedUiRevision: parked.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'parked-navigation',
+    })
+    expect(started.task.phase).toBe('driving-to-airport')
+  })
+
+  it('rejects stale parked context after a newer moving event without changing task facts', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask({
+      ...createRequest('接妈妈，航班 MU5102'),
+      vehicleContext: { speedKph: 0, batteryPercent: 90, remainingRangeKm: 240, gear: 'P', isNight: false },
+    })
+
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'ordered-moving', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'ordered-moving', type: 'vehicle.moving', speedKph: 80, timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    expect(moving.task).toMatchObject({
+      taskRevision: created.task.taskRevision,
+      updatedAt: created.task.updatedAt,
+      processedEventIds: created.task.processedEventIds,
+    })
+    expect(moving.task.processedEventIds).not.toContain('ordered-moving')
+    expect(moving.ui.presentation.density).toBe('minimal')
+
+    const staleParked = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'stale-ordered-parked', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'stale-ordered-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(staleParked.task).toEqual(moving.task)
+    expect(staleParked.ui).toEqual(moving.ui)
+    expect(staleParked.task.processedEventIds).not.toContain('stale-ordered-parked')
+
+    const denied = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'stale-parked-navigation', expectedTaskRevision: staleParked.task.taskRevision,
+      expectedUiRevision: staleParked.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'stale-parked-navigation',
+    })
+    expect(denied.effects).toEqual([expect.objectContaining({ status: 'failed', errorCode: 'VEHICLE_MOVING' })])
+  })
+
+  it('advances event ordering for a context-only charging completion', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+
+    const charged = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'context-charging-completed', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'context-charging-completed', type: 'charging.completed', batteryPercent: 88, timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    expect(charged.task).toMatchObject({
+      taskRevision: created.task.taskRevision,
+      updatedAt: created.task.updatedAt,
+      processedEventIds: created.task.processedEventIds,
+    })
+    expect(charged.task.processedEventIds).not.toContain('context-charging-completed')
+
+    const staleMoving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'stale-after-charging', expectedTaskRevision: charged.task.taskRevision,
+      event: { eventId: 'stale-after-charging', type: 'vehicle.moving', speedKph: 80, timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(staleMoving.task).toEqual(charged.task)
+    expect(staleMoving.ui).toEqual(charged.ui)
+  })
+
+  it('does not let a newer sensor watermark reject a valid task event', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈'))
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'future-sensor', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'future-sensor', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+
+    const flight = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'task-after-sensor', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'task-after-sensor', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(flight.task).toMatchObject({ phase: 'preparing', flight: { flightNumber: 'MU5102' } })
+    expect(flight.ui.presentation.density).toBe('compact')
+  })
+
+  it('advances a valid parked phase transition without overwriting newer moving context', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'mixed-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'mixed-start',
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'mixed-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'mixed-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'mixed-moving', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'mixed-moving', type: 'vehicle.moving', speedKph: 20, timestamp: '2026-07-22T12:03:00+08:00' },
+    })
+    const parked = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'mixed-parked', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'mixed-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+
+    expect(parked.task.phase).toBe('waiting-for-passengers')
+    expect(parked.ui.presentation.density).toBe('compact')
+
+    const reset = gateway.resetTask(created.task.taskId, {
+      clientRequestId: 'mixed-reset', expectedTaskRevision: parked.task.taskRevision,
+    })
+    const prepared = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'mixed-reprepare', expectedTaskRevision: reset.task.taskRevision,
+      event: { eventId: 'mixed-reprepare', type: 'user.input', text: '接妈妈，航班 MU5102', timestamp: '2026-07-22T12:04:00+08:00' },
+    })
+    const denied = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'mixed-navigation-denied', expectedTaskRevision: prepared.task.taskRevision,
+      expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'mixed-navigation-denied',
+    })
+    expect(denied.effects).toEqual([expect.objectContaining({ status: 'failed', errorCode: 'VEHICLE_MOVING' })])
+  })
+
+  it('keeps moving safety context when parked arrives with the same timestamp', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'equal-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'equal-start',
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'equal-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'equal-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'equal-moving', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'equal-moving', type: 'vehicle.moving', speedKph: 20, timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    const parked = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'equal-parked', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'equal-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+
+    expect(parked.task.phase).toBe('waiting-for-passengers')
+    expect(parked.ui.presentation.density).toBe('compact')
+
+    const reset = gateway.resetTask(created.task.taskId, {
+      clientRequestId: 'equal-reset', expectedTaskRevision: parked.task.taskRevision,
+    })
+    const prepared = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'equal-reprepare', expectedTaskRevision: reset.task.taskRevision,
+      event: { eventId: 'equal-reprepare', type: 'user.input', text: '接妈妈，航班 MU5102', timestamp: '2026-07-22T12:03:00+08:00' },
+    })
+    const denied = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'equal-navigation-denied', expectedTaskRevision: prepared.task.taskRevision,
+      expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'equal-navigation-denied',
+    })
+    expect(denied.effects).toEqual([expect.objectContaining({ status: 'failed', errorCode: 'VEHICLE_MOVING' })])
+  })
+
+  it('does not let a newer moving watermark reject active charging completion', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'mixed-charge-navigation', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'mixed-charge-navigation',
+    })
+    const charging = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'mixed-charge-plan', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'mixed-charge-plan', type: 'user.input', text: '先去充电', timestamp: '2026-07-22T12:00:30+08:00' },
+    })
+    const active = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'mixed-charge-start', expectedTaskRevision: charging.task.taskRevision,
+      event: { eventId: 'mixed-charge-start', type: 'charging.started', stationId: 'station-hongqiao-01', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'mixed-charge-moving', expectedTaskRevision: active.task.taskRevision,
+      event: { eventId: 'mixed-charge-moving', type: 'vehicle.moving', speedKph: 10, timestamp: '2026-07-22T12:03:00+08:00' },
+    })
+    const completed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'mixed-charge-completed', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'mixed-charge-completed', type: 'charging.completed', batteryPercent: 88, timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+
+    expect(completed.task.charging).toMatchObject({ accepted: true, status: 'completed' })
+    expect(completed.ui.components).toContainEqual(expect.objectContaining({
+      type: 'charging-recommendation', props: expect.objectContaining({ currentBatteryPercent: 42 }),
+    }))
+    expect(completed.ui.presentation.density).toBe('compact')
+  })
+
+  it('persists a custom destination through passenger-first slot filling', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const planRoute = vi.fn(base['navigation.plan-route'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'navigation.plan-route': planRoute },
+      orchestrator: new ReadToolOrchestrator({ registry: { ...base, 'navigation.plan-route': planRoute } }),
+    })
+    const created = gateway.createTask({
+      ...createRequest('接妈妈'),
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥接机点' },
+    })
+    const updated = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'destination-flight', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'destination-flight', type: 'user.input', text: '航班 MU5102', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(planRoute).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: created.task.taskId }),
+      expect.objectContaining({ destination: { id: 'destination-hongqiao-t2', name: '虹桥接机点' } }),
+    )
+    expect(updated.task.navigation?.destination).toBe('虹桥接机点')
+  })
+
+  it('clears low-confidence guidance when fixture state is reset', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask({
+      ...createRequest('接妈妈，航班 MU5102'),
+      input: { type: 'text', text: '接妈妈，航班 MU5102', source: 'voice', confidence: 0.2 },
+    })
+
+    const reset = gateway.resetTask(created.task.taskId, {
+      clientRequestId: 'reset-low-confidence',
+      expectedTaskRevision: created.task.taskRevision,
+    })
+
+    expect(reset.assistant?.text).toContain('航班号')
+    expect(reset.assistant?.text).not.toContain('不太确定')
+  })
+
   it.each([
     ['MU5102', 'MU5102'],
     ['MU 5102', 'MU5102'],
@@ -233,13 +541,13 @@ describe('AgentGateway', () => {
       taskRevision: 1,
       flight: { flightNumber: 'MU5102', status: 'scheduled', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
       navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
-      charging: { recommended: true, status: 'planned' },
+      charging: { recommended: false, status: 'none' },
       message: { autoNotifyAuthorized: true },
     })
     expect(updated.ui.components).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'flight-status', props: expect.objectContaining({ scheduledArrival: '2026-07-22T20:30:00+08:00' }) }),
       expect.objectContaining({ id: 'navigation-plan', props: expect.objectContaining({ routeId: 'route-airport-001', distanceKm: 32 }) }),
-      expect.objectContaining({ id: 'charging-plan', props: expect.objectContaining({ estimatedFinalBatteryPercent: 18 }) }),
+      expect.objectContaining({ id: 'charging-plan', props: expect.objectContaining({ estimatedFinalBatteryPercent: 29 }) }),
     ]))
     expect(updated).not.toHaveProperty('toolResults')
   })
@@ -257,9 +565,10 @@ describe('AgentGateway', () => {
     const first = gateway.submitEvent(created.task.taskId, request)
     expect(first.task).toMatchObject({
       uiRevision: created.task.uiRevision + 1,
-      taskRevision: created.task.taskRevision + 1,
-      phase: 'preparing',
+      taskRevision: created.task.taskRevision,
+      phase: created.task.phase,
     })
+    expect(first.task.flight).toBeUndefined()
     expect(first.ui.meta.generatedBy).toBe('fallback')
     expect(first.meta.fallbackUsed).toBe(true)
     const duplicate = gateway.submitEvent(created.task.taskId, { ...request, clientRequestId: 'client-timeout-retry' })
@@ -280,9 +589,10 @@ describe('AgentGateway', () => {
     })
     expect(failed.task).toMatchObject({
       uiRevision: created.task.uiRevision + 1,
-      taskRevision: created.task.taskRevision + 1,
-      phase: 'preparing',
+      taskRevision: created.task.taskRevision,
+      phase: created.task.phase,
     })
+    expect(failed.task.flight).toBeUndefined()
     expect(failed.ui.meta.generatedBy).toBe('fallback')
     expect(failed.meta.fallbackUsed).toBe(true)
   })
@@ -346,7 +656,7 @@ describe('AgentGateway', () => {
     })
   })
 
-  it('preserves an incremental flight slot when preparation fails after user input', () => {
+  it('preserves the previous task snapshot when incremental flight preparation fails', () => {
     const base = new ReadToolOrchestrator()
     const orchestrator = {
       resolveInitialPassengers: base.resolveInitialPassengers.bind(base),
@@ -364,10 +674,11 @@ describe('AgentGateway', () => {
 
     expect(fallback.meta.fallbackUsed).toBe(true)
     expect(fallback.task).toMatchObject({
-      phase: 'preparing',
-      flight: { flightNumber: 'MU5102' },
+      phase: created.task.phase,
+      taskRevision: created.task.taskRevision,
       passengers: { memberIds: ['mom'], names: ['妈妈'] },
     })
+    expect(fallback.task.flight).toBeUndefined()
     const duplicate = gateway.submitEvent(created.task.taskId, {
       clientRequestId: 'client-flight-input-retry',
       expectedTaskRevision: created.task.taskRevision,
@@ -375,6 +686,30 @@ describe('AgentGateway', () => {
     })
     expect(duplicate.task).toEqual(fallback.task)
     expect(duplicate.ui).toEqual(fallback.ui)
+  })
+
+  it('returns deterministic fallback when incremental passenger resolution times out', () => {
+    const base = new ReadToolOrchestrator()
+    const orchestrator = {
+      resolveInitialPassengers: (taskId: string, requestId: string, labels: string[]) => {
+        if (labels.includes('爸爸')) throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'family timeout', true)
+        return base.resolveInitialPassengers(taskId, requestId, labels)
+      },
+      prepareTrip: base.prepareTrip.bind(base),
+      resolveReturnTripPreferences: base.resolveReturnTripPreferences.bind(base),
+    }
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator })
+    const created = gateway.createTask(createRequest('航班 MU5102'))
+
+    const fallback = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'passenger-timeout', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'passenger-timeout', type: 'user.input', text: '接爸爸', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(fallback.meta.fallbackUsed).toBe(true)
+    expect(fallback.task.flight?.flightNumber).toBe('MU5102')
+    expect(fallback.task.passengers.names).not.toContain('爸爸')
+    expect(fallback.task.taskRevision).toBe(created.task.taskRevision)
   })
 
   it('returns the current snapshot through revision conflict errors', () => {

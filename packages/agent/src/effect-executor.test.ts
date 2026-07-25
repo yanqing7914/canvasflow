@@ -89,6 +89,15 @@ describe('EffectExecutor', () => {
   })
 
   it.each([
+    [{ speedKph: 10, batteryPercent: 42, remainingRangeKm: 210, gear: 'P' as const, isNight: false }, false],
+    [{ speedKph: 10, batteryPercent: 42, remainingRangeKm: 210, gear: 'D' as const, isNight: false }, false],
+    [{ speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P' as const, isNight: false }, true],
+    [{ speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'D' as const, isNight: false }, false],
+  ])('gates navigation against parked vehicle state %#', (vehicle, allowed) => {
+    expect(new DefaultPolicyGate().authorizeNavigationStart(task, task.navigation.routeId, vehicle).allowed).toBe(allowed)
+  })
+
+  it.each([
     ['bad envelope', () => ({ unexpected: true })],
     ['wrong request metadata', () => ({
       ok: true,

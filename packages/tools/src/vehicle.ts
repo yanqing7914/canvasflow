@@ -11,13 +11,22 @@ const TOOL = 'vehicle.get-status'
  * provider would ignore this and read the real vehicle state.
  */
 const vehicleStatusControlSchema = z
-  .object({ snapshot: z.string().min(1).optional() })
+  .union([
+    z.object({ snapshot: z.string().min(1) }),
+    z.object({
+      context: vehicleStatusOutputSchema.omit({ rearOccupied: true }).extend({ rearOccupied: z.boolean().optional() }),
+    }),
+  ])
   .optional()
 
 export function getVehicleStatus(ctx: ToolContext, input?: unknown): ToolResult<VehicleStatusOutput> {
   const parsed = vehicleStatusControlSchema.safeParse(input)
   if (!parsed.success) {
-    return errorResult(ctx, TOOL, 'INVALID_ARGUMENT', 'snapshot 必须是字符串', false)
+    return errorResult(ctx, TOOL, 'INVALID_ARGUMENT', '需要有效的车辆快照名称或车辆上下文', false)
+  }
+
+  if (parsed.data && 'context' in parsed.data) {
+    return okResult(ctx, TOOL, vehicleStatusOutputSchema.parse({ ...parsed.data.context, rearOccupied: parsed.data.context.rearOccupied ?? false }))
   }
 
   const snapshotName = parsed.data?.snapshot ?? DEFAULT_VEHICLE_SNAPSHOT

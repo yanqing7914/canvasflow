@@ -2,6 +2,7 @@ import { uiSpecSchema, type AirportPickupTaskState, type UISpec } from '@canvasf
 import { memberPreferences, type MemberPreferenceRecord } from '@canvasflow/tools'
 import { canRetryLandingMessage } from './landing-message-retry'
 import type { ReadToolResults } from './orchestration'
+import type { StoredTask } from './store'
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息',
@@ -150,6 +151,49 @@ export function composeAgentSpec(
       generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm,
       generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${task.taskRevision}`,
     },
+  })
+}
+
+export function applyRequestPresentation(ui: UISpec, context: StoredTask['requestContext']): UISpec {
+  if (!context) return ui
+  const density: UISpec['presentation']['density'] = context.vehicle.speedKph > 60
+    ? 'minimal'
+    : context.vehicle.speedKph > 0
+      ? 'compact'
+      : 'full'
+  const maxComponents = density === 'minimal' ? 2 : density === 'compact' ? 4 : 6
+  const components = ui.components.slice(0, maxComponents).map((component) => (
+    component.type === 'charging-recommendation'
+      ? {
+          ...component,
+          props: { ...component.props, currentBatteryPercent: context.vehicle.batteryPercent },
+        }
+      : component
+  ))
+  const retainedComponentActionIds = new Set(components.flatMap((component) => component.actions ?? []))
+  const ownedActionIds = new Set(ui.components.flatMap((component) => component.actions ?? []))
+  const actions = ui.actions.filter((action) => (
+    retainedComponentActionIds.has(action.id) || !ownedActionIds.has(action.id)
+  ))
+  const registeredActionIds = new Set(actions.map((action) => action.id))
+  const componentsWithActions = components.map((component) => component.actions
+    ? { ...component, actions: component.actions.filter((actionId) => registeredActionIds.has(actionId)) }
+    : component)
+  const layout = {
+    type: 'stack' as const,
+    gap: ui.layout.type === 'stack' ? ui.layout.gap : 'md' as const,
+    slots: { main: componentsWithActions.map((component) => component.id) },
+  }
+  return uiSpecSchema.parse({
+    ...ui,
+    presentation: {
+      ...ui.presentation,
+      density,
+      theme: context.vehicle.isNight ? 'dark' : 'light',
+    },
+    layout,
+    components: componentsWithActions,
+    actions,
   })
 }
 

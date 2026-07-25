@@ -390,6 +390,15 @@ describe('vehicle.get-status', () => {
     expect(result.data).toMatchObject({ speedKph: 80, gear: 'D' })
   })
 
+  it('accepts validated request vehicle context', () => {
+    const result = getVehicleStatus(ctx, {
+      context: { speedKph: 35, batteryPercent: 61, remainingRangeKm: 150, gear: 'D', isNight: false },
+    })
+    expect(result.data).toEqual({
+      speedKph: 35, batteryPercent: 61, remainingRangeKm: 150, gear: 'D', isNight: false, rearOccupied: false,
+    })
+  })
+
   it('未知快照返回 VEHICLE_STATE_UNAVAILABLE', () => {
     const result = getVehicleStatus(ctx, { snapshot: 'flying' })
     expect(result.error).toMatchObject({ code: 'VEHICLE_STATE_UNAVAILABLE', retryable: false })

@@ -49,14 +49,18 @@ describe('AgentApiClient', () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(result, 201))
     const api = client(fetchMock)
 
-    await expect(api.create('接妈妈，航班 MU5102', { source: 'voice', confidence: 0.96 })).resolves.toEqual(result)
+    await expect(api.create('接妈妈，航班 MU5102', {
+      source: 'voice', confidence: 0.96,
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥接机点' },
+    })).resolves.toEqual(result)
 
     expect(fetchMock).toHaveBeenCalledWith('/v1/tasks', expect.objectContaining({ method: 'POST' }))
     expect(requestBody(fetchMock, 0)).toEqual({
       clientRequestId: 'create-1',
       input: { type: 'text', text: '接妈妈，航班 MU5102', source: 'voice', confidence: 0.96 },
-      vehicleContext: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P', isNight: false },
+      vehicleContext: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false },
       clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: true },
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥接机点' },
     })
   })
 

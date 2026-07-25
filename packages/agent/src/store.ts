@@ -1,10 +1,18 @@
-import type { AirportPickupTaskState, EffectRecord, UISpec } from '@canvasflow/schema'
+import type { AgentDestination, AirportPickupTaskState, ClientCapabilities, EffectRecord, UISpec, VehicleContext } from '@canvasflow/schema'
 import type { ReadToolResults } from './orchestration'
 
 export type StoredTask = {
   task: AirportPickupTaskState
   ui: UISpec
   toolResults?: ReadToolResults
+  requestContext?: {
+    vehicle: VehicleContext
+    clientCapabilities: ClientCapabilities
+    destination: AgentDestination
+    inputConfidence?: number
+    /** Ordering watermark for request-context-only events. */
+    updatedAt?: string
+  }
 }
 
 export type StoredEventResult = {

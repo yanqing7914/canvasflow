@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { memberPreferences } from '@canvasflow/tools'
-import { composeAgentSpec } from './composer'
+import { applyRequestPresentation, composeAgentSpec } from './composer'
 import { applyEvent, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
 
@@ -140,6 +140,65 @@ describe('Agent UISpec composer', () => {
         { event: { type: 'confirmation', confirmationId: 'pickup-001:save-memory', decision: 'reject' } },
       ],
     })
+  })
+
+  it('keeps global confirmation actions while applying driving presentation limits', () => {
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'completed' as const,
+      pendingConfirmation: { confirmationId: 'pickup-001:save-memory', action: 'save-memory' as const },
+    }
+
+    const spec = applyRequestPresentation(composeAgentSpec(task), {
+      vehicle: { speedKph: 80, batteryPercent: 42, remainingRangeKm: 210, gear: 'D', isNight: false },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: true },
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+    })
+
+    expect(spec.presentation).toMatchObject({ density: 'minimal', theme: 'light' })
+    expect(spec.actions).toHaveLength(2)
+  })
+
+  it('removes actions owned only by components truncated by driving policy', () => {
+    const base = composeAgentSpec(createInitialTask('pickup-001', timestamp))
+    const spec = applyRequestPresentation({
+      ...base,
+      components: [
+        ...base.components,
+        { id: 'primary', type: 'status-banner', props: { level: 'info', title: '主要状态' } },
+        { id: 'secondary', type: 'status-banner', props: { level: 'info', title: '次要操作' }, actions: ['secondary-action'] },
+      ],
+      actions: [
+        { id: 'secondary-action', label: '次要操作', style: 'secondary', event: { type: 'dismiss', targetId: 'secondary' } },
+      ],
+      layout: { type: 'stack', gap: 'md', slots: { main: [...base.components.map((component) => component.id), 'primary', 'secondary'] } },
+    }, {
+      vehicle: { speedKph: 80, batteryPercent: 42, remainingRangeKm: 210, gear: 'D', isNight: false },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: true },
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+    })
+
+    expect(spec.components.map((component) => component.id)).not.toContain('secondary')
+    expect(spec.actions).toEqual([])
+  })
+
+  it('projects the latest request-context battery into charging UI', () => {
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      charging: { recommended: true, accepted: true, status: 'completed' as const },
+    }
+    const spec = applyRequestPresentation(composeAgentSpec(task), {
+      vehicle: { speedKph: 0, batteryPercent: 88, remainingRangeKm: 260, gear: 'P', isNight: false },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: true },
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      updatedAt: '2026-07-22T20:18:00+08:00',
+    })
+
+    expect(spec.components).toContainEqual(expect.objectContaining({
+      type: 'charging-recommendation',
+      props: expect.objectContaining({ currentBatteryPercent: 88 }),
+    }))
   })
 
   it('keeps original scheduledArrival separate from delayed estimatedArrival', () => {
