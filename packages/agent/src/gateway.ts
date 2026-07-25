@@ -741,7 +741,7 @@ export class AgentGateway {
     return {
       workflowId,
       homeDestinationId: homeDestinationId ?? existing?.homeDestinationId,
-      route: execution.applied.route && execution.navigation
+      route: execution.residual.route && execution.navigation
         ? { status: 'succeeded', routeId: execution.navigation.routeId, eta: execution.navigation.eta }
         : { ...(existing?.route ?? { status: 'pending' }), ...(failed('navigation.update-route') ? { status: 'failed' as const, errorCode: failed('navigation.update-route') } : {}) },
       cabin: { status: execution.applied.cabin ? 'succeeded' : (failed('vehicle.apply-cabin-profile') ? 'failed' : 'pending'), ...(failed('vehicle.apply-cabin-profile') ? { errorCode: failed('vehicle.apply-cabin-profile') } : {}) },
@@ -758,7 +758,7 @@ export class AgentGateway {
     return {
       ...task,
       returnTrip: this.#returnTripState(task, workflowId, homeDestinationId, execution),
-      ...(execution.applied.route && execution.navigation
+      ...(execution.residual.route && execution.navigation
         ? {
             navigation: {
               routeId: execution.navigation.routeId,

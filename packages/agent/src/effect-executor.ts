@@ -73,6 +73,7 @@ export type ReturnTripExecution = {
   navigation?: { routeId: string; destination: string; eta: string }
   rolledBack?: boolean
   applied: { route: boolean; cabin: boolean; media: boolean }
+  residual: { route: boolean; cabin: boolean; media: boolean }
 }
 
 export type MemoryProposalExecution = {
@@ -219,6 +220,7 @@ export class EffectExecutor {
       cabin: input.completed?.cabin === true,
       media: input.completed?.media === true,
     }
+    const residual = { ...applied }
     const newlyApplied = { route: false, cabin: false, media: false }
     let cabinEffectId: string | undefined
     const append = (type: string, status: EffectRecord['status'], tool = type, errorCode?: string) => {
@@ -252,6 +254,7 @@ export class EffectExecutor {
         )
         if (revert.succeeded && revert.data.effectId === cabinEffectId && revert.data.reverted) {
           applied.cabin = false
+          residual.cabin = false
           newlyApplied.cabin = false
           append('vehicle.revert-cabin-profile', 'succeeded')
         } else {
@@ -291,6 +294,7 @@ export class EffectExecutor {
             && restored.data.status === 'active'
           ) {
             applied.route = false
+            residual.route = false
             newlyApplied.route = false
             append('navigation.update-route.rollback', 'succeeded', 'navigation.update-route')
           } else {
@@ -304,13 +308,14 @@ export class EffectExecutor {
         }
       }
 
-      const rolledBack = !newlyApplied.route && !newlyApplied.cabin
+      const rolledBack = !residual.route && !residual.cabin && !residual.media
       return {
         succeeded: false,
         effect: effects,
         rolledBack,
         applied,
-        ...(applied.route && navigation.routeId ? { navigation } : {}),
+        residual,
+        ...(residual.route && navigation.routeId ? { navigation } : {}),
       }
     }
     const policy = this.#policy.authorizeReturnTrip(input.task)
@@ -346,14 +351,16 @@ export class EffectExecutor {
       toolResultSchema(navigationUpdateRouteOutputSchema),
         )
     if (!update.succeeded) return failed('navigation.update-route', update.errorCode)
+    navigation.routeId = update.data.routeId
+    navigation.destination = update.data.destination
+    navigation.eta = route.arrivalTime
     if (!input.completed?.route && (update.data.routeId !== route.routeId || update.data.destination !== '家' || update.data.status !== 'active')) {
+      residual.route = true
       newlyApplied.route = true
       return failed('navigation.update-route', 'PROVIDER_FAILED')
     }
-    navigation.routeId = route.routeId
-    navigation.destination = '家'
-    navigation.eta = route.arrivalTime
     applied.route = true
+    residual.route = true
     if (!input.completed?.route) {
       newlyApplied.route = true
       append('navigation.update-route', 'succeeded')
@@ -383,12 +390,13 @@ export class EffectExecutor {
         || (input.preferences.mediaTitle !== undefined && cabin.data.current.mediaTitle !== input.preferences.mediaTitle)
       ) {
         cabinEffectId = cabin.data.effectId
-        applied.cabin = true
+        residual.cabin = true
         newlyApplied.cabin = true
         return failed('vehicle.apply-cabin-profile', 'PROVIDER_FAILED')
       }
       cabinEffectId = cabin.data.effectId
       applied.cabin = true
+      residual.cabin = true
       newlyApplied.cabin = true
       append('vehicle.apply-cabin-profile', 'succeeded')
     }
@@ -406,15 +414,16 @@ export class EffectExecutor {
       )
       if (!media.succeeded) return failed('media.play', media.errorCode)
       if (media.data.title !== input.preferences.mediaTitle || media.data.status !== 'playing') {
-        applied.media = true
-        append('media.play', 'failed', 'media.play', 'PROVIDER_FAILED')
-        return { succeeded: false, effect: effects, rolledBack: false, applied, navigation }
+        applied.media = false
+        residual.media = true
+        return failed('media.play', 'PROVIDER_FAILED')
       }
       applied.media = true
+      residual.media = true
       append('media.play', 'succeeded')
     }
 
-    return { succeeded: true, effect: effects, navigation, applied }
+    return { succeeded: true, effect: effects, navigation, applied, residual }
   }
 
   proposeMemoryUpdate(input: {

@@ -651,6 +651,69 @@ describe('AgentGateway', () => {
     expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
   })
 
+  it('keeps semantically invalid media output failed and retries it', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    let mediaCalls = 0
+    const media = vi.fn((ctx: { taskId: string; requestId?: string }, input: unknown) => {
+      mediaCalls += 1
+      if (mediaCalls === 1) {
+        return {
+          ok: true as const,
+          data: { playbackId: 'wrong-playback', title: '轻音乐', status: 'playing' as const, reversible: true as const },
+          error: null,
+          meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'media.play', provider: 'fixture' as const, durationMs: 1, generatedAt: now },
+        }
+      }
+      return base['media.play'](ctx, input)
+    })
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime, providers: { ...base, 'media.play': media } })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'invalid-media-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'invalid-media-start' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'invalid-media-geofence', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'invalid-media-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'invalid-media-parked', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'invalid-media-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'invalid-media-onboard', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'invalid-media-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
+
+    expect(failed.task.returnTrip).toMatchObject({ media: { status: 'failed', errorCode: 'PROVIDER_FAILED' } })
+    const retry = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'invalid-media-retry', expectedTaskRevision: failed.task.taskRevision, expectedUiRevision: failed.ui.uiRevision,
+      actionId: 'retry-return-trip', componentId: 'return-trip-provider-fallback', idempotencyKey: 'invalid-media-retry',
+    })
+
+    expect(media).toHaveBeenCalledTimes(2)
+    expect(retry.task.returnTrip?.media.status).toBe('succeeded')
+  })
+
+  it('keeps invalid cabin output failed when cabin compensation also fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const applyCabin = vi.fn((ctx: { taskId: string; requestId?: string }) => ({
+      ok: true as const,
+      data: { effectId: `${ctx.taskId}:cabin:invalid`, applied: true, previous: { temperatureC: 22, fanLevel: 2 }, current: { temperatureC: 19, fanLevel: 2 }, reversible: true },
+      error: null,
+      meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'vehicle.apply-cabin-profile', provider: 'fixture' as const, durationMs: 1, generatedAt: now },
+    }))
+    const revertCabin = vi.fn((ctx: { taskId: string; requestId?: string }) => ({
+      ok: false as const,
+      data: null,
+      error: { code: 'ROLLBACK_FAILED', message: 'cannot revert cabin', retryable: false },
+      meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'vehicle.revert-cabin-profile', provider: 'fixture' as const, durationMs: 1, generatedAt: now },
+    }))
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.apply-cabin-profile': applyCabin, 'vehicle.revert-cabin-profile': revertCabin },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'invalid-cabin-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'invalid-cabin-start' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'invalid-cabin-geofence', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'invalid-cabin-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'invalid-cabin-parked', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'invalid-cabin-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'invalid-cabin-onboard', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'invalid-cabin-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
+
+    expect(failed.task.returnTrip).toMatchObject({ cabin: { status: 'failed', errorCode: 'PROVIDER_FAILED' } })
+    expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'vehicle.revert-cabin-profile', status: 'failed', errorCode: 'ROLLBACK_FAILED' }))
+    expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
+  })
+
   it.each([
     ['navigation.update-route', 'ROUTE_PROVIDER_FAILED'],
     ['vehicle.apply-cabin-profile', 'CABIN_PROVIDER_FAILED'],
