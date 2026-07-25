@@ -39,7 +39,7 @@ export type AgentApiClientOptions = {
 const defaultVehicleContext: CreateTaskRequest['vehicleContext'] = {
   speedKph: 0,
   batteryPercent: 42,
-  remainingRangeKm: 210,
+  remainingRangeKm: 112,
   gear: 'P',
   isNight: false,
 }
