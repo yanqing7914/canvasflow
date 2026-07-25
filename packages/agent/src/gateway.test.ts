@@ -547,7 +547,7 @@ describe('AgentGateway', () => {
     expect(playMedia).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps task facts aligned with the return route when a later provider fails', () => {
+  it('keeps the original task snapshot when a later return-trip provider fails', () => {
     const runtime = createSideEffectRuntime()
     const base = createProviderRegistry(runtime)
     let mediaCalls = 0
@@ -568,21 +568,63 @@ describe('AgentGateway', () => {
     const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'p', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'p', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
     expect(waiting.task.phase).toBe('waiting-for-passengers')
     const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
-    expect(failed.task).toMatchObject({
-      phase: 'returning-home',
-      passengers: { confirmedOnboard: true },
-      navigation: { routeId: 'route-home-001', destination: '家', status: 'active' },
-    })
-    expect(failed.task.taskRevision).toBe(waiting.task.taskRevision + 1)
+    expect(failed.task).toEqual(waiting.task)
     expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'media.play', status: 'failed', errorCode: 'MEDIA_UNAVAILABLE' }))
     expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
     const retry = gateway.submitAction(created.task.taskId, {
       clientRequestId: 'o-retry', expectedTaskRevision: failed.task.taskRevision, expectedUiRevision: failed.ui.uiRevision,
-      actionId: 'retry-return-trip', componentId: 'passenger-status', idempotencyKey: 'return-retry',
+      actionId: 'retry-return-trip', componentId: 'return-trip-provider-fallback', idempotencyKey: 'return-retry',
+    })
+    const duplicateRetry = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'o-retry-duplicate', expectedTaskRevision: failed.task.taskRevision, expectedUiRevision: failed.ui.uiRevision,
+      actionId: 'retry-return-trip', componentId: 'return-trip-provider-fallback', idempotencyKey: 'return-retry',
     })
     expect(mediaCalls).toBe(2)
+    expect(retry.task).toMatchObject({
+      phase: 'returning-home',
+      passengers: { confirmedOnboard: true },
+      navigation: { routeId: 'route-home-001', destination: '家', status: 'active' },
+    })
     expect(retry.task.returnTrip).toMatchObject({ route: { status: 'succeeded' }, cabin: { status: 'succeeded' }, media: { status: 'succeeded' } })
     expect(retry.effects).toContainEqual(expect.objectContaining({ type: 'media.play', status: 'succeeded' }))
+    expect(duplicateRetry.task).toEqual(retry.task)
+    expect(duplicateRetry.effects).toEqual(retry.effects)
+  })
+
+  it.each([
+    ['navigation.update-route', 'ROUTE_PROVIDER_FAILED'],
+    ['vehicle.apply-cabin-profile', 'CABIN_PROVIDER_FAILED'],
+  ] as const)('does not commit onboard facts when %s fails', (tool, errorCode) => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const failedProvider = vi.fn((ctx: { taskId: string; requestId?: string }) => ({
+      ok: false as const,
+      data: null,
+      error: { code: errorCode, message: 'failed', retryable: false },
+      meta: {
+        requestId: ctx.requestId!, taskId: ctx.taskId, tool, provider: 'fixture' as const,
+        durationMs: 1, generatedAt: now,
+      },
+    }))
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, [tool]: failedProvider },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: `s-${tool}`, expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: `s-${tool}` })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: `g-${tool}`, expectedTaskRevision: started.task.taskRevision, event: { eventId: `g-${tool}`, type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: `p-${tool}`, expectedTaskRevision: approaching.task.taskRevision, event: { eventId: `p-${tool}`, type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const event = { eventId: `onboard-${tool}`, type: 'user.confirmed-passengers-onboard' as const, timestamp: '2026-07-22T12:04:00+08:00' }
+
+    const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: `o-${tool}`, expectedTaskRevision: waiting.task.taskRevision, event })
+    const duplicate = gateway.submitEvent(created.task.taskId, { clientRequestId: `o-${tool}-retry`, expectedTaskRevision: waiting.task.taskRevision, event })
+
+    expect(failed.task).toEqual(waiting.task)
+    expect(failed.effects).toContainEqual(expect.objectContaining({ tool, status: 'failed', errorCode }))
+    expect(duplicate.task).toEqual(failed.task)
+    expect(duplicate.ui).toEqual(failed.ui)
+    expect(duplicate.effects).toEqual(failed.effects)
+    expect(failedProvider).toHaveBeenCalledTimes(1)
   })
 
   it('keeps a retry action when return-trip preference lookup falls back', () => {
@@ -605,7 +647,7 @@ describe('AgentGateway', () => {
     const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'p', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'p', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
     const fallback = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
 
-    expect(fallback.task.phase).toBe('returning-home')
+    expect(fallback.task).toEqual(waiting.task)
     expect(preferenceReads).toBe(1)
     expect(fallback.meta.fallbackUsed).toBe(true)
     expect(fallback.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
@@ -615,6 +657,7 @@ describe('AgentGateway', () => {
       actionId: 'retry-return-trip', componentId: 'return-trip-provider-fallback', idempotencyKey: 'return-retry',
     })
     expect(retry.meta.fallbackUsed).toBe(false)
+    expect(retry.task.phase).toBe('returning-home')
     expect(retry.task.returnTrip?.route.status).toBe('succeeded')
   })
 
@@ -639,10 +682,9 @@ describe('AgentGateway', () => {
     const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'p', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'p', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
     const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'o', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'o', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
 
-    expect(failed.task.phase).toBe('returning-home')
-    expect(failed.task.navigation).toBeUndefined()
-    expect(failed.task.returnTrip).toMatchObject({ route: { status: 'failed', errorCode: 'PREFERENCE_UNAVAILABLE' } })
+    expect(failed.task).toEqual(waiting.task)
     expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'navigation.update-route', status: 'failed', errorCode: 'PREFERENCE_UNAVAILABLE' }))
+    expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
   })
 
   it('keeps the original snapshot and records a failed effect when navigation.start fails', () => {
