@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   applyEvent,
   armLandingMessageRetry,
@@ -59,6 +59,8 @@ export default function App({
   const [text, setText] = useState('我现在要去机场接妈妈和豆豆')
   const [stepIndex, setStepIndex] = useState(0)
   const [error, setError] = useState<string>()
+  const [pending, setPending] = useState(false)
+  const pendingRef = useRef(false)
   const [localTask, setLocalTask] = useState<AirportPickupTaskState>(initialTask ?? mainFlowTimeline.initialTaskState)
   // Fixture-only injection is used by unit tests; the shipped demo leaves these props unset.
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
@@ -71,18 +73,27 @@ export default function App({
   const spec = response?.ui ?? localSpec
   const effects = useMemo(() => response?.effects ?? [], [response])
 
-  async function run(operation: () => Promise<AgentResponse>) {
+  async function run(operation: () => Promise<AgentResponse>): Promise<AgentResponse | undefined> {
+    if (pendingRef.current) return undefined
+    pendingRef.current = true
+    setPending(true)
     setError(undefined)
     try {
       const next = await operation()
       setResponse(next)
       return next
-    } catch (cause) { setError(cause instanceof Error ? cause.message : '请求失败') }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '请求失败')
+      return undefined
+    } finally {
+      pendingRef.current = false
+      setPending(false)
+    }
   }
 
   function submitText() {
     const value = text.trim()
-    if (!value) return
+    if (!value || pendingRef.current) return
     if (!response && !localOnly) {
       void run(() => api.create(value)).then((created) => {
         if (created) setStepIndex(1)
@@ -104,6 +115,7 @@ export default function App({
   }
 
   function advance() {
+    if (pendingRef.current) return
     if (!response) {
       setLocalTask((current) => advanceMainFlowStep(current, demoRuntime.preferences))
       return
@@ -120,6 +132,7 @@ export default function App({
   }
 
   function handleAction(actionId: string, componentId: string) {
+    if (pendingRef.current) return
     if (!response) {
       setLocalTask((current) => {
         if (actionId === 'save-trip-preferences') return resolveConfirmation(current, `${current.taskId}:save-memory`)
@@ -158,11 +171,11 @@ export default function App({
 
   return <main className="demo-shell">
     <header><p className="eyebrow">CanvasFlow / Agent API</p><h1>机场接人任务卡片</h1><p>文本、Action、confirmation 与时间线事件统一通过 Gateway。</p></header>
-    <section className="prompt" aria-label="Agent input"><input aria-label="任务输入" value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitText() }} placeholder="告诉我接谁、航班号或下一步" /><button type="button" onClick={submitText}>发送</button></section>
-    <section className="console" aria-label="Event console"><div><span className="label">阶段</span><strong>{spec?.title ?? '等待创建任务'}</strong><small>{task ? `${task.phase} · taskRevision ${task.taskRevision} · uiRevision ${spec?.uiRevision}` : '尚无任务'}</small></div><button type="button" onClick={advance} disabled={!task || task.phase === 'completed' || task.phase === 'cancelled'}>推进下一事件</button></section>
+    <section className="prompt" aria-label="Agent input"><input aria-label="任务输入" value={text} disabled={pending} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitText() }} placeholder="告诉我接谁、航班号或下一步" /><button type="button" onClick={submitText} disabled={pending}>发送</button></section>
+    <section className="console" aria-label="Event console"><div><span className="label">阶段</span><strong>{spec?.title ?? '等待创建任务'}</strong><small>{task ? `${task.phase} · taskRevision ${task.taskRevision} · uiRevision ${spec?.uiRevision}` : '尚无任务'}</small></div><button type="button" onClick={advance} disabled={pending || !task || task.phase === 'completed' || task.phase === 'cancelled'}>推进下一事件</button></section>
     {error && <p role="alert">{error}</p>}
-    <section className="cards">{spec?.components.map((component) => <article key={component.id}><span className="tag">{component.type}</span><h2>{componentTitle(component)}</h2><p>{componentSummary(component)}</p>{component.actions?.map((actionId) => <button key={actionId} type="button" onClick={() => handleAction(actionId, component.id)}>{spec.actions.find((action) => action.id === actionId)?.label ?? actionId}</button>)}</article>)}</section>
-    {spec && spec.actions.length > 0 && <section className="actions" aria-label="Task actions">{spec.actions.filter((action) => !spec.components.some((component) => component.actions?.includes(action.id))).map((action) => <button key={action.id} type="button" onClick={() => handleAction(action.id, spec.components[0]?.id ?? 'task')}>{action.label}</button>)}</section>}
+    <section className="cards">{spec?.components.map((component) => <article key={component.id}><span className="tag">{component.type}</span><h2>{componentTitle(component)}</h2><p>{componentSummary(component)}</p>{component.actions?.map((actionId) => <button key={actionId} type="button" onClick={() => handleAction(actionId, component.id)} disabled={pending}>{spec.actions.find((action) => action.id === actionId)?.label ?? actionId}</button>)}</article>)}</section>
+    {spec && spec.actions.length > 0 && <section className="actions" aria-label="Task actions">{spec.actions.filter((action) => !spec.components.some((component) => component.actions?.includes(action.id))).map((action) => <button key={action.id} type="button" onClick={() => handleAction(action.id, spec.components[0]?.id ?? 'task')} disabled={pending}>{action.label}</button>)}</section>}
     {effects.length > 0 && <p className="effects" aria-label="Effect receipts">{effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ')}</p>}
   </main>
 }

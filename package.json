@@ -11,7 +11,7 @@
     "node": ">=22 <25"
   },
   "scripts": {
-    "dev": "npm run dev --workspace @canvasflow/demo",
+    "dev": "node scripts/dev.mjs",
     "build": "npm run build --workspaces --if-present",
     "preview": "npm run preview --workspace @canvasflow/demo",
     "lint": "eslint .",

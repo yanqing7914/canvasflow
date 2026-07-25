@@ -348,6 +348,29 @@ describe('demo integration', () => {
     expect(flightUpdateAttempts).toBe(2)
   })
 
+  it('serializes API mutations and disables controls while a request is pending', async () => {
+    const user = userEvent.setup()
+    let resolveCreate!: (response: AgentResponse) => void
+    const create = vi.fn(() => new Promise<AgentResponse>((resolve) => { resolveCreate = resolve }))
+    const api = {
+      create,
+      event: vi.fn(),
+      action: vi.fn(),
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    const send = screen.getByRole('button', { name: '发送' })
+    await user.click(send)
+    expect(send).toBeDisabled()
+    await user.click(send)
+    expect(create).toHaveBeenCalledTimes(1)
+
+    resolveCreate(apiResponse(createInitialTask()))
+    await screen.findByText(/collecting-information/)
+    expect(send).toBeEnabled()
+  })
+
   it('renders and resolves the completion confirmation action', async () => {
     const user = userEvent.setup()
     render(<App initialTask={{ ...createInitialTask(), phase: 'completed', pendingConfirmation: { confirmationId: 'pickup-001:save-memory', action: 'save-memory' } }} />)
