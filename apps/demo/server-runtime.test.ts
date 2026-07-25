@@ -1,14 +1,20 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { request } from 'node:http'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createAgentServer, serverHost, serverPort } from './server-runtime'
 
 describe('agent server runtime', () => {
   let server: ReturnType<typeof createAgentServer> | undefined
+  let staticDirectory: string | undefined
 
   afterEach(async () => {
     if (!server) return
     await new Promise<void>((resolve) => server?.close(() => resolve()))
     server = undefined
+    if (staticDirectory) await rm(staticDirectory, { recursive: true, force: true })
+    staticDirectory = undefined
   })
 
   it('binds externally by default and allows a local override', () => {
@@ -45,5 +51,18 @@ describe('agent server runtime', () => {
     expect(status).toBe(400)
     const health = await fetch(`http://127.0.0.1:${address.port}/health`)
     expect(health.status).toBe(200)
+  })
+
+  it('serves the production index from an absolute static directory', async () => {
+    staticDirectory = await mkdtemp(join(tmpdir(), 'canvasflow-demo-'))
+    await writeFile(join(staticDirectory, 'index.html'), '<h1>CanvasFlow</h1>')
+    server = createAgentServer({ staticDirectory })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/`)
+    expect(response.status).toBe(200)
+    await expect(response.text()).resolves.toContain('CanvasFlow')
   })
 })

@@ -1,12 +1,15 @@
 import { spawn } from 'node:child_process'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const webCommand = process.argv[2] === 'preview' ? 'preview' : 'dev'
 const commands = webCommand === 'preview'
   ? [['preview', ['run', 'agent', '--workspace', '@canvasflow/demo'], {
       ...process.env,
       AGENT_PORT: process.env.AGENT_PORT ?? '4173',
-      DEMO_STATIC_DIR: process.env.DEMO_STATIC_DIR ?? 'dist',
+      DEMO_STATIC_DIR: process.env.DEMO_STATIC_DIR ?? resolve(repositoryRoot, 'apps/demo/dist'),
     }]]
   : [
       ['agent', ['run', 'agent', '--workspace', '@canvasflow/demo'], process.env],
