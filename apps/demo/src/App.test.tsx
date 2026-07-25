@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import App from './App'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { applyEvent, createInitialTask } from '@canvasflow/agent'
-import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState } from '@canvasflow/schema'
+import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, UISpec, VehicleContext } from '@canvasflow/schema'
 import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
 
@@ -74,6 +74,98 @@ describe('demo integration', () => {
     expect(screen.getByText('尚无任务')).toBeInTheDocument()
     expect(screen.queryByText('status-banner')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '推进下一事件' })).toBeDisabled()
+  })
+
+  it.each([
+    {
+      name: 'parked',
+      vehicle: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false } satisfies VehicleContext,
+      visibleTitle: '停车提示',
+      hiddenTitle: '驾驶提示',
+    },
+    {
+      name: 'driving',
+      vehicle: { speedKph: 30, batteryPercent: 42, remainingRangeKm: 112, gear: 'D', isNight: false } satisfies VehicleContext,
+      visibleTitle: '驾驶提示',
+      hiddenTitle: '停车提示',
+    },
+  ])('passes authoritative $name context from task creation into UISpec visibility', async ({ vehicle, visibleTitle, hiddenTitle }) => {
+    const user = userEvent.setup()
+    const task = createInitialTask()
+    const base = composePickupSpec(task)
+    const ui: UISpec = {
+      ...base,
+      layout: { type: 'stack', gap: 'md', slots: { main: ['parked-status', 'driving-status'] } },
+      components: [
+        { id: 'parked-status', type: 'status-banner', visibility: 'parked-only', props: { level: 'info', title: '停车提示' } },
+        { id: 'driving-status', type: 'status-banner', visibility: 'driving-only', props: { level: 'info', title: '驾驶提示' } },
+      ],
+    }
+    const response = { ...apiResponse(task), ui }
+    const create = vi.fn().mockResolvedValue(response)
+    const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+
+    render(<App api={api} initialVehicleContext={vehicle} />)
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    expect(await screen.findByText(visibleTitle)).toBeInTheDocument()
+    expect(screen.queryByText(hiddenTitle)).not.toBeInTheDocument()
+    expect(create).toHaveBeenCalledWith('我现在要去机场接妈妈和豆豆', { vehicleContext: vehicle })
+  })
+
+  it('updates conditional visibility after successful moving and parked sensor events', async () => {
+    const user = userEvent.setup()
+    let task = {
+      ...createInitialTask(),
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+    }
+    const responseWithVisibility = (current: AirportPickupTaskState): AgentResponse => {
+      const response = apiResponse(current)
+      return {
+        ...response,
+        ui: {
+          ...response.ui,
+          layout: { type: 'stack', gap: 'md', slots: { main: ['parked-status', 'driving-status'] } },
+          components: [
+            { id: 'parked-status', type: 'status-banner', visibility: 'parked-only', props: { level: 'info', title: '停车提示' } },
+            { id: 'driving-status', type: 'status-banner', visibility: 'driving-only', props: { level: 'info', title: '驾驶提示' } },
+          ],
+        },
+      }
+    }
+    const api = {
+      create: vi.fn(async () => responseWithVisibility(task)),
+      event: vi.fn(async (current: AirportPickupTaskState, event: AirportPickupEvent) => {
+        task = applyEvent(current, {
+          ...event,
+          eventId: event.eventId ?? `event-${event.type}`,
+          timestamp: event.timestamp ?? '2026-07-22T20:10:00+08:00',
+        })
+        return responseWithVisibility(task)
+      }),
+      action: vi.fn(async (current: AgentResponse) => {
+        task = applyEvent(current.task, mainFlowTimeline.steps[3]!.event)
+        return responseWithVisibility(task)
+      }),
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByText('停车提示')).toBeInTheDocument()
+
+    const advance = screen.getByRole('button', { name: '推进下一事件' })
+    await user.clear(screen.getByLabelText('任务输入'))
+    await user.type(screen.getByLabelText('任务输入'), 'MU5102')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await user.click(screen.getByRole('button', { name: '开始导航' }))
+    expect(await screen.findByText('驾驶提示')).toBeInTheDocument()
+    expect(screen.queryByText('停车提示')).not.toBeInTheDocument()
+
+    for (let index = 0; index < 7; index += 1) await user.click(advance)
+    expect(api.event).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ type: 'vehicle.parked' }))
+    expect(await screen.findByText('停车提示')).toBeInTheDocument()
+    expect(screen.queryByText('驾驶提示')).not.toBeInTheDocument()
   })
 
   it('surfaces the terminal meeting point while approaching / waiting', () => {
