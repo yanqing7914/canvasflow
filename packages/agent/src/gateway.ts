@@ -794,6 +794,7 @@ export class AgentGateway {
     error?: ReadToolOrchestrationError,
     task: AirportPickupTaskState = current.task,
   ): StoredTask {
+    const taskChanged = JSON.stringify(task) !== JSON.stringify(current.task)
     const uiBase = {
       ...task,
       uiRevision: Math.max(task.uiRevision, current.ui.uiRevision),
@@ -801,7 +802,9 @@ export class AgentGateway {
     const ui = composeFallbackSpec(
       uiBase,
       error?.code === 'PROVIDER_TIMEOUT' ? '返程设置暂时不可用' : '返程设置失败',
-      '任务状态未改变，可以安全重试返程路线、座舱和媒体设置。',
+      taskChanged
+        ? '部分返程操作仍在生效，当前状态已同步显示。请检查路线和座舱后重试未完成的设置。'
+        : '返程操作已撤销，任务状态未改变。可以安全重试返程路线、座舱和媒体设置。',
       error?.code === 'PROVIDER_TIMEOUT' ? 'warning' : 'error',
       {
         actionId: 'retry-return-trip',

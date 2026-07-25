@@ -582,6 +582,10 @@ describe('AgentGateway', () => {
       routeId: 'route-airport-001',
       destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
     }))
+    expect(failed.ui.components).toContainEqual(expect.objectContaining({
+      type: 'status-banner',
+      props: expect.objectContaining({ message: expect.stringContaining('返程操作已撤销') }),
+    }))
     expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
     const retry = gateway.submitAction(created.task.taskId, {
       clientRequestId: 'o-retry', expectedTaskRevision: failed.task.taskRevision, expectedUiRevision: failed.ui.uiRevision,
@@ -649,6 +653,10 @@ describe('AgentGateway', () => {
     })
     expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'navigation.update-route.rollback', status: 'failed', errorCode: 'ROLLBACK_FAILED' }))
     expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-return-trip' }))
+    expect(failed.ui.components).toContainEqual(expect.objectContaining({
+      type: 'status-banner',
+      props: expect.objectContaining({ message: expect.stringContaining('部分返程操作仍在生效') }),
+    }))
   })
 
   it('keeps semantically invalid media output failed and retries it', () => {
