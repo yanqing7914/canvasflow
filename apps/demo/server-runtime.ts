@@ -20,7 +20,10 @@ export function createAgentServer(options: AgentServerOptions = {}) {
       return
     }
     if (staticDirectory && request.method === 'GET' && !request.url?.startsWith('/v1/')) {
-      void serveStatic(staticDirectory, request.url ?? '/', response)
+      void serveStatic(staticDirectory, request.url ?? '/', response).catch(() => {
+        if (!response.headersSent) response.writeHead(500)
+        if (!response.writableEnded) response.end()
+      })
       return
     }
     void agentHandler(request, response)
@@ -36,7 +39,13 @@ export function serverPort(environment: NodeJS.ProcessEnv = process.env): number
 }
 
 async function serveStatic(staticDirectory: string, url: string, response: ServerResponse) {
-  const pathname = decodeURIComponent(new URL(url, 'http://localhost').pathname)
+  let pathname: string
+  try {
+    pathname = decodeURIComponent(new URL(url, 'http://localhost').pathname)
+  } catch {
+    response.writeHead(400).end()
+    return
+  }
   const relative = normalize(pathname).replace(/^([/\\])+/, '')
   const requested = resolve(join(staticDirectory, relative || 'index.html'))
   if (!requested.startsWith(`${staticDirectory}/`) && requested !== staticDirectory) {
