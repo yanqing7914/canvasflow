@@ -43,6 +43,16 @@ describe('airport pickup Planner', () => {
     })
   })
 
+  it.each([
+    '去航站楼接一下妈妈的电话',
+    '去航站楼接一下妈妈和豆豆的电话',
+  ])('does not interpret a passenger phone call as pickup: %s', (text) => {
+    expect(planAirportPickup({ text, eventId: `phone-${text}`, timestamp })).toMatchObject({
+      intent: 'unknown',
+      proposedEvents: [],
+    })
+  })
+
   it('fills passengers when the flight is provided before the passenger', () => {
     const state = createInitialTask('pickup-001', timestamp)
     const plan = planAirportPickup({ text: '航班 MU5102，接爸爸', state, eventId: 'dad-after-flight', timestamp })

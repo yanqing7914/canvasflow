@@ -114,9 +114,12 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
-  const isPickupRequest = /去机场接/.test(compactText)
-    || /机场接(?:人|妈妈|爸爸|豆豆)/.test(compactText)
-    || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(compactText)
+  const isPassengerPhoneRequest = /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)(?:和(?:妈妈|爸爸|豆豆))*(?:的)?电话/.test(compactText)
+  const isPickupRequest = !isPassengerPhoneRequest && (
+    /去机场接/.test(compactText)
+      || /机场接(?:人|妈妈|爸爸|豆豆)/.test(compactText)
+      || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(compactText)
+  )
   if (isPickupRequest) {
     const missingSlots = pickupMissingSlots(state, passengers, flightNumber)
     return {
