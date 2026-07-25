@@ -8,9 +8,17 @@ const passengerCatalog = [
   { name: '豆豆', memberId: 'doubao' },
 ] as const
 
+const passengerPhonePhrasePattern = /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)(?:和(?:妈妈|爸爸|豆豆))*(?:的)?电话/gu
+
+/** Remove phone-call phrases so their names do not fill pickup passenger slots. */
+export function stripPassengerPhonePhrases(text: string): string {
+  return text.replace(passengerPhonePhrasePattern, '')
+}
+
 /** Parse only passenger labels with an explicit product mapping. Unknown names stay missing. */
 export function parsePassengers(text: string): ParsedPassengers | undefined {
-  const matches = passengerCatalog.filter((passenger) => text.includes(passenger.name))
+  const actionableText = stripPassengerPhonePhrases(text)
+  const matches = passengerCatalog.filter((passenger) => actionableText.includes(passenger.name))
   if (matches.length === 0) return undefined
   return {
     memberIds: matches.map((passenger) => passenger.memberId),

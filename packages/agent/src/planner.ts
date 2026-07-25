@@ -1,6 +1,6 @@
 import type { AirportPickupEvent, AirportPickupTaskState } from '@canvasflow/schema'
 import { normalizeFlightNumber } from './flight-number'
-import { parsePassengers } from './passengers'
+import { parsePassengers, stripPassengerPhonePhrases } from './passengers'
 
 export type PlannerIntent =
   | 'create-airport-pickup'
@@ -51,6 +51,7 @@ export class Planner {
 export function planAirportPickup(input: PlannerInput): Plan {
   const text = input.text.trim()
   const compactText = text.replace(/\s+/g, '')
+  const actionableText = stripPassengerPhonePhrases(compactText)
   const state = input.state
   const flightNumber = normalizeFlightNumber(text)
   const passengers = parsePassengers(text)
@@ -114,12 +115,9 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
-  const isPassengerPhoneRequest = /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)(?:和(?:妈妈|爸爸|豆豆))*(?:的)?电话/.test(compactText)
-  const isPickupRequest = !isPassengerPhoneRequest && (
-    /去机场接/.test(compactText)
-      || /机场接(?:人|妈妈|爸爸|豆豆)/.test(compactText)
-      || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(compactText)
-  )
+  const isPickupRequest = /去机场接/.test(actionableText)
+    || /机场接(?:人|妈妈|爸爸|豆豆)/.test(actionableText)
+    || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(actionableText)
   if (isPickupRequest) {
     const missingSlots = pickupMissingSlots(state, passengers, flightNumber)
     return {

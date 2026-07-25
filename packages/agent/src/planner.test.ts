@@ -53,6 +53,29 @@ describe('airport pickup Planner', () => {
     })
   })
 
+  it.each([
+    ['先接一下妈妈的电话，然后去机场接爸爸', undefined],
+    ['先接一下妈妈的电话，然后去机场接爸爸，航班 MU5102', 'MU5102'],
+  ] as const)('keeps the pickup intent after an unrelated phone request: %s', (text, expectedFlight) => {
+    const plan = planAirportPickup({ text, eventId: `mixed-${text}`, timestamp })
+
+    expect(plan).toMatchObject({
+      intent: 'create-airport-pickup',
+      slotUpdates: {
+        passengers: { memberIds: ['dad'], names: ['爸爸'], confirmedOnboard: false },
+        ...(expectedFlight ? { flightNumber: expectedFlight } : {}),
+      },
+      missingSlots: expectedFlight ? [] : ['flightNumber'],
+      proposedEvents: [{ type: 'user.input', text }],
+    })
+    if (expectedFlight) {
+      expect(applyEvent(createInitialTask('mixed-task', timestamp), plan.proposedEvents[0]!)).toMatchObject({
+        passengers: { memberIds: ['dad'], names: ['爸爸'], confirmedOnboard: false },
+        flight: { flightNumber: expectedFlight },
+      })
+    }
+  })
+
   it('fills passengers when the flight is provided before the passenger', () => {
     const state = createInitialTask('pickup-001', timestamp)
     const plan = planAirportPickup({ text: '航班 MU5102，接爸爸', state, eventId: 'dad-after-flight', timestamp })
