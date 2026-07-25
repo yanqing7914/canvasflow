@@ -56,6 +56,7 @@ jobs:
             scripts/dev.mjs
             apps/demo/package.json
             apps/demo/server.ts
+            apps/demo/server-runtime.ts
             apps/demo/dist
             packages
 
