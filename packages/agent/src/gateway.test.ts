@@ -292,6 +292,45 @@ describe('AgentGateway', () => {
     expect(denied.effects).toEqual([expect.objectContaining({ status: 'failed', errorCode: 'VEHICLE_MOVING' })])
   })
 
+  it('keeps moving safety context when parked arrives with the same timestamp', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'equal-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'equal-start',
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'equal-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'equal-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'equal-moving', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'equal-moving', type: 'vehicle.moving', speedKph: 20, timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    const parked = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'equal-parked', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'equal-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+
+    expect(parked.task.phase).toBe('waiting-for-passengers')
+    expect(parked.ui.presentation.density).toBe('compact')
+
+    const reset = gateway.resetTask(created.task.taskId, {
+      clientRequestId: 'equal-reset', expectedTaskRevision: parked.task.taskRevision,
+    })
+    const prepared = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'equal-reprepare', expectedTaskRevision: reset.task.taskRevision,
+      event: { eventId: 'equal-reprepare', type: 'user.input', text: '接妈妈，航班 MU5102', timestamp: '2026-07-22T12:03:00+08:00' },
+    })
+    const denied = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'equal-navigation-denied', expectedTaskRevision: prepared.task.taskRevision,
+      expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'equal-navigation-denied',
+    })
+    expect(denied.effects).toEqual([expect.objectContaining({ status: 'failed', errorCode: 'VEHICLE_MOVING' })])
+  })
+
   it('does not let a newer moving watermark reject active charging completion', () => {
     const gateway = createGateway()
     const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))

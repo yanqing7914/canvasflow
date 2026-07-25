@@ -1011,8 +1011,13 @@ export class AgentGateway {
   ): StoredTask['requestContext'] {
     if (!context) return undefined
     if (event.type === 'user.input') return { ...context, inputConfidence: undefined }
-    const contextEventIsCurrent = !context.updatedAt
-      || Date.parse(event.timestamp) >= Date.parse(context.updatedAt)
+    const eventTimestamp = Date.parse(event.timestamp)
+    const contextTimestamp = context.updatedAt ? Date.parse(context.updatedAt) : undefined
+    const equalTimestampParkedWouldClearMoving = event.type === 'vehicle.parked'
+      && contextTimestamp === eventTimestamp
+      && (context.vehicle.speedKph > 0 || context.vehicle.gear !== 'P')
+    const contextEventIsCurrent = (contextTimestamp === undefined || eventTimestamp >= contextTimestamp)
+      && !equalTimestampParkedWouldClearMoving
     if (!contextEventIsCurrent) return context
     if (event.type === 'vehicle.moving') {
       return {
