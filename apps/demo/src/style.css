@@ -81,14 +81,35 @@ header p { color: #bac6bf; }
 
 .ui-surface {
   --card-padding: clamp(1.1rem, 2.2vw, 2rem);
-  border: 1px solid rgba(232, 255, 101, 0.22);
+  --surface-accent: var(--acid);
+  --surface-background: #091410;
+  --surface-border: rgba(232, 255, 101, 0.22);
+  --surface-foreground: #f4f0e5;
+  --surface-muted: var(--muted);
+  background: var(--surface-background);
+  border: 1px solid var(--surface-border);
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.25);
+  color: var(--surface-foreground);
   margin-top: 1rem;
   padding: clamp(1rem, 2.5vw, 2.25rem);
   position: relative;
 }
+.ui-surface[data-theme="light"] {
+  --surface-accent: #1d7658;
+  --surface-background: #e8ede5;
+  --surface-border: rgba(22, 80, 60, 0.25);
+  --surface-foreground: #102019;
+  --surface-muted: #5f6f67;
+}
+.ui-surface[data-theme="dark"] {
+  --surface-accent: var(--acid);
+  --surface-background: #091410;
+  --surface-border: rgba(232, 255, 101, 0.28);
+  --surface-foreground: #f4f0e5;
+  --surface-muted: var(--muted);
+}
 .ui-surface::before {
-  background: linear-gradient(90deg, var(--acid), transparent);
+  background: linear-gradient(90deg, var(--surface-accent), transparent);
   content: "";
   height: 2px;
   left: 0;
@@ -104,8 +125,9 @@ header p { color: #bac6bf; }
 .surface-heading { align-items: flex-start; display: flex; gap: 1rem; justify-content: space-between; margin-bottom: 1rem; }
 .surface-heading h2 { font-family: Georgia, serif; font-size: clamp(1.6rem, 3vw, 2.8rem); line-height: 1; margin: 0.35rem 0 0; }
 .surface-revision { align-items: end; border-left: 1px solid var(--line); display: grid; justify-items: end; min-width: 4rem; padding-left: 1rem; }
-.surface-revision span { color: var(--muted); font-size: 0.65rem; letter-spacing: 0.16em; }
-.surface-revision strong { color: var(--acid); font-family: Georgia, serif; font-size: 2rem; }
+.ui-surface .surface-kicker { color: var(--surface-accent); }
+.surface-revision span { color: var(--surface-muted); font-size: 0.65rem; letter-spacing: 0.16em; }
+.surface-revision strong { color: var(--surface-accent); font-family: Georgia, serif; font-size: 2rem; }
 
 .ui-layout { display: grid; min-width: 0; }
 .ui-slot { display: grid; gap: inherit; min-width: 0; }

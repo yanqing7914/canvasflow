@@ -59,6 +59,7 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
       aria-label="Generated task interface"
       data-layout={spec.layout.type}
       data-theme={spec.presentation.theme}
+      style={themeStyle(spec.presentation.theme)}
     >
       <div className="surface-heading">
         <div>
@@ -308,6 +309,12 @@ function layoutGap(spec: UISpec): string {
 function layoutStyle(spec: UISpec): CSSProperties | undefined {
   if (spec.layout.type !== 'split') return undefined
   return { gridTemplateColumns: `${spec.layout.ratio[0]}fr ${spec.layout.ratio[1]}fr` }
+}
+
+function themeStyle(theme: UISpec['presentation']['theme']): CSSProperties {
+  return theme === 'light'
+    ? { backgroundColor: '#e8ede5', color: '#102019' }
+    : { backgroundColor: '#091410', color: '#f4f0e5' }
 }
 
 function formatTime(value: string): string {

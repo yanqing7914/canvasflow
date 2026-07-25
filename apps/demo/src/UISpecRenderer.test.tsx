@@ -68,6 +68,34 @@ describe('UISpecRenderer', () => {
     expect(container.querySelector(`.${className}`)).toBeInTheDocument()
   })
 
+  it('projects light and dark themes as distinct surface contracts', () => {
+    const component: ComponentSpec = {
+      id: 'theme-banner', type: 'status-banner', props: { level: 'info', title: '主题提示' },
+    }
+    const dark = specWith([component], {
+      presentation: { mode: 'replace', density: 'full', theme: 'dark', priority: 'normal' },
+    })
+    const light = specWith([component], {
+      presentation: { mode: 'replace', density: 'full', theme: 'light', priority: 'normal' },
+    })
+    const { container, rerender } = render(<UISpecRenderer onAction={() => undefined} pending={false} spec={dark} />)
+    const surface = container.querySelector('.ui-surface')
+    expect(surface).toHaveAttribute('data-theme', 'dark')
+    const darkStyle = getComputedStyle(surface as Element)
+    const darkColors = { background: darkStyle.backgroundColor, foreground: darkStyle.color }
+
+    rerender(<UISpecRenderer onAction={() => undefined} pending={false} spec={light} />)
+    expect(surface).toHaveAttribute('data-theme', 'light')
+    const lightStyle = getComputedStyle(surface as Element)
+    expect(lightStyle.backgroundColor).not.toBe(darkColors.background)
+    expect(lightStyle.color).not.toBe(darkColors.foreground)
+
+    const critical = { ...light, presentation: { ...light.presentation, priority: 'critical' as const } }
+    rerender(<UISpecRenderer onAction={() => undefined} pending={false} spec={critical} />)
+    expect(surface).toHaveClass('priority-critical')
+    expect((surface as HTMLElement).style.borderColor).toBe('')
+  })
+
   it('renders focus primary and secondary slots without flattening their order', () => {
     const components: ComponentSpec[] = [
       { id: 'secondary', type: 'status-banner', props: { level: 'info', title: '次要内容' } },
