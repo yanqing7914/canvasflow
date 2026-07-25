@@ -24,12 +24,18 @@ Repository context:
 - All changes should land via pull request.
 - This repo uses `AGENTS.md` as durable guidance.
 
-Verdict contract:
+## Required Final Format
 
-Automation parses your final message to decide whether the PR can merge automatically, so end the final message with exactly one verdict line, as the last line, in one of these two forms:
+Your final response is posted to the pull request and parsed by automation. Do not end the review until you have written a concise human-readable conclusion followed by exactly one of the verdict lines below as the final line of your response.
 
-- `CODEX-REVIEW-VERDICT: PASS` — you found no unresolved P0 or P1 issue in this PR.
-- `CODEX-REVIEW-VERDICT: BLOCK` — at least one P0 or P1 issue remains.
+```text
+CODEX-REVIEW-VERDICT: PASS
+```
 
-A PASS verdict triggers an automatic merge into `dev`. Never output PASS while any P0 or P1 finding stands, and never omit the verdict line.
+Use `PASS` only when there are no unresolved P0 or P1 findings. Otherwise end with:
 
+```text
+CODEX-REVIEW-VERDICT: BLOCK
+```
+
+Never quote either verdict line anywhere else in the response. Never omit the final verdict line. A malformed or missing verdict fails the review workflow and prevents automatic merge.
