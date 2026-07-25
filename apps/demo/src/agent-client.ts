@@ -36,7 +36,7 @@ export type AgentApiClientOptions = {
   clientCapabilities?: CreateTaskRequest['clientCapabilities']
 }
 
-const defaultVehicleContext: CreateTaskRequest['vehicleContext'] = {
+export const defaultDemoVehicleContext: CreateTaskRequest['vehicleContext'] = {
   speedKph: 0,
   batteryPercent: 42,
   remainingRangeKm: 112,
@@ -103,7 +103,7 @@ export class AgentApiClient {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.#createId = options.createId ?? browserId
     this.#now = options.now ?? (() => new Date().toISOString())
-    this.#vehicleContext = options.vehicleContext ?? defaultVehicleContext
+    this.#vehicleContext = options.vehicleContext ?? defaultDemoVehicleContext
     this.#clientCapabilities = options.clientCapabilities ?? defaultClientCapabilities
   }
 

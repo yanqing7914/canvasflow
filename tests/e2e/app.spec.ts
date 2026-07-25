@@ -11,6 +11,37 @@ async function advanceFlow(page: Page) {
   return response.json()
 }
 
+async function expectNoHorizontalOverflow(page: Page) {
+  const dimensions = await page.evaluate(() => ({
+    body: document.body.scrollWidth,
+    document: document.documentElement.scrollWidth,
+    viewport: document.documentElement.clientWidth,
+  }))
+  expect(Math.max(dimensions.body, dimensions.document)).toBeLessThanOrEqual(dimensions.viewport)
+}
+
+test('renders the UISpec surface responsively and keeps primary controls keyboard accessible', async ({ page }) => {
+  for (const viewport of [{ width: 375, height: 812 }, { width: 1920, height: 720 }]) {
+    await page.setViewportSize(viewport)
+    await page.goto('/')
+    await page.getByLabel('任务输入').focus()
+    await page.keyboard.press('Enter')
+
+    const surface = page.getByRole('region', { name: 'Generated task interface' })
+    await expect(surface).toBeVisible()
+    await expect(surface).toHaveAttribute('data-layout', 'stack')
+    await expect(surface.locator('[data-component-type="status-banner"]')).toBeVisible()
+    await page.getByLabel('任务输入').fill('MU5102')
+    await page.getByRole('button', { name: '发送' }).click()
+    const startNavigation = page.getByRole('button', { name: '开始导航' })
+    await expect(startNavigation).toBeEnabled()
+    await startNavigation.focus()
+    await page.keyboard.press('Enter')
+    await expect(page.getByRole('region', { name: 'Event console' })).toContainText('driving-to-airport')
+    await expectNoHorizontalOverflow(page)
+  }
+})
+
 test('completes the airport pickup flow through the Agent API', async ({ page }) => {
   await page.goto('/')
 

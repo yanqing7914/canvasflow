@@ -7,42 +7,13 @@ import {
 } from '@canvasflow/agent'
 import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
-import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, ComponentSpec } from '@canvasflow/schema'
+import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, VehicleContext } from '@canvasflow/schema'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
-import { AgentApiClient } from './agent-client'
+import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
+import { UISpecRenderer } from './UISpecRenderer'
 
 const defaultClient = new AgentApiClient('/v1')
 type DemoAgentApi = Pick<AgentApiClient, 'create' | 'event' | 'action' | 'confirmation'>
-
-function componentSummary(component: ComponentSpec): string {
-  switch (component.type) {
-    case 'pickup-overview': return `${component.props.passengers.join('、')} · ${component.props.flightNumber} · ${component.props.airport} ${component.props.terminal}`
-    case 'task-progress': return component.props.steps.map((step) => `${step.label} ${step.status}`).join(' / ')
-    case 'status-banner': return component.props.message ?? component.props.title
-    case 'flight-status': return `${component.props.flightNumber} · ${component.props.status} · ${component.props.terminal}`
-    case 'navigation-summary': return `${component.props.destination} · ETA ${component.props.eta}`
-    case 'charging-recommendation': return `${component.props.reason} · ${component.props.currentBatteryPercent}% → ${component.props.estimatedFinalBatteryPercent}%`
-    case 'message-preview': return `${component.props.contactLabel}：${component.props.textPreview}`
-    case 'passenger-status': return component.props.meetingPoint ? `${component.props.label} · ${component.props.meetingPoint}` : component.props.label
-    case 'cabin-profile': return [component.props.temperatureC === undefined ? undefined : `${component.props.temperatureC}°C`, component.props.mediaTitle].filter(Boolean).join(' · ')
-    case 'alert': return component.props.message ?? component.props.title
-  }
-}
-
-function componentTitle(component: ComponentSpec): string {
-  switch (component.type) {
-    case 'pickup-overview': return component.props.phaseLabel
-    case 'status-banner': return component.props.title
-    case 'flight-status': return '航班状态'
-    case 'navigation-summary': return '导航路线'
-    case 'charging-recommendation': return '补能建议'
-    case 'message-preview': return '落地通知'
-    case 'passenger-status': return '乘客状态'
-    case 'cabin-profile': return '家庭座舱偏好'
-    case 'task-progress': return '任务进度'
-    case 'alert': return component.props.title
-  }
-}
 
 const demoRuntime = createSideEffectRuntime()
 
@@ -50,10 +21,12 @@ export default function App({
   api = defaultClient,
   initialTask,
   composeContext = {},
+  initialVehicleContext = defaultDemoVehicleContext,
 }: {
   api?: DemoAgentApi
   initialTask?: AirportPickupTaskState
   composeContext?: ComposerContext
+  initialVehicleContext?: VehicleContext
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
   const [response, setResponse] = useState<AgentResponse>()
@@ -61,6 +34,7 @@ export default function App({
   const [stepIndex, setStepIndex] = useState(0)
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
+  const [vehicleContext, setVehicleContext] = useState(initialVehicleContext)
   const pendingRef = useRef(false)
   const [localTask, setLocalTask] = useState<AirportPickupTaskState | undefined>(
     localOnly ? (initialTask ?? mainFlowTimeline.initialTaskState) : undefined,
@@ -97,7 +71,7 @@ export default function App({
     const value = text.trim()
     if (!value || pendingRef.current) return
     if (!response && !localOnly) {
-      void run(() => api.create(value)).then((created) => {
+      void run(() => api.create(value, { vehicleContext })).then((created) => {
         if (created) {
           setStepIndex(1)
           setText('')
@@ -129,15 +103,39 @@ export default function App({
       setLocalTask((current) => current ? advanceMainFlowStep(current, demoRuntime.preferences) : current)
       return
     }
-    const step = mainFlowTimeline.steps.slice(stepIndex).find((candidate) => !candidate.advisory)
+    void advanceApiFlow(response)
+  }
+
+  async function advanceApiFlow(current: AgentResponse) {
+    const index = stepIndex
+    const step = mainFlowTimeline.steps[index]
     if (!step) return
-    const index = mainFlowTimeline.steps.indexOf(step)
     const request = step.event.type === 'navigation.started'
-      ? api.action(response, 'start-navigation', 'navigation-plan')
-      : api.event(response.task, { ...step.event, timestamp: undefined })
-    void run(() => request).then((next) => {
-      if (next) setStepIndex(index + 1)
-    })
+      ? api.action(current, 'start-navigation', 'navigation-plan')
+      : api.event(current.task, { ...step.event, timestamp: undefined })
+    const next = await run(() => request)
+    if (!next) return
+    updateVehicleContext(step.event)
+    setStepIndex(consumeAdvisoryContext(index + 1))
+  }
+
+  function consumeAdvisoryContext(startIndex: number) {
+    let index = startIndex
+    let step = mainFlowTimeline.steps[index]
+    while (step?.advisory) {
+      updateVehicleContext(step.event)
+      index += 1
+      step = mainFlowTimeline.steps[index]
+    }
+    return index
+  }
+
+  function updateVehicleContext(event: AirportPickupEvent) {
+    if (event.type === 'vehicle.moving') {
+      setVehicleContext((current) => ({ ...current, speedKph: event.speedKph, gear: 'D' }))
+    } else if (event.type === 'vehicle.parked') {
+      setVehicleContext((current) => ({ ...current, speedKph: 0, gear: 'P' }))
+    }
   }
 
   function handleAction(actionId: string, componentId: string) {
@@ -168,7 +166,8 @@ export default function App({
         ? nextIndexForTimelineEvent('navigation.started')
         : undefined
       void run(() => api.action(response, actionId, componentId)).then((next) => {
-        if (next && nextTimelineIndex !== undefined) setStepIndex(nextTimelineIndex)
+        if (!next || nextTimelineIndex === undefined) return
+        setStepIndex(consumeAdvisoryContext(nextTimelineIndex))
       })
     }
   }
@@ -185,8 +184,12 @@ export default function App({
     <section className="prompt" aria-label="Agent input"><input aria-label="任务输入" value={text} disabled={pending} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitText() }} placeholder="告诉我接谁、航班号或下一步" /><button type="button" onClick={submitText} disabled={pending}>发送</button></section>
     <section className="console" aria-label="Event console"><div><span className="label">阶段</span><strong>{spec?.title ?? '等待创建任务'}</strong><small>{task ? `${task.phase} · taskRevision ${task.taskRevision} · uiRevision ${spec?.uiRevision}` : '尚无任务'}</small></div><button type="button" onClick={advance} disabled={pending || (!response && !localOnly) || !task || task.phase === 'completed' || task.phase === 'cancelled'}>推进下一事件</button></section>
     {error && <p role="alert">{error}</p>}
-    <section className="cards">{spec?.components.map((component) => <article key={component.id}><span className="tag">{component.type}</span><h2>{componentTitle(component)}</h2><p>{componentSummary(component)}</p>{component.actions?.map((actionId) => <button key={actionId} type="button" onClick={() => handleAction(actionId, component.id)} disabled={pending}>{spec.actions.find((action) => action.id === actionId)?.label ?? actionId}</button>)}</article>)}</section>
-    {spec && spec.actions.length > 0 && <section className="actions" aria-label="Task actions">{spec.actions.filter((action) => !spec.components.some((component) => component.actions?.includes(action.id))).map((action) => <button key={action.id} type="button" onClick={() => handleAction(action.id, spec.components[0]?.id ?? 'task')} disabled={pending}>{action.label}</button>)}</section>}
+    {spec && task && <UISpecRenderer
+      driving={vehicleContext.speedKph > 0 || vehicleContext.gear !== 'P'}
+      onAction={handleAction}
+      pending={pending}
+      spec={spec}
+    />}
     {effects.length > 0 && <p className="effects" aria-label="Effect receipts">{effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ')}</p>}
   </main>
 }
