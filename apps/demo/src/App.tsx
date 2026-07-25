@@ -55,21 +55,23 @@ export default function App({
   initialTask?: AirportPickupTaskState
   composeContext?: ComposerContext
 }) {
+  const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
   const [response, setResponse] = useState<AgentResponse>()
   const [text, setText] = useState('我现在要去机场接妈妈和豆豆')
   const [stepIndex, setStepIndex] = useState(0)
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
   const pendingRef = useRef(false)
-  const [localTask, setLocalTask] = useState<AirportPickupTaskState>(initialTask ?? mainFlowTimeline.initialTaskState)
+  const [localTask, setLocalTask] = useState<AirportPickupTaskState | undefined>(
+    localOnly ? (initialTask ?? mainFlowTimeline.initialTaskState) : undefined,
+  )
   // Fixture-only injection is used by unit tests; the shipped demo leaves these props unset.
-  const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
   const task = response?.task ?? localTask
-  const localSpec = useMemo(() => composePickupSpec(task, {
+  const localSpec = useMemo(() => task ? composePickupSpec(task, {
     ...composeContext,
     landingMessageRetryAvailable: composeContext.landingMessageRetryAvailable
       ?? Boolean(resolveAuthorizedLandingContact(task.passengers.memberIds, demoRuntime.preferences)),
-  }), [composeContext, task])
+  }) : undefined, [composeContext, task])
   const spec = response?.ui ?? localSpec
   const effects = useMemo(() => response?.effects ?? [], [response])
 
@@ -102,12 +104,12 @@ export default function App({
         }
       })
     } else if (!response) {
-      setLocalTask((current) => applyEvent(current, {
+      setLocalTask((current) => current ? applyEvent(current, {
         eventId: `demo-input-${Date.now()}`,
         type: 'user.input',
         text: value,
         timestamp: new Date().toISOString(),
-      }, demoRuntime.preferences))
+      }, demoRuntime.preferences) : current)
       setText('')
     } else {
       const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
@@ -124,7 +126,7 @@ export default function App({
     if (pendingRef.current) return
     if (!response) {
       if (!localOnly) return
-      setLocalTask((current) => advanceMainFlowStep(current, demoRuntime.preferences))
+      setLocalTask((current) => current ? advanceMainFlowStep(current, demoRuntime.preferences) : current)
       return
     }
     const step = mainFlowTimeline.steps.slice(stepIndex).find((candidate) => !candidate.advisory)
@@ -143,6 +145,7 @@ export default function App({
     if (!response) {
       if (!localOnly) return
       setLocalTask((current) => {
+        if (!current) return current
         if (actionId === 'save-trip-preferences') return resolveConfirmation(current, `${current.taskId}:save-memory`)
         if (actionId === 'retry-landing-message') return armLandingMessageRetry(current, demoRuntime) ?? current
         if (actionId === 'confirm-retry-landing-message') {

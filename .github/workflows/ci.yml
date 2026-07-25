@@ -44,12 +44,20 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Upload production build
+      - name: Upload production runtime
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
-          name: canvasflow-dist
-          path: apps/demo/dist
+          name: canvasflow-runtime
+          path: |
+            package.json
+            package-lock.json
+            tsconfig.base.json
+            scripts/dev.mjs
+            apps/demo/package.json
+            apps/demo/server.ts
+            apps/demo/dist
+            packages
 
   e2e:
     name: e2e

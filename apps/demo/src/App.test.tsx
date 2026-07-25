@@ -67,6 +67,15 @@ describe('demo integration', () => {
     expect(spec.components[0]).toMatchObject({ type: 'status-banner', props: { title: '请补充航班号' } })
   })
 
+  it('does not fabricate a task before the Agent API creates one', () => {
+    const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<App api={api} />)
+    expect(screen.getByText('等待创建任务')).toBeInTheDocument()
+    expect(screen.getByText('尚无任务')).toBeInTheDocument()
+    expect(screen.queryByText('status-banner')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '推进下一事件' })).toBeDisabled()
+  })
+
   it('surfaces the terminal meeting point while approaching / waiting', () => {
     const approaching = composePickupSpec({
       ...createInitialTask(),

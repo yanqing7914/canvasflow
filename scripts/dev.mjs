@@ -2,13 +2,19 @@ import { spawn } from 'node:child_process'
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 const webCommand = process.argv[2] === 'preview' ? 'preview' : 'dev'
-const commands = [
-  ['agent', ['run', 'agent', '--workspace', '@canvasflow/demo']],
-  ['vite', ['run', webCommand, '--workspace', '@canvasflow/demo']],
-]
+const commands = webCommand === 'preview'
+  ? [['preview', ['run', 'agent', '--workspace', '@canvasflow/demo'], {
+      ...process.env,
+      AGENT_PORT: process.env.AGENT_PORT ?? '4173',
+      DEMO_STATIC_DIR: process.env.DEMO_STATIC_DIR ?? 'dist',
+    }]]
+  : [
+      ['agent', ['run', 'agent', '--workspace', '@canvasflow/demo'], process.env],
+      ['vite', ['run', 'dev', '--workspace', '@canvasflow/demo'], process.env],
+    ]
 
-const children = commands.map(([name, args]) => {
-  const child = spawn(npm, args, { stdio: 'inherit', env: process.env })
+const children = commands.map(([name, args, env]) => {
+  const child = spawn(npm, args, { stdio: 'inherit', env })
   child.on('exit', (code, signal) => {
     if (stopping) return
     if (code !== 0 && signal === null) {

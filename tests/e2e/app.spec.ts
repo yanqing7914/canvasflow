@@ -7,7 +7,7 @@ test('creates a task through Agent API and advances to airport navigation', asyn
   const console = page.getByRole('region', { name: 'Event console' })
   const advance = page.getByRole('button', { name: '推进下一事件' })
   await expect(advance).toBeDisabled()
-  await expect(console).toContainText('collecting-information')
+  await expect(console).toContainText('尚无任务')
 
   await page.getByRole('button', { name: '发送' }).click()
   await expect(console).toContainText('collecting-information')
