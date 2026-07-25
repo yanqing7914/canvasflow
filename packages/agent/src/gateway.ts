@@ -227,7 +227,13 @@ export class AgentGateway {
       uiRevision: Math.max(current.task.uiRevision, current.ui.uiRevision),
     }
     const requestContext = current.requestContext
-      ? { ...current.requestContext, inputConfidence: undefined, updatedAt: timestamp }
+      ? {
+          ...current.requestContext,
+          inputConfidence: undefined,
+          updatedAt: Date.parse(current.requestContext.updatedAt ?? timestamp) > Date.parse(timestamp)
+            ? current.requestContext.updatedAt
+            : timestamp,
+        }
       : undefined
     const stored = this.#store.reset(this.#publish(resetTask, undefined, requestContext))
     const effects: AgentResponse['effects'] = []
@@ -1004,10 +1010,10 @@ export class AgentGateway {
     event: SubmitEventRequest['event'],
   ): StoredTask['requestContext'] {
     if (!context) return undefined
-    const updatedAt = Date.parse(event.timestamp) > Date.parse(context.updatedAt ?? event.timestamp)
-      ? event.timestamp
-      : context.updatedAt ?? event.timestamp
     if (event.type === 'user.input') return { ...context, inputConfidence: undefined }
+    const contextEventIsCurrent = !context.updatedAt
+      || Date.parse(event.timestamp) >= Date.parse(context.updatedAt)
+    if (!contextEventIsCurrent) return context
     if (event.type === 'vehicle.moving') {
       return {
         ...context,
@@ -1016,17 +1022,17 @@ export class AgentGateway {
           speedKph: event.speedKph,
           gear: event.speedKph > 0 ? 'D' : context.vehicle.gear,
         },
-        updatedAt,
+        updatedAt: event.timestamp,
       }
     }
     if (event.type === 'vehicle.parked') {
-      return { ...context, vehicle: { ...context.vehicle, speedKph: 0, gear: 'P' }, updatedAt }
+      return { ...context, vehicle: { ...context.vehicle, speedKph: 0, gear: 'P' }, updatedAt: event.timestamp }
     }
     if (event.type === 'charging.completed') {
       return {
         ...context,
         vehicle: { ...context.vehicle, batteryPercent: event.batteryPercent },
-        updatedAt,
+        updatedAt: event.timestamp,
       }
     }
     return context

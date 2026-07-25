@@ -253,7 +253,7 @@ describe('AgentGateway', () => {
     expect(flight.ui.presentation.density).toBe('compact')
   })
 
-  it('does not let a newer moving watermark reject a valid parked phase transition', () => {
+  it('advances a valid parked phase transition without overwriting newer moving context', () => {
     const gateway = createGateway()
     const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
     const started = gateway.submitAction(created.task.taskId, {
@@ -275,7 +275,21 @@ describe('AgentGateway', () => {
     })
 
     expect(parked.task.phase).toBe('waiting-for-passengers')
-    expect(parked.ui.presentation.density).toBe('full')
+    expect(parked.ui.presentation.density).toBe('compact')
+
+    const reset = gateway.resetTask(created.task.taskId, {
+      clientRequestId: 'mixed-reset', expectedTaskRevision: parked.task.taskRevision,
+    })
+    const prepared = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'mixed-reprepare', expectedTaskRevision: reset.task.taskRevision,
+      event: { eventId: 'mixed-reprepare', type: 'user.input', text: '接妈妈，航班 MU5102', timestamp: '2026-07-22T12:04:00+08:00' },
+    })
+    const denied = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'mixed-navigation-denied', expectedTaskRevision: prepared.task.taskRevision,
+      expectedUiRevision: prepared.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'mixed-navigation-denied',
+    })
+    expect(denied.effects).toEqual([expect.objectContaining({ status: 'failed', errorCode: 'VEHICLE_MOVING' })])
   })
 
   it('does not let a newer moving watermark reject active charging completion', () => {
@@ -305,8 +319,9 @@ describe('AgentGateway', () => {
 
     expect(completed.task.charging).toMatchObject({ accepted: true, status: 'completed' })
     expect(completed.ui.components).toContainEqual(expect.objectContaining({
-      type: 'charging-recommendation', props: expect.objectContaining({ currentBatteryPercent: 88 }),
+      type: 'charging-recommendation', props: expect.objectContaining({ currentBatteryPercent: 42 }),
     }))
+    expect(completed.ui.presentation.density).toBe('compact')
   })
 
   it('persists a custom destination through passenger-first slot filling', () => {
