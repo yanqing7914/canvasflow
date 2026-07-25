@@ -10,8 +10,11 @@ import type {
   SubmitEventRequest,
 } from '@canvasflow/schema'
 import { AgentGatewayError } from './gateway'
+import type { TaskUpdateRead } from './store'
 
 const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024
+const DEFAULT_EVENT_POLL_INTERVAL_MS = 250
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 15_000
 
 export interface AgentHttpGateway {
   createTask(input: CreateTaskRequest): AgentResponse
@@ -21,12 +24,15 @@ export interface AgentHttpGateway {
   submitConfirmation(taskId: string, confirmationId: string, input: SubmitConfirmationRequest): AgentResponse
   cancelTask(taskId: string, input: CancelTaskRequest): AgentResponse
   resetTask(taskId: string, input: ResetTaskRequest): AgentResponse
+  getTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead
   hasCreateResult?(clientRequestId: string): boolean
 }
 
 export type AgentHttpOptions = {
   bodyLimitBytes?: number
   createRequestId?: () => string
+  eventPollIntervalMs?: number
+  heartbeatIntervalMs?: number
 }
 
 type ErrorCode =
@@ -146,12 +152,105 @@ function isValidationError(error: unknown): error is { issues: unknown[] } {
     && Array.isArray((error as Error & { issues?: unknown }).issues)
 }
 
+function positiveInterval(value: number, name: string): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${name} must be a positive safe integer`)
+  return value
+}
+
+function acceptsEventStream(request: IncomingMessage): boolean {
+  const accept = request.headers.accept
+  const values: string[] = Array.isArray(accept) ? accept : accept ? [accept] : []
+  return values.some((value) => value.split(',').some((item) => item.trim().split(';', 1)[0]?.toLowerCase() === 'text/event-stream'))
+}
+
+function eventId(taskId: string, cursor: number): string {
+  return `${Buffer.from(taskId).toString('base64url')}.${cursor}`
+}
+
+function lastEventCursor(request: IncomingMessage, taskId: string): number | undefined {
+  const header = request.headers['last-event-id']
+  if (Array.isArray(header)) {
+    throw new HttpRequestError(400, 'INVALID_REQUEST', 'Last-Event-ID must be a single task cursor')
+  }
+  if (header === undefined) return undefined
+  const value = header.trim()
+  const match = /^([A-Za-z0-9_-]+)\.(0|[1-9]\d*)$/.exec(value)
+  if (!match) {
+    throw new HttpRequestError(400, 'INVALID_REQUEST', 'Last-Event-ID must be a valid task cursor')
+  }
+  let encodedTaskId: string
+  try {
+    encodedTaskId = Buffer.from(match[1]!, 'base64url').toString('utf8')
+  } catch {
+    throw new HttpRequestError(400, 'INVALID_REQUEST', 'Last-Event-ID must be a valid task cursor')
+  }
+  if (encodedTaskId !== taskId || Buffer.from(encodedTaskId).toString('base64url') !== match[1]) {
+    throw new HttpRequestError(400, 'INVALID_REQUEST', 'Last-Event-ID belongs to a different task')
+  }
+  const cursor = Number(match[2])
+  if (!Number.isSafeInteger(cursor)) {
+    throw new HttpRequestError(400, 'INVALID_REQUEST', 'Last-Event-ID exceeds the supported cursor range')
+  }
+  return cursor
+}
+
+export type SseWritable = {
+  write(chunk: string): boolean
+  once(event: 'drain' | 'close', listener: () => void): unknown
+  once(event: 'error', listener: (error: Error) => void): unknown
+  off(event: 'drain' | 'close', listener: () => void): unknown
+  off(event: 'error', listener: (error: Error) => void): unknown
+}
+
+function waitForDrain(writable: SseWritable): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      writable.off('drain', onDrain)
+      writable.off('close', onClose)
+      writable.off('error', onError)
+    }
+    const onDrain = () => {
+      cleanup()
+      resolve()
+    }
+    const onClose = () => {
+      cleanup()
+      reject(new Error('SSE connection closed while waiting for drain'))
+    }
+    const onError = (error: Error) => {
+      cleanup()
+      reject(error)
+    }
+    writable.once('drain', onDrain)
+    writable.once('close', onClose)
+    writable.once('error', onError)
+  })
+}
+
+async function writeSseChunk(writable: SseWritable, chunk: string): Promise<void> {
+  if (!writable.write(chunk)) await waitForDrain(writable)
+}
+
+export async function writeTaskUpdates(writable: SseWritable, read: TaskUpdateRead): Promise<number | undefined> {
+  let lastCursor: number | undefined
+  for (const update of read.updates) {
+    await writeSseChunk(
+      writable,
+      `id: ${eventId(update.taskId, update.cursor)}\nevent: task.updated\ndata: ${JSON.stringify(update)}\n\n`,
+    )
+    lastCursor = update.cursor
+  }
+  return lastCursor
+}
+
 export function createAgentHttpHandler(gateway: AgentHttpGateway, options: AgentHttpOptions = {}) {
   const bodyLimitBytes = options.bodyLimitBytes ?? DEFAULT_BODY_LIMIT_BYTES
   if (!Number.isSafeInteger(bodyLimitBytes) || bodyLimitBytes <= 0) {
     throw new TypeError('bodyLimitBytes must be a positive safe integer')
   }
   const createRequestId = options.createRequestId ?? randomUUID
+  const eventPollIntervalMs = positiveInterval(options.eventPollIntervalMs ?? DEFAULT_EVENT_POLL_INTERVAL_MS, 'eventPollIntervalMs')
+  const heartbeatIntervalMs = positiveInterval(options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS, 'heartbeatIntervalMs')
 
   return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
     const requestId = headerRequestId(request, createRequestId)
@@ -161,6 +260,79 @@ export function createAgentHttpHandler(gateway: AgentHttpGateway, options: Agent
       const prefixLength = 2
       const taskRoot = v1Prefix && segments[1] === 'tasks' && segments.length === prefixLength
       const taskRoute = v1Prefix && segments[1] === 'tasks' && segments.length >= prefixLength + 1
+
+      if (
+        request.method === 'GET'
+        && taskRoute
+        && segments.length === prefixLength + 2
+        && segments[prefixLength + 1] === 'events'
+      ) {
+        if (!acceptsEventStream(request)) {
+          throw new HttpRequestError(400, 'INVALID_REQUEST', 'Accept must include text/event-stream')
+        }
+        const taskId = segments[prefixLength]!
+        const afterCursor = lastEventCursor(request, taskId)
+        const initial = gateway.getTaskUpdates(taskId, afterCursor)
+        if (afterCursor !== undefined && afterCursor > initial.latestCursor) {
+          throw new HttpRequestError(400, 'INVALID_REQUEST', 'Last-Event-ID is ahead of the task update stream', {
+            latestCursor: initial.latestCursor,
+          })
+        }
+
+        response.writeHead(200, {
+          'cache-control': 'no-cache, no-store',
+          connection: 'keep-alive',
+          'content-type': 'text/event-stream; charset=utf-8',
+          'x-accel-buffering': 'no',
+          'x-request-id': requestId,
+        })
+        response.flushHeaders()
+        let cursor = afterCursor ?? 0
+        let closed = false
+        let writing = false
+        const timers: NodeJS.Timeout[] = []
+        const cleanup = () => {
+          if (closed) return
+          closed = true
+          for (const timer of timers) clearInterval(timer)
+        }
+        request.once('aborted', cleanup)
+        response.once('close', cleanup)
+
+        const runWrite = async (operation: () => Promise<void>) => {
+          if (closed || writing) return
+          writing = true
+          try {
+            await operation()
+          } catch {
+            cleanup()
+            response.destroy()
+          } finally {
+            writing = false
+          }
+        }
+        await runWrite(async () => {
+          const initialCursor = await writeTaskUpdates(response, initial)
+          if (initialCursor !== undefined) cursor = initialCursor
+        })
+        if (closed) return
+
+        const pollTimer = setInterval(() => {
+          void runWrite(async () => {
+            const read = gateway.getTaskUpdates(taskId, cursor)
+            const nextCursor = await writeTaskUpdates(response, read)
+            if (nextCursor !== undefined) cursor = nextCursor
+          })
+        }, eventPollIntervalMs)
+        pollTimer.unref()
+        timers.push(pollTimer)
+        const heartbeatTimer = setInterval(() => {
+          void runWrite(() => writeSseChunk(response, ': heartbeat\n\n'))
+        }, heartbeatIntervalMs)
+        heartbeatTimer.unref()
+        timers.push(heartbeatTimer)
+        return
+      }
 
       if (request.method === 'POST' && taskRoot) {
         const body = await readJson(request, bodyLimitBytes)

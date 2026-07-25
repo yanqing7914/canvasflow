@@ -1,13 +1,15 @@
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
+import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentErrorResponse, AgentResponse, CreateTaskRequest } from '@canvasflow/schema'
 import { AgentGateway } from './gateway'
-import { createAgentHttpServer } from './http'
+import { createAgentHttpServer, writeTaskUpdates, type SseWritable } from './http'
 import { MemoryTaskStore } from './store'
 
 const now = '2026-07-22T12:00:00+08:00'
 const servers: Server[] = []
+const streamReaders: ReadableStreamDefaultReader<Uint8Array>[] = []
 
 function createRequest(text = '接妈妈，航班 MU5102', clientRequestId = 'create-001'): CreateTaskRequest {
   return {
@@ -18,13 +20,25 @@ function createRequest(text = '接妈妈，航班 MU5102', clientRequestId = 'cr
   }
 }
 
-async function startServer(options: { bodyLimitBytes?: number } = {}) {
-  const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => 'http-001' })
+async function startServer(options: { bodyLimitBytes?: number; eventPollIntervalMs?: number; heartbeatIntervalMs?: number } = {}) {
+  let id = 0
+  const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => `http-${String(++id).padStart(3, '0')}` })
   const server = createAgentHttpServer(gateway, { ...options, createRequestId: () => 'generated-http-request' })
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address() as AddressInfo
   return { gateway, baseUrl: `http://127.0.0.1:${address.port}` }
+}
+
+function streamId(taskId: string, cursor: number): string {
+  return `${Buffer.from(taskId).toString('base64url')}.${cursor}`
+}
+
+async function readStreamChunk(response: Response): Promise<string> {
+  const reader = response.body!.getReader()
+  streamReaders.push(reader)
+  const { value } = await reader.read()
+  return new TextDecoder().decode(value)
 }
 
 async function post(baseUrl: string, path: string, body: unknown, headers: Record<string, string> = {}) {
@@ -43,6 +57,8 @@ async function post(baseUrl: string, path: string, body: unknown, headers: Recor
 }
 
 afterEach(async () => {
+  await Promise.all(streamReaders.splice(0).map((reader) => reader.cancel().catch(() => undefined)))
+  for (const server of servers) server.closeAllConnections()
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve())
   })))
@@ -167,5 +183,113 @@ describe('Agent HTTP API', () => {
     const { baseUrl } = await startServer()
     const response = await post(baseUrl, '/api/v1/tasks', createRequest('接爸爸，航班 MU5102', 'alias-001'))
     expect(response.status).toBe(404)
+  })
+
+  it('streams the exact current snapshot frame and never exposes private stored fields', async () => {
+    const { baseUrl } = await startServer()
+    const created = await (await post(baseUrl, '/v1/tasks', createRequest())).json() as AgentResponse
+    const response = await fetch(`${baseUrl}/v1/tasks/${created.task.taskId}/events`, {
+      headers: { accept: 'text/event-stream' },
+    })
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toBe('text/event-stream; charset=utf-8')
+    const chunk = await readStreamChunk(response)
+    const envelope = { type: 'task.updated', cursor: 1, taskId: created.task.taskId, snapshot: { task: created.task, ui: created.ui } }
+    expect(chunk).toBe(`id: ${streamId(created.task.taskId, 1)}\nevent: task.updated\ndata: ${JSON.stringify(envelope)}\n\n`)
+    expect(chunk).not.toContain('toolResults')
+    expect(chunk).not.toContain('requestContext')
+    await streamReaders.at(-1)?.cancel()
+  })
+
+  it('exclusively replays ordered updates after a task-bound Last-Event-ID', async () => {
+    const { gateway, baseUrl } = await startServer()
+    const created = await (await post(baseUrl, '/v1/tasks', createRequest())).json() as AgentResponse
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'moving', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'moving', type: 'vehicle.moving', speedKph: 80, timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'parked', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    const response = await fetch(`${baseUrl}/v1/tasks/${created.task.taskId}/events`, {
+      headers: { accept: 'text/event-stream', 'last-event-id': streamId(created.task.taskId, 1) },
+    })
+    const chunk = await readStreamChunk(response)
+    expect(chunk).not.toContain(`id: ${streamId(created.task.taskId, 1)}\n`)
+    expect(chunk.indexOf(`id: ${streamId(created.task.taskId, 2)}\n`)).toBeGreaterThanOrEqual(0)
+    expect(chunk.indexOf(`id: ${streamId(created.task.taskId, 3)}\n`)).toBeGreaterThan(
+      chunk.indexOf(`id: ${streamId(created.task.taskId, 2)}\n`),
+    )
+    await streamReaders.at(-1)?.cancel()
+  })
+
+  it('rejects invalid, foreign-task, and future Last-Event-ID values before SSE headers', async () => {
+    const { baseUrl } = await startServer()
+    const first = await (await post(baseUrl, '/v1/tasks', createRequest('接妈妈，航班 MU5102', 'first'))).json() as AgentResponse
+    const second = await (await post(baseUrl, '/v1/tasks', createRequest('接爸爸，航班 MU5102', 'second'))).json() as AgentResponse
+    for (const value of ['bad', streamId(second.task.taskId, 1), streamId(first.task.taskId, 99)]) {
+      const response = await fetch(`${baseUrl}/v1/tasks/${first.task.taskId}/events`, {
+        headers: { accept: 'text/event-stream', 'last-event-id': value },
+      })
+      expect(response.status).toBe(400)
+      expect(response.headers.get('content-type')).toBe('application/json; charset=utf-8')
+      expect(await response.json()).toMatchObject({ error: { code: 'INVALID_REQUEST' } })
+    }
+    const missingAccept = await fetch(`${baseUrl}/v1/tasks/${first.task.taskId}/events`)
+    expect(missingAccept.status).toBe(400)
+    expect(missingAccept.headers.get('content-type')).toBe('application/json; charset=utf-8')
+    const missingTask = await fetch(`${baseUrl}/v1/tasks/missing/events`, { headers: { accept: 'text/event-stream' } })
+    expect(missingTask.status).toBe(404)
+    expect(missingTask.headers.get('content-type')).toBe('application/json; charset=utf-8')
+  })
+
+  it('sends heartbeats and cleans up a disconnected stream so the server can close', async () => {
+    const { baseUrl } = await startServer({ heartbeatIntervalMs: 10 })
+    const created = await (await post(baseUrl, '/v1/tasks', createRequest())).json() as AgentResponse
+    const response = await fetch(`${baseUrl}/v1/tasks/${created.task.taskId}/events`, {
+      headers: { accept: 'text/event-stream', 'last-event-id': streamId(created.task.taskId, 1) },
+    })
+    expect(await readStreamChunk(response)).toBe(': heartbeat\n\n')
+    await streamReaders.at(-1)?.cancel()
+  })
+
+  it('waits for drain before writing the next update without dropping or reordering frames', async () => {
+    class BackpressuredWritable extends EventEmitter {
+      readonly chunks: string[] = []
+
+      write(chunk: string): boolean {
+        this.chunks.push(chunk)
+        return this.chunks.length !== 1
+      }
+    }
+    const writable = new BackpressuredWritable()
+    const updates = [1, 2].map((cursor) => ({
+      type: 'task.updated' as const,
+      cursor,
+      taskId: 'task-backpressure',
+      snapshot: {
+        task: { taskId: 'task-backpressure' },
+        ui: { taskId: 'task-backpressure' },
+      },
+    }))
+    const writing = writeTaskUpdates(writable as SseWritable, {
+      updates: updates as never,
+      latestCursor: 2,
+      staleCursor: false,
+    })
+
+    await Promise.resolve()
+    expect(writable.chunks).toHaveLength(1)
+    let completed = false
+    void writing.then(() => { completed = true })
+    await Promise.resolve()
+    expect(completed).toBe(false)
+
+    writable.emit('drain')
+    await expect(writing).resolves.toBe(2)
+    expect(writable.chunks).toHaveLength(2)
+    expect(writable.chunks[0]).toContain('id: dGFzay1iYWNrcHJlc3N1cmU.1\n')
+    expect(writable.chunks[1]).toContain('id: dGFzay1iYWNrcHJlc3N1cmU.2\n')
   })
 })

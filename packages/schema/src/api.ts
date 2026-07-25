@@ -92,6 +92,26 @@ export const agentResponseSchema = z.object({
   }),
 })
 
+export const taskUpdateSnapshotSchema = z.object({
+  task: airportPickupTaskStateSchema,
+  ui: uiSpecSchema,
+}).strict()
+
+export const taskUpdateEnvelopeSchema = z.object({
+  type: z.literal('task.updated'),
+  cursor: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  taskId: z.string().trim().min(1),
+  snapshot: taskUpdateSnapshotSchema,
+}).strict().superRefine((value, context) => {
+  if (value.taskId !== value.snapshot.task.taskId) {
+    context.addIssue({
+      code: 'custom',
+      path: ['taskId'],
+      message: 'taskId must match snapshot.task.taskId',
+    })
+  }
+})
+
 export const agentErrorCodeSchema = z.enum([
   'INVALID_REQUEST',
   'TASK_NOT_FOUND',
@@ -125,5 +145,7 @@ export type CancelTaskRequest = z.infer<typeof cancelTaskRequestSchema>
 export type ResetTaskRequest = z.infer<typeof resetTaskRequestSchema>
 export type EffectRecord = z.infer<typeof effectRecordSchema>
 export type AgentResponse = z.infer<typeof agentResponseSchema>
+export type TaskUpdateSnapshot = z.infer<typeof taskUpdateSnapshotSchema>
+export type TaskUpdateEnvelope = z.infer<typeof taskUpdateEnvelopeSchema>
 export type AgentErrorCode = z.infer<typeof agentErrorCodeSchema>
 export type AgentErrorResponse = z.infer<typeof agentErrorResponseSchema>

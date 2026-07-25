@@ -46,7 +46,7 @@ import {
   type ReadToolOrchestration,
   type ReadToolResults,
 } from './orchestration'
-import { MemoryTaskStore, type StoredTask, type TaskStore } from './store'
+import { MemoryTaskStore, type StoredTask, type TaskStore, type TaskUpdateRead } from './store'
 
 export class AgentGatewayError extends Error {
   constructor(
@@ -185,6 +185,11 @@ export class AgentGateway {
     const startedAt = performance.now()
     const stored = this.#requireTask(taskId)
     return this.#response(requestId, stored, [], performance.now() - startedAt)
+  }
+
+  getTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead {
+    this.#requireTask(taskId)
+    return this.#store.readTaskUpdates(taskId, afterCursor)
   }
 
   hasCreateResult(clientRequestId: string): boolean {

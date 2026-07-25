@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { createTaskRequestSchema } from './api'
+import { createTaskRequestSchema, taskUpdateEnvelopeSchema } from './api'
 import { airportPickupEventSchema, flightStateSchema } from './task'
 import {
   applyCabinProfileInputSchema,
@@ -111,6 +111,33 @@ describe('Agent API', () => {
     })
     expect(result.success).toBe(true)
     if (result.success) expect(result.data.destination?.name).toBe('虹桥机场 T1')
+  })
+
+  it('validates public task updates without accepting stored runtime context', () => {
+    const task = {
+      taskId: 'task-001', surfaceId: 'surface', taskRevision: 0, uiRevision: 0, phase: 'collecting-information' as const,
+      passengers: { memberIds: [], names: [], confirmedOnboard: false },
+      charging: { recommended: false, accepted: false, status: 'none' as const },
+      message: { autoNotifyAuthorized: true, status: 'idle' as const, landingNoticeSent: false },
+      processedEventIds: [], updatedAt: '2026-07-22T12:00:00+08:00',
+    }
+    const ui = {
+      version: '1.0' as const, taskId: 'task-001', surfaceId: 'surface', taskRevision: 0, uiRevision: 0,
+      phase: 'collecting-information', title: 'Pickup',
+      presentation: { mode: 'replace' as const, density: 'full' as const, theme: 'dark' as const, priority: 'normal' as const },
+      layout: { type: 'stack' as const, gap: 'md' as const, slots: { main: [] } }, components: [], actions: [],
+      meta: { generatedBy: 'composer' as const, sourceTaskRevision: 0, requiresConfirm: false, generatedAt: '2026-07-22T12:00:00+08:00', traceId: 'trace' },
+    }
+    expect(taskUpdateEnvelopeSchema.safeParse({
+      type: 'task.updated', cursor: 1, taskId: 'task-001', snapshot: { task, ui },
+    }).success).toBe(true)
+    expect(taskUpdateEnvelopeSchema.safeParse({
+      type: 'task.updated', cursor: 1, taskId: 'task-001',
+      snapshot: { task, ui, toolResults: { secret: true }, requestContext: { token: 'secret' } },
+    }).success).toBe(false)
+    expect(taskUpdateEnvelopeSchema.safeParse({
+      type: 'task.updated', cursor: 1, taskId: 'other-task', snapshot: { task, ui },
+    }).success).toBe(false)
   })
 })
 
