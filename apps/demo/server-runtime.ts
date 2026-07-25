@@ -2,11 +2,30 @@ import { createServer, type ServerResponse } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize, resolve } from 'node:path'
 import { AgentGateway } from '@canvasflow/agent'
-import { createAgentHttpHandler } from '@canvasflow/agent/http'
+import { createAgentHttpHandler, type AgentHttpGateway } from '@canvasflow/agent/http'
+import {
+  PersistentAgentRuntime,
+  providerModeFromEnvironment,
+  type ProviderFactory,
+} from '@canvasflow/agent/persistent'
 
 export type AgentServerOptions = {
   staticDirectory?: string
-  gateway?: AgentGateway
+  gateway?: AgentHttpGateway
+}
+
+export type ConfiguredAgentRuntimeOptions = {
+  environment?: NodeJS.ProcessEnv
+  providerFactory?: ProviderFactory
+}
+
+export function createConfiguredAgentRuntime(options: ConfiguredAgentRuntimeOptions = {}): PersistentAgentRuntime {
+  const environment = options.environment ?? process.env
+  return new PersistentAgentRuntime({
+    databasePath: environment.AGENT_DATABASE_PATH ?? '.canvasflow/agent.sqlite',
+    mode: providerModeFromEnvironment(environment),
+    providerFactory: options.providerFactory,
+  })
 }
 
 export function createAgentServer(options: AgentServerOptions = {}) {

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DEMO_ORIGIN } from './data'
-import { createSideEffectRuntime } from './idempotency'
+import { createSideEffectRuntime, resetSideEffectRuntimeTask } from './idempotency'
 import { FAILING_CONTACT_ID, issueAutoNotifyAuthorization, issueSendMessageConfirmation } from './message'
 import { createProviderRegistry, type ProviderRegistry } from './registry'
 import type { ToolContext } from './result'
@@ -276,6 +276,43 @@ describe('cabin profile side effects', () => {
     })
     expect(revertA.ok).toBe(true)
     expect(revertA.data?.current.temperatureC).toBe(22)
+  })
+
+  it('reset restores the current cabin profile before deleting task receipts', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const applied = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear', temperatureC: 25, sourceMemberIds: ['mom'], idempotencyKey: 'reset-cabin',
+    })
+    expect(applied.ok).toBe(true)
+    expect(runtime.cabinCurrent.temperatureC).toBe(25)
+
+    resetSideEffectRuntimeTask(runtime, ctx.taskId)
+
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+    expect(runtime.cabinEffects.size).toBe(0)
+  })
+
+  it('reset splices an older task from the cabin rollback chain', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const first = registry['vehicle.apply-cabin-profile'](ctx, {
+      zone: 'rear', temperatureC: 25, sourceMemberIds: ['mom'], idempotencyKey: 'task-a-cabin',
+    })
+    const secondContext = { taskId: 'pickup-002' }
+    const second = registry['vehicle.apply-cabin-profile'](secondContext, {
+      zone: 'rear', fanLevel: 3, sourceMemberIds: ['dad'], idempotencyKey: 'task-b-cabin',
+    })
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+
+    resetSideEffectRuntimeTask(runtime, ctx.taskId)
+    const reverted = registry['vehicle.revert-cabin-profile'](secondContext, {
+      effectId: second.data!.effectId, idempotencyKey: 'revert-task-b',
+    })
+
+    expect(reverted.ok).toBe(true)
+    expect(reverted.data?.current).toEqual({ temperatureC: 22, fanLevel: 2 })
   })
 })
 

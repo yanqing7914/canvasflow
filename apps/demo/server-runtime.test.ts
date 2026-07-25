@@ -3,7 +3,7 @@ import { request } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createAgentServer, serverHost, serverPort } from './server-runtime'
+import { createAgentServer, createConfiguredAgentRuntime, serverHost, serverPort } from './server-runtime'
 
 describe('agent server runtime', () => {
   let server: ReturnType<typeof createAgentServer> | undefined
@@ -21,6 +21,35 @@ describe('agent server runtime', () => {
     expect(serverHost({})).toBe('0.0.0.0')
     expect(serverHost({ AGENT_HOST: '127.0.0.1' })).toBe('127.0.0.1')
     expect(serverPort({ AGENT_PORT: '9876' })).toBe(9876)
+  })
+
+  it('creates a persistent fixture runtime from environment configuration', async () => {
+    staticDirectory = await mkdtemp(join(tmpdir(), 'canvasflow-runtime-'))
+    const runtime = createConfiguredAgentRuntime({
+      environment: { AGENT_DATABASE_PATH: join(staticDirectory, 'agent.sqlite'), AGENT_PROVIDER_MODE: 'fixture' },
+    })
+    const created = runtime.createTask({
+      clientRequestId: 'server-create',
+      input: { type: 'text', text: '接妈妈，航班 MU5102' },
+      vehicleContext: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P', isNight: true },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true },
+    })
+    expect(created.meta.mode).toBe('fixture')
+    runtime.close()
+  })
+
+  it('selects the built-in deterministic mock provider mode explicitly', () => {
+    const runtime = createConfiguredAgentRuntime({
+      environment: { AGENT_DATABASE_PATH: ':memory:', AGENT_PROVIDER_MODE: 'mock' },
+    })
+    const created = runtime.createTask({
+      clientRequestId: 'server-mock-create',
+      input: { type: 'text', text: '接妈妈，航班 MU5102' },
+      vehicleContext: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P', isNight: true },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true },
+    })
+    expect(created.meta.mode).toBe('mock')
+    runtime.close()
   })
 
   it('serves the health endpoint from the configured runtime', async () => {

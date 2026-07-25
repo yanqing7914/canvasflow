@@ -17,6 +17,7 @@ import {
   type SubmitEventRequest,
   type ReturnTripState,
   type UISpec,
+  type ProviderMode,
 } from '@canvasflow/schema'
 import {
   createProviderRegistry,
@@ -70,6 +71,7 @@ export type AgentGatewayOptions = {
   orchestrator?: ReadToolOrchestration
   providers?: ProviderRegistry
   policyGate?: PolicyGate
+  mode?: ProviderMode
   /**
    * Side-effect runtime for opaque confirmations and preference-backed notify.
    * When provided, its preferences are authoritative for landing-notify auth.
@@ -92,9 +94,11 @@ export class AgentGateway {
   readonly #effectExecutor: EffectExecutor
   readonly #runtime: SideEffectRuntime
   readonly #preferences: Record<string, MemberPreferenceRecord>
+  readonly #mode: ProviderMode
 
   constructor(options: AgentGatewayOptions = {}) {
     this.#store = options.store ?? new MemoryTaskStore()
+    this.#mode = options.mode ?? 'fixture'
     this.#now = options.now ?? (() => new Date().toISOString())
     this.#createId = options.createId ?? (() => crypto.randomUUID())
     const runtime = options.runtime ?? createSideEffectRuntime()
@@ -999,7 +1003,7 @@ export class AgentGateway {
       ui: stored.ui,
       assistant,
       effects,
-      meta: { mode: 'fixture', durationMs, fallbackUsed: stored.ui.meta.generatedBy === 'fallback' },
+      meta: { mode: this.#mode, durationMs, fallbackUsed: stored.ui.meta.generatedBy === 'fallback' },
     })
   }
 }

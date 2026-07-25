@@ -70,6 +70,14 @@ describe('provider registry (ctx, input)', () => {
     expect(() => toolResultSchema(z.unknown()).parse(first)).not.toThrow()
   })
 
+  it('mock registry marks every tool result envelope as mock', () => {
+    const registry = createProviderRegistry(undefined, 'mock')
+    const result = registry['flight.get-status'](ctx, canonicalInputs['flight.get-status'])
+
+    expect(result.ok).toBe(true)
+    expect(result.meta.provider).toBe('mock')
+  })
+
   it('工具定义的风险级别和超时符合契约 P0 表', () => {
     expect(toolDefinitions['flight.get-status'].timeoutMs).toBe(3000)
     expect(toolDefinitions['navigation.plan-route'].timeoutMs).toBe(5000)
