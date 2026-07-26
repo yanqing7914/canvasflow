@@ -108,3 +108,90 @@ test('rejects the arrival memory proposal through the confirmation API', async (
   await expect(page.getByLabel('Effect receipts')).toContainText('memory.reject-update:cancelled')
   await expect(page.getByRole('button', { name: '暂不保存' })).toHaveCount(0)
 })
+
+test('retries a failed landing message through action and confirmation APIs', async ({ page }) => {
+  await page.route('**/v1/tasks/*/events', async (route) => {
+    const request = route.request()
+    const payload = request.postDataJSON() as {
+      event?: {
+        eventId?: string
+        flight?: { flightNumber?: string }
+        messageId?: string
+        timestamp?: string
+        type?: string
+      }
+    }
+    if (payload.event?.type === 'message.sent' && payload.event.messageId === 'MU5102:landing') {
+      await route.continue({
+        postData: JSON.stringify({
+          ...payload,
+          event: { ...payload.event, messageId: 'MU5103:landing' },
+        }),
+      })
+      return
+    }
+    if (payload.event?.type !== 'flight.updated' || payload.event.flight?.flightNumber !== 'MU5102') {
+      await route.continue()
+      return
+    }
+
+    await route.continue({
+      postData: JSON.stringify({
+        ...payload,
+        event: {
+          ...payload.event,
+          flight: { ...payload.event.flight, flightNumber: 'MU5103' },
+        },
+      }),
+    })
+  })
+  await page.goto('/')
+  const console = page.getByRole('region', { name: 'Event console' })
+
+  await page.getByRole('button', { name: '发送' }).click()
+  await page.getByLabel('任务输入').fill('MU5102')
+  await page.getByRole('button', { name: '发送' }).click()
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await expect(console).toContainText('driving-to-airport')
+  await advanceFlow(page) // charging.started
+  await advanceFlow(page) // flight in-air
+  await advanceFlow(page) // charging.completed
+  await advanceFlow(page) // flight landed
+  const failedSend = await advanceFlow(page) // message.send provider returns SEND_FAILED
+
+  expect(failedSend).toMatchObject({
+    task: { message: { status: 'failed', landingNoticeSent: false } },
+    effects: [{ type: 'message.send', status: 'failed', errorCode: 'SEND_FAILED' }],
+  })
+  await expect(console).toContainText('落地通知失败')
+  await expect(page.getByRole('button', { name: '重试发送' })).toBeVisible()
+
+  const prepareResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/actions$/.test(new URL(response.url()).pathname)
+    && (response.request().postDataJSON() as { actionId?: string }).actionId === 'retry-landing-message'
+  ))
+  await page.getByRole('button', { name: '重试发送' }).click()
+  const prepareResponse = await prepareResponsePromise
+  expect(prepareResponse.ok()).toBe(true)
+  await expect(prepareResponse.json()).resolves.toMatchObject({
+    effects: [{ type: 'message.prepare', status: 'pending-confirmation' }],
+  })
+  await expect(page.getByRole('button', { name: '确认发送' })).toBeVisible()
+
+  const sendResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/confirmations\//.test(new URL(response.url()).pathname)
+    && (response.request().postDataJSON() as { decision?: string }).decision === 'accept'
+  ))
+  await page.getByRole('button', { name: '确认发送' }).click()
+  const sendResponse = await sendResponsePromise
+  expect(sendResponse.ok()).toBe(true)
+  await expect(sendResponse.json()).resolves.toMatchObject({
+    task: { message: { status: 'sent', landingNoticeSent: true } },
+    effects: [{ type: 'message.send', status: 'succeeded' }],
+  })
+  await expect(page.getByLabel('Effect receipts')).toContainText('message.send:succeeded')
+  await expect(page.getByRole('button', { name: '确认发送' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '重试发送' })).toHaveCount(0)
+})

@@ -3,11 +3,13 @@ import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize, resolve } from 'node:path'
 import { AgentGateway } from '@canvasflow/agent'
 import { createAgentHttpHandler, type AgentHttpGateway } from '@canvasflow/agent/http'
+import { messageSendInputSchema } from '@canvasflow/schema'
 import {
   PersistentAgentRuntime,
   providerModeFromEnvironment,
   type ProviderFactory,
 } from '@canvasflow/agent/persistent'
+import { createProviderRegistry, errorResult } from '@canvasflow/tools'
 
 export type AgentServerOptions = {
   staticDirectory?: string
@@ -19,12 +21,49 @@ export type ConfiguredAgentRuntimeOptions = {
   providerFactory?: ProviderFactory
 }
 
+export const E2E_FAIL_AUTO_MESSAGE_SEND = 'AGENT_E2E_FAIL_AUTO_MESSAGE_SEND'
+export const CANVASFLOW_E2E = 'CANVASFLOW_E2E'
+
+export function createE2eProviderFactory(environment: NodeJS.ProcessEnv): ProviderFactory | undefined {
+  if (environment[CANVASFLOW_E2E] !== '1' || environment[E2E_FAIL_AUTO_MESSAGE_SEND] !== '1') return undefined
+  return (runtime, mode) => {
+    if (mode === 'live') throw new Error(`${E2E_FAIL_AUTO_MESSAGE_SEND} is unavailable in live provider mode`)
+    const registry = createProviderRegistry(runtime, mode)
+    const send = registry['message.send']
+    return {
+      ...registry,
+      'message.send': (context, input) => {
+        const parsed = messageSendInputSchema.safeParse(input)
+        if (
+          parsed.success
+          && parsed.data.authorizationId !== undefined
+          && parsed.data.confirmationId === undefined
+          && parsed.data.messageId === 'MU5103:landing'
+        ) {
+          return errorResult(
+            { ...context, provider: mode },
+            'message.send',
+            'SEND_FAILED',
+            'E2E auto-notify failure',
+            false,
+          )
+        }
+        return send(context, input)
+      },
+    }
+  }
+}
+
 export function createConfiguredAgentRuntime(options: ConfiguredAgentRuntimeOptions = {}): PersistentAgentRuntime {
   const environment = options.environment ?? process.env
+  const mode = providerModeFromEnvironment(environment)
+  if (mode === 'live' && createE2eProviderFactory(environment)) {
+    throw new Error(`${E2E_FAIL_AUTO_MESSAGE_SEND} is unavailable in live provider mode`)
+  }
   return new PersistentAgentRuntime({
     databasePath: environment.AGENT_DATABASE_PATH ?? '.canvasflow/agent.sqlite',
-    mode: providerModeFromEnvironment(environment),
-    providerFactory: options.providerFactory,
+    mode,
+    providerFactory: options.providerFactory ?? createE2eProviderFactory(environment),
   })
 }
 
