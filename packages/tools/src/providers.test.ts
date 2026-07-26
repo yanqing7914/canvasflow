@@ -85,6 +85,7 @@ describe('provider registry (ctx, input)', () => {
     expect(toolDefinitions['navigation.start'].riskLevel).toBe('reversible')
     expect(toolDefinitions['message.send'].riskLevel).toBe('external')
     expect(toolDefinitions['message.revoke-confirmation'].riskLevel).toBe('reversible')
+    expect(toolDefinitions['message.revoke-authorization'].riskLevel).toBe('reversible')
     expect(toolDefinitions['memory.confirm-update'].riskLevel).toBe('persistent')
     expect(toolDefinitions['message.send'].timeoutMs).toBe(3000)
   })

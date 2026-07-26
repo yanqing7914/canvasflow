@@ -43,6 +43,160 @@ const providerMeta = (taskId: string, tool: string, requestId: string) => ({
 })
 
 describe('EffectExecutor', () => {
+  it('applies a returning-home cabin preference through the provider', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const applyCabin = vi.fn(registry['vehicle.apply-cabin-profile'])
+    const executor = new EffectExecutor({ ...registry, 'vehicle.apply-cabin-profile': applyCabin })
+    const returning = {
+      ...task,
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+      navigation: { ...task.navigation, status: 'active' as const },
+    }
+
+    const result = executor.applyCabinPreferences({
+      task: returning,
+      memberIds: ['mom'],
+      temperatureC: 25,
+      idempotencyKey: 'cabin-001',
+      effectId: 'cabin-001:0',
+    })
+
+    expect(applyCabin).toHaveBeenCalledWith(
+      { taskId: task.taskId, requestId: 'pickup-001:vehicle.apply-cabin-profile:cabin-001' },
+      { zone: 'rear', temperatureC: 25, sourceMemberIds: ['mom'], idempotencyKey: 'cabin-001' },
+    )
+    expect(result).toEqual({
+      succeeded: true,
+      effect: { effectId: 'cabin-001:0', type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
+    })
+  })
+
+  it('policy-denies cabin preference execution without calling the provider', () => {
+    const registry = createProviderRegistry()
+    const applyCabin = vi.fn(registry['vehicle.apply-cabin-profile'])
+    const result = new EffectExecutor({ ...registry, 'vehicle.apply-cabin-profile': applyCabin }).applyCabinPreferences({
+      task,
+      memberIds: ['mom'],
+      temperatureC: 25,
+      idempotencyKey: 'cabin-denied',
+      effectId: 'cabin-denied:0',
+    })
+    expect(applyCabin).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ succeeded: false, effect: { status: 'failed', errorCode: 'INVALID_TASK_PHASE' } })
+  })
+
+  it('fails closed when cabin provider metadata does not match the request', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const returning = {
+      ...task,
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+      navigation: { ...task.navigation, status: 'active' as const },
+    }
+    const executor = new EffectExecutor({
+      ...registry,
+      'vehicle.apply-cabin-profile': (ctx, input) => {
+        const result = registry['vehicle.apply-cabin-profile'](ctx, input)
+        return { ...result, meta: { ...result.meta, requestId: 'wrong-request' } }
+      },
+    })
+    expect(executor.applyCabinPreferences({
+      task: returning, memberIds: ['mom'], temperatureC: 25,
+      idempotencyKey: 'cabin-wrong-meta', effectId: 'cabin-wrong-meta:0',
+    })).toMatchObject({ succeeded: false, effect: { status: 'failed', errorCode: 'PROVIDER_FAILED' } })
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
+  it('compensates a semantically invalid cabin apply before reporting failure', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const revert = vi.fn(registry['vehicle.revert-cabin-profile'])
+    const returning = {
+      ...task,
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+      navigation: { ...task.navigation, status: 'active' as const },
+    }
+    const executor = new EffectExecutor({
+      ...registry,
+      'vehicle.apply-cabin-profile': (ctx, input) => {
+        const result = registry['vehicle.apply-cabin-profile'](ctx, input)
+        return result.ok && result.data
+          ? { ...result, data: { ...result.data, current: { ...result.data.current, temperatureC: 24 } } }
+          : result
+      },
+      'vehicle.revert-cabin-profile': revert,
+    })
+
+    const result = executor.applyCabinPreferences({
+      task: returning, memberIds: ['mom'], temperatureC: 25,
+      idempotencyKey: 'cabin-invalid-output', effectId: 'cabin-invalid-output:0',
+    })
+
+    expect(revert).toHaveBeenCalledTimes(1)
+    expect(result).toMatchObject({
+      succeeded: false,
+      effect: { status: 'failed', errorCode: 'PROVIDER_FAILED' },
+      compensationEffect: { type: 'vehicle.revert-cabin-profile', status: 'succeeded' },
+      residualApplied: false,
+    })
+  })
+
+  it('does not report residual cabin state when rollback succeeds with invalid metadata', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const returning = {
+      ...task,
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+      navigation: { ...task.navigation, status: 'active' as const },
+    }
+    const executor = new EffectExecutor({
+      ...registry,
+      'vehicle.apply-cabin-profile': (ctx, input) => {
+        const result = registry['vehicle.apply-cabin-profile'](ctx, input)
+        return result.ok && result.data
+          ? { ...result, data: { ...result.data, current: { ...result.data.current, temperatureC: 24 } } }
+          : result
+      },
+      'vehicle.revert-cabin-profile': (ctx, input) => {
+        const result = registry['vehicle.revert-cabin-profile'](ctx, input)
+        return { ...result, meta: { ...result.meta, requestId: 'wrong-request' } }
+      },
+    })
+
+    expect(executor.applyCabinPreferences({
+      task: returning, memberIds: ['mom'], temperatureC: 25,
+      idempotencyKey: 'cabin-wrong-rollback-meta', effectId: 'cabin-wrong-rollback-meta:0',
+    })).toMatchObject({ succeeded: false, residualApplied: false })
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
+  it('fails closed when authorization revocation metadata does not match the request', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const authorizationId = runtime.confirmations.issueAutoNotifyAuthorization({
+      taskId: task.taskId, contactId: 'contact-mom', messageId: 'message-1', text: 'hello',
+    })
+    const scheduled = { ...task, message: { ...task.message, authorizationId } }
+    const executor = new EffectExecutor({
+      ...registry,
+      'message.revoke-authorization': (ctx, input) => {
+        const result = registry['message.revoke-authorization'](ctx, input)
+        return { ...result, meta: { ...result.meta, requestId: 'wrong-request' } }
+      },
+    })
+    expect(executor.revokeLandingMessageAuthorization({
+      task: scheduled, authorizationId, idempotencyKey: 'wrong-revoke-meta', effectId: 'wrong-revoke-meta:0',
+    })).toMatchObject({ succeeded: false, ambiguous: true, effect: { status: 'failed', errorCode: 'PROVIDER_FAILED' } })
+    expect(registry['message.send']({ taskId: task.taskId }, {
+      contactId: 'contact-mom', messageId: 'message-1', text: 'hello', authorizationId, idempotencyKey: 'send-after-wrong-revoke',
+    }).error?.code).toBe('AUTHORIZATION_REQUIRED')
+  })
+
   it('policy-gates return-trip effects and does not call providers for cancelled flights', () => {
     const registry = createProviderRegistry()
     const plan = vi.fn(registry['navigation.plan-route'])

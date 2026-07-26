@@ -5,9 +5,12 @@ import {
   messageSendOutputSchema,
   revokeMessageConfirmationInputSchema,
   revokeMessageConfirmationOutputSchema,
+  revokeMessageAuthorizationInputSchema,
+  revokeMessageAuthorizationOutputSchema,
   type MessagePrepareOutput,
   type MessageSendOutput,
   type RevokeMessageConfirmationOutput,
+  type RevokeMessageAuthorizationOutput,
   type ToolResult,
 } from '@canvasflow/schema'
 import { familyMembers, type MemberPreferenceRecord } from './data'
@@ -17,6 +20,7 @@ import { errorResult, FIXTURE_GENERATED_AT, okResult, type ToolContext } from '.
 const PREPARE = 'message.prepare'
 const SEND = 'message.send'
 const REVOKE_CONFIRMATION = 'message.revoke-confirmation'
+const REVOKE_AUTHORIZATION = 'message.revoke-authorization'
 
 /** Fixture contact that deterministically fails send. */
 export const FAILING_CONTACT_ID = 'contact-fail'
@@ -48,6 +52,15 @@ export function issueSendMessageConfirmation(runtime: SideEffectRuntime, binding
 /** Revoke an abandoned / rejected / superseded send-message confirmation. */
 export function revokeSendMessageConfirmation(runtime: SideEffectRuntime, confirmationId: string): boolean {
   return runtime.confirmations.revokeSendMessageConfirmation(confirmationId)
+}
+
+/** Revoke a task-bound auto-notify capability before cancellation commits. */
+export function revokeAutoNotifyAuthorization(
+  runtime: SideEffectRuntime,
+  taskId: string,
+  authorizationId: string,
+): boolean {
+  return runtime.confirmations.revokeAutoNotifyAuthorization(authorizationId, taskId)
 }
 /**
  * Issue an opaque auto-notify capability grant bound to a prepared landing-message
@@ -219,6 +232,38 @@ export function createMessageConfirmationRevoker(runtime: SideEffectRuntime) {
       revokeMessageConfirmationOutputSchema.parse({ confirmationId: parsed.data.confirmationId, revoked: true }),
     )
     runtime.idempotency.set(ctx.taskId, REVOKE_CONFIRMATION, parsed.data.idempotencyKey, parsed.data, result)
+    return result
+  }
+}
+
+export function createMessageAuthorizationRevoker(runtime: SideEffectRuntime) {
+  return function revokeMessageAuthorization(
+    ctx: ToolContext,
+    input: unknown,
+  ): ToolResult<RevokeMessageAuthorizationOutput> {
+    const parsed = revokeMessageAuthorizationInputSchema.safeParse(input)
+    if (!parsed.success) {
+      return errorResult(ctx, REVOKE_AUTHORIZATION, 'INVALID_ARGUMENT', '需要 authorizationId 和 idempotencyKey', false)
+    }
+    const cached = runtime.idempotency.get<RevokeMessageAuthorizationOutput>(
+      ctx.taskId,
+      REVOKE_AUTHORIZATION,
+      parsed.data.idempotencyKey,
+      parsed.data,
+    )
+    if (cached.kind === 'hit') return cached.result
+    if (cached.kind === 'conflict') {
+      return errorResult(ctx, REVOKE_AUTHORIZATION, 'INVALID_ARGUMENT', '同一 idempotencyKey 已被不同请求参数使用', false)
+    }
+    if (!runtime.confirmations.revokeAutoNotifyAuthorization(parsed.data.authorizationId, ctx.taskId)) {
+      return errorResult(ctx, REVOKE_AUTHORIZATION, 'AUTHORIZATION_REQUIRED', '预授权凭据无效或已使用', false)
+    }
+    const result = okResult(
+      ctx,
+      REVOKE_AUTHORIZATION,
+      revokeMessageAuthorizationOutputSchema.parse({ authorizationId: parsed.data.authorizationId, revoked: true }),
+    )
+    runtime.idempotency.set(ctx.taskId, REVOKE_AUTHORIZATION, parsed.data.idempotencyKey, parsed.data, result)
     return result
   }
 }

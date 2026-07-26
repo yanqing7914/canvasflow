@@ -8,7 +8,7 @@ import { createSideEffectRuntime, type SideEffectRuntime } from './idempotency'
 import { createMediaPlayer } from './media'
 import { createPreferenceReader } from './memory'
 import { createMemoryWriteTools } from './memory-write'
-import { createMessageConfirmationRevoker, createMessagePreparer, createMessageSender } from './message'
+import { createMessageAuthorizationRevoker, createMessageConfirmationRevoker, createMessagePreparer, createMessageSender } from './message'
 import { createNavigationSideEffects } from './navigation'
 import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
@@ -134,6 +134,13 @@ export const toolDefinitions = {
     riskLevel: 'reversible',
     timeoutMs: 1000,
   },
+  'message.revoke-authorization': {
+    name: 'message.revoke-authorization',
+    version: '1.0',
+    description: '撤销尚未使用的落地通知预授权凭据',
+    riskLevel: 'reversible',
+    timeoutMs: 1000,
+  },
 } satisfies Record<string, ToolDefinition>
 
 export type ToolName = keyof typeof toolDefinitions
@@ -153,6 +160,7 @@ export function createProviderRegistry(
   const prepareMessage = createMessagePreparer(runtime)
   const sendMessage = createMessageSender(runtime)
   const revokeMessageConfirmation = createMessageConfirmationRevoker(runtime)
+  const revokeMessageAuthorization = createMessageAuthorizationRevoker(runtime)
 
   const registry = {
     'family.resolve-members': resolveMembers,
@@ -173,6 +181,7 @@ export function createProviderRegistry(
     'message.prepare': prepareMessage,
     'message.send': sendMessage,
     'message.revoke-confirmation': revokeMessageConfirmation,
+    'message.revoke-authorization': revokeMessageAuthorization,
   } as const satisfies Record<ToolName, (ctx: ToolContext, input?: unknown) => ToolResult<unknown>>
 
   return Object.fromEntries(

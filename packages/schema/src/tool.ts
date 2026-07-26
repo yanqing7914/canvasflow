@@ -263,6 +263,16 @@ export const revokeMessageConfirmationOutputSchema = z.object({
   revoked: z.literal(true),
 })
 
+export const revokeMessageAuthorizationInputSchema = z.object({
+  authorizationId: z.string().min(1),
+  idempotencyKey: z.string().min(1),
+})
+
+export const revokeMessageAuthorizationOutputSchema = z.object({
+  authorizationId: z.string().min(1),
+  revoked: z.literal(true),
+})
+
 export const memoryPreferenceChangeSchema = z.object({
   rearTemperatureC: z.number().min(16).max(32).optional(),
   mediaTitle: z.string().min(1).optional(),
@@ -333,6 +343,8 @@ export type MessageSendInput = z.infer<typeof messageSendInputSchema>
 export type MessageSendOutput = z.infer<typeof messageSendOutputSchema>
 export type RevokeMessageConfirmationInput = z.infer<typeof revokeMessageConfirmationInputSchema>
 export type RevokeMessageConfirmationOutput = z.infer<typeof revokeMessageConfirmationOutputSchema>
+export type RevokeMessageAuthorizationInput = z.infer<typeof revokeMessageAuthorizationInputSchema>
+export type RevokeMessageAuthorizationOutput = z.infer<typeof revokeMessageAuthorizationOutputSchema>
 export type ProposeMemoryUpdateInput = z.infer<typeof proposeMemoryUpdateInputSchema>
 export type ProposeMemoryUpdateOutput = z.infer<typeof proposeMemoryUpdateOutputSchema>
 export type ConfirmMemoryUpdateInput = z.infer<typeof confirmMemoryUpdateInputSchema>

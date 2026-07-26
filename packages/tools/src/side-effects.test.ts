@@ -419,6 +419,24 @@ describe('idempotency store isolation', () => {
 })
 
 describe('message.send', () => {
+  it('撤销 auto-notify 授权后旧 token 不能发送，且按 taskId 隔离', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const message = { contactId: 'contact-mom', messageId: 'pickup-001:MU5102:landing', text: '我已到达机场' }
+    const authorizationId = issueAutoNotifyAuthorization(runtime, { taskId: 'pickup-001', ...message })
+    const revoked = registry['message.revoke-authorization']({ taskId: 'pickup-001', requestId: 'pickup-001:revoke' }, {
+      authorizationId,
+      idempotencyKey: 'revoke-auto-001',
+    })
+    expect(revoked).toMatchObject({ ok: true, data: { authorizationId, revoked: true } })
+    expect(registry['message.send']({ taskId: 'pickup-001' }, { ...message, authorizationId, idempotencyKey: 'send-after-revoke' }).error?.code)
+      .toBe('AUTHORIZATION_REQUIRED')
+    expect(registry['message.revoke-authorization']({ taskId: 'pickup-002', requestId: 'pickup-002:revoke' }, {
+      authorizationId,
+      idempotencyKey: 'revoke-auto-foreign',
+    }).error?.code).toBe('AUTHORIZATION_REQUIRED')
+  })
+
   it('同一 idempotencyKey 最多成功发送一次', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)

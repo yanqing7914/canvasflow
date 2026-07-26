@@ -200,6 +200,14 @@ export class ConfirmationStore {
     return true
   }
 
+  /** Invalidates an auto-notify capability after cancellation or supersession. */
+  revokeAutoNotifyAuthorization(authorizationId: string, taskId: string): boolean {
+    const grant = this.grants.get(authorizationId)
+    if (!grant || grant.kind !== 'auto-notify' || grant.binding.taskId !== taskId) return false
+    grant.consumed = true
+    return true
+  }
+
   matchesMemoryConfirmation(confirmationId: string, binding: MemoryConfirmBinding): boolean {
     const grant = this.grants.get(confirmationId)
     if (!grant || grant.kind !== 'confirm-memory' || grant.consumed) return false

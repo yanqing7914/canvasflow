@@ -164,6 +164,26 @@ describe('airport pickup Planner', () => {
     })
   })
 
+  it('requires an explicit affirmative returning-home command for cabin preferences', () => {
+    const state = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+    }
+    expect(planAirportPickup({ text: '应用家庭座舱偏好', state, eventId: 'cabin-yes', timestamp })).toMatchObject({
+      intent: 'apply-cabin-preferences',
+      proposedEvents: [{ type: 'user.input' }],
+    })
+    expect(planAirportPickup({ text: '不要应用座舱偏好', state, eventId: 'cabin-no', timestamp })).toMatchObject({
+      intent: 'unknown',
+      proposedEvents: [],
+    })
+    expect(planAirportPickup({ text: '座舱偏好是什么', state, eventId: 'cabin-question', timestamp })).toMatchObject({
+      intent: 'unknown',
+      proposedEvents: [],
+    })
+  })
+
   it('returns the same fallback metadata and event for identical inputs', () => {
     const first = new Planner().plan('开始导航')
     const second = new Planner().plan('开始导航')

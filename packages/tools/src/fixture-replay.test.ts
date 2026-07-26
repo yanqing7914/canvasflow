@@ -12,6 +12,7 @@ import {
   messagePrepareOutputSchema,
   messageSendOutputSchema,
   revokeMessageConfirmationOutputSchema,
+  revokeMessageAuthorizationOutputSchema,
   navigationStartOutputSchema,
   navigationUpdateRouteOutputSchema,
   proposeMemoryUpdateOutputSchema,
@@ -61,6 +62,7 @@ const outputSchemas: Record<ToolName, z.ZodType> = {
   'message.prepare': messagePrepareOutputSchema,
   'message.send': messageSendOutputSchema,
   'message.revoke-confirmation': revokeMessageConfirmationOutputSchema,
+  'message.revoke-authorization': revokeMessageAuthorizationOutputSchema,
 }
 
 function loadFixtures(): ScenarioFixture[] {

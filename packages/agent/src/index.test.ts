@@ -185,7 +185,7 @@ describe('airport pickup task engine', () => {
     expect(completed.charging).toMatchObject({ accepted: true, status: 'completed' })
   })
 
-  it('plans cabin apply for media-only preferences without temperature', () => {
+  it('does not synthesize cabin success for media-only preferences', () => {
     const state = {
       ...createInitialTask(),
       phase: 'returning-home' as const,
@@ -205,9 +205,7 @@ describe('airport pickup task engine', () => {
         error: null,
       },
     }
-    expect(planEffects(state, event, toolResults)).toEqual([
-      { type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
-    ])
+    expect(planEffects(state, event, toolResults)).toEqual([])
   })
 
 
@@ -293,7 +291,7 @@ describe('airport pickup task engine', () => {
     expect(dadPreferred.message.pendingContactId).toBe('contact-dad')
   })
 
-  it('plans cabin apply from memory.get-preferences members shape', () => {
+  it('does not synthesize cabin success from memory.get-preferences', () => {
     const state = {
       ...createInitialTask(),
       phase: 'returning-home' as const,
@@ -318,9 +316,7 @@ describe('airport pickup task engine', () => {
         error: null,
       },
     }
-    expect(planEffects(state, event, toolResults)).toEqual([
-      { type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
-    ])
+    expect(planEffects(state, event, toolResults)).toEqual([])
     expect(planEffects(state, event, {
       'memory.get-preferences': { ok: true, data: { temperatureC: 25 }, error: null },
     })).toEqual([])

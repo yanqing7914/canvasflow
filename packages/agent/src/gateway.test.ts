@@ -1943,6 +1943,151 @@ describe('AgentGateway', () => {
     expect(duplicate.task).toEqual(sent.task)
   })
 
+  it('reconciles a successful landing send with invalid response metadata as failed and non-retryable', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'message.send': (ctx, input) => {
+          const result = base['message.send'](ctx, input)
+          return { ...result, meta: { ...result.meta, requestId: 'wrong-request' } }
+        },
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'ambiguous-send-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'ambiguous-send-start' })
+    const landed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'ambiguous-send-landed', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'ambiguous-send-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' } })
+
+    const sent = gateway.submitEvent(created.task.taskId, { clientRequestId: 'ambiguous-send', expectedTaskRevision: landed.task.taskRevision, event: { eventId: 'ambiguous-send', type: 'message.sent', messageId: landed.task.message.pendingMessageId!, timestamp: '2026-07-22T20:41:00+08:00' } })
+
+    expect(sent.task.message).toMatchObject({ status: 'failed', landingNoticeSent: false, authorizationId: undefined, pendingMessageId: undefined })
+    expect(sent.effects).toEqual([
+      expect.objectContaining({ type: 'message.send', status: 'failed', errorCode: 'PROVIDER_FAILED' }),
+      expect.objectContaining({ type: 'message.revoke-authorization' }),
+    ])
+  })
+
+  it('executes a later cabin-preference request through the provider and replays the first receipt', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const applyCabin = vi.fn(base['vehicle.apply-cabin-profile'])
+    const store = new MemoryTaskStore()
+    const gateway = new AgentGateway({
+      store, now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.apply-cabin-profile': applyCabin },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'later-cabin-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'later-cabin-start',
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'later-cabin-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'later-cabin-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    const waiting = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'later-cabin-parked', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'later-cabin-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' },
+    })
+    const returning = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'later-cabin-onboard', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'later-cabin-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' },
+    })
+    const returningStored = store.get(created.task.taskId)!
+    store.save({
+      ...returningStored,
+      task: {
+        ...returningStored.task,
+        returnTrip: returningStored.task.returnTrip
+          ? { ...returningStored.task.returnTrip, cabin: { status: 'failed', errorCode: 'APPLY_FAILED' } }
+          : undefined,
+      },
+    })
+    applyCabin.mockClear()
+
+    const applied = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'later-cabin-input', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'later-cabin-input', type: 'user.input', text: '应用家庭座舱偏好', timestamp: '2026-07-22T12:05:00+08:00' },
+    })
+    const duplicate = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'later-cabin-replay', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'later-cabin-input', type: 'user.input', text: '应用家庭座舱偏好', timestamp: '2026-07-22T12:05:00+08:00' },
+    })
+
+    expect(applyCabin).toHaveBeenCalledTimes(1)
+    expect(applied.effects).toEqual([expect.objectContaining({ type: 'vehicle.apply-cabin-profile', status: 'succeeded' })])
+    expect(applied.task.returnTrip?.cabin).toEqual({ status: 'succeeded' })
+    expect(duplicate.task).toEqual(applied.task)
+    expect(duplicate.effects).toEqual(applied.effects)
+  })
+
+  it('preserves the returning-home snapshot when a later cabin provider fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    let failCabin = false
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'vehicle.apply-cabin-profile': (ctx, input) => failCabin
+          ? { ok: false, data: null, error: { code: 'APPLY_FAILED', message: 'offline', retryable: true }, meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'vehicle.apply-cabin-profile', provider: 'fixture', durationMs: 1, generatedAt: now } }
+          : base['vehicle.apply-cabin-profile'](ctx, input),
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'fail-cabin-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'fail-cabin-start' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'fail-cabin-geofence', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'fail-cabin-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'fail-cabin-parked', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'fail-cabin-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const returning = gateway.submitEvent(created.task.taskId, { clientRequestId: 'fail-cabin-onboard', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'fail-cabin-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
+    failCabin = true
+
+    const failed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'fail-cabin-input', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'fail-cabin-input', type: 'user.input', text: '应用家庭座舱偏好', timestamp: '2026-07-22T12:05:00+08:00' },
+    })
+
+    expect(failed.task).toEqual({ ...returning.task, uiRevision: failed.task.uiRevision })
+    expect(failed.task.uiRevision).toBeGreaterThan(returning.task.uiRevision)
+    expect(failed.effects).toEqual([expect.objectContaining({ type: 'vehicle.apply-cabin-profile', status: 'failed', errorCode: 'APPLY_FAILED' })])
+    expect(failed.meta.fallbackUsed).toBe(true)
+  })
+
+  it('publishes truthful residual cabin state when compensation fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    let customFailure = false
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'vehicle.apply-cabin-profile': (ctx, input) => {
+          const result = base['vehicle.apply-cabin-profile'](ctx, input)
+          return customFailure && result.ok && result.data
+            ? { ...result, data: { ...result.data, current: { ...result.data.current, temperatureC: 24 } } }
+            : result
+        },
+        'vehicle.revert-cabin-profile': (ctx) => ({
+          ok: false, data: null, error: { code: 'REVERT_FAILED', message: 'offline', retryable: true },
+          meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'vehicle.revert-cabin-profile', provider: 'fixture', durationMs: 1, generatedAt: now },
+        }),
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'residual-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'residual-start' })
+    const approaching = gateway.submitEvent(created.task.taskId, { clientRequestId: 'residual-geofence', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'residual-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' } })
+    const waiting = gateway.submitEvent(created.task.taskId, { clientRequestId: 'residual-parked', expectedTaskRevision: approaching.task.taskRevision, event: { eventId: 'residual-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' } })
+    const returning = gateway.submitEvent(created.task.taskId, { clientRequestId: 'residual-onboard', expectedTaskRevision: waiting.task.taskRevision, event: { eventId: 'residual-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' } })
+    customFailure = true
+    const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'residual-input', expectedTaskRevision: returning.task.taskRevision, event: { eventId: 'residual-input', type: 'user.input', text: '应用家庭座舱偏好', timestamp: '2026-07-22T12:05:00+08:00' } })
+
+    expect(failed.task.returnTrip?.cabin).toEqual({ status: 'succeeded', errorCode: 'COMPENSATION_FAILED' })
+    expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'vehicle.revert-cabin-profile', status: 'failed' }))
+    expect(failed.meta.fallbackUsed).toBe(true)
+  })
+
   it('keeps the scheduled snapshot when the landing message provider fails', () => {
     const runtime = createSideEffectRuntime()
     const base = createProviderRegistry(runtime)
@@ -1956,7 +2101,139 @@ describe('AgentGateway', () => {
     const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'failed-sent', expectedTaskRevision: landed.task.taskRevision, event: { eventId: 'failed-sent-event', type: 'message.sent', messageId: landed.task.message.pendingMessageId!, timestamp: '2026-07-22T20:41:00+08:00' } })
     expect(failed.task.message).toMatchObject({ status: 'failed', pendingContactId: 'contact-mom', pendingMessageId: undefined, authorizationId: undefined })
     expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'retry-landing-message' }))
-    expect(failed.effects).toEqual([expect.objectContaining({ type: 'message.send', status: 'failed', errorCode: 'SEND_FAILED' })])
+    expect(failed.effects).toEqual([
+      expect.objectContaining({ type: 'message.send', status: 'failed', errorCode: 'SEND_FAILED' }),
+      expect.objectContaining({ type: 'message.revoke-authorization', status: 'cancelled' }),
+    ])
+  })
+
+  it('revokes an armed retry before accepting a cancelled flight update', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revoke = vi.fn(base['message.revoke-confirmation'])
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime, providers: { ...base, 'message.revoke-confirmation': revoke } })
+    const failed = failedLandingMessageTask(gateway)
+    const armed = gateway.submitAction(failed.task.taskId, {
+      clientRequestId: 'cancel-flight-arm', expectedTaskRevision: failed.task.taskRevision,
+      expectedUiRevision: failed.ui.uiRevision, actionId: 'retry-landing-message', componentId: 'message-preview',
+      idempotencyKey: 'cancel-flight-arm',
+    })
+    const cancelled = gateway.submitEvent(armed.task.taskId, {
+      clientRequestId: 'cancel-flight-event', expectedTaskRevision: armed.task.taskRevision,
+      event: {
+        eventId: 'cancel-flight-event', type: 'flight.updated',
+        flight: { flightNumber: 'MU5102', status: 'cancelled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        timestamp: '2026-07-22T20:42:00+08:00',
+      },
+    })
+    expect(revoke).toHaveBeenCalledTimes(1)
+    expect(cancelled.task.pendingConfirmation).toBeUndefined()
+    expect(cancelled.task.flight?.status).toBe('cancelled')
+    expect(cancelled.effects).toEqual([expect.objectContaining({ type: 'message.revoke-confirmation', status: 'cancelled' })])
+  })
+
+  it('revokes scheduled auto-notify authorization before cancelling the task', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revoke = vi.fn(base['message.revoke-authorization'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'message.revoke-authorization': revoke },
+    })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'revoke-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'revoke-start' })
+    const landed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'revoke-landed', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'revoke-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' } })
+    const authorizationId = landed.task.message.authorizationId!
+    const payload = {
+      contactId: landed.task.message.pendingContactId!,
+      messageId: landed.task.message.pendingMessageId!,
+      text: `我已到达机场接机点，航班 MU5102，预计 ${landed.task.navigation!.eta} 会合。`,
+    }
+
+    const cancelled = gateway.cancelTask(created.task.taskId, {
+      clientRequestId: 'revoke-cancel', expectedTaskRevision: landed.task.taskRevision, eventId: 'revoke-cancel',
+    })
+
+    expect(revoke).toHaveBeenCalledTimes(1)
+    expect(cancelled.task.phase).toBe('cancelled')
+    expect(cancelled.effects).toEqual([expect.objectContaining({ type: 'message.revoke-authorization', status: 'cancelled' })])
+    expect(base['message.send']({ taskId: created.task.taskId }, { ...payload, authorizationId, idempotencyKey: 'stale-after-cancel' }).error?.code)
+      .toBe('AUTHORIZATION_REQUIRED')
+  })
+
+  it.each([
+    ['task cancellation', () => ({ eventId: 'stale-terminal-cancel', type: 'user.cancelled-task' as const, reason: 'old client', timestamp: '2026-07-22T20:39:00+08:00' })],
+    ['flight cancellation', () => ({ eventId: 'stale-terminal-flight', type: 'flight.updated' as const, flight: { flightNumber: 'MU5102', status: 'cancelled' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:39:00+08:00' })],
+    ['message failure', (messageId: string) => ({ eventId: 'stale-terminal-message', type: 'message.failed' as const, messageId, errorCode: 'SEND_FAILED', timestamp: '2026-07-22T20:39:00+08:00' })],
+  ])('does not consume a scheduled authorization for a stale %s event', (_name, staleEvent) => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime, providers: base })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'stale-terminal-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'stale-terminal-start' })
+    const landed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'stale-terminal-landed', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'stale-terminal-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' } })
+    const authorizationId = landed.task.message.authorizationId!
+
+    const stale = gateway.submitEvent(created.task.taskId, { clientRequestId: `client-${staleEvent(landed.task.message.pendingMessageId!).eventId}`, expectedTaskRevision: landed.task.taskRevision, event: staleEvent(landed.task.message.pendingMessageId!) })
+
+    expect(stale.task).toEqual(landed.task)
+    expect(stale.effects).toEqual([])
+    expect(base['message.send']({ taskId: created.task.taskId }, {
+      contactId: landed.task.message.pendingContactId!, messageId: landed.task.message.pendingMessageId!,
+      text: `我已到达机场接机点，航班 MU5102，预计 ${landed.task.navigation!.eta} 会合。`,
+      authorizationId, idempotencyKey: 'stale-terminal-send',
+    }).ok).toBe(true)
+  })
+
+  it('reconciles task state when authorization revocation succeeds with invalid metadata', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'message.revoke-authorization': (ctx, input) => {
+          const result = base['message.revoke-authorization'](ctx, input)
+          return { ...result, meta: { ...result.meta, requestId: 'wrong-request' } }
+        },
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'ambiguous-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'ambiguous-start' })
+    const landed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'ambiguous-landed', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'ambiguous-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' } })
+    const authorizationId = landed.task.message.authorizationId!
+
+    const failed = gateway.cancelTask(created.task.taskId, { clientRequestId: 'ambiguous-cancel', expectedTaskRevision: landed.task.taskRevision, eventId: 'ambiguous-cancel' })
+
+    expect(failed.task.phase).toBe(landed.task.phase)
+    expect(failed.task.message.authorizationId).toBeUndefined()
+    expect(failed.effects).toEqual([expect.objectContaining({ type: 'message.revoke-authorization', status: 'failed', errorCode: 'PROVIDER_FAILED' })])
+    expect(base['message.send']({ taskId: created.task.taskId }, { contactId: landed.task.message.pendingContactId!, messageId: landed.task.message.pendingMessageId!, text: `我已到达机场接机点，航班 MU5102，预计 ${landed.task.navigation!.eta} 会合。`, authorizationId, idempotencyKey: 'ambiguous-stale-send' }).error?.code).toBe('AUTHORIZATION_REQUIRED')
+  })
+
+  it('keeps the scheduled snapshot when authorization revocation fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'message.revoke-authorization': (ctx) => ({
+          ok: false, data: null, error: { code: 'REVOKE_FAILED', message: 'offline', retryable: true },
+          meta: { requestId: ctx.requestId!, taskId: ctx.taskId, tool: 'message.revoke-authorization', provider: 'fixture', durationMs: 1, generatedAt: now },
+        }),
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, { clientRequestId: 'revoke-fail-start', expectedTaskRevision: created.task.taskRevision, expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'revoke-fail-start' })
+    const landed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'revoke-fail-landed', expectedTaskRevision: started.task.taskRevision, event: { eventId: 'revoke-fail-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' } })
+
+    const failed = gateway.cancelTask(created.task.taskId, { clientRequestId: 'revoke-fail-cancel', expectedTaskRevision: landed.task.taskRevision, eventId: 'revoke-fail-cancel' })
+    const duplicate = gateway.cancelTask(created.task.taskId, { clientRequestId: 'revoke-fail-cancel-retry', expectedTaskRevision: landed.task.taskRevision, eventId: 'revoke-fail-cancel' })
+
+    expect(failed.task).toEqual(landed.task)
+    expect(failed.effects).toEqual([expect.objectContaining({ type: 'message.revoke-authorization', status: 'failed', errorCode: 'REVOKE_FAILED' })])
+    expect(duplicate.effects).toEqual(failed.effects)
   })
 
   it('hides retry and surfaces unavailable UI when failed notify has no authorized contact', () => {

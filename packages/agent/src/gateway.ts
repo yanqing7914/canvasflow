@@ -257,8 +257,36 @@ export class AgentGateway {
       })
       effects = [revocation.effect]
       if (!revocation.succeeded) {
-        this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: current, effects })
-        return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+        const reconciled = revocation.ambiguous
+          ? this.#store.save(this.#publish({
+              ...current.task,
+              taskRevision: current.task.taskRevision + 1,
+              pendingConfirmation: undefined,
+            }, current.toolResults, current.requestContext))
+          : current
+        this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: reconciled, effects })
+        return this.#response(request.clientRequestId, reconciled, effects, performance.now() - startedAt)
+      }
+    }
+
+    if (current.task.message.authorizationId) {
+      const revocation = this.#effectExecutor.revokeLandingMessageAuthorization({
+        task: current.task,
+        authorizationId: current.task.message.authorizationId,
+        idempotencyKey: `${request.clientRequestId}:reset-authorization`,
+        effectId: `${current.task.message.authorizationId}:reset-authorization`,
+      })
+      effects = [...effects, revocation.effect]
+      if (!revocation.succeeded) {
+        const reconciled = revocation.ambiguous
+          ? this.#store.save(this.#publish({
+              ...current.task,
+              taskRevision: current.task.taskRevision + 1,
+              message: { ...current.task.message, authorizationId: undefined },
+            }, current.toolResults, current.requestContext))
+          : current
+        this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: reconciled, effects })
+        return this.#response(request.clientRequestId, reconciled, effects, performance.now() - startedAt)
       }
     }
 
@@ -303,30 +331,6 @@ export class AgentGateway {
       )
     }
 
-    let preEffects: AgentResponse['effects'] = []
-    if (
-      (
-        request.event.type === 'user.cancelled-task'
-        || (
-          request.event.type === 'message.failed'
-          && current.task.message.pendingMessageId === request.event.messageId
-        )
-      )
-      && current.task.pendingConfirmation?.action === 'send-message'
-    ) {
-      const revocation = this.#effectExecutor.revokeLandingMessageConfirmation({
-        task: current.task,
-        confirmationId: current.task.pendingConfirmation.confirmationId,
-        idempotencyKey: `${request.event.eventId}:terminal-message`,
-        effectId: `${current.task.pendingConfirmation.confirmationId}:terminal-message`,
-      })
-      preEffects = [revocation.effect]
-      if (!revocation.succeeded) {
-        this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: preEffects })
-        return this.#response(request.clientRequestId, current, preEffects, performance.now() - startedAt)
-      }
-    }
-
     const plan = request.event.type === 'user.input'
       ? this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
       : undefined
@@ -339,9 +343,6 @@ export class AgentGateway {
         flightNumber: plan.slotUpdates.flightNumber,
       } } : undefined,
     )
-    if (request.event.type === 'message.failed' && preEffects.length > 0) {
-      next = { ...next, pendingConfirmation: undefined }
-    }
     const taskChanged = JSON.stringify(next) !== JSON.stringify(current.task)
     const accepted = taskChanged
       || this.#acceptsContextOnlyEvent(current.task, current.requestContext, request.event)
@@ -350,17 +351,198 @@ export class AgentGateway {
       this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
     }
+
+    // Only revoke live capabilities after freshness and reducer acceptance checks.
+    // A stale terminal event must not consume a credential that remains visible in state.
+    let preEffects: AgentResponse['effects'] = []
+    let cleanupTask = current.task
+    const terminalEvent = request.event.type === 'user.cancelled-task'
+      || (request.event.type === 'flight.updated' && request.event.flight.status === 'cancelled')
+      || (request.event.type === 'message.failed' && current.task.message.pendingMessageId === request.event.messageId)
+    if (terminalEvent && current.task.message.authorizationId) {
+      const revocation = this.#effectExecutor.revokeLandingMessageAuthorization({
+        task: current.task,
+        authorizationId: current.task.message.authorizationId,
+        idempotencyKey: `${request.event.eventId}:landing-authorization`,
+        effectId: `${request.event.eventId}:landing-authorization`,
+      })
+      preEffects = [revocation.effect]
+      if (!revocation.succeeded) {
+        const reconciled = revocation.ambiguous
+          ? this.#store.save(this.#publish({
+              ...current.task,
+              taskRevision: current.task.taskRevision + 1,
+              message: { ...current.task.message, authorizationId: undefined },
+            }, current.toolResults, current.requestContext))
+          : current
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored: reconciled, effects: preEffects })
+        return this.#response(request.clientRequestId, reconciled, preEffects, performance.now() - startedAt)
+      }
+      cleanupTask = {
+        ...cleanupTask,
+        taskRevision: cleanupTask.taskRevision + 1,
+        message: { ...cleanupTask.message, authorizationId: undefined },
+      }
+    }
+    if (terminalEvent && current.task.pendingConfirmation?.action === 'send-message') {
+      const revocation = this.#effectExecutor.revokeLandingMessageConfirmation({
+        task: current.task,
+        confirmationId: current.task.pendingConfirmation.confirmationId,
+        idempotencyKey: `${request.event.eventId}:terminal-message`,
+        effectId: `${current.task.pendingConfirmation.confirmationId}:terminal-message`,
+      })
+      preEffects = [...preEffects, revocation.effect]
+      if (!revocation.succeeded) {
+        const reconciledTask = revocation.ambiguous
+          ? { ...cleanupTask, taskRevision: cleanupTask.taskRevision + 1, pendingConfirmation: undefined }
+          : cleanupTask
+        const stored = reconciledTask === current.task
+          ? current
+          : this.#store.save(this.#publish(reconciledTask, current.toolResults, current.requestContext))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: preEffects })
+        return this.#response(request.clientRequestId, stored, preEffects, performance.now() - startedAt)
+      }
+      cleanupTask = { ...cleanupTask, taskRevision: cleanupTask.taskRevision + 1, pendingConfirmation: undefined }
+    }
+    if (terminalEvent && preEffects.length > 0) next = { ...next, pendingConfirmation: undefined }
+    if (request.event.type === 'flight.updated' && request.event.flight.status === 'cancelled') {
+      next = {
+        ...next,
+        message: {
+          ...next.message,
+          status: next.message.status === 'scheduled' ? 'cancelled' : next.message.status,
+          pendingMessageId: undefined,
+          pendingText: undefined,
+          authorizationId: undefined,
+        },
+      }
+    }
     const requestContext = this.#contextAfterEvent(current.requestContext, request.event)
     const effects = [
       ...preEffects,
       ...planEffects(current.task, request.event, current.toolResults ?? {}, this.#preferences),
     ]
+    if (
+      request.event.type === 'user.input'
+      && current.task.phase === 'returning-home'
+      && plan?.intent === 'apply-cabin-preferences'
+    ) {
+      let preferences: ReadToolResults['memory.get-preferences']
+      try {
+        preferences = this.#orchestrator.resolveReturnTripPreferences(
+          taskId,
+          request.clientRequestId,
+          current.task.passengers.memberIds,
+        )
+      } catch (error) {
+        if (error instanceof ReadToolOrchestrationError) {
+          const stored = this.#store.save(this.#publishFallback(
+            current.task,
+            current.toolResults,
+            error,
+            undefined,
+            current.requestContext,
+          ))
+          this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+          return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+        }
+        this.#throwProviderError(error, current)
+      }
+      const records = preferences.data.members
+      const cabinMember = records.find((member) => member.rearTemperatureC !== undefined || member.mediaTitle !== undefined)
+      const mediaMember = records.find((member) => member.mediaTitle !== undefined)
+      const execution = this.#effectExecutor.applyCabinPreferences({
+        task: current.task,
+        memberIds: current.task.passengers.memberIds,
+        temperatureC: cabinMember?.rearTemperatureC,
+        mediaTitle: mediaMember?.mediaTitle,
+        idempotencyKey: request.event.eventId,
+        effectId: `${request.event.eventId}:0`,
+      })
+      if (!execution.succeeded) {
+        const executionEffects = [execution.effect, ...(execution.compensationEffect ? [execution.compensationEffect] : [])]
+        const residualTask = execution.residualApplied
+          ? {
+              ...current.task,
+              returnTrip: {
+                workflowId: request.event.eventId,
+                homeDestinationId: current.task.returnTrip?.homeDestinationId,
+                route: current.task.returnTrip?.route ?? { status: 'succeeded' as const, routeId: current.task.navigation?.routeId, eta: current.task.navigation?.eta },
+                cabin: { status: 'succeeded' as const, errorCode: 'COMPENSATION_FAILED' },
+                media: current.task.returnTrip?.media ?? { status: 'pending' as const },
+              },
+            }
+          : current.task
+        const stored = this.#store.save(this.#publishFallback(
+          residualTask,
+          current.toolResults,
+          new ReadToolOrchestrationError(
+            execution.effect.errorCode === 'PROVIDER_TIMEOUT' ? 'PROVIDER_TIMEOUT' : 'PROVIDER_FAILED',
+            `vehicle.apply-cabin-profile: ${execution.effect.errorCode ?? 'PROVIDER_FAILED'}`,
+            execution.effect.errorCode === 'PROVIDER_TIMEOUT',
+          ),
+          undefined,
+          current.requestContext,
+        ))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: executionEffects })
+        return this.#response(request.clientRequestId, stored, executionEffects, performance.now() - startedAt)
+      }
+      const previousCabin = next.returnTrip?.cabin
+      const cabinChanged = previousCabin?.status !== 'succeeded' || previousCabin.errorCode !== undefined
+      const successfulTask = {
+        ...next,
+        ...(next.returnTrip ? {
+          taskRevision: next.taskRevision + (cabinChanged ? 1 : 0),
+          returnTrip: { ...next.returnTrip, cabin: { status: 'succeeded' as const } },
+        } : {}),
+      }
+      const stored = this.#store.save(this.#publish(successfulTask, {
+        ...current.toolResults,
+        'memory.get-preferences': preferences,
+      }, requestContext))
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [execution.effect] })
+      return this.#response(request.clientRequestId, stored, [execution.effect], performance.now() - startedAt)
+    }
     if (request.event.type === 'message.sent') {
       if (current.task.message.pendingMessageId !== request.event.messageId) {
         throw new AgentGatewayError('INVALID_REQUEST', 'Message is not pending for this task', false, current)
       }
       const execution = this.#effectExecutor.sendLandingMessage({ task: current.task, idempotencyKey: current.task.message.idempotencyKey ?? request.event.eventId, effectId: `${request.event.eventId}:0` })
       if (!execution.succeeded) {
+        const revokeAuthorization = current.task.message.authorizationId
+          ? this.#effectExecutor.revokeLandingMessageAuthorization({
+              task: current.task,
+              authorizationId: current.task.message.authorizationId,
+              idempotencyKey: `${request.event.eventId}:send-failed`,
+              effectId: `${request.event.eventId}:send-failed`,
+            })
+          : undefined
+        if (revokeAuthorization && !revokeAuthorization.succeeded && !execution.ambiguousApplied) {
+          const failedEffects = [execution.effect, revokeAuthorization.effect]
+          const reconciled = revokeAuthorization.ambiguous
+            ? this.#store.save(this.#publish(applyEvent(current.task, {
+                eventId: request.event.eventId,
+                type: 'message.failed',
+                messageId: request.event.messageId,
+                errorCode: execution.effect.errorCode ?? 'SEND_FAILED',
+                timestamp: request.event.timestamp,
+              }, this.#preferences), current.toolResults, requestContext))
+            : current
+          this.#store.recordEventResult(taskId, request.event.eventId, { stored: reconciled, effects: failedEffects })
+          return this.#response(request.clientRequestId, reconciled, failedEffects, performance.now() - startedAt)
+        }
+        if (execution.ambiguousApplied) {
+          const unknown = this.#store.save(this.#publish(applyEvent(current.task, {
+            eventId: request.event.eventId,
+            type: 'message.failed',
+            messageId: request.event.messageId,
+            errorCode: 'PROVIDER_FAILED',
+            timestamp: request.event.timestamp,
+          }, this.#preferences), current.toolResults, requestContext))
+          const ambiguousEffects = [execution.effect, ...(revokeAuthorization ? [revokeAuthorization.effect] : [])]
+          this.#store.recordEventResult(taskId, request.event.eventId, { stored: unknown, effects: ambiguousEffects })
+          return this.#response(request.clientRequestId, unknown, ambiguousEffects, performance.now() - startedAt)
+        }
         const failed = this.#store.save(this.#publish(applyEvent(current.task, {
           eventId: request.event.eventId,
           type: 'message.failed',
@@ -368,8 +550,9 @@ export class AgentGateway {
           errorCode: execution.effect.errorCode ?? 'SEND_FAILED',
           timestamp: request.event.timestamp,
         }, this.#preferences), current.toolResults, requestContext))
-        this.#store.recordEventResult(taskId, request.event.eventId, { stored: failed, effects: [execution.effect] })
-        return this.#response(request.clientRequestId, failed, [execution.effect], performance.now() - startedAt)
+        const failedEffects = [execution.effect, ...(revokeAuthorization ? [revokeAuthorization.effect] : [])]
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored: failed, effects: failedEffects })
+        return this.#response(request.clientRequestId, failed, failedEffects, performance.now() - startedAt)
       }
       const sent = this.#store.save(this.#publish(next, current.toolResults, requestContext))
       this.#store.recordEventResult(taskId, request.event.eventId, { stored: sent, effects: [execution.effect] })

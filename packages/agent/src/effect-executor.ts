@@ -11,6 +11,7 @@ import {
   messagePrepareOutputSchema,
   messageSendOutputSchema,
   revokeMessageConfirmationOutputSchema,
+  revokeMessageAuthorizationOutputSchema,
   toolResultSchema,
   type AirportPickupTaskState,
   type EffectRecord,
@@ -85,6 +86,13 @@ export type NavigationStartExecution = {
   effect: EffectRecord
 }
 
+type LandingMessageExecution = {
+  succeeded: boolean
+  effect: EffectRecord
+  /** The provider reports that the external send happened, but its envelope is untrusted. */
+  ambiguousApplied?: boolean
+}
+
 export type ReturnTripExecution = {
   succeeded: boolean
   effect: EffectRecord[]
@@ -126,11 +134,20 @@ export type LandingMessageRevocationExecution = {
   succeeded: boolean
   effect: EffectRecord
   errorCode?: string
+  /** Provider returned a successful payload but an untrusted envelope; reconcile locally. */
+  ambiguous?: boolean
+}
+
+export type CabinPreferenceExecution = {
+  succeeded: boolean
+  effect: EffectRecord
+  compensationEffect?: EffectRecord
+  residualApplied?: boolean
 }
 
 type ProviderResult<T> =
   | { succeeded: true; data: T }
-  | { succeeded: false; errorCode: string }
+  | { succeeded: false; errorCode: string; data?: T }
 
 type ProviderResultSchema<T> = {
   safeParse(value: unknown):
@@ -215,7 +232,7 @@ export class EffectExecutor {
     task: AirportPickupTaskState
     idempotencyKey: string
     effectId: string
-  }): { succeeded: boolean; effect: EffectRecord } {
+  }): LandingMessageExecution {
     const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({ effectId: input.effectId, type: 'message.send', status, tool: 'message.send', ...(errorCode ? { errorCode } : {}) })
     const policy = this.#policy.authorizeLandingMessage(input.task)
     if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
@@ -236,7 +253,16 @@ export class EffectExecutor {
       ),
       toolResultSchema(messageSendOutputSchema),
     )
-    if (!result.succeeded || result.data.messageId !== input.task.message.pendingMessageId || result.data.status !== 'sent') return { succeeded: false, effect: effect('failed', result.succeeded ? 'PROVIDER_FAILED' : result.errorCode) }
+    if (!result.succeeded) {
+      return {
+        succeeded: false,
+        effect: effect('failed', result.errorCode),
+        ambiguousApplied: result.data?.messageId === input.task.message.pendingMessageId && result.data?.status === 'sent',
+      }
+    }
+    if (result.data.messageId !== input.task.message.pendingMessageId || result.data.status !== 'sent') {
+      return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+    }
     return { succeeded: true, effect: effect('succeeded') }
   }
 
@@ -410,12 +436,142 @@ export class EffectExecutor {
       toolResultSchema(revokeMessageConfirmationOutputSchema),
     )
     if (!result.succeeded) {
-      return { succeeded: false, errorCode: result.errorCode, effect: effect('failed', result.errorCode) }
+      return {
+        succeeded: false,
+        errorCode: result.errorCode,
+        ambiguous: result.data !== undefined,
+        effect: effect('failed', result.errorCode),
+      }
     }
     if (result.data.confirmationId !== input.confirmationId || !result.data.revoked) {
       return { succeeded: false, errorCode: 'PROVIDER_FAILED', effect: effect('failed', 'PROVIDER_FAILED') }
     }
     return { succeeded: true, effect: effect('cancelled', 'USER_REJECTED') }
+  }
+
+  revokeLandingMessageAuthorization(input: {
+    task: AirportPickupTaskState
+    authorizationId: string
+    idempotencyKey: string
+    effectId: string
+  }): LandingMessageRevocationExecution {
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
+      effectId: input.effectId,
+      type: 'message.revoke-authorization',
+      status,
+      tool: 'message.revoke-authorization',
+      ...(errorCode ? { errorCode } : {}),
+    })
+    if (input.task.message.authorizationId !== input.authorizationId) {
+      return { succeeded: false, errorCode: 'AUTHORIZATION_REQUIRED', effect: effect('failed', 'AUTHORIZATION_REQUIRED') }
+    }
+    const providerRequestId = `${input.task.taskId}:message.revoke-authorization:${input.idempotencyKey}`
+    const result = this.#callProvider(
+      input.task.taskId,
+      'message.revoke-authorization',
+      providerRequestId,
+      () => this.#registry['message.revoke-authorization'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        { authorizationId: input.authorizationId, idempotencyKey: input.idempotencyKey },
+      ),
+      toolResultSchema(revokeMessageAuthorizationOutputSchema),
+    )
+    if (!result.succeeded) {
+      return {
+        succeeded: false,
+        errorCode: result.errorCode,
+        ambiguous: result.data !== undefined,
+        effect: effect('failed', result.errorCode),
+      }
+    }
+    if (result.data.authorizationId !== input.authorizationId || !result.data.revoked) {
+      return {
+        succeeded: false,
+        errorCode: 'PROVIDER_FAILED',
+        ambiguous: result.data.revoked,
+        effect: effect('failed', 'PROVIDER_FAILED'),
+      }
+    }
+    return { succeeded: true, effect: effect('cancelled', 'TASK_CANCELLED') }
+  }
+
+  applyCabinPreferences(input: {
+    task: AirportPickupTaskState
+    memberIds: string[]
+    temperatureC?: number
+    mediaTitle?: string
+    idempotencyKey: string
+    effectId: string
+  }): CabinPreferenceExecution {
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
+      effectId: input.effectId,
+      type: 'vehicle.apply-cabin-profile',
+      status,
+      tool: 'vehicle.apply-cabin-profile',
+      ...(errorCode ? { errorCode } : {}),
+    })
+    const policy = this.#policy.authorizeReturnTrip(input.task)
+    if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
+    if (input.temperatureC === undefined && input.mediaTitle === undefined) {
+      return { succeeded: false, effect: effect('failed', 'PREFERENCE_UNAVAILABLE') }
+    }
+    const providerRequestId = `${input.task.taskId}:vehicle.apply-cabin-profile:${input.idempotencyKey}`
+    const result = this.#callProvider(
+      input.task.taskId,
+      'vehicle.apply-cabin-profile',
+      providerRequestId,
+      () => this.#registry['vehicle.apply-cabin-profile'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        {
+          zone: 'rear',
+          ...(input.temperatureC !== undefined ? { temperatureC: input.temperatureC } : {}),
+          ...(input.mediaTitle !== undefined ? { mediaTitle: input.mediaTitle } : {}),
+          sourceMemberIds: input.memberIds,
+          idempotencyKey: input.idempotencyKey,
+        },
+      ),
+      toolResultSchema(applyCabinProfileOutputSchema),
+    )
+    if (!result.succeeded && result.data === undefined) return { succeeded: false, effect: effect('failed', result.errorCode) }
+    if (
+      !result.succeeded
+      || !result.data.applied
+      || !result.data.reversible
+      || (input.temperatureC !== undefined && result.data.current.temperatureC !== input.temperatureC)
+      || (input.mediaTitle !== undefined && result.data.current.mediaTitle !== input.mediaTitle)
+    ) {
+      const appliedData = result.data
+      if (!appliedData || !appliedData.applied || !appliedData.effectId) {
+        return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+      }
+      const rollbackRequestId = `${providerRequestId}:rollback`
+      const rollback = this.#callProvider(
+        input.task.taskId,
+        'vehicle.revert-cabin-profile',
+        rollbackRequestId,
+        () => this.#registry['vehicle.revert-cabin-profile'](
+          { taskId: input.task.taskId, requestId: rollbackRequestId },
+          { effectId: appliedData.effectId, idempotencyKey: `${input.idempotencyKey}:rollback` },
+        ),
+        toolResultSchema(revertCabinProfileOutputSchema),
+      )
+      const compensated = (rollback.succeeded || rollback.data !== undefined)
+        && rollback.data?.effectId === appliedData.effectId
+        && rollback.data.reverted
+      return {
+        succeeded: false,
+        effect: effect('failed', compensated ? 'PROVIDER_FAILED' : 'COMPENSATION_FAILED'),
+        compensationEffect: {
+          effectId: `${input.effectId}:rollback`,
+          type: 'vehicle.revert-cabin-profile',
+          status: compensated ? 'succeeded' : 'failed',
+          tool: 'vehicle.revert-cabin-profile',
+          ...(compensated ? {} : { errorCode: rollback.succeeded ? 'PROVIDER_FAILED' : rollback.errorCode }),
+        },
+        residualApplied: !compensated,
+      }
+    }
+    return { succeeded: true, effect: effect('succeeded') }
   }
 
   executeReturnTrip(input: {
@@ -775,7 +931,9 @@ export class EffectExecutor {
     if (!parsed.success) return { succeeded: false, errorCode: 'PROVIDER_FAILED' }
     const result = parsed.data
     if (result.meta.taskId !== taskId || result.meta.tool !== tool || result.meta.requestId !== requestId) {
-      return { succeeded: false, errorCode: 'PROVIDER_FAILED' }
+      return result.ok && result.data !== null && result.error === null
+        ? { succeeded: false, errorCode: 'PROVIDER_FAILED', data: result.data }
+        : { succeeded: false, errorCode: 'PROVIDER_FAILED' }
     }
     if (result.ok && result.data !== null && result.error === null) {
       return { succeeded: true, data: result.data }
