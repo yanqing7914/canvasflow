@@ -8,6 +8,7 @@ export type PlannerIntent =
   | 'start-navigation'
   | 'plan-charging'
   | 'confirm-passengers-onboard'
+  | 'apply-cabin-preferences'
   | 'cancel-task'
   | 'unknown'
 
@@ -112,6 +113,21 @@ export function planAirportPickup(input: PlannerInput): Plan {
       missingSlots: pickupMissingSlots(state, passengers, flightNumber),
       proposedEvents: [{ ...eventBase, type: 'navigation.started', routeId }],
       assistantText: '好的，已准备开始前往机场的导航。',
+    }
+  }
+
+  if (
+    state?.phase === 'returning-home'
+    && /(?:应用|恢复|设置|调整|开启)(?:家庭|后排|座舱|媒体|温度|偏好)*(?:座舱|媒体|温度|偏好)/.test(compactText)
+    && !/(?:不要|不需要|别|取消|关闭|停止|是什么|有哪些|查看|告诉我)/.test(compactText)
+  ) {
+    return {
+      intent: 'apply-cabin-preferences',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，已准备应用已授权的座舱偏好。',
     }
   }
 

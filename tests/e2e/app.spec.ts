@@ -161,7 +161,10 @@ test('retries a failed landing message through action and confirmation APIs', as
 
   expect(failedSend).toMatchObject({
     task: { message: { status: 'failed', landingNoticeSent: false } },
-    effects: [{ type: 'message.send', status: 'failed', errorCode: 'SEND_FAILED' }],
+    effects: [
+      { type: 'message.send', status: 'failed', errorCode: 'SEND_FAILED' },
+      { type: 'message.revoke-authorization', status: 'cancelled' },
+    ],
   })
   await expect(console).toContainText('落地通知失败')
   await expect(page.getByRole('button', { name: '重试发送' })).toBeVisible()
