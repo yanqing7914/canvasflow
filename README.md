@@ -133,7 +133,7 @@ The current Chromium suite covers two complete flows through the real Agent API:
 ## Known Limitations
 
 - The shipped demo defaults to deterministic Fixture mode and includes no model key, vehicle credential, or live Provider dependency.
-- `ModelGateway` is an optional public rules-first/LLM-fallback boundary, but it is not wired into the demo HTTP runtime yet. Unknown language therefore follows the deterministic Planner fallback in the shipped demo.
+- `AgentGateway` and the demo HTTP runtime use the deterministic `Planner` as their shared create/update slot-filling boundary. The optional asynchronous `ModelGateway` is not wired into the HTTP runtime yet, so unknown language still follows the deterministic fallback.
 - A live model runtime still needs product decisions for model provenance persistence, original-versus-canonical input storage, and model-fallback metadata. Async inference must remain outside the SQLite write transaction.
 - The built-in server cannot start in `live` Provider mode without an injected durable provider factory.
 - Real flight, navigation, vehicle, messaging, and memory backends require deployment-specific adapters, credentials, reliability limits, and operational review.

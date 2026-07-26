@@ -38,6 +38,35 @@ describe('airport pickup task engine', () => {
     expect(next.phase).toBe('preparing')
   })
 
+  it('uses planned user-input slots without reparsing the original text', () => {
+    const event = {
+      eventId: 'planned-input', type: 'user.input' as const,
+      text: '这段文字本身没有可解析槽位', timestamp: '2026-07-22T12:01:00+08:00',
+    }
+    const next = applyEvent(createInitialTask(), event, memberPreferences, {
+      userInputSlots: {
+        passengers: { memberIds: ['dad'], names: ['爸爸'], confirmedOnboard: false },
+        flightNumber: 'MU5102',
+      },
+    })
+
+    expect(next).toMatchObject({
+      phase: 'preparing', passengers: { memberIds: ['dad'], names: ['爸爸'] }, flight: { flightNumber: 'MU5102' },
+    })
+  })
+
+  it('does not infer slots from text when the Planner supplies no slots', () => {
+    const event = {
+      eventId: 'authoritative-empty-plan', type: 'user.input' as const,
+      text: '接爸爸，航班 MU5102', timestamp: '2026-07-22T12:01:00+08:00',
+    }
+    const next = applyEvent(createInitialTask(), event, memberPreferences, { userInputSlots: {} })
+
+    expect(next.passengers.names).toEqual([])
+    expect(next.flight).toBeUndefined()
+    expect(next.phase).toBe('collecting-information')
+  })
+
   it('does not mutate terminal tasks when late events arrive', () => {
     const completed = { ...createInitialTask(), phase: 'completed' as const, taskRevision: 4 }
     const lateEvent = { eventId: 'late-cancel', type: 'user.cancelled-task' as const, timestamp: '2026-07-22T12:10:00+08:00' }
