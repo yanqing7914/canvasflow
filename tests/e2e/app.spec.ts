@@ -1,5 +1,21 @@
 import { expect, test, type Page } from '@playwright/test'
 
+const apiRequest = {
+  vehicleContext: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P', isNight: true },
+  clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true },
+}
+
+function futureTimestamp(offsetMinutes = 0) {
+  return new Date(Date.now() + 24 * 60 * 60 * 1_000 + offsetMinutes * 60 * 1_000).toISOString()
+}
+
+async function postApi(page: Page, path: string, body: unknown) {
+  return page.context().request.post(path, {
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    data: body,
+  })
+}
+
 async function advanceFlow(page: Page) {
   const responsePromise = page.waitForResponse((response) => (
     response.request().method() === 'POST'
@@ -8,7 +24,11 @@ async function advanceFlow(page: Page) {
   await page.getByRole('button', { name: '推进下一事件' }).click()
   const response = await responsePromise
   expect(response.ok()).toBe(true)
-  return response.json()
+  const result = await response.json()
+  await page.evaluate(() => new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  }))
+  return result
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -197,4 +217,162 @@ test('retries a failed landing message through action and confirmation APIs', as
   await expect(page.getByLabel('Effect receipts')).toContainText('message.send:succeeded')
   await expect(page.getByRole('button', { name: '确认发送' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '重试发送' })).toHaveCount(0)
+})
+
+test('replays a duplicate event without applying it twice', async ({ page }) => {
+  await page.goto('/')
+  const createdResponse = await postApi(page, '/v1/tasks', {
+    clientRequestId: 'e2e-duplicate-create',
+    input: { type: 'text', text: '接妈妈' },
+    ...apiRequest,
+  })
+  expect(createdResponse.status()).toBe(201)
+  const created = await createdResponse.json()
+
+  const event = {
+    clientRequestId: 'e2e-duplicate-event-first',
+    expectedTaskRevision: created.task.taskRevision,
+    event: {
+      eventId: 'e2e-duplicate-flight',
+      type: 'user.input',
+      text: 'MU5102',
+      timestamp: futureTimestamp(1),
+    },
+  }
+  const firstResponse = await postApi(page, `/v1/tasks/${created.task.taskId}/events`, event)
+  expect(firstResponse.status()).toBe(200)
+  const first = await firstResponse.json()
+
+  const replayResponse = await postApi(page, `/v1/tasks/${created.task.taskId}/events`, {
+    ...event,
+    clientRequestId: 'e2e-duplicate-event-replay',
+  })
+  expect(replayResponse.status()).toBe(200)
+  await expect(replayResponse.json()).resolves.toMatchObject({
+    task: first.task,
+    ui: first.ui,
+    effects: first.effects,
+  })
+})
+
+test('cancels a flight before navigation and rejects the navigation action', async ({ page }) => {
+  await page.goto('/')
+  const createdResponse = await postApi(page, '/v1/tasks', {
+    clientRequestId: 'e2e-flight-cancel-create',
+    input: { type: 'text', text: '接妈妈，航班 MU5102' },
+    ...apiRequest,
+  })
+  expect(createdResponse.status()).toBe(201)
+  const created = await createdResponse.json()
+  expect(created.task.phase).toBe('preparing')
+
+  const cancelledResponse = await postApi(page, `/v1/tasks/${created.task.taskId}/events`, {
+    clientRequestId: 'e2e-flight-cancel-event',
+    expectedTaskRevision: created.task.taskRevision,
+    event: {
+      eventId: 'e2e-flight-cancelled',
+      type: 'flight.updated',
+      flight: {
+        flightNumber: 'MU5102',
+        status: 'cancelled',
+        scheduledArrival: '2026-07-22T20:30:00+08:00',
+        estimatedArrival: '2026-07-22T20:30:00+08:00',
+        terminal: 'T2',
+      },
+      timestamp: futureTimestamp(2),
+    },
+  })
+  expect(cancelledResponse.status()).toBe(200)
+  const cancelled = await cancelledResponse.json()
+  expect(cancelled.task).toMatchObject({ phase: 'preparing', flight: { status: 'cancelled' } })
+  expect(cancelled.ui.actions).not.toEqual(expect.arrayContaining([expect.objectContaining({ id: 'start-navigation' })]))
+
+  const navigationResponse = await postApi(page, `/v1/tasks/${created.task.taskId}/actions`, {
+    clientRequestId: 'e2e-flight-cancel-navigation',
+    expectedTaskRevision: cancelled.task.taskRevision,
+    expectedUiRevision: cancelled.ui.uiRevision,
+    actionId: 'start-navigation',
+    componentId: 'navigation-plan',
+    idempotencyKey: 'e2e-flight-cancel-navigation',
+  })
+  expect(navigationResponse.status()).toBe(400)
+  await expect(navigationResponse.json()).resolves.toMatchObject({
+    error: { code: 'INVALID_REQUEST' },
+    latest: { task: { flight: { status: 'cancelled' } } },
+  })
+})
+
+test('shows a deterministic fallback when the flight provider times out', async ({ page }) => {
+  await page.goto('/')
+  await page.getByLabel('任务输入').fill('接妈妈，航班 MU0000')
+  await page.getByRole('button', { name: '发送' }).click()
+
+  await expect(page.getByRole('region', { name: 'Generated task interface' })).toContainText('数据暂时不可用')
+  await expect(page.getByRole('region', { name: 'Generated task interface' })).toContainText('请稍后重试')
+  await expect(page.getByLabel('Event console')).toContainText('preparing')
+})
+
+test('returns CONFIRMATION_EXPIRED when a resolved memory confirmation is reused', async ({ page }) => {
+  await page.goto('/')
+  const createdResponse = await postApi(page, '/v1/tasks', {
+    clientRequestId: 'e2e-confirmation-create',
+    input: { type: 'text', text: '接妈妈，航班 MU5102' },
+    ...apiRequest,
+  })
+  expect(createdResponse.status()).toBe(201)
+  let current = await createdResponse.json()
+
+  const actionResponse = await postApi(page, `/v1/tasks/${current.task.taskId}/actions`, {
+    clientRequestId: 'e2e-confirmation-start',
+    expectedTaskRevision: current.task.taskRevision,
+    expectedUiRevision: current.ui.uiRevision,
+    actionId: 'start-navigation',
+    componentId: 'navigation-plan',
+    idempotencyKey: 'e2e-confirmation-start',
+  })
+  expect(actionResponse.status()).toBe(200)
+  current = await actionResponse.json()
+
+  const events = [
+    { type: 'charging.started', stationId: 'station-hongqiao-01' },
+    { type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'in-air', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' } },
+    { type: 'charging.completed', batteryPercent: 78 },
+    { type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' } },
+    { type: 'message.sent', messageId: 'MU5102:landing' },
+    { type: 'vehicle.entered-airport-geofence' },
+    { type: 'vehicle.parked' },
+    { type: 'user.confirmed-passengers-onboard' },
+    { type: 'user.input', text: '应用家庭座舱偏好' },
+    { type: 'destination.arrived', destination: '家' },
+  ] as const
+  for (const [index, event] of events.entries()) {
+    const eventResponse = await postApi(page, `/v1/tasks/${current.task.taskId}/events`, {
+      clientRequestId: `e2e-confirmation-event-${index}`,
+      expectedTaskRevision: current.task.taskRevision,
+      event: { ...event, eventId: `e2e-confirmation-event-${index}`, timestamp: futureTimestamp(index + 3) },
+    })
+    expect(eventResponse.status()).toBe(200)
+    current = await eventResponse.json()
+  }
+  const completed = current
+  expect(completed?.task.phase).toBe('completed')
+  const confirmationId = completed.task.pendingConfirmation.confirmationId
+
+  const acceptResponse = await postApi(page, `/v1/tasks/${completed.task.taskId}/confirmations/${confirmationId}`, {
+    clientRequestId: 'e2e-confirmation-accept',
+    expectedTaskRevision: completed.task.taskRevision,
+    decision: 'accept',
+    idempotencyKey: 'e2e-confirmation-accept',
+  })
+  expect(acceptResponse.status()).toBe(200)
+  const accepted = await acceptResponse.json()
+
+  const replayResponse = await postApi(page, `/v1/tasks/${completed.task.taskId}/confirmations/${confirmationId}`, {
+    clientRequestId: 'e2e-expired-confirmation-replay',
+    expectedTaskRevision: accepted.task.taskRevision,
+    decision: 'accept',
+    idempotencyKey: 'e2e-expired-confirmation-replay',
+  })
+  expect(replayResponse.status()).toBe(410)
+  await expect(replayResponse.json()).resolves.toMatchObject({ error: { code: 'CONFIRMATION_EXPIRED' } })
 })
