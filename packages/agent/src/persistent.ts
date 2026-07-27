@@ -24,7 +24,7 @@ import {
 } from '@canvasflow/tools'
 import { AgentGateway, type AgentGatewayOptions } from './gateway'
 import type { AgentHttpGateway } from './http'
-import { ModelGateway } from './model-gateway'
+import { ModelGateway, type ModelGatewayResult } from './model-gateway'
 import type { Plan, PlannerInput } from './planner'
 import type { StoredEventResult, StoredIdempotencyResult, StoredTask, TaskStore, TaskUpdateRead } from './store'
 import { createTaskUpdate } from './task-updates'
@@ -311,7 +311,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       return this.#run((gateway) => {
         const replay = gateway.hasCreateResult(request.clientRequestId)
         return { response: gateway.createTask(request), replay }
-      }, planned)
+      }, planned?.plan, planned?.source === 'model' ? planned.modelUsed : undefined)
     })().finally(() => this.#inFlightOperations.delete(key))
     this.#inFlightOperations.set(key, pending)
     return pending
@@ -335,7 +335,11 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     }
     const pending = (async () => {
       const planned = await this.#planEvent(taskId, request)
-      return this.#run((gateway) => gateway.submitEvent(taskId, request), planned)
+      return this.#run(
+        (gateway) => gateway.submitEvent(taskId, request),
+        planned?.plan,
+        planned?.source === 'model' ? planned.modelUsed : undefined,
+      )
     })().finally(() => this.#inFlightOperations.delete(key))
     this.#inFlightOperations.set(key, pending)
     return pending
@@ -367,7 +371,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     this.#closed = true
   }
 
-  #run<T>(operation: (gateway: AgentGateway) => T, plannedInput?: Plan): T {
+  #run<T>(operation: (gateway: AgentGateway) => T, plannedInput?: Plan, modelUsed?: string): T {
     this.#assertOpen()
     // Serializes Gateway calls across processes sharing this SQLite file.
     this.#database.exec('BEGIN IMMEDIATE')
@@ -385,6 +389,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
         createId: this.#options.createId,
         compose: this.#options.compose,
         policyGate: this.#options.policyGate,
+        modelUsed,
         ...(plannedInput ? { planner: { plan: () => plannedInput } } : {}),
       })
       const result = operation(gateway)
@@ -414,7 +419,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     }))
   }
 
-  async #planCreate(input: CreateTaskRequest): Promise<Plan | undefined> {
+  async #planCreate(input: CreateTaskRequest): Promise<ModelGatewayResult | undefined> {
     if (!this.#modelGateway || this.hasCreateResult(input.clientRequestId)) return undefined
     return this.#runModelPlan({
       text: input.input.text,
@@ -423,7 +428,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     })
   }
 
-  async #planEvent(taskId: string, input: SubmitEventRequest): Promise<Plan | undefined> {
+  async #planEvent(taskId: string, input: SubmitEventRequest): Promise<ModelGatewayResult | undefined> {
     if (!this.#modelGateway || input.event.type !== 'user.input') return undefined
     const existing = this.#read((gateway) => {
       try {
@@ -441,9 +446,8 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     })
   }
 
-  async #runModelPlan(input: PlannerInput): Promise<Plan | undefined> {
-    const result = await this.#modelGateway!.plan(input)
-    return result.plan
+  async #runModelPlan(input: PlannerInput): Promise<ModelGatewayResult> {
+    return this.#modelGateway!.plan(input)
   }
 
   #migrate(): void {

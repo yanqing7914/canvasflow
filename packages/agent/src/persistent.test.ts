@@ -47,7 +47,7 @@ afterEach(async () => {
 })
 
 describe('PersistentAgentRuntime', () => {
-  it('uses a validated model plan for an unknown create request before persisting it', async () => {
+  it('preserves validated model provenance on durable create replays after restart', async () => {
     const path = await databasePath()
     const modelGateway = new ModelGateway({
       adapter: {
@@ -72,6 +72,19 @@ describe('PersistentAgentRuntime', () => {
     expect(created.task).toMatchObject({
       phase: 'collecting-information', passengers: { names: ['妈妈'] },
     })
+    expect(created.meta.modelUsed).toBe('fixture-model')
+    agent.close()
+
+    const replayModelGateway = { plan: vi.fn() }
+    const restarted = runtime(path, { modelGateway: replayModelGateway })
+    const replayed = await restarted.createTaskAsync({
+      ...createRequest(),
+      input: { type: 'text', text: '劳驾替我去航站楼把妈妈接回来' },
+    })
+
+    expect(replayModelGateway.plan).not.toHaveBeenCalled()
+    expect(replayed.task).toEqual(created.task)
+    expect(replayed.meta.modelUsed).toBe('fixture-model')
   })
 
   it('does not call the model for rule-recognized input or duplicate creates', async () => {
@@ -169,6 +182,53 @@ describe('PersistentAgentRuntime', () => {
     expect(updated.task.flight?.flightNumber).toBe(created.task.flight?.flightNumber)
     expect(updated.task.passengers).toEqual(created.task.passengers)
     expect(updated.task.processedEventIds).toEqual(created.task.processedEventIds)
+    expect(updated.meta.modelUsed).toBeUndefined()
+  })
+
+  it('preserves model provenance on durable user-input event replays after restart', async () => {
+    const path = await databasePath()
+    const modelGateway = new ModelGateway({
+      adapter: {
+        modelId: 'event-model',
+        plan: async () => ({
+          confidence: 0.95,
+          canonicalInput: '去机场接妈妈',
+          intentHint: 'create-airport-pickup',
+          evidence: { passengers: ['妈妈'] },
+        }),
+      },
+    })
+    const agent = runtime(path, { modelGateway })
+    const created = agent.createTask({
+      ...createRequest('empty-task'),
+      input: { type: 'text', text: '先创建任务', confidence: 0.5 },
+    })
+    const event = {
+      clientRequestId: 'model-event',
+      expectedTaskRevision: created.task.taskRevision,
+      event: {
+        eventId: 'model-event',
+        type: 'user.input' as const,
+        text: '劳驾替我去航站楼把妈妈接回来',
+        timestamp: '2026-07-22T12:01:00+08:00',
+      },
+    }
+
+    const updated = await agent.submitEventAsync(created.task.taskId, event)
+    expect(updated.task.passengers.names).toEqual(['妈妈'])
+    expect(updated.meta.modelUsed).toBe('event-model')
+    agent.close()
+
+    const replayModelGateway = { plan: vi.fn() }
+    const restarted = runtime(path, { modelGateway: replayModelGateway })
+    const replayed = await restarted.submitEventAsync(created.task.taskId, {
+      ...event,
+      clientRequestId: 'model-event-retry',
+    })
+
+    expect(replayModelGateway.plan).not.toHaveBeenCalled()
+    expect(replayed.task).toEqual(updated.task)
+    expect(replayed.meta.modelUsed).toBe('event-model')
   })
 
   it('restores tasks and original create results after a process restart', async () => {

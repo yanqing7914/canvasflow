@@ -92,6 +92,8 @@ export type AgentGatewayOptions = {
   providers?: ProviderRegistry
   policyGate?: PolicyGate
   planner?: Pick<Planner, 'plan'>
+  /** Trusted model provenance supplied by the persistent runtime for this operation. */
+  modelUsed?: string
   mode?: ProviderMode
   /**
    * Side-effect runtime for opaque confirmations and preference-backed notify.
@@ -118,10 +120,12 @@ export class AgentGateway {
   readonly #runtime: SideEffectRuntime
   readonly #preferences: Record<string, MemberPreferenceRecord>
   readonly #mode: ProviderMode
+  readonly #modelUsed: string | undefined
 
   constructor(options: AgentGatewayOptions = {}) {
     this.#store = options.store ?? new MemoryTaskStore()
     this.#mode = options.mode ?? 'fixture'
+    this.#modelUsed = options.modelUsed
     this.#now = options.now ?? (() => new Date().toISOString())
     this.#createId = options.createId ?? (() => crypto.randomUUID())
     const runtime = options.runtime ?? createSideEffectRuntime()
@@ -1691,6 +1695,7 @@ export class AgentGateway {
     return {
       task: { ...task, uiRevision: publishedUi.uiRevision },
       ui: publishedUi,
+      ...(this.#modelUsed ? { modelUsed: this.#modelUsed } : {}),
       toolResults,
       effectReceipts: privateReceipts,
       requestContext,
@@ -1745,6 +1750,7 @@ export class AgentGateway {
     return {
       task: { ...task, uiRevision: ui.uiRevision },
       ui: applyRequestPresentation(ui, requestContext),
+      ...(this.#modelUsed ? { modelUsed: this.#modelUsed } : {}),
       toolResults,
       effectReceipts,
       requestContext,
@@ -1903,7 +1909,12 @@ export class AgentGateway {
       ui: stored.ui,
       assistant,
       effects,
-      meta: { mode: this.#mode, durationMs, fallbackUsed: stored.ui.meta.generatedBy === 'fallback' },
+      meta: {
+        mode: this.#mode,
+        durationMs,
+        ...(stored.modelUsed ? { modelUsed: stored.modelUsed } : {}),
+        fallbackUsed: stored.ui.meta.generatedBy === 'fallback',
+      },
     })
   }
 }

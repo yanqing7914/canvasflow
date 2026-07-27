@@ -14,6 +14,8 @@ function validateMaxTaskUpdates(value: number): number {
 export type StoredTask = {
   task: AirportPickupTaskState
   ui: UISpec
+  /** Model provenance for the operation that produced this persisted snapshot. */
+  modelUsed?: string
   toolResults?: ReadToolResults
   /** Provider receipts stay private to the Agent and never enter TaskState or UISpec. */
   effectReceipts?: {
