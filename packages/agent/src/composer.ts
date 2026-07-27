@@ -24,11 +24,13 @@ export function composeAgentSpec(
   task: AirportPickupTaskState,
   toolResults?: ReadToolResults,
   preferences?: Record<string, MemberPreferenceRecord>,
+  privateContext?: { cabinRevertActionToken?: string },
 ): UISpec
 export function composeAgentSpec(
   task: AirportPickupTaskState,
   context?: ReadToolResults | Record<string, MemberPreferenceRecord>,
   preferences?: Record<string, MemberPreferenceRecord>,
+  privateContext?: { cabinRevertActionToken?: string },
 ): UISpec {
   const hasExplicitPreferences = preferences !== undefined
   const contextIsToolResults = hasExplicitPreferences || context === undefined || isReadToolResults(context)
@@ -76,9 +78,70 @@ export function composeAgentSpec(
     title = '返程回家'
     density = 'compact'
     components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }]
+    const preferences = toolResults['memory.get-preferences']?.data.members
+    const temperatureC = preferences?.find((member) => member.rearTemperatureC !== undefined)?.rearTemperatureC
+    const mediaTitle = preferences?.find((member) => member.mediaTitle !== undefined)?.mediaTitle
+    const cabinRevertStatus = task.returnTrip?.cabin.revert?.status
+    const cabinReverted = cabinRevertStatus === 'succeeded'
+    const cabinApplied = task.returnTrip?.cabin.status === 'succeeded' && !cabinReverted
+    const cabinRevertAvailable = privateContext?.cabinRevertActionToken !== undefined
+      && cabinRevertStatus !== 'unknown'
+      && cabinRevertStatus !== 'succeeded'
+    if (cabinApplied && (temperatureC !== undefined || mediaTitle !== undefined)) {
+      const cabinProps = {
+        zone: 'rear' as const,
+        ...(temperatureC !== undefined ? { temperatureC } : {}),
+        ...(mediaTitle !== undefined ? { mediaTitle } : {}),
+        appliedFromMemory: true,
+        reversible: cabinRevertAvailable,
+      }
+      const cabinComponent = {
+        id: 'cabin-profile',
+        type: 'cabin-profile',
+        visibility: 'parked-only',
+        props: cabinProps,
+        ...(cabinRevertAvailable ? { actions: ['revert-cabin-profile'] } : {}),
+      } as const
+      components = [...components, cabinComponent]
+      if (cabinRevertStatus === 'failed') {
+        components.push({
+          id: 'cabin-revert-failed',
+          type: 'status-banner',
+          props: { level: 'error', title: '座舱设置撤销失败', message: '设置仍保持生效，可停车后重试。' },
+        })
+      } else if (cabinRevertStatus === 'unknown') {
+        components.push({
+          id: 'cabin-revert-unknown',
+          type: 'status-banner',
+          props: { level: 'warning', title: '座舱状态待确认', message: '为避免重复操作，已暂停再次撤销。' },
+        })
+      }
+      actions = cabinRevertAvailable
+        ? [{
+            id: 'revert-cabin-profile',
+            label: '撤销座舱设置',
+            style: 'secondary',
+            event: {
+              type: 'tool-request',
+              actionToken: privateContext!.cabinRevertActionToken!,
+            },
+          }]
+        : []
+    }
+    if (cabinReverted) {
+      components.push({
+        id: 'cabin-reverted',
+        type: 'status-banner',
+        props: { level: 'info', title: '座舱设置已撤销', message: '已恢复应用前的座舱配置；媒体播放不包含在本次撤销中。' },
+      })
+    }
     if (task.returnTrip && [task.returnTrip.route, task.returnTrip.cabin, task.returnTrip.media].some((effect) => effect.status === 'failed')) {
-      components = [{ ...components[0], actions: ['retry-return-trip'] }]
-      actions = [{ id: 'retry-return-trip', label: '重试返程设置', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-return-trip` } }]
+      const passengerIndex = components.findIndex((component) => component.id === 'passenger-status')
+      if (passengerIndex >= 0) components[passengerIndex] = { ...components[passengerIndex]!, actions: ['retry-return-trip'] }
+      actions = [
+        ...actions,
+        { id: 'retry-return-trip', label: '重试返程设置', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-return-trip` } },
+      ]
     }
   } else if (task.message.status === 'scheduled') {
     title = '落地通知'

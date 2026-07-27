@@ -28,6 +28,7 @@ export type PolicyDecision =
 export interface PolicyGate {
   authorizeNavigationStart(task: AirportPickupTaskState, routeId: string, vehicle?: VehicleContext): PolicyDecision
   authorizeReturnTrip(task: AirportPickupTaskState): PolicyDecision
+  authorizeCabinRevert(task: AirportPickupTaskState, vehicle?: VehicleContext): PolicyDecision
   authorizeLandingMessage(task: AirportPickupTaskState): PolicyDecision
   authorizeLandingMessageRetry(task: AirportPickupTaskState, confirmationId?: string): PolicyDecision
 }
@@ -59,6 +60,24 @@ export class DefaultPolicyGate implements PolicyGate {
     if (task.phase === 'completed' || task.phase === 'cancelled') return { allowed: false, errorCode: 'TASK_TERMINAL' }
     if (task.phase !== 'returning-home' || !task.passengers.confirmedOnboard) return { allowed: false, errorCode: 'INVALID_TASK_PHASE' }
     if (task.flight?.status === 'cancelled') return { allowed: false, errorCode: 'FLIGHT_CANCELLED' }
+    return { allowed: true }
+  }
+
+  authorizeCabinRevert(task: AirportPickupTaskState, vehicle?: VehicleContext): PolicyDecision {
+    if (task.phase === 'completed' || task.phase === 'cancelled') return { allowed: false, errorCode: 'TASK_TERMINAL' }
+    if (task.phase !== 'returning-home' || !task.passengers.confirmedOnboard) {
+      return { allowed: false, errorCode: 'INVALID_TASK_PHASE' }
+    }
+    if (task.flight?.status === 'cancelled') return { allowed: false, errorCode: 'FLIGHT_CANCELLED' }
+    if (
+      task.returnTrip?.cabin.status !== 'succeeded'
+      || task.returnTrip.cabin.revert?.status === 'succeeded'
+      || task.returnTrip.cabin.revert?.status === 'unknown'
+    ) {
+      return { allowed: false, errorCode: 'INVALID_TASK_STATE' }
+    }
+    if (!vehicle) return { allowed: false, errorCode: 'VEHICLE_CONTEXT_REQUIRED' }
+    if (vehicle.speedKph > 0 || vehicle.gear !== 'P') return { allowed: false, errorCode: 'VEHICLE_MOVING' }
     return { allowed: true }
   }
 
@@ -100,6 +119,16 @@ export type ReturnTripExecution = {
   rolledBack?: boolean
   applied: { route: boolean; cabin: boolean; media: boolean }
   residual: { route: boolean; cabin: boolean; media: boolean }
+  skipped: { cabin: boolean; media: boolean }
+  cabinEffectId?: string
+  cabinEffectIsNew?: boolean
+}
+
+export type CabinRevertExecution = {
+  succeeded: boolean
+  effect: EffectRecord
+  current?: { temperatureC?: number; fanLevel?: number; mediaTitle?: string }
+  ambiguous?: boolean
 }
 
 export type MemoryProposalExecution = {
@@ -143,6 +172,7 @@ export type CabinPreferenceExecution = {
   effect: EffectRecord
   compensationEffect?: EffectRecord
   residualApplied?: boolean
+  cabinEffectId?: string
 }
 
 type ProviderResult<T> =
@@ -555,8 +585,8 @@ export class EffectExecutor {
         ),
         toolResultSchema(revertCabinProfileOutputSchema),
       )
-      const compensated = (rollback.succeeded || rollback.data !== undefined)
-        && rollback.data?.effectId === appliedData.effectId
+      const compensated = rollback.succeeded
+        && rollback.data.effectId === appliedData.effectId
         && rollback.data.reverted
       return {
         succeeded: false,
@@ -569,9 +599,52 @@ export class EffectExecutor {
           ...(compensated ? {} : { errorCode: rollback.succeeded ? 'PROVIDER_FAILED' : rollback.errorCode }),
         },
         residualApplied: !compensated,
+        ...(!compensated ? { cabinEffectId: appliedData.effectId } : {}),
       }
     }
-    return { succeeded: true, effect: effect('succeeded') }
+    return { succeeded: true, effect: effect('succeeded'), cabinEffectId: result.data.effectId }
+  }
+
+  revertCabinProfile(input: {
+    task: AirportPickupTaskState
+    cabinEffectId: string
+    idempotencyKey: string
+    effectId: string
+    vehicle?: VehicleContext
+  }): CabinRevertExecution {
+    const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
+      effectId: input.effectId,
+      type: 'vehicle.revert-cabin-profile',
+      status,
+      tool: 'vehicle.revert-cabin-profile',
+      ...(errorCode ? { errorCode } : {}),
+    })
+    const policy = this.#policy.authorizeCabinRevert(input.task, input.vehicle)
+    if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
+
+    const providerRequestId = `${input.task.taskId}:vehicle.revert-cabin-profile:${input.idempotencyKey}`
+    const result = this.#callProvider(
+      input.task.taskId,
+      'vehicle.revert-cabin-profile',
+      providerRequestId,
+      () => this.#registry['vehicle.revert-cabin-profile'](
+        { taskId: input.task.taskId, requestId: providerRequestId },
+        { effectId: input.cabinEffectId, idempotencyKey: input.idempotencyKey },
+      ),
+      toolResultSchema(revertCabinProfileOutputSchema),
+    )
+    if (!result.succeeded) {
+      const ambiguous = result.data?.effectId === input.cabinEffectId && result.data.reverted
+      return {
+        succeeded: false,
+        effect: effect('failed', result.errorCode),
+        ...(ambiguous ? { current: result.data!.current, ambiguous: true } : {}),
+      }
+    }
+    if (result.data.effectId !== input.cabinEffectId || !result.data.reverted) {
+      return { succeeded: false, effect: effect('failed', 'PROVIDER_FAILED') }
+    }
+    return { succeeded: true, effect: effect('succeeded'), current: result.data.current }
   }
 
   executeReturnTrip(input: {
@@ -581,7 +654,7 @@ export class EffectExecutor {
     rollbackNavigation?: { routeId: string; destination: { id: string; name: string }; eta: string }
     idempotencyKey: string
     effectIdPrefix: string
-    completed?: { route: boolean; cabin: boolean; media: boolean }
+    completed?: { route: boolean; cabin: boolean; media: boolean; cabinEffectId?: string }
   }): ReturnTripExecution {
     const effects: EffectRecord[] = []
     const navigation = { routeId: '', destination: '', eta: '' }
@@ -590,9 +663,16 @@ export class EffectExecutor {
       cabin: input.completed?.cabin === true,
       media: input.completed?.media === true,
     }
+    const skipped = {
+      cabin: input.completed?.cabin !== true
+        && input.preferences.temperatureC === undefined
+        && input.preferences.mediaTitle === undefined,
+      media: input.completed?.media !== true
+        && (input.preferences.mediaTitle === undefined || input.preferences.mediaMemberId === undefined),
+    }
     const residual = { ...applied }
     const newlyApplied = { route: false, cabin: false, media: false }
-    let cabinEffectId: string | undefined
+    let cabinEffectId = input.completed?.cabinEffectId
     const append = (type: string, status: EffectRecord['status'], tool = type, errorCode?: string) => {
       effects.push({
         effectId: `${input.effectIdPrefix}:${effects.length}`,
@@ -685,6 +765,9 @@ export class EffectExecutor {
         rolledBack,
         applied,
         residual,
+        skipped,
+        ...(cabinEffectId ? { cabinEffectId } : {}),
+        ...(newlyApplied.cabin ? { cabinEffectIsNew: true } : {}),
         ...(residual.route && navigation.routeId ? { navigation } : {}),
       }
     }
@@ -753,9 +836,17 @@ export class EffectExecutor {
         ),
         toolResultSchema(applyCabinProfileOutputSchema),
       )
-      if (!cabin.succeeded) return failed('vehicle.apply-cabin-profile', cabin.errorCode)
+      if (!cabin.succeeded) {
+        if (cabin.data?.applied && cabin.data.effectId) {
+          cabinEffectId = cabin.data.effectId
+          residual.cabin = true
+          newlyApplied.cabin = true
+        }
+        return failed('vehicle.apply-cabin-profile', cabin.errorCode)
+      }
       if (
         !cabin.data.applied
+        || !cabin.data.reversible
         || (input.preferences.temperatureC !== undefined && cabin.data.current.temperatureC !== input.preferences.temperatureC)
         || (input.preferences.mediaTitle !== undefined && cabin.data.current.mediaTitle !== input.preferences.mediaTitle)
       ) {
@@ -782,9 +873,15 @@ export class EffectExecutor {
         ),
         toolResultSchema(mediaPlayOutputSchema),
       )
-      if (!media.succeeded) return failed('media.play', media.errorCode)
+      if (!media.succeeded) {
+        if (media.data?.status === 'playing') {
+          applied.media = true
+          residual.media = true
+        }
+        return failed('media.play', media.errorCode)
+      }
       if (media.data.title !== input.preferences.mediaTitle || media.data.status !== 'playing') {
-        applied.media = false
+        applied.media = media.data.status === 'playing'
         residual.media = true
         return failed('media.play', 'PROVIDER_FAILED')
       }
@@ -793,7 +890,16 @@ export class EffectExecutor {
       append('media.play', 'succeeded')
     }
 
-    return { succeeded: true, effect: effects, navigation, applied, residual }
+    return {
+      succeeded: true,
+      effect: effects,
+      navigation,
+      applied,
+      residual,
+      skipped,
+      ...(cabinEffectId ? { cabinEffectId } : {}),
+      ...(newlyApplied.cabin ? { cabinEffectIsNew: true } : {}),
+    }
   }
 
   proposeMemoryUpdate(input: {

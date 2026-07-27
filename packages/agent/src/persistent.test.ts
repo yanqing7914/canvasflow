@@ -214,6 +214,44 @@ describe('PersistentAgentRuntime', () => {
     expect(duplicate.effects).toEqual(first.effects)
   })
 
+  it('restores the cabin undo receipt after restart and replays the first result', async () => {
+    const path = await databasePath()
+    let revertCalls = 0
+    const providerFactory: import('./persistent').ProviderFactory = (sideEffectRuntime) => {
+      const providers = createProviderRegistry(sideEffectRuntime)
+      return {
+        ...providers,
+        'vehicle.revert-cabin-profile': (context, input) => {
+          revertCalls += 1
+          return providers['vehicle.revert-cabin-profile'](context, input)
+        },
+      }
+    }
+    const firstRuntime = runtime(path, { providerFactory })
+    const returning = returningTask(firstRuntime)
+    expect(returning.ui.actions).toContainEqual(expect.objectContaining({ id: 'revert-cabin-profile' }))
+    firstRuntime.close()
+
+    const restarted = runtime(path, { providerFactory })
+    const request = {
+      clientRequestId: 'persistent-cabin-revert', expectedTaskRevision: returning.task.taskRevision,
+      expectedUiRevision: returning.ui.uiRevision, actionId: 'revert-cabin-profile',
+      componentId: 'cabin-profile', idempotencyKey: 'persistent-cabin-revert',
+    }
+    const reverted = restarted.submitAction(returning.task.taskId, request)
+    restarted.close()
+
+    const replayRuntime = runtime(path, { providerFactory })
+    const replay = replayRuntime.submitAction(returning.task.taskId, {
+      ...request,
+      clientRequestId: 'persistent-cabin-revert-replay',
+    })
+    expect(revertCalls).toBe(1)
+    expect(reverted.task.returnTrip?.cabin.revert?.status).toBe('succeeded')
+    expect(replay.task).toEqual(reverted.task)
+    expect(replay.effects).toEqual(reverted.effects)
+  })
+
   it('restores pending memory confirmations so accept remains executable after restart', async () => {
     const path = await databasePath()
     const firstRuntime = runtime(path)
@@ -364,6 +402,27 @@ describe('PersistentAgentRuntime', () => {
     expect(created.task.flight).toMatchObject({ flightNumber: 'MU5102', trusted: false })
   })
 })
+
+function returningTask(agent: PersistentAgentRuntime) {
+  const created = agent.createTask(createRequest())
+  const started = agent.submitAction(created.task.taskId, {
+    clientRequestId: 'persistent-return-start', expectedTaskRevision: created.task.taskRevision,
+    expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation',
+    componentId: 'navigation-plan', idempotencyKey: 'persistent-return-start',
+  })
+  const approaching = agent.submitEvent(created.task.taskId, {
+    clientRequestId: 'persistent-return-geofence', expectedTaskRevision: started.task.taskRevision,
+    event: { eventId: 'persistent-return-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' },
+  })
+  const waiting = agent.submitEvent(created.task.taskId, {
+    clientRequestId: 'persistent-return-parked', expectedTaskRevision: approaching.task.taskRevision,
+    event: { eventId: 'persistent-return-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' },
+  })
+  return agent.submitEvent(created.task.taskId, {
+    clientRequestId: 'persistent-return-onboard', expectedTaskRevision: waiting.task.taskRevision,
+    event: { eventId: 'persistent-return-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' },
+  })
+}
 
 function completeTask(agent: PersistentAgentRuntime) {
   const created = agent.createTask(createRequest())
