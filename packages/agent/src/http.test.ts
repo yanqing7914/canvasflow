@@ -1,10 +1,11 @@
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
 import { EventEmitter } from 'node:events'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentErrorResponse, AgentResponse, CreateTaskRequest } from '@canvasflow/schema'
 import { AgentGateway } from './gateway'
 import { createAgentHttpServer, writeTaskUpdates, type SseWritable } from './http'
+import { ModelGateway } from './model-gateway'
 import { PersistentAgentRuntime } from './persistent'
 import { MemoryTaskStore } from './store'
 
@@ -32,8 +33,8 @@ async function startServer(options: { bodyLimitBytes?: number; eventPollInterval
   return { gateway, baseUrl: `http://127.0.0.1:${address.port}` }
 }
 
-async function startPersistentServer() {
-  const runtime = new PersistentAgentRuntime({ databasePath: ':memory:', now: () => now })
+async function startPersistentServer(options: Omit<ConstructorParameters<typeof PersistentAgentRuntime>[0], 'databasePath' | 'now'> = {}) {
+  const runtime = new PersistentAgentRuntime({ databasePath: ':memory:', now: () => now, ...options })
   persistentRuntimes.push(runtime)
   const server = createAgentHttpServer(runtime, { createRequestId: () => 'persistent-http-request' })
   servers.push(server)
@@ -201,6 +202,43 @@ describe('Agent HTTP API', () => {
     await expect(invalidEvent.json()).resolves.toMatchObject({
       error: { code: 'INVALID_REQUEST', retryable: false },
     })
+  })
+
+  it('returns a replay response when a duplicate create joins an async model preflight', async () => {
+    let startedPlanning: (() => void) | undefined
+    let releasePlanning: ((value: unknown) => void) | undefined
+    const planningStarted = new Promise<void>((resolve) => { startedPlanning = resolve })
+    const modelOutput = new Promise<unknown>((resolve) => { releasePlanning = resolve })
+    const modelGateway = new ModelGateway({
+      adapter: {
+        modelId: 'waiting-model',
+        plan: vi.fn(async () => {
+          startedPlanning!()
+          return modelOutput
+        }),
+      },
+    })
+    const { baseUrl, runtime } = await startPersistentServer({ createId: () => 'concurrent', modelGateway })
+    const hasCreateInFlight = vi.spyOn(runtime, 'hasCreateInFlight')
+    const request = createRequest('劳驾替我去航站楼把妈妈接回来', 'concurrent-create')
+
+    const first = post(baseUrl, '/v1/tasks', request)
+    await planningStarted
+    const replay = post(baseUrl, '/v1/tasks', request)
+    await vi.waitFor(() => expect(hasCreateInFlight).toHaveBeenCalledTimes(2))
+    releasePlanning!({
+      confidence: 0.95,
+      canonicalInput: '去机场接妈妈',
+      intentHint: 'create-airport-pickup',
+      evidence: { passengers: ['妈妈'] },
+    })
+
+    const [createdResponse, replayResponse] = await Promise.all([first, replay])
+    expect(createdResponse.status).toBe(201)
+    expect(createdResponse.headers.get('location')).toBe('/v1/tasks/pickup-concurrent')
+    expect(replayResponse.status).toBe(200)
+    expect(replayResponse.headers.get('location')).toBeNull()
+    expect(await replayResponse.json()).toEqual(await createdResponse.json())
   })
 
   it('rejects malformed transport input and enforces the body limit', async () => {

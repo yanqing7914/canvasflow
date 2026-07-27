@@ -286,6 +286,11 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     ) !== undefined
   }
 
+  hasCreateInFlight(clientRequestId: string): boolean {
+    this.#assertOpen()
+    return this.#inFlightOperations.has(`create:${clientRequestId}`)
+  }
+
   createTask(input: CreateTaskRequest): AgentResponse {
     return this.#run((gateway) => gateway.createTask(input))
   }

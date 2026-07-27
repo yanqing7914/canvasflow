@@ -26,6 +26,8 @@ export interface AgentHttpGateway {
   resetTask(taskId: string, input: ResetTaskRequest): AgentResponse
   getTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead
   hasCreateResult?(clientRequestId: string): boolean
+  /** Indicates that a matching async create has started but has not persisted its result yet. */
+  hasCreateInFlight?(clientRequestId: string): boolean
   /** Optional preflight methods for runtimes that need async work before a write transaction. */
   createTaskAsync?(input: CreateTaskRequest): Promise<AgentResponse>
   submitEventAsync?(taskId: string, input: SubmitEventRequest): Promise<AgentResponse>
@@ -340,7 +342,11 @@ export function createAgentHttpHandler(gateway: AgentHttpGateway, options: Agent
       if (request.method === 'POST' && taskRoot) {
         const body = await readJson(request, bodyLimitBytes)
         const clientRequestId = bodyClientRequestId(body)
-        const replay = clientRequestId !== undefined && (gateway.hasCreateResult?.(clientRequestId) ?? false)
+        // A duplicate may join an async model preflight before its result is persisted.
+        const replay = clientRequestId !== undefined && (
+          (gateway.hasCreateResult?.(clientRequestId) ?? false)
+          || (gateway.hasCreateInFlight?.(clientRequestId) ?? false)
+        )
         const createRequest = body as CreateTaskRequest
         const result = gateway.createTaskAsync
           ? await gateway.createTaskAsync(createRequest)
