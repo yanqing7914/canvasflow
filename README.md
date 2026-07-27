@@ -9,7 +9,9 @@ flowchart LR
   User["Demo UI"] -->|"/v1 task API"| HTTP["Agent HTTP + SSE"]
   HTTP --> Runtime["SQLite persistent runtime"]
   Runtime --> Gateway["AgentGateway"]
-  Gateway --> Planner["Rules-first Planner"]
+  Runtime --> Model["Rules-first Model Gateway"]
+  Model --> Gateway
+  Gateway --> Planner["Deterministic Planner"]
   Gateway --> Policy["Policy Gate"]
   Policy --> Effects["Effect Executor"]
   Effects --> Providers["Fixture / Mock / injected Live providers"]
@@ -92,9 +94,15 @@ Mutation requests use client or operation idempotency keys. SSE clients receive 
 | `AGENT_PORT` | `8787` | Agent API port. The preview launcher defaults it to `4173`. |
 | `AGENT_DATABASE_PATH` | `.canvasflow/agent.sqlite` | SQLite task, receipt, confirmation, and update-stream storage. Use `:memory:` for an ephemeral run. |
 | `AGENT_PROVIDER_MODE` | `fixture` | Tool Provider mode: `fixture`, `mock`, or `live`. |
+| `AGENT_MODEL_MODE` | unset | Model planning mode. Leave unset or set `disabled` for rules-only planning; `openai-compatible` enables the validated OpenAI-compatible adapter. |
+| `AGENT_MODEL_ENDPOINT` | unset | HTTPS OpenAI-compatible `/chat/completions` endpoint; required only when `AGENT_MODEL_MODE=openai-compatible`. |
+| `AGENT_MODEL_ALLOWED_HOSTS` | unset | Comma-separated allowlist for the model endpoint host; required only when model planning is enabled. |
+| `AGENT_MODEL_API_KEY` | unset | Deployment-injected credential for the model adapter; required only when model planning is enabled and must never be committed. |
+| `AGENT_MODEL_ID` | unset | Model identifier reported as `meta.modelUsed` only when a validated model plan is applied. |
+| `AGENT_MODEL_TIMEOUT_MS` | `5000` | Optional model request timeout in milliseconds, from 1 through 30000. |
 | `DEMO_STATIC_DIR` | unset | Static directory served by the Agent server. The preview launcher sets it to `apps/demo/dist`. |
 
-`fixture` and `mock` use the built-in deterministic Provider registry. `live` is intentionally fail-closed: the runtime requires an explicitly injected provider factory that guarantees durable external idempotency.
+`fixture` and `mock` use the built-in deterministic Provider registry. `live` is intentionally fail-closed: the runtime requires an explicitly injected provider factory that guarantees durable external idempotency. Model planning is independently configured: rules remain the first path, and the model can only supply validated canonicalization for otherwise unknown supported input. Missing, failed, timed-out, low-confidence, stale, terminal, or idempotent-replay inputs do not call the model and retain the deterministic behavior. Successful model plans persist their model ID in the task snapshot and return it as `meta.modelUsed`; rules and deterministic fallbacks omit that field.
 
 Never commit credentials or `.env` files. Live Provider credentials must be supplied by the deployment environment.
 
@@ -133,8 +141,8 @@ The current Chromium suite covers two complete flows through the real Agent API:
 ## Known Limitations
 
 - The shipped demo defaults to deterministic Fixture mode and includes no model key, vehicle credential, or live Provider dependency.
-- `AgentGateway` and the demo HTTP runtime use the deterministic `Planner` as their shared create/update slot-filling boundary. The optional asynchronous `ModelGateway` is not wired into the HTTP runtime yet, so unknown language still follows the deterministic fallback.
-- A live model runtime still needs product decisions for model provenance persistence, original-versus-canonical input storage, and model-fallback metadata. Async inference must remain outside the SQLite write transaction.
+- With no explicit model environment configuration, the demo remains rules-only. An OpenAI-compatible adapter can be enabled by deployment configuration, but it only supports validated canonicalization of unknown airport-pickup slot input; it does not autonomously invoke tools or broaden the Agent intent contract.
+- Async model inference occurs outside the SQLite write transaction. The runtime persists the configured model ID for successful model-planned create and user-input results, but intentionally does not persist raw model responses, credentials, or original-versus-canonical text mappings.
 - The built-in server cannot start in `live` Provider mode without an injected durable provider factory.
 - Real flight, navigation, vehicle, messaging, and memory backends require deployment-specific adapters, credentials, reliability limits, and operational review.
 - Fixture geometry and task facts are fictional competition data, not production navigation or aviation data.
