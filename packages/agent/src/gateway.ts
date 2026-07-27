@@ -6,6 +6,7 @@ import {
   submitActionRequestSchema,
   submitConfirmationRequestSchema,
   submitEventRequestSchema,
+  uiSpecSchema,
   type AgentErrorCode,
   type AgentResponse,
   type AirportPickupTaskState,
@@ -85,6 +86,7 @@ export type AgentGatewayOptions = {
     task: AirportPickupTaskState,
     toolResults?: ReadToolResults,
     preferences?: Record<string, MemberPreferenceRecord>,
+    privateContext?: { cabinRevertActionToken?: string },
   ) => UISpec
   orchestrator?: ReadToolOrchestration
   providers?: ProviderRegistry
@@ -108,6 +110,7 @@ export class AgentGateway {
     task: AirportPickupTaskState,
     toolResults?: ReadToolResults,
     preferences?: Record<string, MemberPreferenceRecord>,
+    privateContext?: { cabinRevertActionToken?: string },
   ) => UISpec
   readonly #orchestrator: ReadToolOrchestration
   readonly #effectExecutor: EffectExecutor
@@ -259,10 +262,10 @@ export class AgentGateway {
       if (!revocation.succeeded) {
         const reconciled = revocation.ambiguous
           ? this.#store.save(this.#publish({
-              ...current.task,
-              taskRevision: current.task.taskRevision + 1,
-              pendingConfirmation: undefined,
-            }, current.toolResults, current.requestContext))
+            ...current.task,
+            taskRevision: current.task.taskRevision + 1,
+            pendingConfirmation: undefined,
+            }, current.toolResults, current.requestContext, current.effectReceipts))
           : current
         this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: reconciled, effects })
         return this.#response(request.clientRequestId, reconciled, effects, performance.now() - startedAt)
@@ -283,7 +286,42 @@ export class AgentGateway {
               ...current.task,
               taskRevision: current.task.taskRevision + 1,
               message: { ...current.task.message, authorizationId: undefined },
-            }, current.toolResults, current.requestContext))
+            }, current.toolResults, current.requestContext, current.effectReceipts))
+          : current
+        this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: reconciled, effects })
+        return this.#response(request.clientRequestId, reconciled, effects, performance.now() - startedAt)
+      }
+    }
+
+    const activeCabin = current.effectReceipts?.activeCabin
+    if (activeCabin && (activeCabin.state === 'applied' || activeCabin.state === 'revert-failed')) {
+      const cleanup = this.#effectExecutor.revertCabinProfile({
+        task: current.task,
+        cabinEffectId: activeCabin.providerEffectId,
+        idempotencyKey: `${request.clientRequestId}:reset-cabin`,
+        effectId: `${request.clientRequestId}:reset-cabin`,
+        vehicle: current.requestContext?.vehicle,
+      })
+      effects = [...effects, cleanup.effect]
+      if (!cleanup.succeeded) {
+        const reconciled = cleanup.ambiguous
+          ? this.#store.save(this.#publish({
+              ...current.task,
+              taskRevision: current.task.taskRevision + 1,
+              updatedAt: this.#eventTimestamp(current.task.updatedAt),
+              returnTrip: current.task.returnTrip
+                ? {
+                    ...current.task.returnTrip,
+                    cabin: {
+                      ...current.task.returnTrip.cabin,
+                      revert: { status: 'unknown', errorCode: cleanup.effect.errorCode ?? 'PROVIDER_FAILED' },
+                    },
+                  }
+                : current.task.returnTrip,
+            }, current.toolResults, current.requestContext, {
+              ...current.effectReceipts,
+              activeCabin: { ...activeCabin, state: 'unknown', lastErrorCode: cleanup.effect.errorCode },
+            }))
           : current
         this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: reconciled, effects })
         return this.#response(request.clientRequestId, reconciled, effects, performance.now() - startedAt)
@@ -355,6 +393,54 @@ export class AgentGateway {
     // Only revoke live capabilities after freshness and reducer acceptance checks.
     // A stale terminal event must not consume a credential that remains visible in state.
     let preEffects: AgentResponse['effects'] = []
+    let receiptsAfterTerminalCleanup = current.effectReceipts
+    const closesTask = request.event.type === 'user.cancelled-task'
+      || request.event.type === 'destination.arrived'
+      || (request.event.type === 'flight.updated' && request.event.flight.status === 'cancelled')
+    const activeCabin = current.effectReceipts?.activeCabin
+    if (closesTask && activeCabin && (activeCabin.state === 'applied' || activeCabin.state === 'revert-failed')) {
+      const cleanup = this.#effectExecutor.revertCabinProfile({
+        task: current.task,
+        cabinEffectId: activeCabin.providerEffectId,
+        idempotencyKey: `${request.event.eventId}:terminal-cabin`,
+        effectId: `${request.event.eventId}:terminal-cabin`,
+        vehicle: current.requestContext?.vehicle,
+      })
+      preEffects = [cleanup.effect]
+      if (!cleanup.succeeded) {
+        const reconciled = cleanup.ambiguous
+          ? this.#store.save(this.#publish({
+              ...current.task,
+              taskRevision: current.task.taskRevision + 1,
+              updatedAt: this.#eventTimestamp(current.task.updatedAt),
+              returnTrip: current.task.returnTrip
+                ? {
+                    ...current.task.returnTrip,
+                    cabin: {
+                      ...current.task.returnTrip.cabin,
+                      revert: { status: 'unknown', errorCode: cleanup.effect.errorCode ?? 'PROVIDER_FAILED' },
+                    },
+                  }
+                : current.task.returnTrip,
+            }, current.toolResults, current.requestContext, {
+              ...current.effectReceipts,
+              activeCabin: { ...activeCabin, state: 'unknown', lastErrorCode: cleanup.effect.errorCode },
+            }))
+          : current
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored: reconciled, effects: preEffects })
+        return this.#response(request.clientRequestId, reconciled, preEffects, performance.now() - startedAt)
+      }
+      if (next.returnTrip) {
+        next.returnTrip = {
+          ...next.returnTrip,
+          cabin: { ...next.returnTrip.cabin, revert: { status: 'succeeded' } },
+        }
+      }
+      receiptsAfterTerminalCleanup = {
+        ...current.effectReceipts,
+        activeCabin: { ...activeCabin, state: 'reverted', lastErrorCode: undefined },
+      }
+    }
     let cleanupTask = current.task
     const terminalEvent = request.event.type === 'user.cancelled-task'
       || (request.event.type === 'flight.updated' && request.event.flight.status === 'cancelled')
@@ -366,15 +452,35 @@ export class AgentGateway {
         idempotencyKey: `${request.event.eventId}:landing-authorization`,
         effectId: `${request.event.eventId}:landing-authorization`,
       })
-      preEffects = [revocation.effect]
+      preEffects = [...preEffects, revocation.effect]
       if (!revocation.succeeded) {
+        const cabinWasReverted = receiptsAfterTerminalCleanup?.activeCabin?.state === 'reverted'
+          && current.effectReceipts?.activeCabin?.state !== 'reverted'
+        const cleanupState = cabinWasReverted && cleanupTask.returnTrip
+          ? {
+              ...cleanupTask,
+              taskRevision: cleanupTask.taskRevision + 1,
+              updatedAt: this.#eventTimestamp(cleanupTask.updatedAt),
+              returnTrip: {
+                ...cleanupTask.returnTrip,
+                cabin: { ...cleanupTask.returnTrip.cabin, revert: { status: 'succeeded' as const } },
+              },
+            }
+          : cleanupTask
         const reconciled = revocation.ambiguous
           ? this.#store.save(this.#publish({
-              ...current.task,
-              taskRevision: current.task.taskRevision + 1,
-              message: { ...current.task.message, authorizationId: undefined },
-            }, current.toolResults, current.requestContext))
-          : current
+              ...cleanupState,
+              taskRevision: cleanupState.taskRevision + 1,
+              message: { ...cleanupState.message, authorizationId: undefined },
+            }, current.toolResults, current.requestContext, receiptsAfterTerminalCleanup))
+          : cleanupState === current.task
+            ? current
+            : this.#store.save(this.#publish(
+                cleanupState,
+                current.toolResults,
+                current.requestContext,
+                receiptsAfterTerminalCleanup,
+              ))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored: reconciled, effects: preEffects })
         return this.#response(request.clientRequestId, reconciled, preEffects, performance.now() - startedAt)
       }
@@ -398,7 +504,12 @@ export class AgentGateway {
           : cleanupTask
         const stored = reconciledTask === current.task
           ? current
-          : this.#store.save(this.#publish(reconciledTask, current.toolResults, current.requestContext))
+          : this.#store.save(this.#publish(
+              reconciledTask,
+              current.toolResults,
+              current.requestContext,
+              receiptsAfterTerminalCleanup,
+            ))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: preEffects })
         return this.#response(request.clientRequestId, stored, preEffects, performance.now() - startedAt)
       }
@@ -442,6 +553,7 @@ export class AgentGateway {
             error,
             undefined,
             current.requestContext,
+            receiptsAfterTerminalCleanup,
           ))
           this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
           return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
@@ -451,6 +563,64 @@ export class AgentGateway {
       const records = preferences.data.members
       const cabinMember = records.find((member) => member.rearTemperatureC !== undefined || member.mediaTitle !== undefined)
       const mediaMember = records.find((member) => member.mediaTitle !== undefined)
+      let replacementEffects: AgentResponse['effects'] = []
+      let cabinBaseTask = current.task
+      let cabinBaseReceipts = current.effectReceipts
+      const activeCabin = current.effectReceipts?.activeCabin
+      if (activeCabin?.state === 'applied' || activeCabin?.state === 'revert-failed') {
+        const replacement = this.#effectExecutor.revertCabinProfile({
+          task: current.task,
+          cabinEffectId: activeCabin.providerEffectId,
+          idempotencyKey: `${request.event.eventId}:replace-cabin`,
+          effectId: `${request.event.eventId}:replace-cabin`,
+          vehicle: current.requestContext?.vehicle,
+        })
+        replacementEffects = [replacement.effect]
+        if (!replacement.succeeded) {
+          const replacementTask = replacement.ambiguous
+            ? {
+                ...current.task,
+                taskRevision: current.task.taskRevision + 1,
+                updatedAt: this.#eventTimestamp(current.task.updatedAt),
+                returnTrip: current.task.returnTrip
+                  ? {
+                      ...current.task.returnTrip,
+                      cabin: {
+                        ...current.task.returnTrip.cabin,
+                        revert: { status: 'unknown' as const, errorCode: replacement.effect.errorCode ?? 'PROVIDER_FAILED' },
+                      },
+                    }
+                  : current.task.returnTrip,
+              }
+            : current.task
+          const replacementReceipts = replacement.ambiguous
+            ? {
+                ...current.effectReceipts,
+                activeCabin: { ...activeCabin, state: 'unknown' as const, lastErrorCode: replacement.effect.errorCode },
+              }
+            : current.effectReceipts
+          const stored = replacementTask === current.task
+            ? current
+            : this.#store.save(this.#publish(replacementTask, current.toolResults, current.requestContext, replacementReceipts))
+          this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: replacementEffects })
+          return this.#response(request.clientRequestId, stored, replacementEffects, performance.now() - startedAt)
+        }
+        cabinBaseTask = current.task.returnTrip
+          ? {
+              ...current.task,
+              taskRevision: current.task.taskRevision + 1,
+              updatedAt: this.#eventTimestamp(current.task.updatedAt),
+              returnTrip: {
+                ...current.task.returnTrip,
+                cabin: { ...current.task.returnTrip.cabin, revert: { status: 'succeeded' as const } },
+              },
+            }
+          : current.task
+        cabinBaseReceipts = {
+          ...current.effectReceipts,
+          activeCabin: { ...activeCabin, state: 'reverted', lastErrorCode: undefined },
+        }
+      }
       const execution = this.#effectExecutor.applyCabinPreferences({
         task: current.task,
         memberIds: current.task.passengers.memberIds,
@@ -460,19 +630,26 @@ export class AgentGateway {
         effectId: `${request.event.eventId}:0`,
       })
       if (!execution.succeeded) {
-        const executionEffects = [execution.effect, ...(execution.compensationEffect ? [execution.compensationEffect] : [])]
+        const executionEffects = [...replacementEffects, execution.effect, ...(execution.compensationEffect ? [execution.compensationEffect] : [])]
         const residualTask = execution.residualApplied
           ? {
-              ...current.task,
+              ...cabinBaseTask,
               returnTrip: {
                 workflowId: request.event.eventId,
-                homeDestinationId: current.task.returnTrip?.homeDestinationId,
-                route: current.task.returnTrip?.route ?? { status: 'succeeded' as const, routeId: current.task.navigation?.routeId, eta: current.task.navigation?.eta },
-                cabin: { status: 'succeeded' as const, errorCode: 'COMPENSATION_FAILED' },
-                media: current.task.returnTrip?.media ?? { status: 'pending' as const },
+                homeDestinationId: cabinBaseTask.returnTrip?.homeDestinationId,
+                route: cabinBaseTask.returnTrip?.route ?? { status: 'succeeded' as const, routeId: cabinBaseTask.navigation?.routeId, eta: cabinBaseTask.navigation?.eta },
+                cabin: {
+                  status: 'succeeded' as const,
+                  errorCode: 'COMPENSATION_FAILED',
+                  revert: { status: 'available' as const },
+                },
+                media: cabinBaseTask.returnTrip?.media ?? { status: 'pending' as const },
               },
             }
-          : current.task
+          : cabinBaseTask
+        const effectReceipts = execution.residualApplied && execution.cabinEffectId
+          ? this.#appliedCabinReceipt(cabinBaseReceipts, request.event.eventId, execution.cabinEffectId)
+          : cabinBaseReceipts
         const stored = this.#store.save(this.#publishFallback(
           residualTask,
           current.toolResults,
@@ -483,6 +660,7 @@ export class AgentGateway {
           ),
           undefined,
           current.requestContext,
+          effectReceipts,
         ))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: executionEffects })
         return this.#response(request.clientRequestId, stored, executionEffects, performance.now() - startedAt)
@@ -490,18 +668,25 @@ export class AgentGateway {
       const previousCabin = next.returnTrip?.cabin
       const cabinChanged = previousCabin?.status !== 'succeeded' || previousCabin.errorCode !== undefined
       const successfulTask = {
-        ...next,
-        ...(next.returnTrip ? {
-          taskRevision: next.taskRevision + (cabinChanged ? 1 : 0),
-          returnTrip: { ...next.returnTrip, cabin: { status: 'succeeded' as const } },
+        ...cabinBaseTask,
+        ...(cabinBaseTask.returnTrip ? {
+          taskRevision: cabinBaseTask.taskRevision + (cabinChanged ? 1 : 0),
+          returnTrip: {
+            ...cabinBaseTask.returnTrip,
+            cabin: { status: 'succeeded' as const, revert: { status: 'available' as const } },
+          },
         } : {}),
       }
+      const effectReceipts = execution.cabinEffectId
+        ? this.#appliedCabinReceipt(cabinBaseReceipts, request.event.eventId, execution.cabinEffectId)
+        : cabinBaseReceipts
       const stored = this.#store.save(this.#publish(successfulTask, {
         ...current.toolResults,
         'memory.get-preferences': preferences,
-      }, requestContext))
-      this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [execution.effect] })
-      return this.#response(request.clientRequestId, stored, [execution.effect], performance.now() - startedAt)
+      }, requestContext, effectReceipts))
+      const allEffects = [...replacementEffects, execution.effect]
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: allEffects })
+      return this.#response(request.clientRequestId, stored, allEffects, performance.now() - startedAt)
     }
     if (request.event.type === 'message.sent') {
       if (current.task.message.pendingMessageId !== request.event.messageId) {
@@ -526,7 +711,7 @@ export class AgentGateway {
                 messageId: request.event.messageId,
                 errorCode: execution.effect.errorCode ?? 'SEND_FAILED',
                 timestamp: request.event.timestamp,
-              }, this.#preferences), current.toolResults, requestContext))
+              }, this.#preferences), current.toolResults, requestContext, current.effectReceipts))
             : current
           this.#store.recordEventResult(taskId, request.event.eventId, { stored: reconciled, effects: failedEffects })
           return this.#response(request.clientRequestId, reconciled, failedEffects, performance.now() - startedAt)
@@ -538,7 +723,7 @@ export class AgentGateway {
             messageId: request.event.messageId,
             errorCode: 'PROVIDER_FAILED',
             timestamp: request.event.timestamp,
-          }, this.#preferences), current.toolResults, requestContext))
+          }, this.#preferences), current.toolResults, requestContext, current.effectReceipts))
           const ambiguousEffects = [execution.effect, ...(revokeAuthorization ? [revokeAuthorization.effect] : [])]
           this.#store.recordEventResult(taskId, request.event.eventId, { stored: unknown, effects: ambiguousEffects })
           return this.#response(request.clientRequestId, unknown, ambiguousEffects, performance.now() - startedAt)
@@ -549,12 +734,12 @@ export class AgentGateway {
           messageId: request.event.messageId,
           errorCode: execution.effect.errorCode ?? 'SEND_FAILED',
           timestamp: request.event.timestamp,
-        }, this.#preferences), current.toolResults, requestContext))
+        }, this.#preferences), current.toolResults, requestContext, current.effectReceipts))
         const failedEffects = [execution.effect, ...(revokeAuthorization ? [revokeAuthorization.effect] : [])]
         this.#store.recordEventResult(taskId, request.event.eventId, { stored: failed, effects: failedEffects })
         return this.#response(request.clientRequestId, failed, failedEffects, performance.now() - startedAt)
       }
-      const sent = this.#store.save(this.#publish(next, current.toolResults, requestContext))
+      const sent = this.#store.save(this.#publish(next, current.toolResults, requestContext, current.effectReceipts))
       this.#store.recordEventResult(taskId, request.event.eventId, { stored: sent, effects: [execution.effect] })
       return this.#response(request.clientRequestId, sent, [execution.effect], performance.now() - startedAt)
     }
@@ -596,6 +781,7 @@ export class AgentGateway {
           error,
           undefined,
           current.requestContext,
+          current.effectReceipts,
         ))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
@@ -625,6 +811,7 @@ export class AgentGateway {
             error,
             undefined,
             current.requestContext,
+            receiptsAfterTerminalCleanup,
           ))
           this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
           return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
@@ -664,6 +851,9 @@ export class AgentGateway {
             route: next.returnTrip.route.status === 'succeeded',
             cabin: next.returnTrip.cabin.status === 'succeeded',
             media: next.returnTrip.media.status === 'succeeded',
+            cabinEffectId: current.effectReceipts?.activeCabin?.state === 'applied'
+              ? current.effectReceipts.activeCabin.providerEffectId
+              : undefined,
           } : undefined,
         })
         const policyDenied = !execution.succeeded
@@ -684,13 +874,19 @@ export class AgentGateway {
             request.event.eventId,
             undefined,
             failedTask,
+            execution.cabinEffectIsNew && execution.cabinEffectId
+              ? this.#appliedCabinReceipt(current.effectReceipts, request.event.eventId, execution.cabinEffectId)
+              : current.effectReceipts,
           ))
           this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: execution.effect })
           return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
         }
         next = this.#applyReturnTripExecution(next, request.event.eventId, homeDestinationId, execution)
         next.uiRevision = Math.max(next.uiRevision, current.ui.uiRevision)
-        const stored = this.#store.save(this.#publish(next, toolResults, requestContext))
+        const effectReceipts = execution.cabinEffectIsNew && execution.cabinEffectId
+          ? this.#appliedCabinReceipt(current.effectReceipts, request.event.eventId, execution.cabinEffectId)
+          : current.effectReceipts
+        const stored = this.#store.save(this.#publish(next, toolResults, requestContext, effectReceipts))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: execution.effect })
         return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
       } catch (error) {
@@ -712,10 +908,11 @@ export class AgentGateway {
       if (!memberId) {
         next.pendingConfirmation = undefined
         next.memoryProposal = { status: 'skipped', errorCode: 'PREFERENCE_UNAVAILABLE' }
-        const stored = this.#store.save(this.#publish(next, toolResults, requestContext))
+        const stored = this.#store.save(this.#publish(next, toolResults, requestContext, receiptsAfterTerminalCleanup))
         const skipped: AgentResponse['effects'] = [{ effectId: `${request.event.eventId}:0`, type: 'memory.propose-update', status: 'cancelled', tool: 'memory.propose-update', errorCode: 'PREFERENCE_UNAVAILABLE' }]
-        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: skipped })
-        return this.#response(request.clientRequestId, stored, skipped, performance.now() - startedAt)
+        const completedEffects = [...preEffects, ...skipped]
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: completedEffects })
+        return this.#response(request.clientRequestId, stored, completedEffects, performance.now() - startedAt)
       }
       const proposal = this.#effectExecutor.proposeMemoryUpdate({
         task: next,
@@ -729,9 +926,10 @@ export class AgentGateway {
           ...next,
           memoryProposal: { status: 'failed', errorCode: proposal.effect.errorCode ?? 'PROVIDER_FAILED' },
           pendingConfirmation: undefined,
-        }, toolResults, requestContext))
-        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [proposal.effect] })
-        return this.#response(request.clientRequestId, stored, [proposal.effect], performance.now() - startedAt)
+        }, toolResults, requestContext, receiptsAfterTerminalCleanup))
+        const failedEffects = [...preEffects, proposal.effect]
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: failedEffects })
+        return this.#response(request.clientRequestId, stored, failedEffects, performance.now() - startedAt)
       }
       next.memoryProposal = {
         proposalId: proposal.proposal.proposalId,
@@ -746,11 +944,12 @@ export class AgentGateway {
         action: 'save-memory',
         expiresAt: proposal.proposal.expiresAt,
       }
-      const stored = this.#store.save(this.#publish(next, toolResults, requestContext))
-      this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [proposal.effect] })
-      return this.#response(request.clientRequestId, stored, [proposal.effect], performance.now() - startedAt)
+      const stored = this.#store.save(this.#publish(next, toolResults, requestContext, receiptsAfterTerminalCleanup))
+      const proposalEffects = [...preEffects, proposal.effect]
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: proposalEffects })
+      return this.#response(request.clientRequestId, stored, proposalEffects, performance.now() - startedAt)
     }
-    const stored = this.#store.save(this.#publish(next, toolResults, requestContext))
+    const stored = this.#store.save(this.#publish(next, toolResults, requestContext, receiptsAfterTerminalCleanup))
     const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${request.event.eventId}:${index}` }))
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: effectRecords })
     return this.#response(
@@ -777,6 +976,10 @@ export class AgentGateway {
       return this.#submitRetryReturnTrip(taskId, current, request, operation, startedAt)
     }
 
+    if (request.actionId === 'revert-cabin-profile') {
+      return this.#submitRevertCabinProfile(taskId, current, request, operation, startedAt)
+    }
+
     const action = current.ui.actions.find((candidate) => candidate.id === request.actionId)
     const component = current.ui.components.find((candidate) => candidate.id === request.componentId)
     if (
@@ -784,7 +987,7 @@ export class AgentGateway {
       || action.event.actionToken !== 'start-navigation'
       || request.actionId !== 'start-navigation'
       || component?.id !== 'navigation-plan'
-      || !component.actions?.includes(request.actionId)
+      || !component?.actions?.includes(request.actionId)
       || !current.toolResults?.['navigation.plan-route']
     ) {
       throw new AgentGatewayError('INVALID_REQUEST', 'Action is not registered for the current task state', false, current)
@@ -805,7 +1008,12 @@ export class AgentGateway {
       vehicle: current.requestContext?.vehicle ?? current.toolResults?.['vehicle.get-status']?.data,
     })
     const stored = execution.succeeded
-      ? this.#store.save(this.#publish(applyEvent(current.task, event, this.#preferences), current.toolResults, current.requestContext))
+      ? this.#store.save(this.#publish(
+          applyEvent(current.task, event, this.#preferences),
+          current.toolResults,
+          current.requestContext,
+          current.effectReceipts,
+        ))
       : current
     const effectRecords = [execution.effect]
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: effectRecords })
@@ -861,7 +1069,12 @@ export class AgentGateway {
         updatedAt: this.#eventTimestamp(current.task.updatedAt),
       }
       const effects: AgentResponse['effects'] = [{ ...expiration.effect, status: 'failed', errorCode: 'PROPOSAL_EXPIRED' }]
-      const stored = this.#store.save(this.#publish(expired, current.toolResults, current.requestContext))
+      const stored = this.#store.save(this.#publish(
+        expired,
+        current.toolResults,
+        current.requestContext,
+        current.effectReceipts,
+      ))
       this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
       return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
     }
@@ -910,7 +1123,12 @@ export class AgentGateway {
           updatedAt: this.#eventTimestamp(current.task.updatedAt),
         }
         effects = [execution.effect]
-        const stored = this.#store.save(this.#publish(failed, current.toolResults, current.requestContext))
+        const stored = this.#store.save(this.#publish(
+          failed,
+          current.toolResults,
+          current.requestContext,
+          current.effectReceipts,
+        ))
         this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
         return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
       }
@@ -923,7 +1141,12 @@ export class AgentGateway {
       }
       effects = [execution.effect]
     }
-    const stored = this.#store.save(this.#publish(next, current.toolResults, current.requestContext))
+    const stored = this.#store.save(this.#publish(
+      next,
+      current.toolResults,
+      current.requestContext,
+      current.effectReceipts,
+    ))
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
@@ -972,7 +1195,12 @@ export class AgentGateway {
     }
 
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
-    const stored = this.#store.save(this.#publish({ ...armed, updatedAt: timestamp }, current.toolResults, current.requestContext))
+    const stored = this.#store.save(this.#publish(
+      { ...armed, updatedAt: timestamp },
+      current.toolResults,
+      current.requestContext,
+      current.effectReceipts,
+    ))
     const effects: AgentResponse['effects'] = [execution.effect]
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
@@ -1047,6 +1275,9 @@ export class AgentGateway {
         route: current.task.returnTrip.route.status === 'succeeded',
         cabin: current.task.returnTrip.cabin.status === 'succeeded',
         media: current.task.returnTrip.media.status === 'succeeded',
+        cabinEffectId: current.effectReceipts?.activeCabin?.state === 'applied'
+          ? current.effectReceipts.activeCabin.providerEffectId
+          : undefined,
       } : undefined,
     })
     if (!execution.succeeded) {
@@ -1059,6 +1290,9 @@ export class AgentGateway {
         workflowId,
         undefined,
         failedTask,
+        execution.cabinEffectIsNew && execution.cabinEffectId
+          ? this.#appliedCabinReceipt(current.effectReceipts, workflowId, execution.cabinEffectId)
+          : current.effectReceipts,
       ))
       this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: execution.effect })
       return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
@@ -1068,9 +1302,111 @@ export class AgentGateway {
       ...executedTask,
       uiRevision: Math.max(executionTask.uiRevision, current.ui.uiRevision),
     }
-    const stored = this.#store.save(this.#publish(next, { ...current.toolResults, 'memory.get-preferences': preferences }, current.requestContext))
+    const effectReceipts = execution.cabinEffectIsNew && execution.cabinEffectId
+      ? this.#appliedCabinReceipt(current.effectReceipts, workflowId, execution.cabinEffectId)
+      : current.effectReceipts
+    const stored = this.#store.save(this.#publish(
+      next,
+      { ...current.toolResults, 'memory.get-preferences': preferences },
+      current.requestContext,
+      effectReceipts,
+    ))
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: execution.effect })
     return this.#response(request.clientRequestId, stored, execution.effect, performance.now() - startedAt)
+  }
+
+  #submitRevertCabinProfile(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitActionRequest,
+    operation: string,
+    startedAt: number,
+  ): AgentResponse {
+    const receipt = current.effectReceipts?.activeCabin
+    const action = current.ui.actions.find((candidate) => candidate.id === request.actionId)
+    const component = current.ui.components.find((candidate) => candidate.id === request.componentId)
+    const actionToken = receipt ? this.#cabinRevertActionToken(taskId, receipt.receiptId) : undefined
+    if (
+      !receipt
+      || receipt.state === 'reverted'
+      || action?.event.type !== 'tool-request'
+      || action.event.actionToken !== actionToken
+      || !component?.actions?.includes(request.actionId)
+    ) {
+      throw new AgentGatewayError('INVALID_REQUEST', 'Action is not registered for the current cabin state', false, current)
+    }
+
+    const providerIdempotencyKey = `${receipt.receiptId}:revert:${request.idempotencyKey}`
+    const execution = this.#effectExecutor.revertCabinProfile({
+      task: current.task,
+      cabinEffectId: receipt.providerEffectId,
+      idempotencyKey: providerIdempotencyKey,
+      effectId: `action:${request.idempotencyKey}:0`,
+      vehicle: current.requestContext?.vehicle,
+    })
+    const effects = [execution.effect]
+    if (!execution.succeeded) {
+      if (isCabinRevertPolicyDenial(execution.effect.errorCode)) {
+        this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored: current, effects })
+        return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+      }
+      const shouldReconcile = execution.ambiguous === true
+      const state = shouldReconcile ? 'unknown' as const : 'revert-failed' as const
+      const nextTask = {
+        ...current.task,
+        taskRevision: current.task.taskRevision + 1,
+        updatedAt: this.#eventTimestamp(current.task.updatedAt),
+        returnTrip: current.task.returnTrip
+          ? {
+              ...current.task.returnTrip,
+              cabin: {
+                ...current.task.returnTrip.cabin,
+                revert: {
+                  status: shouldReconcile ? 'unknown' as const : 'failed' as const,
+                  errorCode: execution.effect.errorCode ?? 'PROVIDER_FAILED',
+                },
+              },
+            }
+          : current.task.returnTrip,
+      }
+      const stored = this.#store.save(this.#publish(
+        nextTask,
+        current.toolResults,
+        current.requestContext,
+        {
+          ...current.effectReceipts,
+          activeCabin: { ...receipt, state, lastErrorCode: execution.effect.errorCode },
+        },
+      ))
+      this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
+      return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
+    }
+
+    const next: AirportPickupTaskState = {
+      ...current.task,
+      taskRevision: current.task.taskRevision + 1,
+      updatedAt: this.#eventTimestamp(current.task.updatedAt),
+      returnTrip: current.task.returnTrip
+        ? {
+            ...current.task.returnTrip,
+            cabin: {
+              ...current.task.returnTrip.cabin,
+              revert: { status: 'succeeded' },
+            },
+          }
+        : current.task.returnTrip,
+    }
+    const stored = this.#store.save(this.#publish(
+      next,
+      current.toolResults,
+      current.requestContext,
+      {
+        ...current.effectReceipts,
+        activeCabin: { ...receipt, state: 'reverted', lastErrorCode: undefined },
+      },
+    ))
+    this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
+    return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
 
   #returnTripState(
@@ -1087,8 +1423,27 @@ export class AgentGateway {
       route: execution.residual.route && execution.navigation
         ? { status: 'succeeded', routeId: execution.navigation.routeId, eta: execution.navigation.eta }
         : { ...(existing?.route ?? { status: 'pending' }), ...(failed('navigation.update-route') ? { status: 'failed' as const, errorCode: failed('navigation.update-route') } : {}) },
-      cabin: { status: execution.applied.cabin ? 'succeeded' : (failed('vehicle.apply-cabin-profile') ? 'failed' : 'pending'), ...(failed('vehicle.apply-cabin-profile') ? { errorCode: failed('vehicle.apply-cabin-profile') } : {}) },
-      media: { status: execution.applied.media ? 'succeeded' : (failed('media.play') ? 'failed' : 'pending'), ...(failed('media.play') ? { errorCode: failed('media.play') } : {}) },
+      cabin: {
+        status: execution.applied.cabin
+          ? 'succeeded'
+          : execution.skipped.cabin
+            ? 'skipped'
+            : (failed('vehicle.apply-cabin-profile') ? 'failed' : 'pending'),
+        ...(failed('vehicle.apply-cabin-profile') ? { errorCode: failed('vehicle.apply-cabin-profile') } : {}),
+        ...(execution.applied.cabin && execution.cabinEffectId
+          ? { revert: existing?.cabin.revert ?? { status: 'available' as const } }
+          : {}),
+      },
+      media: {
+        status: failed('media.play')
+          ? 'failed'
+          : execution.applied.media
+            ? 'succeeded'
+            : execution.skipped.media
+              ? 'skipped'
+              : 'pending',
+        ...(failed('media.play') ? { errorCode: failed('media.play') } : {}),
+      },
     }
   }
 
@@ -1130,12 +1485,32 @@ export class AgentGateway {
     return `${taskId}:retry-return-trip:${workflowId}`
   }
 
+  #cabinRevertActionToken(taskId: string, receiptId: string): string {
+    return `${taskId}:revert-cabin-profile:${receiptId}`
+  }
+
+  #appliedCabinReceipt(
+    existing: StoredTask['effectReceipts'],
+    receiptId: string,
+    providerEffectId: string,
+  ): NonNullable<StoredTask['effectReceipts']> {
+    return {
+      ...existing,
+      activeCabin: {
+        receiptId,
+        providerEffectId,
+        state: 'applied',
+      },
+    }
+  }
+
   #publishReturnTripFailure(
     current: StoredTask,
     toolResults: ReadToolResults | undefined,
     workflowId: string,
     error?: ReadToolOrchestrationError,
     task: AirportPickupTaskState = current.task,
+    effectReceipts: StoredTask['effectReceipts'] = current.effectReceipts,
   ): StoredTask {
     const taskChanged = JSON.stringify(task) !== JSON.stringify(current.task)
     const uiBase = {
@@ -1156,7 +1531,7 @@ export class AgentGateway {
         actionToken: this.#returnTripRetryActionToken(current.task.taskId, workflowId),
       },
     ), current.requestContext)
-    return { task, ui, toolResults, requestContext: current.requestContext }
+    return { task, ui, toolResults, effectReceipts, requestContext: current.requestContext }
   }
 
   #submitSendMessageConfirmation(
@@ -1246,7 +1621,12 @@ export class AgentGateway {
       effects = cleanupEffect ? [execution.effect, cleanupEffect] : [execution.effect]
     }
 
-    const stored = this.#store.save(this.#publish(nextTask, current.toolResults, current.requestContext))
+    const stored = this.#store.save(this.#publish(
+      nextTask,
+      current.toolResults,
+      current.requestContext,
+      current.effectReceipts,
+    ))
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
@@ -1255,8 +1635,24 @@ export class AgentGateway {
     task: AirportPickupTaskState,
     toolResults?: ReadToolResults,
     requestContext?: StoredTask['requestContext'],
+    effectReceipts?: StoredTask['effectReceipts'],
   ): StoredTask {
-    const ui = applyRequestPresentation(this.#compose(task, toolResults, this.#preferences), requestContext)
+    const privateReceipts = task.phase === 'completed' || task.phase === 'cancelled'
+      ? undefined
+      : effectReceipts
+    const canSafelyRevertCabin = requestContext !== undefined
+      && requestContext.vehicle.speedKph === 0
+      && requestContext.vehicle.gear === 'P'
+    const cabinRevertActionToken = canSafelyRevertCabin && privateReceipts?.activeCabin
+      && (privateReceipts.activeCabin.state === 'applied' || privateReceipts.activeCabin.state === 'revert-failed')
+      ? this.#cabinRevertActionToken(task.taskId, privateReceipts.activeCabin.receiptId)
+      : undefined
+    const ui = applyRequestPresentation(this.#compose(
+      task,
+      toolResults,
+      this.#preferences,
+      cabinRevertActionToken ? { cabinRevertActionToken } : undefined,
+    ), requestContext)
     const uiWithoutStartNavigation = {
       ...ui,
       components: ui.components.map((component) => component.actions?.includes('start-navigation')
@@ -1292,7 +1688,13 @@ export class AgentGateway {
           ],
         }
       : uiWithoutStartNavigation
-    return { task: { ...task, uiRevision: publishedUi.uiRevision }, ui: publishedUi, toolResults, requestContext }
+    return {
+      task: { ...task, uiRevision: publishedUi.uiRevision },
+      ui: publishedUi,
+      toolResults,
+      effectReceipts: privateReceipts,
+      requestContext,
+    }
   }
 
   #publishFallback(
@@ -1301,19 +1703,50 @@ export class AgentGateway {
     error: ReadToolOrchestrationError,
     retry?: { actionId: string; label: string; componentId: string; actionToken: string },
     requestContext?: StoredTask['requestContext'],
+    effectReceipts?: StoredTask['effectReceipts'],
   ): StoredTask {
     const timeout = error.code === 'PROVIDER_TIMEOUT'
-    const ui = composeFallbackSpec(
+    const baseUi = composeFallbackSpec(
       task,
       timeout ? '数据暂时不可用' : '数据源暂时不可用',
       timeout ? '正在保留当前任务信息，请稍后重试。' : '已保留当前任务信息，请稍后重试。',
       timeout ? 'warning' : 'error',
       retry,
     )
+    const cabinReceipt = effectReceipts?.activeCabin
+    const canRevertCabin = task.phase === 'returning-home'
+      && task.returnTrip?.cabin.status === 'succeeded'
+      && cabinReceipt !== undefined
+      && (cabinReceipt.state === 'applied' || cabinReceipt.state === 'revert-failed')
+      && requestContext !== undefined
+      && requestContext.vehicle.speedKph === 0
+      && requestContext.vehicle.gear === 'P'
+    const fallbackComponentId = retry?.componentId ?? 'provider-fallback'
+    const ui = canRevertCabin
+      ? uiSpecSchema.parse({
+          ...baseUi,
+          components: baseUi.components.map((component) => component.id === fallbackComponentId
+            ? { ...component, actions: [...(component.actions ?? []), 'revert-cabin-profile'] }
+            : component),
+          actions: [
+            ...baseUi.actions,
+            {
+              id: 'revert-cabin-profile',
+              label: '撤销座舱设置',
+              style: 'secondary' as const,
+              event: {
+                type: 'tool-request' as const,
+                actionToken: this.#cabinRevertActionToken(task.taskId, cabinReceipt.receiptId),
+              },
+            },
+          ],
+        })
+      : baseUi
     return {
       task: { ...task, uiRevision: ui.uiRevision },
       ui: applyRequestPresentation(ui, requestContext),
       toolResults,
+      effectReceipts,
       requestContext,
     }
   }
@@ -1473,4 +1906,13 @@ export class AgentGateway {
       meta: { mode: this.#mode, durationMs, fallbackUsed: stored.ui.meta.generatedBy === 'fallback' },
     })
   }
+}
+
+function isCabinRevertPolicyDenial(errorCode: string | undefined): boolean {
+  return errorCode === 'TASK_TERMINAL'
+    || errorCode === 'INVALID_TASK_PHASE'
+    || errorCode === 'FLIGHT_CANCELLED'
+    || errorCode === 'INVALID_TASK_STATE'
+    || errorCode === 'VEHICLE_CONTEXT_REQUIRED'
+    || errorCode === 'VEHICLE_MOVING'
 }

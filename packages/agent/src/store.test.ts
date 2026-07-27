@@ -27,6 +27,7 @@ describe('MemoryTaskStore task updates', () => {
     expect(firstUpdate.snapshot).toEqual({ task: first.task, ui: first.ui })
     expect(JSON.stringify(firstUpdate)).not.toContain('toolResults')
     expect(JSON.stringify(firstUpdate)).not.toContain('requestContext')
+    expect(JSON.stringify(firstUpdate)).not.toContain('effectReceipts')
     expect(gateway.getTaskUpdates(second.task.taskId).updates[0]?.cursor).toBe(1)
     expect(gateway.getTaskUpdates(first.task.taskId, 1).updates).toEqual([])
   })

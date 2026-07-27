@@ -53,7 +53,14 @@ export const returnTripStateSchema = z.object({
     routeId: z.string().min(1).optional(),
     eta: z.iso.datetime({ offset: true }).optional(),
   }),
-  cabin: returnTripEffectStateSchema,
+  cabin: returnTripEffectStateSchema.extend({
+    revert: z
+      .object({
+        status: z.enum(['available', 'succeeded', 'failed', 'unknown']),
+        errorCode: z.string().optional(),
+      })
+      .optional(),
+  }),
   media: returnTripEffectStateSchema,
 })
 

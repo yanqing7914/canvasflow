@@ -1039,6 +1039,311 @@ describe('AgentGateway', () => {
     expect(playMedia).toHaveBeenCalledTimes(1)
   })
 
+  it('executes and idempotently replays the registered cabin undo action', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
+    })
+    const returning = returningTask(gateway)
+
+    expect(returning.ui.components).toContainEqual(expect.objectContaining({
+      id: 'cabin-profile',
+      actions: ['revert-cabin-profile'],
+      props: expect.objectContaining({ reversible: true }),
+    }))
+    const request = {
+      clientRequestId: 'cabin-revert',
+      expectedTaskRevision: returning.task.taskRevision,
+      expectedUiRevision: returning.ui.uiRevision,
+      actionId: 'revert-cabin-profile',
+      componentId: 'cabin-profile',
+      idempotencyKey: 'cabin-revert-001',
+    }
+    const reverted = gateway.submitAction(returning.task.taskId, request)
+    const duplicate = gateway.submitAction(returning.task.taskId, { ...request, clientRequestId: 'cabin-revert-replay' })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(reverted.effects).toEqual([
+      expect.objectContaining({ type: 'vehicle.revert-cabin-profile', status: 'succeeded' }),
+    ])
+    expect(reverted.task.returnTrip?.cabin.revert).toEqual({ status: 'succeeded' })
+    expect(reverted.ui.actions.some((action) => action.id === 'revert-cabin-profile')).toBe(false)
+    expect(reverted.ui.components).toContainEqual(expect.objectContaining({
+      id: 'cabin-reverted',
+      props: expect.objectContaining({ title: '座舱设置已撤销' }),
+    }))
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+    expect(duplicate.task).toEqual(reverted.task)
+    expect(duplicate.effects).toEqual(reverted.effects)
+  })
+
+  it('preserves cabin undo across context events and policy-denies it while moving', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
+    })
+    const returning = returningTask(gateway)
+    const moving = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'return-moving', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'return-moving', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:05:00+08:00' },
+    })
+
+    expect(moving.ui.actions.some((action) => action.id === 'revert-cabin-profile')).toBe(false)
+    expect(moving.ui.components).toContainEqual(expect.objectContaining({
+      id: 'cabin-profile',
+      props: expect.objectContaining({ reversible: false }),
+    }))
+    expect(() => gateway.submitAction(moving.task.taskId, {
+      clientRequestId: 'moving-revert', expectedTaskRevision: moving.task.taskRevision,
+      expectedUiRevision: moving.ui.uiRevision, actionId: 'revert-cabin-profile',
+      componentId: 'cabin-profile', idempotencyKey: 'moving-revert',
+    })).toThrow(AgentGatewayError)
+    expect(revertCabin).not.toHaveBeenCalled()
+
+    const parked = gateway.submitEvent(moving.task.taskId, {
+      clientRequestId: 'return-parked-again', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'return-parked-again', type: 'vehicle.parked', timestamp: '2026-07-22T12:06:00+08:00' },
+    })
+    const reverted = gateway.submitAction(parked.task.taskId, {
+      clientRequestId: 'parked-revert', expectedTaskRevision: parked.task.taskRevision,
+      expectedUiRevision: parked.ui.uiRevision, actionId: 'revert-cabin-profile',
+      componentId: 'cabin-profile', idempotencyKey: 'parked-revert',
+    })
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(reverted.task.returnTrip?.cabin.revert?.status).toBe('succeeded')
+  })
+
+  it('freezes cabin undo after an ambiguous provider result', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn((ctx: Parameters<typeof base['vehicle.revert-cabin-profile']>[0], input: unknown) => {
+      const result = base['vehicle.revert-cabin-profile'](ctx, input)
+      return { ...result, meta: { ...result.meta, requestId: 'wrong-request' } }
+    })
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
+    })
+    const returning = returningTask(gateway)
+    const unknown = gateway.submitAction(returning.task.taskId, {
+      clientRequestId: 'ambiguous-revert', expectedTaskRevision: returning.task.taskRevision,
+      expectedUiRevision: returning.ui.uiRevision, actionId: 'revert-cabin-profile',
+      componentId: 'cabin-profile', idempotencyKey: 'ambiguous-revert',
+    })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(unknown.task.returnTrip?.cabin.revert).toEqual({ status: 'unknown', errorCode: 'PROVIDER_FAILED' })
+    expect(unknown.ui.actions.some((action) => action.id === 'revert-cabin-profile')).toBe(false)
+    expect(unknown.ui.components).toContainEqual(expect.objectContaining({ id: 'cabin-revert-unknown' }))
+  })
+
+  it('reverts the active cabin effect before cancelling the task', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
+    })
+    const returning = returningTask(gateway)
+
+    const cancelled = gateway.cancelTask(returning.task.taskId, {
+      clientRequestId: 'return-cancel', expectedTaskRevision: returning.task.taskRevision, eventId: 'return-cancel',
+    })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(cancelled.task.phase).toBe('cancelled')
+    expect(cancelled.task.returnTrip?.cabin.revert).toEqual({ status: 'succeeded' })
+    expect(cancelled.effects).toContainEqual(expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'succeeded',
+    }))
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
+  it('reverts the active cabin effect before accepting a flight cancellation', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
+    })
+    const returning = returningTask(gateway)
+
+    const cancelled = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'return-flight-cancel', expectedTaskRevision: returning.task.taskRevision,
+      event: {
+        eventId: 'return-flight-cancel', type: 'flight.updated',
+        flight: {
+          flightNumber: 'MU5102', status: 'cancelled',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+        },
+        timestamp: '2026-07-22T20:40:00+08:00',
+      },
+    })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(cancelled.task.flight?.status).toBe('cancelled')
+    expect(cancelled.task.returnTrip?.cabin.revert).toEqual({ status: 'succeeded' })
+    expect(cancelled.ui.actions.some((action) => action.id === 'revert-cabin-profile')).toBe(false)
+    expect(cancelled.effects).toContainEqual(expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'succeeded',
+    }))
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
+  it('persists a successful cabin cleanup when later terminal authorization cleanup fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'vehicle.revert-cabin-profile': revertCabin,
+        'message.revoke-authorization': (context) => ({
+          ok: false, data: null,
+          error: { code: 'REVOKE_FAILED', message: 'offline', retryable: true },
+          meta: { requestId: context.requestId!, taskId: context.taskId, tool: 'message.revoke-authorization', provider: 'fixture', durationMs: 1, generatedAt: now },
+        }),
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'returning-landed-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'returning-landed-start',
+    })
+    const landed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'returning-landed', expectedTaskRevision: started.task.taskRevision,
+      event: {
+        eventId: 'returning-landed', type: 'flight.updated',
+        flight: {
+          flightNumber: 'MU5102', status: 'landed',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+        },
+        timestamp: '2026-07-22T20:40:00+08:00',
+      },
+    })
+    expect(landed.task.message.authorizationId).toBeDefined()
+
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'returning-late-geofence', expectedTaskRevision: landed.task.taskRevision,
+      event: { eventId: 'returning-late-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T20:41:00+08:00' },
+    })
+    const waiting = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'returning-late-parked', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'returning-late-parked', type: 'vehicle.parked', timestamp: '2026-07-22T20:42:00+08:00' },
+    })
+    const returning = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'returning-late-onboard', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'returning-late-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T20:43:00+08:00' },
+    })
+
+    const failed = gateway.cancelTask(returning.task.taskId, {
+      clientRequestId: 'return-cancel-late-failure', expectedTaskRevision: returning.task.taskRevision,
+      eventId: 'return-cancel-late-failure',
+    })
+    const replay = gateway.cancelTask(returning.task.taskId, {
+      clientRequestId: 'return-cancel-late-failure-replay', expectedTaskRevision: returning.task.taskRevision,
+      eventId: 'return-cancel-late-failure',
+    })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(failed.task.phase).toBe('returning-home')
+    expect(failed.task.returnTrip?.cabin.revert).toEqual({ status: 'succeeded' })
+    expect(failed.task.message.authorizationId).toBeDefined()
+    expect(failed.ui.actions.some((action) => action.id === 'revert-cabin-profile')).toBe(false)
+    expect(failed.effects).toEqual([
+      expect.objectContaining({ type: 'vehicle.revert-cabin-profile', status: 'succeeded' }),
+      expect.objectContaining({ type: 'message.revoke-authorization', status: 'failed', errorCode: 'REVOKE_FAILED' }),
+    ])
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+    expect(replay.task).toEqual(failed.task)
+    expect(replay.effects).toEqual(failed.effects)
+  })
+
+  it('keeps the returning snapshot when terminal cabin cleanup fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'vehicle.revert-cabin-profile': (context) => ({
+          ok: false, data: null,
+          error: { code: 'REVERT_FAILED', message: 'offline', retryable: true },
+          meta: { requestId: context.requestId!, taskId: context.taskId, tool: 'vehicle.revert-cabin-profile', provider: 'fixture', durationMs: 1, generatedAt: now },
+        }),
+      },
+    })
+    const returning = returningTask(gateway)
+
+    const failed = gateway.cancelTask(returning.task.taskId, {
+      clientRequestId: 'return-cancel-failed', expectedTaskRevision: returning.task.taskRevision, eventId: 'return-cancel-failed',
+    })
+
+    expect(failed.task).toEqual(returning.task)
+    expect(failed.effects).toEqual([expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'failed', errorCode: 'REVERT_FAILED',
+    })])
+    expect(runtime.cabinCurrent.temperatureC).toBe(25)
+  })
+
+  it('reverts the active cabin effect before completing at home', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
+    })
+    const returning = returningTask(gateway)
+
+    const completed = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'return-arrived', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'return-arrived', type: 'destination.arrived', destination: '家', timestamp: '2026-07-22T12:05:00+08:00' },
+    })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(completed.task.phase).toBe('completed')
+    expect(completed.task.returnTrip?.cabin.revert).toEqual({ status: 'succeeded' })
+    expect(completed.effects).toContainEqual(expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'succeeded',
+    }))
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
+  it('reverts the active cabin effect before resetting the task', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
+    })
+    const returning = returningTask(gateway)
+
+    const reset = gateway.resetTask(returning.task.taskId, {
+      clientRequestId: 'return-reset', expectedTaskRevision: returning.task.taskRevision,
+    })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(reset.task.phase).toBe('collecting-information')
+    expect(reset.effects).toContainEqual(expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'succeeded',
+    }))
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
   it('keeps the original task snapshot when a later return-trip provider fails', () => {
     const runtime = createSideEffectRuntime()
     const base = createProviderRegistry(runtime)
@@ -1973,10 +2278,11 @@ describe('AgentGateway', () => {
     const runtime = createSideEffectRuntime()
     const base = createProviderRegistry(runtime)
     const applyCabin = vi.fn(base['vehicle.apply-cabin-profile'])
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
     const store = new MemoryTaskStore()
     const gateway = new AgentGateway({
       store, now: () => now, createId: () => '001', runtime,
-      providers: { ...base, 'vehicle.apply-cabin-profile': applyCabin },
+      providers: { ...base, 'vehicle.apply-cabin-profile': applyCabin, 'vehicle.revert-cabin-profile': revertCabin },
     })
     const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
     const started = gateway.submitAction(created.task.taskId, {
@@ -1997,6 +2303,7 @@ describe('AgentGateway', () => {
       event: { eventId: 'later-cabin-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' },
     })
     const returningStored = store.get(created.task.taskId)!
+    const activeCabin = returningStored.effectReceipts?.activeCabin
     store.save({
       ...returningStored,
       task: {
@@ -2005,6 +2312,9 @@ describe('AgentGateway', () => {
           ? { ...returningStored.task.returnTrip, cabin: { status: 'failed', errorCode: 'APPLY_FAILED' } }
           : undefined,
       },
+      effectReceipts: activeCabin
+        ? { activeCabin: { ...activeCabin, state: 'reverted' } }
+        : undefined,
     })
     applyCabin.mockClear()
 
@@ -2018,10 +2328,120 @@ describe('AgentGateway', () => {
     })
 
     expect(applyCabin).toHaveBeenCalledTimes(1)
+    expect(revertCabin).not.toHaveBeenCalled()
     expect(applied.effects).toEqual([expect.objectContaining({ type: 'vehicle.apply-cabin-profile', status: 'succeeded' })])
-    expect(applied.task.returnTrip?.cabin).toEqual({ status: 'succeeded' })
+    expect(applied.task.returnTrip?.cabin).toEqual({ status: 'succeeded', revert: { status: 'available' } })
     expect(duplicate.task).toEqual(applied.task)
     expect(duplicate.effects).toEqual(applied.effects)
+  })
+
+  it('undoes a replacement cabin profile back to the pre-task baseline', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: base,
+    })
+    const returning = returningTask(gateway)
+
+    const replaced = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'replace-cabin-input', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'replace-cabin-input', type: 'user.input', text: '应用家庭座舱偏好', timestamp: '2026-07-22T12:05:00+08:00' },
+    })
+    const reverted = gateway.submitAction(replaced.task.taskId, {
+      clientRequestId: 'replace-cabin-undo', expectedTaskRevision: replaced.task.taskRevision,
+      expectedUiRevision: replaced.ui.uiRevision, actionId: 'revert-cabin-profile',
+      componentId: 'cabin-profile', idempotencyKey: 'replace-cabin-undo',
+    })
+
+    expect(reverted.task.returnTrip?.cabin.revert).toEqual({ status: 'succeeded' })
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+    expect(runtime.cabinCurrent.mediaTitle).toBeUndefined()
+  })
+
+  it('resolves a failed cabin undo before applying a replacement profile', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    let revertCalls = 0
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'vehicle.revert-cabin-profile': (context, input) => {
+          revertCalls += 1
+          if (revertCalls === 1) {
+            return {
+              ok: false as const,
+              data: null,
+              error: { code: 'REVERT_FAILED', message: 'offline', retryable: true },
+              meta: { requestId: context.requestId!, taskId: context.taskId, tool: 'vehicle.revert-cabin-profile', provider: 'fixture' as const, durationMs: 1, generatedAt: now },
+            }
+          }
+          return base['vehicle.revert-cabin-profile'](context, input)
+        },
+      },
+    })
+    const returning = returningTask(gateway)
+    const failedUndo = gateway.submitAction(returning.task.taskId, {
+      clientRequestId: 'failed-revert', expectedTaskRevision: returning.task.taskRevision,
+      expectedUiRevision: returning.ui.uiRevision, actionId: 'revert-cabin-profile',
+      componentId: 'cabin-profile', idempotencyKey: 'failed-revert',
+    })
+    expect(failedUndo.task.returnTrip?.cabin.revert).toEqual({ status: 'failed', errorCode: 'REVERT_FAILED' })
+
+    const replaced = gateway.submitEvent(failedUndo.task.taskId, {
+      clientRequestId: 'replace-after-failed-revert', expectedTaskRevision: failedUndo.task.taskRevision,
+      event: { eventId: 'replace-after-failed-revert', type: 'user.input', text: '应用家庭座舱偏好', timestamp: '2026-07-22T12:05:00+08:00' },
+    })
+    const reverted = gateway.submitAction(replaced.task.taskId, {
+      clientRequestId: 'replace-after-failed-revert-undo', expectedTaskRevision: replaced.task.taskRevision,
+      expectedUiRevision: replaced.ui.uiRevision, actionId: 'revert-cabin-profile',
+      componentId: 'cabin-profile', idempotencyKey: 'replace-after-failed-revert-undo',
+    })
+
+    expect(revertCalls).toBe(3)
+    expect(replaced.effects).toEqual([
+      expect.objectContaining({ type: 'vehicle.revert-cabin-profile', status: 'succeeded' }),
+      expect.objectContaining({ type: 'vehicle.apply-cabin-profile', status: 'succeeded' }),
+    ])
+    expect(reverted.task.returnTrip?.cabin.revert).toEqual({ status: 'succeeded' })
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+    expect(runtime.cabinCurrent.mediaTitle).toBeUndefined()
+  })
+
+  it('marks unavailable cabin and media preferences as skipped after a successful return route', () => {
+    const runtime = createSideEffectRuntime()
+    runtime.preferences.mom = {
+      ...runtime.preferences.mom,
+      rearTemperatureC: undefined,
+    }
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: createProviderRegistry(runtime),
+    })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'skipped-return-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'skipped-return-start',
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'skipped-return-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'skipped-return-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    const waiting = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'skipped-return-parked', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'skipped-return-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' },
+    })
+    const returning = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'skipped-return-onboard', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'skipped-return-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' },
+    })
+
+    expect(returning.task.returnTrip).toMatchObject({
+      route: { status: 'succeeded' }, cabin: { status: 'skipped' }, media: { status: 'skipped' },
+    })
+    expect(returning.ui.actions.some((action) => action.id === 'retry-return-trip')).toBe(false)
   })
 
   it('preserves the returning-home snapshot when a later cabin provider fails', () => {
@@ -2049,9 +2469,19 @@ describe('AgentGateway', () => {
       event: { eventId: 'fail-cabin-input', type: 'user.input', text: '应用家庭座舱偏好', timestamp: '2026-07-22T12:05:00+08:00' },
     })
 
-    expect(failed.task).toEqual({ ...returning.task, uiRevision: failed.task.uiRevision })
+    expect(failed.task).toEqual({
+      ...returning.task,
+      taskRevision: returning.task.taskRevision + 1,
+      uiRevision: failed.task.uiRevision,
+      returnTrip: returning.task.returnTrip
+        ? { ...returning.task.returnTrip, cabin: { ...returning.task.returnTrip.cabin, revert: { status: 'succeeded' } } }
+        : undefined,
+    })
     expect(failed.task.uiRevision).toBeGreaterThan(returning.task.uiRevision)
-    expect(failed.effects).toEqual([expect.objectContaining({ type: 'vehicle.apply-cabin-profile', status: 'failed', errorCode: 'APPLY_FAILED' })])
+    expect(failed.effects).toEqual([
+      expect.objectContaining({ type: 'vehicle.revert-cabin-profile', status: 'succeeded' }),
+      expect.objectContaining({ type: 'vehicle.apply-cabin-profile', status: 'failed', errorCode: 'APPLY_FAILED' }),
+    ])
     expect(failed.meta.fallbackUsed).toBe(true)
   })
 
@@ -2083,9 +2513,13 @@ describe('AgentGateway', () => {
     customFailure = true
     const failed = gateway.submitEvent(created.task.taskId, { clientRequestId: 'residual-input', expectedTaskRevision: returning.task.taskRevision, event: { eventId: 'residual-input', type: 'user.input', text: '应用家庭座舱偏好', timestamp: '2026-07-22T12:05:00+08:00' } })
 
-    expect(failed.task.returnTrip?.cabin).toEqual({ status: 'succeeded', errorCode: 'COMPENSATION_FAILED' })
+    expect(failed.task.returnTrip?.cabin).toEqual({ status: 'succeeded', revert: { status: 'available' } })
     expect(failed.effects).toContainEqual(expect.objectContaining({ type: 'vehicle.revert-cabin-profile', status: 'failed' }))
-    expect(failed.meta.fallbackUsed).toBe(true)
+    expect(failed.ui.actions).toContainEqual(expect.objectContaining({ id: 'revert-cabin-profile' }))
+    expect(failed.ui.components).toContainEqual(expect.objectContaining({
+      id: 'cabin-profile', actions: ['revert-cabin-profile'],
+    }))
+    expect(failed.meta.fallbackUsed).toBe(false)
   })
 
   it('keeps the scheduled snapshot when the landing message provider fails', () => {
@@ -2305,6 +2739,27 @@ describe('AgentGateway', () => {
     }))
   })
 })
+
+function returningTask(gateway: AgentGateway) {
+  const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+  const started = gateway.submitAction(created.task.taskId, {
+    clientRequestId: 'returning-helper-start', expectedTaskRevision: created.task.taskRevision,
+    expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation',
+    componentId: 'navigation-plan', idempotencyKey: 'returning-helper-start',
+  })
+  const approaching = gateway.submitEvent(created.task.taskId, {
+    clientRequestId: 'returning-helper-geofence', expectedTaskRevision: started.task.taskRevision,
+    event: { eventId: 'returning-helper-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' },
+  })
+  const waiting = gateway.submitEvent(created.task.taskId, {
+    clientRequestId: 'returning-helper-parked', expectedTaskRevision: approaching.task.taskRevision,
+    event: { eventId: 'returning-helper-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' },
+  })
+  return gateway.submitEvent(created.task.taskId, {
+    clientRequestId: 'returning-helper-onboard', expectedTaskRevision: waiting.task.taskRevision,
+    event: { eventId: 'returning-helper-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:04:00+08:00' },
+  })
+}
 
 function completeTask(gateway: AgentGateway, navigationIdempotencyKey = 'start-navigation-001') {
   const created = gateway.createTask(createRequest())

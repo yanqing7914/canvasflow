@@ -70,6 +70,7 @@ describe('EffectExecutor', () => {
     expect(result).toEqual({
       succeeded: true,
       effect: { effectId: 'cabin-001:0', type: 'vehicle.apply-cabin-profile', status: 'succeeded', tool: 'vehicle.apply-cabin-profile' },
+      cabinEffectId: 'pickup-001:cabin:cabin-001',
     })
   })
 
@@ -85,6 +86,113 @@ describe('EffectExecutor', () => {
     })
     expect(applyCabin).not.toHaveBeenCalled()
     expect(result).toMatchObject({ succeeded: false, effect: { status: 'failed', errorCode: 'INVALID_TASK_PHASE' } })
+  })
+
+  it('reverts the applied cabin effect through the provider while parked', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const returning = {
+      ...task,
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+      navigation: { ...task.navigation, status: 'active' as const },
+      returnTrip: {
+        workflowId: 'return-home',
+        route: { status: 'succeeded' as const },
+        cabin: { status: 'succeeded' as const },
+        media: { status: 'succeeded' as const },
+      },
+    }
+    const applied = registry['vehicle.apply-cabin-profile']({ taskId: task.taskId }, {
+      zone: 'rear', temperatureC: 25, sourceMemberIds: ['mom'], idempotencyKey: 'apply-for-revert',
+    })
+    const revert = vi.fn(registry['vehicle.revert-cabin-profile'])
+
+    const result = new EffectExecutor({ ...registry, 'vehicle.revert-cabin-profile': revert }).revertCabinProfile({
+      task: returning,
+      cabinEffectId: applied.data!.effectId,
+      idempotencyKey: 'revert-001',
+      effectId: 'revert-001:0',
+      vehicle: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P', isNight: false },
+    })
+
+    expect(revert).toHaveBeenCalledWith(
+      { taskId: task.taskId, requestId: 'pickup-001:vehicle.revert-cabin-profile:revert-001' },
+      { effectId: applied.data!.effectId, idempotencyKey: 'revert-001' },
+    )
+    expect(result).toMatchObject({
+      succeeded: true,
+      effect: { type: 'vehicle.revert-cabin-profile', status: 'succeeded' },
+      current: { temperatureC: 22 },
+    })
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
+  it('policy-denies cabin revert while moving without calling the provider', () => {
+    const registry = createProviderRegistry()
+    const revert = vi.fn(registry['vehicle.revert-cabin-profile'])
+    const returning = {
+      ...task,
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+      returnTrip: {
+        workflowId: 'return-home',
+        route: { status: 'succeeded' as const },
+        cabin: { status: 'succeeded' as const },
+        media: { status: 'succeeded' as const },
+      },
+    }
+
+    const result = new EffectExecutor({ ...registry, 'vehicle.revert-cabin-profile': revert }).revertCabinProfile({
+      task: returning,
+      cabinEffectId: 'pickup-001:cabin:apply',
+      idempotencyKey: 'revert-moving',
+      effectId: 'revert-moving:0',
+      vehicle: { speedKph: 20, batteryPercent: 42, remainingRangeKm: 210, gear: 'D', isNight: false },
+    })
+
+    expect(revert).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ succeeded: false, effect: { status: 'failed', errorCode: 'VEHICLE_MOVING' } })
+  })
+
+  it('marks a provider-reported revert with invalid metadata as ambiguous', () => {
+    const runtime = createSideEffectRuntime()
+    const registry = createProviderRegistry(runtime)
+    const returning = {
+      ...task,
+      phase: 'returning-home' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+      returnTrip: {
+        workflowId: 'return-home',
+        route: { status: 'succeeded' as const },
+        cabin: { status: 'succeeded' as const },
+        media: { status: 'succeeded' as const },
+      },
+    }
+    const applied = registry['vehicle.apply-cabin-profile']({ taskId: task.taskId }, {
+      zone: 'rear', temperatureC: 25, sourceMemberIds: ['mom'], idempotencyKey: 'apply-ambiguous-revert',
+    })
+    const executor = new EffectExecutor({
+      ...registry,
+      'vehicle.revert-cabin-profile': (ctx, input) => {
+        const result = registry['vehicle.revert-cabin-profile'](ctx, input)
+        return { ...result, meta: { ...result.meta, requestId: 'wrong-request' } }
+      },
+    })
+
+    expect(executor.revertCabinProfile({
+      task: returning,
+      cabinEffectId: applied.data!.effectId,
+      idempotencyKey: 'revert-ambiguous',
+      effectId: 'revert-ambiguous:0',
+      vehicle: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P', isNight: false },
+    })).toMatchObject({
+      succeeded: false,
+      ambiguous: true,
+      effect: { status: 'failed', errorCode: 'PROVIDER_FAILED' },
+      current: { temperatureC: 22 },
+    })
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
   })
 
   it('fails closed when cabin provider metadata does not match the request', () => {
@@ -145,7 +253,7 @@ describe('EffectExecutor', () => {
     })
   })
 
-  it('does not report residual cabin state when rollback succeeds with invalid metadata', () => {
+  it('keeps cabin state residual when rollback metadata is invalid', () => {
     const runtime = createSideEffectRuntime()
     const registry = createProviderRegistry(runtime)
     const returning = {
@@ -171,7 +279,7 @@ describe('EffectExecutor', () => {
     expect(executor.applyCabinPreferences({
       task: returning, memberIds: ['mom'], temperatureC: 25,
       idempotencyKey: 'cabin-wrong-rollback-meta', effectId: 'cabin-wrong-rollback-meta:0',
-    })).toMatchObject({ succeeded: false, residualApplied: false })
+    })).toMatchObject({ succeeded: false, residualApplied: true, cabinEffectId: expect.any(String) })
     expect(runtime.cabinCurrent.temperatureC).toBe(22)
   })
 
@@ -477,6 +585,7 @@ describe('EffectExecutor', () => {
       ...new DefaultPolicyGate(),
       authorizeNavigationStart: new DefaultPolicyGate().authorizeNavigationStart.bind(new DefaultPolicyGate()),
       authorizeReturnTrip: new DefaultPolicyGate().authorizeReturnTrip.bind(new DefaultPolicyGate()),
+      authorizeCabinRevert: new DefaultPolicyGate().authorizeCabinRevert.bind(new DefaultPolicyGate()),
       authorizeLandingMessage: new DefaultPolicyGate().authorizeLandingMessage.bind(new DefaultPolicyGate()),
       authorizeLandingMessageRetry: () => ({ allowed: false as const, errorCode: 'POLICY_DENIED' }),
     }

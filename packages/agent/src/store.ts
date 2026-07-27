@@ -15,6 +15,15 @@ export type StoredTask = {
   task: AirportPickupTaskState
   ui: UISpec
   toolResults?: ReadToolResults
+  /** Provider receipts stay private to the Agent and never enter TaskState or UISpec. */
+  effectReceipts?: {
+    activeCabin?: {
+      receiptId: string
+      providerEffectId: string
+      state: 'applied' | 'reverted' | 'revert-failed' | 'unknown'
+      lastErrorCode?: string
+    }
+  }
   requestContext?: {
     vehicle: VehicleContext
     clientCapabilities: ClientCapabilities
