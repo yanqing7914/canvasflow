@@ -112,6 +112,40 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
 })
 
+test('applies an out-of-band task update through the durable SSE stream', async ({ page }) => {
+  await page.goto('/')
+  const createResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/v1/tasks'
+  ))
+  await page.getByRole('button', { name: '发送' }).click()
+  const created = await (await createResponsePromise).json()
+
+  const preparedResponse = await postApi(page, `/v1/tasks/${created.task.taskId}/events`, {
+    clientRequestId: 'e2e-sse-flight-request',
+    expectedTaskRevision: created.task.taskRevision,
+    event: {
+      eventId: 'e2e-sse-flight',
+      type: 'user.input',
+      text: 'MU5102',
+      timestamp: futureTimestamp(),
+    },
+  })
+  expect(preparedResponse.ok()).toBe(true)
+  const prepared = await preparedResponse.json()
+
+  const started = await postApi(page, `/v1/tasks/${created.task.taskId}/actions`, {
+    clientRequestId: 'e2e-sse-start-request',
+    expectedTaskRevision: prepared.task.taskRevision,
+    expectedUiRevision: prepared.ui.uiRevision,
+    actionId: 'start-navigation',
+    componentId: 'navigation-plan',
+    idempotencyKey: 'e2e-sse-start',
+  })
+  expect(started.ok()).toBe(true)
+  await expect(page.getByRole('region', { name: 'Event console' })).toContainText('driving-to-airport')
+})
+
 test('rejects the arrival memory proposal through the confirmation API', async ({ page }) => {
   await page.goto('/')
   const console = page.getByRole('region', { name: 'Event console' })
@@ -132,6 +166,10 @@ test('rejects the arrival memory proposal through the confirmation API', async (
 test('retries a failed landing message through action and confirmation APIs', async ({ page }) => {
   await page.route('**/v1/tasks/*/events', async (route) => {
     const request = route.request()
+    if (request.method() !== 'POST') {
+      await route.continue()
+      return
+    }
     const payload = request.postDataJSON() as {
       event?: {
         eventId?: string

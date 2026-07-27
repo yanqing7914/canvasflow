@@ -10,9 +10,23 @@ import {
   type SubmitActionRequest,
   type SubmitConfirmationRequest,
   type SubmitEventRequest,
+  taskUpdateEnvelopeSchema,
+  type TaskUpdateEnvelope,
 } from '@canvasflow/schema'
 
 type Fetch = typeof fetch
+
+export type TaskUpdateSource = {
+  addEventListener(type: 'task.updated', listener: (event: MessageEvent<string>) => void): void
+  addEventListener(type: 'error', listener: (event: Event) => void): void
+  removeEventListener(type: 'task.updated', listener: (event: MessageEvent<string>) => void): void
+  removeEventListener(type: 'error', listener: (event: Event) => void): void
+  close(): void
+}
+
+export type TaskUpdateSubscription = {
+  close(): void
+}
 
 type EventInput = AirportPickupEvent extends infer Event
   ? Event extends AirportPickupEvent
@@ -32,6 +46,7 @@ export type AgentApiClientOptions = {
   fetch?: Fetch
   createId?: () => string
   now?: () => string
+  eventSource?: (url: string) => TaskUpdateSource
   vehicleContext?: CreateTaskRequest['vehicleContext']
   clientCapabilities?: CreateTaskRequest['clientCapabilities']
 }
@@ -46,7 +61,7 @@ export const defaultDemoVehicleContext: CreateTaskRequest['vehicleContext'] = {
 
 const defaultClientCapabilities: CreateTaskRequest['clientCapabilities'] = {
   uiSchemaVersion: '1.0',
-  supportsSse: false,
+  supportsSse: true,
   supportsTts: true,
 }
 
@@ -95,6 +110,7 @@ export class AgentApiClient {
   readonly #fetch: Fetch
   readonly #createId: () => string
   readonly #now: () => string
+  readonly #eventSource: (url: string) => TaskUpdateSource
   readonly #vehicleContext: CreateTaskRequest['vehicleContext']
   readonly #clientCapabilities: CreateTaskRequest['clientCapabilities']
 
@@ -103,6 +119,7 @@ export class AgentApiClient {
     this.#fetch = options.fetch ?? globalThis.fetch.bind(globalThis)
     this.#createId = options.createId ?? browserId
     this.#now = options.now ?? (() => new Date().toISOString())
+    this.#eventSource = options.eventSource ?? ((url) => new EventSource(url))
     this.#vehicleContext = options.vehicleContext ?? defaultDemoVehicleContext
     this.#clientCapabilities = options.clientCapabilities ?? defaultClientCapabilities
   }
@@ -210,6 +227,40 @@ export class AgentApiClient {
 
   resetTask(taskId: string, input: { clientRequestId: string; expectedTaskRevision: number }): Promise<AgentResponse> {
     return this.#post(taskId, 'reset', input)
+  }
+
+  /**
+   * Opens the task's durable SSE stream. Browser EventSource automatically
+   * reconnects with the last received event ID, so the server can replay only
+   * updates the client has not already observed.
+   */
+  subscribeTaskUpdates(
+    taskId: string,
+    onUpdate: (update: TaskUpdateEnvelope) => void,
+    onConnectionError?: () => void,
+  ): TaskUpdateSubscription {
+    const source = this.#eventSource(`${this.#tasksUrl}/${encodeURIComponent(taskId)}/events`)
+    const onTaskUpdated = (event: MessageEvent<string>) => {
+      let payload: unknown
+      try {
+        payload = JSON.parse(event.data) as unknown
+      } catch {
+        return
+      }
+      const update = taskUpdateEnvelopeSchema.safeParse(payload)
+      if (!update.success || update.data.taskId !== taskId) return
+      onUpdate(update.data)
+    }
+    const onError = () => onConnectionError?.()
+    source.addEventListener('task.updated', onTaskUpdated)
+    source.addEventListener('error', onError)
+    return {
+      close: () => {
+        source.removeEventListener('task.updated', onTaskUpdated)
+        source.removeEventListener('error', onError)
+        source.close()
+      },
+    }
   }
 
   #post(

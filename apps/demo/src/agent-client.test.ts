@@ -5,7 +5,7 @@ import {
   type AgentResponse,
 } from '@canvasflow/schema'
 import taskCreatedFixture from '../../../fixtures/airport-pickup/task-created.json'
-import { AgentApiClient, AgentApiError, AgentApiProtocolError } from './agent-client'
+import { AgentApiClient, AgentApiError, AgentApiProtocolError, type TaskUpdateSource } from './agent-client'
 
 const fixture = taskCreatedFixture as unknown as {
   expectedTaskState: AgentResponse['task']
@@ -43,6 +43,10 @@ function client(fetchMock: ReturnType<typeof vi.fn>) {
   })
 }
 
+function taskUpdate(task: AgentResponse['task'], ui: AgentResponse['ui'], cursor = 1) {
+  return { type: 'task.updated' as const, cursor, taskId: task.taskId, snapshot: { task, ui } }
+}
+
 describe('AgentApiClient', () => {
   it('creates a task with generated request context and parses the response', async () => {
     const result = agentResponse()
@@ -59,7 +63,7 @@ describe('AgentApiClient', () => {
       clientRequestId: 'create-1',
       input: { type: 'text', text: '接妈妈，航班 MU5102', source: 'voice', confidence: 0.96 },
       vehicleContext: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false },
-      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: true },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true },
       destination: { id: 'destination-hongqiao-t2', name: '虹桥接机点' },
     })
   })
@@ -146,5 +150,31 @@ describe('AgentApiClient', () => {
 
     await expect(api.get('pickup-001')).rejects.toBeInstanceOf(AgentApiProtocolError)
     await expect(api.get('pickup-001')).rejects.toMatchObject({ status: 500 })
+  })
+
+  it('subscribes to validated task updates and closes the EventSource', () => {
+    const listeners = new Map<string, EventListener>()
+    const source: TaskUpdateSource = {
+      addEventListener: (type, listener) => listeners.set(type, listener as EventListener),
+      removeEventListener: (type) => listeners.delete(type),
+      close: vi.fn(),
+    }
+    const eventSource = vi.fn(() => source)
+    const fetchMock = vi.fn()
+    const api = new AgentApiClient('/v1/', { fetch: fetchMock as unknown as typeof fetch, eventSource })
+    const update = taskUpdate(agentResponse().task, agentResponse().ui)
+    const onUpdate = vi.fn()
+    const subscription = api.subscribeTaskUpdates('pickup-001', onUpdate)
+
+    expect(eventSource).toHaveBeenCalledWith('/v1/tasks/pickup-001/events')
+    listeners.get('task.updated')?.(new MessageEvent('task.updated', { data: JSON.stringify(update) }))
+    listeners.get('task.updated')?.(new MessageEvent('task.updated', { data: '{' }))
+    listeners.get('task.updated')?.(new MessageEvent('task.updated', { data: JSON.stringify({ ...update, taskId: 'other-task' }) }))
+    expect(onUpdate).toHaveBeenCalledTimes(1)
+    expect(onUpdate).toHaveBeenCalledWith(update)
+
+    subscription.close()
+    expect(source.close).toHaveBeenCalledOnce()
+    expect(listeners).toEqual(new Map())
   })
 })
