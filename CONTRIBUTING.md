@@ -9,7 +9,9 @@
 5. Wait for the automation: once CI is green and the latest completed Codex review ends with `CODEX-REVIEW-VERDICT: PASS`, the review workflow squash-merges the PR into `dev` automatically. Nobody merges ordinary PRs manually; if auto-merge fails, fix the reported cause and push again.
 6. The owner opens a separate `dev` -> `main` pull request for a competition release.
 
-GitHub Free does not provide protected branches for private repositories. The team therefore treats `dev` and `main` as protected by convention: do not push directly to them, require CI and review on every PR, and let the owner handle the release merge. This is a process gate, not a server-enforced permission gate.
+`dev` and `main` are protected branches. Direct pushes are rejected, force pushes and branch deletion are blocked, and a pull request cannot merge until the `quality`, `e2e`, and `branch-and-files` checks pass. Protection does not require an approving review, because the auto-merge automation acts with `GITHUB_TOKEN` and cannot approve a pull request; the Codex verdict is what gates the merge. Repository administrators can bypass protection, so the owner still routes work through pull requests and handles the release merge.
+
+The repository is public but closed to outside contributions during the competition: Issues are disabled, interaction is limited to collaborators until 2027-01-27, and workflows on pull requests from forks need maintainer approval.
 
 ## Branch Naming
 
@@ -40,6 +42,13 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
+npm run test:e2e
+```
+
+The end-to-end suite needs a browser once per machine:
+
+```bash
+npx playwright install chromium
 ```
 
 ## Shared repository setup

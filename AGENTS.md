@@ -1,6 +1,6 @@
 # CanvasFlow Agent Guide
 
-This repository is designed for agent-assisted development. It is a private GitHub Free repository with three collaborators who have normal `Write` access. The team uses pull requests by agreement; GitHub Free cannot technically prevent a collaborator with `Write` access from pushing directly to a private branch.
+This repository is designed for agent-assisted development. It is a public repository with three collaborators who have normal `Write` access. `dev` and `main` are protected branches: direct pushes are rejected, force pushes and branch deletion are blocked, and every change must arrive through a pull request that passes the required checks. Repository administrators can bypass protection, so the owner still avoids pushing directly.
 
 ## Repo Shape
 
@@ -9,7 +9,16 @@ This repository is designed for agent-assisted development. It is a private GitH
 - All work happens on short-lived `feat/*`, `fix/*`, `test/*`, or `chore/*` branches.
 - Every change lands through a pull request.
 - Keep pull requests small enough to review in one sitting.
-- Teammates may push short-lived feature branches to the upstream repository. Do not push directly to `dev` or `main` during normal work.
+- Teammates may push short-lived feature branches to the upstream repository. Direct pushes to `dev` or `main` are rejected by branch protection.
+
+## Repository Settings
+
+The repository is public, but it is not open for outside contributions during the competition:
+
+- Issues are disabled.
+- Interaction is limited to collaborators. The limit expires on 2027-01-27 and has to be renewed if it is still needed.
+- Workflows on pull requests from forks require manual approval from a maintainer.
+- `dev` and `main` require the `quality`, `e2e`, and `branch-and-files` checks to pass. They do not require an approving review, because the auto-merge automation acts with `GITHUB_TOKEN` and cannot approve a pull request.
 
 ## Required Checks
 
@@ -20,7 +29,10 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
+npm run test:e2e
 ```
+
+The end-to-end suite needs a browser once per machine: `npx playwright install chromium`.
 
 ## Development Flow
 
@@ -51,7 +63,7 @@ Stop and report instead of guessing when the request conflicts with product dire
 
 ## Review and handoff contract
 
-The PR author must describe before/after behavior, tests run, visual changes, known risks, and rollback approach. Generated code must be reviewed by the author before handoff. A PR merges automatically once CI is green and the latest completed Codex review reports a PASS verdict; a green CI job alone is not sufficient, and owner review is no longer a merge gate for ordinary PRs into `dev`. If someone accidentally pushes to `dev` or `main`, stop and notify the owner so the commit can be reviewed or reverted.
+The PR author must describe before/after behavior, tests run, visual changes, known risks, and rollback approach. Generated code must be reviewed by the author before handoff. A PR merges automatically once CI is green and the latest completed Codex review reports a PASS verdict; a green CI job alone is not sufficient, and owner review is no longer a merge gate for ordinary PRs into `dev`. Branch protection rejects a direct push to `dev` or `main`, so a commit can only land outside this flow if an administrator bypasses protection; if that happens, stop and notify the owner so the commit can be reviewed or reverted.
 
 For a UI change, include a screenshot or short recording. For behavior changes, add a focused test or explain why a test is not practical. Never claim that a check ran if it did not run.
 
