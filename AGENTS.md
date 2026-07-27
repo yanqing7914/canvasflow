@@ -19,6 +19,7 @@ The repository is public, but it is not open for outside contributions during th
 - Interaction is limited to collaborators. The limit expires on 2027-01-27 and has to be renewed if it is still needed.
 - Workflows on pull requests from forks require manual approval from a maintainer.
 - `dev` and `main` require the `quality`, `e2e`, and `branch-and-files` checks to pass. They do not require an approving review, because the auto-merge automation acts with `GITHUB_TOKEN` and cannot approve a pull request.
+- The review model comes from the `CODEX_REVIEW_MODEL` repository variable, with `CODEX_REVIEW_FALLBACK_MODEL` used only when the first model fails. If a review model reports that it is at capacity, switch `CODEX_REVIEW_MODEL` to another model the provider serves rather than re-running against the same one.
 
 ## Required Checks
 

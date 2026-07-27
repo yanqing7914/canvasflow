@@ -91,18 +91,28 @@ jobs:
           CODEX_REVIEW_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
         run: |
           mkdir -p "$RUNNER_TEMP/codex-home"
-          node <<'NODE'
-          const fs = require('node:fs')
 
+          # Kept in a file so the fallback step can rebuild the same config for
+          # a different model instead of duplicating this logic.
+          cat > "$RUNNER_TEMP/write-codex-config.mjs" <<'NODE'
+          import fs from 'node:fs'
+
+          const model = process.argv[2] ?? ''
           const lines = []
           if (process.env.OPENAI_BASE_URL) {
             lines.push(`openai_base_url = ${JSON.stringify(process.env.OPENAI_BASE_URL)}`)
           }
-          if (process.env.CODEX_REVIEW_MODEL) {
-            lines.push(`model = ${JSON.stringify(process.env.CODEX_REVIEW_MODEL)}`)
+          if (model) {
+            lines.push(`model = ${JSON.stringify(model)}`)
           }
 
           fs.writeFileSync(`${process.env.RUNNER_TEMP}/codex-home/config.toml`, `${lines.join('\n')}\n`)
+          NODE
+
+          node "$RUNNER_TEMP/write-codex-config.mjs" "$CODEX_REVIEW_MODEL"
+
+          node <<'NODE'
+          const fs = require('node:fs')
 
           const baseUrl = process.env.OPENAI_BASE_URL?.replace(/\/+$/, '')
           if (baseUrl) {
@@ -111,8 +121,12 @@ jobs:
           }
           NODE
 
+      # A single review model is a single point of failure for the merge gate:
+      # when the provider reports it at capacity the job dies and nothing can
+      # merge. Try the primary model first, then fall back to another one.
       - name: Run Codex review
         id: codex
+        continue-on-error: true
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
@@ -123,8 +137,56 @@ jobs:
           sandbox: read-only
           model: ${{ vars.CODEX_REVIEW_MODEL }}
 
+      - name: Switch to the fallback review model
+        if: steps.codex.outcome == 'failure' && vars.CODEX_REVIEW_FALLBACK_MODEL != ''
+        env:
+          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
+          CODEX_REVIEW_FALLBACK_MODEL: ${{ vars.CODEX_REVIEW_FALLBACK_MODEL }}
+        run: node "$RUNNER_TEMP/write-codex-config.mjs" "$CODEX_REVIEW_FALLBACK_MODEL"
+
+      - name: Run Codex review (fallback model)
+        id: codex_fallback
+        if: steps.codex.outcome == 'failure' && vars.CODEX_REVIEW_FALLBACK_MODEL != ''
+        continue-on-error: true
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          responses-api-endpoint: ${{ steps.codex_provider.outputs.responses-api-endpoint }}
+          codex-home: ${{ runner.temp }}/codex-home
+          prompt-file: ${{ runner.temp }}/review-prompt.md
+          output-file: codex-review.md
+          sandbox: read-only
+          model: ${{ vars.CODEX_REVIEW_FALLBACK_MODEL }}
+
+      # Distinguish "the review could not run" from "the review said BLOCK", so
+      # nobody hunts for a defect that the review never actually reported.
+      - name: Report review provider failure
+        if: steps.codex.outcome == 'failure' && steps.codex_fallback.outcome != 'success'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const primary = process.env.PRIMARY_MODEL || 'the provider default'
+            const fallback = process.env.FALLBACK_MODEL
+            const attempted = fallback ? `\`${primary}\` and \`${fallback}\`` : `\`${primary}\``
+            const hint = fallback
+              ? 'Both review models failed to produce a review.'
+              : 'No fallback model is configured; set the `CODEX_REVIEW_FALLBACK_MODEL` repository variable to add one.'
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: `The Codex review could not run (${attempted}). This is a review provider failure, not a finding about this PR, so there is nothing to fix in the diff.\n\n${hint} Re-run the \`Codex Review\` workflow once the provider recovers. The PR stays unmergeable until a review completes with a verdict.`,
+            })
+            core.setFailed('Codex review did not run; no verdict is available.')
+        env:
+          PRIMARY_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
+          FALLBACK_MODEL: ${{ vars.CODEX_REVIEW_FALLBACK_MODEL }}
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+
       - name: Extract review verdict
         id: verdict
+        if: steps.codex.outcome == 'success' || steps.codex_fallback.outcome == 'success'
         run: |
           set -euo pipefail
 
@@ -201,7 +263,7 @@ jobs:
           path: codex-review.md
 
       - name: Post review summary
-        if: steps.codex.outputs.final-message != ''
+        if: steps.codex.outputs.final-message != '' || steps.codex_fallback.outputs.final-message != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ github.token }}
@@ -215,7 +277,7 @@ jobs:
               body,
             })
         env:
-          CODEX_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}
+          CODEX_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message || steps.codex_fallback.outputs.final-message }}
           PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
 
   auto-merge:
