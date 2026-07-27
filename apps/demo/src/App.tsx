@@ -1,17 +1,18 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   applyEvent,
   resolveConfirmation,
 } from '@canvasflow/agent'
 import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
-import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, VehicleContext } from '@canvasflow/schema'
+import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, TaskUpdateEnvelope, VehicleContext } from '@canvasflow/schema'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
 import { UISpecRenderer } from './UISpecRenderer'
 
 const defaultClient = new AgentApiClient('/v1')
 type DemoAgentApi = Pick<AgentApiClient, 'create' | 'event' | 'action' | 'confirmation'>
+  & Partial<Pick<AgentApiClient, 'subscribeTaskUpdates'>>
 
 const demoRuntime = createSideEffectRuntime()
 
@@ -34,6 +35,7 @@ export default function App({
   const [pending, setPending] = useState(false)
   const [vehicleContext, setVehicleContext] = useState(initialVehicleContext)
   const pendingRef = useRef(false)
+  const streamCursorRef = useRef(0)
   const [localTask, setLocalTask] = useState<AirportPickupTaskState | undefined>(
     localOnly ? (initialTask ?? mainFlowTimeline.initialTaskState) : undefined,
   )
@@ -46,6 +48,26 @@ export default function App({
   }) : undefined, [composeContext, task])
   const spec = response?.ui ?? localSpec
   const effects = useMemo(() => response?.effects ?? [], [response])
+  const remoteTaskId = response?.task.taskId
+
+  useEffect(() => {
+    if (localOnly || !remoteTaskId || !api.subscribeTaskUpdates) return
+    const taskId = remoteTaskId
+    streamCursorRef.current = 0
+    const subscription = api.subscribeTaskUpdates(taskId, (update: TaskUpdateEnvelope) => {
+      if (update.cursor <= streamCursorRef.current) return
+      streamCursorRef.current = update.cursor
+      setResponse((current) => {
+        if (!current || current.task.taskId !== taskId) return current
+        const taskChanged = update.snapshot.task.taskRevision > current.task.taskRevision
+        const uiChanged = update.snapshot.ui.uiRevision > current.ui.uiRevision
+        if (!taskChanged && !uiChanged) return current
+        // SSE snapshots intentionally omit mutation effects; do not show stale receipts.
+        return { ...current, task: update.snapshot.task, ui: update.snapshot.ui, effects: [] }
+      })
+    })
+    return () => subscription.close()
+  }, [api, localOnly, remoteTaskId])
 
   async function run(operation: () => Promise<AgentResponse>): Promise<AgentResponse | undefined> {
     if (pendingRef.current) return undefined

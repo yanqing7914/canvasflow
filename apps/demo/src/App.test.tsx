@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import App from './App'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { applyEvent, createInitialTask } from '@canvasflow/agent'
-import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, UISpec, VehicleContext } from '@canvasflow/schema'
+import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, TaskUpdateEnvelope, UISpec, VehicleContext } from '@canvasflow/schema'
 import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
 
@@ -74,6 +74,45 @@ describe('demo integration', () => {
     expect(screen.getByText('尚无任务')).toBeInTheDocument()
     expect(screen.queryByText('status-banner')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '推进下一事件' })).toBeDisabled()
+  })
+
+  it('applies newer validated task snapshots received over SSE and closes the stream on unmount', async () => {
+    const initial = apiResponse(createInitialTask('pickup-sse', '2026-07-22T12:00:00+08:00'))
+    const updatedTask = {
+      ...initial.task,
+      taskRevision: initial.task.taskRevision + 1,
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: {
+        flightNumber: 'MU5102', trusted: false, status: 'scheduled' as const,
+        scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+      },
+    }
+    const update: TaskUpdateEnvelope = {
+      type: 'task.updated', cursor: 2, taskId: 'pickup-sse', snapshot: { task: updatedTask, ui: composePickupSpec(updatedTask) },
+    }
+    let onUpdate: ((value: TaskUpdateEnvelope) => void) | undefined
+    const close = vi.fn()
+    const api = {
+      create: vi.fn().mockResolvedValue(initial), event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+      subscribeTaskUpdates: vi.fn((_taskId: string, callback: (value: TaskUpdateEnvelope) => void) => {
+        onUpdate = callback
+        return { close }
+      }),
+    }
+    const user = userEvent.setup()
+    const rendered = render(<App api={api} />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(api.subscribeTaskUpdates).toHaveBeenCalledWith('pickup-sse', expect.any(Function)))
+    act(() => {
+      onUpdate!(update)
+      onUpdate!({ ...update, cursor: 1, snapshot: { task: initial.task, ui: initial.ui } })
+    })
+
+    await screen.findByText(/preparing · taskRevision 1/)
+    rendered.unmount()
+    expect(close).toHaveBeenCalledOnce()
   })
 
   it.each([
