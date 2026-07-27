@@ -228,6 +228,22 @@ export class AgentGateway {
     return this.#store.getByClientRequestId(clientRequestId) !== undefined
   }
 
+  /**
+   * Returns the state that may safely be sent to the optional model planner.
+   * Replays, stale writes, and terminal tasks are resolved by submitEvent without
+   * needing to disclose the caller's text to a model provider.
+   */
+  userInputPlanningState(taskId: string, input: SubmitEventRequest): AirportPickupTaskState | undefined {
+    const request = submitEventRequestSchema.parse(input)
+    if (request.event.type !== 'user.input') return undefined
+    const current = this.#requireTask(taskId)
+    if (this.#store.getEventResult(taskId, request.event.eventId)) return undefined
+    if (request.expectedTaskRevision !== current.task.taskRevision) return undefined
+    if (current.task.phase === 'completed' || current.task.phase === 'cancelled') return undefined
+    if (Date.parse(request.event.timestamp) < Date.parse(current.task.updatedAt)) return undefined
+    return current.task
+  }
+
   cancelTask(taskId: string, input: CancelTaskRequest): AgentResponse {
     const request = cancelTaskRequestSchema.parse(input)
     const current = this.#requireTask(taskId)

@@ -420,7 +420,11 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
   }
 
   async #planCreate(input: CreateTaskRequest): Promise<ModelGatewayResult | undefined> {
-    if (!this.#modelGateway || this.hasCreateResult(input.clientRequestId)) return undefined
+    // Low-confidence input has a deliberate Gateway confirmation path. Never send
+    // it to a model provider before that privacy- and latency-sensitive decision.
+    if (!this.#modelGateway || this.hasCreateResult(input.clientRequestId) || (input.input.confidence !== undefined && input.input.confidence < 0.6)) {
+      return undefined
+    }
     return this.#runModelPlan({
       text: input.input.text,
       eventId: `${input.clientRequestId}:input`,
@@ -430,14 +434,8 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
 
   async #planEvent(taskId: string, input: SubmitEventRequest): Promise<ModelGatewayResult | undefined> {
     if (!this.#modelGateway || input.event.type !== 'user.input') return undefined
-    const existing = this.#read((gateway) => {
-      try {
-        return gateway.getTask(taskId).task
-      } catch {
-        return undefined
-      }
-    })
-    if (!existing || existing.processedEventIds.includes(input.event.eventId)) return undefined
+    const existing = this.#read((gateway) => gateway.userInputPlanningState(taskId, input))
+    if (!existing) return undefined
     return this.#runModelPlan({
       text: input.event.text,
       state: existing,

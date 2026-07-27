@@ -105,6 +105,20 @@ describe('PersistentAgentRuntime', () => {
     expect(replay.meta.modelUsed).toBeUndefined()
   })
 
+  it('does not plan low-confidence creates with the model', async () => {
+    const path = await databasePath()
+    const plan = vi.fn()
+    const agent = runtime(path, { modelGateway: { plan } })
+
+    const created = await agent.createTaskAsync({
+      ...createRequest('low-confidence-create'),
+      input: { type: 'text', text: '把这段不确定的语音发给模型', confidence: 0.5 },
+    })
+
+    expect(plan).not.toHaveBeenCalled()
+    expect(created.task).toMatchObject({ phase: 'collecting-information', passengers: { names: [] } })
+  })
+
   it('does not hold a SQLite write transaction while waiting for model planning', async () => {
     const path = await databasePath()
     let resolvePlan: ((value: Awaited<ReturnType<ModelGateway['plan']>>) => void) | undefined
@@ -159,6 +173,67 @@ describe('PersistentAgentRuntime', () => {
 
     await expect(agent.createTaskAsync({ clientRequestId: 'invalid' } as never)).rejects.toMatchObject({ name: 'ZodError' })
     await expect(agent.submitEventAsync('missing', { clientRequestId: 'invalid' } as never)).rejects.toMatchObject({ name: 'ZodError' })
+    expect(plan).not.toHaveBeenCalled()
+  })
+
+  it('does not plan stale user input with the model', async () => {
+    const path = await databasePath()
+    const plan = vi.fn()
+    const agent = runtime(path, { modelGateway: { plan } })
+    const created = agent.createTask(createRequest('stale-input-task'))
+
+    await expect(agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'stale-model-input',
+      expectedTaskRevision: created.task.taskRevision - 1,
+      event: {
+        eventId: 'stale-model-input',
+        type: 'user.input',
+        text: '把这段过期输入发给模型',
+        timestamp: '2026-07-22T12:01:00+08:00',
+      },
+    })).rejects.toMatchObject({ code: 'TASK_REVISION_CONFLICT' })
+
+    expect(plan).not.toHaveBeenCalled()
+  })
+
+  it('does not plan terminal or stale-timestamp user input with the model', async () => {
+    const path = await databasePath()
+    const plan = vi.fn()
+    const agent = runtime(path, { modelGateway: { plan } })
+    const created = agent.createTask(createRequest('terminal-input-task'))
+    const cancelled = agent.cancelTask(created.task.taskId, {
+      clientRequestId: 'cancel-terminal-input',
+      expectedTaskRevision: created.task.taskRevision,
+      eventId: 'cancel-terminal-input',
+    })
+
+    const terminal = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'terminal-model-input',
+      expectedTaskRevision: cancelled.task.taskRevision,
+      event: {
+        eventId: 'terminal-model-input',
+        type: 'user.input',
+        text: '把这段终态输入发给模型',
+        timestamp: '2026-07-22T12:02:00+08:00',
+      },
+    })
+    expect(terminal.task).toEqual(cancelled.task)
+
+    const reset = agent.resetTask(created.task.taskId, {
+      clientRequestId: 'reset-stale-timestamp-task',
+      expectedTaskRevision: cancelled.task.taskRevision,
+    })
+    const stale = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'stale-timestamp-input',
+      expectedTaskRevision: reset.task.taskRevision,
+      event: {
+        eventId: 'stale-timestamp-input',
+        type: 'user.input',
+        text: '把这段旧输入发给模型',
+        timestamp: '2026-07-22T11:59:00+08:00',
+      },
+    })
+    expect(stale.task).toEqual(reset.task)
     expect(plan).not.toHaveBeenCalled()
   })
 
