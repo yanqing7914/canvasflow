@@ -290,6 +290,51 @@ describe('Agent HTTP API', () => {
     expect(replayedResponse).toMatchObject({ task: createdResponse.task, ui: createdResponse.ui, effects: createdResponse.effects })
   })
 
+  it('preserves each caller request ID when duplicate events join an async model preflight', async () => {
+    let startedPlanning: (() => void) | undefined
+    let releasePlanning: ((value: unknown) => void) | undefined
+    const planningStarted = new Promise<void>((resolve) => { startedPlanning = resolve })
+    const modelOutput = new Promise<unknown>((resolve) => { releasePlanning = resolve })
+    const modelGateway = new ModelGateway({
+      adapter: {
+        modelId: 'waiting-event-model',
+        plan: vi.fn(async () => {
+          startedPlanning!()
+          return modelOutput
+        }),
+      },
+    })
+    const { baseUrl, runtime } = await startPersistentServer({ modelGateway })
+    const created = await (await post(baseUrl, '/v1/tasks', createRequest())).json() as AgentResponse
+    const submitEvent = vi.spyOn(runtime, 'submitEventAsync')
+    const event = {
+      eventId: 'duplicate-unknown-input', type: 'user.input' as const, text: '完全未知的表达', timestamp: '2026-07-22T12:01:00+08:00',
+    }
+    const first = post(baseUrl, `/v1/tasks/${created.task.taskId}/events`, {
+      clientRequestId: 'event-first', expectedTaskRevision: created.task.taskRevision, event,
+    })
+    await planningStarted
+    const replay = post(baseUrl, `/v1/tasks/${created.task.taskId}/events`, {
+      clientRequestId: 'event-retry', expectedTaskRevision: created.task.taskRevision, event,
+    })
+    await vi.waitFor(() => expect(submitEvent).toHaveBeenCalledTimes(2))
+    releasePlanning!({
+      confidence: 0.2,
+      canonicalInput: '去机场接妈妈',
+      intentHint: 'create-airport-pickup',
+      evidence: { passengers: ['妈妈'] },
+    })
+
+    const [firstResponse, replayResponse] = await Promise.all([first, replay])
+    expect(firstResponse.status).toBe(200)
+    expect(replayResponse.status).toBe(200)
+    const firstBody = await firstResponse.json() as AgentResponse
+    const replayBody = await replayResponse.json() as AgentResponse
+    expect(firstBody.requestId).toBe('event-first')
+    expect(replayBody.requestId).toBe('event-retry')
+    expect(replayBody).toMatchObject({ task: firstBody.task, ui: firstBody.ui, effects: firstBody.effects })
+  })
+
   it('rejects malformed transport input and enforces the body limit', async () => {
     const { baseUrl } = await startServer({ bodyLimitBytes: 64 })
     const contentTypeResponse = await fetch(`${baseUrl}/v1/tasks`, { method: 'POST', body: '{}' })

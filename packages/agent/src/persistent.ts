@@ -327,10 +327,18 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
 
   async submitEventAsync(taskId: string, input: SubmitEventRequest): Promise<AgentResponse> {
     const request = submitEventRequestSchema.parse(input)
-    return this.#coalesceOperation(`event:${taskId}:${request.event.eventId}`, async () => {
+    const key = `event:${taskId}:${request.event.eventId}`
+    const existing = this.#inFlightOperations.get(key) as Promise<AgentResponse> | undefined
+    if (existing) {
+      // Rebuild a durable event replay with the retrying caller's request ID.
+      return existing.then(() => this.#run((gateway) => gateway.submitEvent(taskId, request)))
+    }
+    const pending = (async () => {
       const planned = await this.#planEvent(taskId, request)
       return this.#run((gateway) => gateway.submitEvent(taskId, request), planned)
-    })
+    })().finally(() => this.#inFlightOperations.delete(key))
+    this.#inFlightOperations.set(key, pending)
+    return pending
   }
 
   submitAction(taskId: string, input: SubmitActionRequest): AgentResponse {
@@ -436,14 +444,6 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
   async #runModelPlan(input: PlannerInput): Promise<Plan | undefined> {
     const result = await this.#modelGateway!.plan(input)
     return result.plan
-  }
-
-  #coalesceOperation<T>(key: string, create: () => Promise<T>): Promise<T> {
-    const existing = this.#inFlightOperations.get(key) as Promise<T> | undefined
-    if (existing) return existing
-    const pending = create().finally(() => this.#inFlightOperations.delete(key))
-    this.#inFlightOperations.set(key, pending)
-    return pending
   }
 
   #migrate(): void {
