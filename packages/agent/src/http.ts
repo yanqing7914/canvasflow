@@ -26,6 +26,11 @@ export interface AgentHttpGateway {
   resetTask(taskId: string, input: ResetTaskRequest): AgentResponse
   getTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead
   hasCreateResult?(clientRequestId: string): boolean
+  /** Optional preflight methods for runtimes that need async work before a write transaction. */
+  createTaskAsync?(input: CreateTaskRequest): Promise<AgentResponse>
+  /** Reports whether the durable create transaction replayed an existing result. */
+  createTaskWithStatusAsync?(input: CreateTaskRequest): Promise<{ response: AgentResponse; replay: boolean }>
+  submitEventAsync?(taskId: string, input: SubmitEventRequest): Promise<AgentResponse>
 }
 
 export type AgentHttpOptions = {
@@ -337,8 +342,15 @@ export function createAgentHttpHandler(gateway: AgentHttpGateway, options: Agent
       if (request.method === 'POST' && taskRoot) {
         const body = await readJson(request, bodyLimitBytes)
         const clientRequestId = bodyClientRequestId(body)
-        const replay = clientRequestId !== undefined && (gateway.hasCreateResult?.(clientRequestId) ?? false)
-        const result = gateway.createTask(body as CreateTaskRequest)
+        const createRequest = body as CreateTaskRequest
+        const existingReplay = clientRequestId !== undefined && (gateway.hasCreateResult?.(clientRequestId) ?? false)
+        const durableResult = gateway.createTaskWithStatusAsync
+          ? await gateway.createTaskWithStatusAsync(createRequest)
+          : undefined
+        const result = durableResult?.response ?? (gateway.createTaskAsync
+          ? await gateway.createTaskAsync(createRequest)
+          : gateway.createTask(createRequest))
+        const replay = durableResult?.replay ?? existingReplay
         writeJson(
           response,
           replay ? 200 : 201,
@@ -361,7 +373,10 @@ export function createAgentHttpHandler(gateway: AgentHttpGateway, options: Agent
         let result: AgentResponse
         const operation = segments[prefixLength + 1]
         if (segments.length === prefixLength + 2 && operation === 'events') {
-          result = gateway.submitEvent(taskId, body as SubmitEventRequest)
+          const eventRequest = body as SubmitEventRequest
+          result = gateway.submitEventAsync
+            ? await gateway.submitEventAsync(taskId, eventRequest)
+            : gateway.submitEvent(taskId, eventRequest)
         } else if (segments.length === prefixLength + 2 && operation === 'actions') {
           result = gateway.submitAction(taskId, body as SubmitActionRequest)
         } else if (segments.length === prefixLength + 3 && operation === 'confirmations') {

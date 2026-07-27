@@ -12,6 +12,7 @@ import type {
   SubmitEventRequest,
   TaskUpdateEnvelope,
 } from '@canvasflow/schema'
+import { createTaskRequestSchema, submitEventRequestSchema } from '@canvasflow/schema'
 import {
   createProviderRegistry,
   createSideEffectRuntime,
@@ -23,6 +24,8 @@ import {
 } from '@canvasflow/tools'
 import { AgentGateway, type AgentGatewayOptions } from './gateway'
 import type { AgentHttpGateway } from './http'
+import { ModelGateway, type ModelGatewayResult } from './model-gateway'
+import type { Plan, PlannerInput } from './planner'
 import type { StoredEventResult, StoredIdempotencyResult, StoredTask, TaskStore, TaskUpdateRead } from './store'
 import { createTaskUpdate } from './task-updates'
 
@@ -227,8 +230,16 @@ export type PersistentAgentRuntimeOptions = {
   createId?: AgentGatewayOptions['createId']
   compose?: AgentGatewayOptions['compose']
   policyGate?: AgentGatewayOptions['policyGate']
+  /** Optional rules-first model planner. It is evaluated before SQLite writes. */
+  modelGateway?: Pick<ModelGateway, 'plan'>
   /** Maximum retained SSE snapshots for each task; stale cursors receive an authoritative resync snapshot. */
   maxTaskUpdatesPerTask?: number
+}
+
+export type CreateTaskExecution = {
+  response: AgentResponse
+  /** Whether the SQLite transaction replayed an existing create result. */
+  replay: boolean
 }
 
 export function providerModeFromEnvironment(environment: NodeJS.ProcessEnv = process.env): ProviderMode {
@@ -242,6 +253,8 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
   readonly #mode: ProviderMode
   readonly #providerFactory: ProviderFactory
   readonly #options: Omit<PersistentAgentRuntimeOptions, 'databasePath' | 'mode' | 'providerFactory'>
+  readonly #modelGateway: Pick<ModelGateway, 'plan'> | undefined
+  readonly #inFlightOperations = new Map<string, Promise<unknown>>()
   #closed = false
 
   constructor(options: PersistentAgentRuntimeOptions) {
@@ -262,6 +275,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       policyGate: options.policyGate,
       maxTaskUpdatesPerTask: options.maxTaskUpdatesPerTask,
     }
+    this.#modelGateway = options.modelGateway
     if (options.databasePath !== ':memory:') mkdirSync(dirname(resolve(options.databasePath)), { recursive: true })
     this.#database = new DatabaseSync(options.databasePath)
     this.#database.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
@@ -282,12 +296,53 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     return this.#run((gateway) => gateway.createTask(input))
   }
 
+  async createTaskAsync(input: CreateTaskRequest): Promise<AgentResponse> {
+    return (await this.createTaskWithStatusAsync(input)).response
+  }
+
+  async createTaskWithStatusAsync(input: CreateTaskRequest): Promise<CreateTaskExecution> {
+    const request = createTaskRequestSchema.parse(input)
+    const key = `create:${request.clientRequestId}`
+    const existing = this.#inFlightOperations.get(key) as Promise<CreateTaskExecution> | undefined
+    // Every caller after the owner is a replay, even when it shares the local preflight promise.
+    if (existing) return existing.then(({ response }) => ({ response, replay: true }))
+    const pending = (async () => {
+      const planned = await this.#planCreate(request)
+      return this.#run((gateway) => {
+        const replay = gateway.hasCreateResult(request.clientRequestId)
+        return { response: gateway.createTask(request), replay }
+      }, planned?.plan, planned?.source === 'model' ? planned.modelUsed : undefined)
+    })().finally(() => this.#inFlightOperations.delete(key))
+    this.#inFlightOperations.set(key, pending)
+    return pending
+  }
+
   getTask(taskId: string, requestId?: string): AgentResponse {
     return this.#read((gateway) => gateway.getTask(taskId, requestId))
   }
 
   submitEvent(taskId: string, input: SubmitEventRequest): AgentResponse {
     return this.#run((gateway) => gateway.submitEvent(taskId, input))
+  }
+
+  async submitEventAsync(taskId: string, input: SubmitEventRequest): Promise<AgentResponse> {
+    const request = submitEventRequestSchema.parse(input)
+    const key = `event:${taskId}:${request.event.eventId}`
+    const existing = this.#inFlightOperations.get(key) as Promise<AgentResponse> | undefined
+    if (existing) {
+      // Rebuild a durable event replay with the retrying caller's request ID.
+      return existing.then(() => this.#run((gateway) => gateway.submitEvent(taskId, request)))
+    }
+    const pending = (async () => {
+      const planned = await this.#planEvent(taskId, request)
+      return this.#run(
+        (gateway) => gateway.submitEvent(taskId, request),
+        planned?.plan,
+        planned?.source === 'model' ? planned.modelUsed : undefined,
+      )
+    })().finally(() => this.#inFlightOperations.delete(key))
+    this.#inFlightOperations.set(key, pending)
+    return pending
   }
 
   submitAction(taskId: string, input: SubmitActionRequest): AgentResponse {
@@ -316,7 +371,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     this.#closed = true
   }
 
-  #run<T>(operation: (gateway: AgentGateway) => T): T {
+  #run<T>(operation: (gateway: AgentGateway) => T, plannedInput?: Plan, modelUsed?: string): T {
     this.#assertOpen()
     // Serializes Gateway calls across processes sharing this SQLite file.
     this.#database.exec('BEGIN IMMEDIATE')
@@ -334,6 +389,8 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
         createId: this.#options.createId,
         compose: this.#options.compose,
         policyGate: this.#options.policyGate,
+        modelUsed,
+        ...(plannedInput ? { planner: { plan: () => plannedInput } } : {}),
       })
       const result = operation(gateway)
       this.#persistRuntime(runtime)
@@ -360,6 +417,35 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       now: this.#options.now, createId: this.#options.createId, compose: this.#options.compose,
       policyGate: this.#options.policyGate,
     }))
+  }
+
+  async #planCreate(input: CreateTaskRequest): Promise<ModelGatewayResult | undefined> {
+    // Low-confidence input has a deliberate Gateway confirmation path. Never send
+    // it to a model provider before that privacy- and latency-sensitive decision.
+    if (!this.#modelGateway || this.hasCreateResult(input.clientRequestId) || (input.input.confidence !== undefined && input.input.confidence < 0.6)) {
+      return undefined
+    }
+    return this.#runModelPlan({
+      text: input.input.text,
+      eventId: `${input.clientRequestId}:input`,
+      timestamp: this.#options.now?.() ?? new Date().toISOString(),
+    })
+  }
+
+  async #planEvent(taskId: string, input: SubmitEventRequest): Promise<ModelGatewayResult | undefined> {
+    if (!this.#modelGateway || input.event.type !== 'user.input') return undefined
+    const existing = this.#read((gateway) => gateway.userInputPlanningState(taskId, input))
+    if (!existing) return undefined
+    return this.#runModelPlan({
+      text: input.event.text,
+      state: existing,
+      eventId: input.event.eventId,
+      timestamp: input.event.timestamp,
+    })
+  }
+
+  async #runModelPlan(input: PlannerInput): Promise<ModelGatewayResult> {
+    return this.#modelGateway!.plan(input)
   }
 
   #migrate(): void {

@@ -4,7 +4,9 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { createProviderRegistry, type ProviderRegistry } from '@canvasflow/tools'
+import { ModelGateway } from './model-gateway'
 import { PersistentAgentRuntime, providerModeFromEnvironment } from './persistent'
+import type { Plan } from './planner'
 
 const now = '2026-07-22T12:00:00+08:00'
 const runtimes: PersistentAgentRuntime[] = []
@@ -45,6 +47,267 @@ afterEach(async () => {
 })
 
 describe('PersistentAgentRuntime', () => {
+  it('preserves validated model provenance on durable create replays after restart', async () => {
+    const path = await databasePath()
+    const modelGateway = new ModelGateway({
+      adapter: {
+        modelId: 'fixture-model',
+        plan: async () => ({
+          confidence: 0.95,
+          canonicalInput: '去机场接妈妈',
+          intentHint: 'create-airport-pickup',
+          evidence: { passengers: ['妈妈'] },
+        }),
+      },
+    })
+    const plan = vi.spyOn(modelGateway, 'plan')
+    const agent = runtime(path, { modelGateway })
+
+    const created = await agent.createTaskAsync({
+      ...createRequest(),
+      input: { type: 'text', text: '劳驾替我去航站楼把妈妈接回来' },
+    })
+
+    expect(plan).toHaveBeenCalledOnce()
+    expect(created.task).toMatchObject({
+      phase: 'collecting-information', passengers: { names: ['妈妈'] },
+    })
+    expect(created.meta.modelUsed).toBe('fixture-model')
+    agent.close()
+
+    const replayModelGateway = { plan: vi.fn() }
+    const restarted = runtime(path, { modelGateway: replayModelGateway })
+    const replayed = await restarted.createTaskAsync({
+      ...createRequest(),
+      input: { type: 'text', text: '劳驾替我去航站楼把妈妈接回来' },
+    })
+
+    expect(replayModelGateway.plan).not.toHaveBeenCalled()
+    expect(replayed.task).toEqual(created.task)
+    expect(replayed.meta.modelUsed).toBe('fixture-model')
+  })
+
+  it('does not call the model for rule-recognized input or duplicate creates', async () => {
+    const path = await databasePath()
+    const modelGateway = new ModelGateway({
+      adapter: { modelId: 'unexpected', plan: async () => { throw new Error('rules should bypass the model') } },
+    })
+    const plan = vi.spyOn(modelGateway, 'plan')
+    const agent = runtime(path, { modelGateway })
+
+    const request = createRequest()
+    const first = await agent.createTaskAsync(request)
+    const replay = await agent.createTaskAsync(request)
+
+    expect(plan).toHaveBeenCalledTimes(1)
+    expect(first.task).toEqual(replay.task)
+    expect(first.meta.modelUsed).toBeUndefined()
+    expect(replay.meta.modelUsed).toBeUndefined()
+  })
+
+  it('does not plan low-confidence creates with the model', async () => {
+    const path = await databasePath()
+    const plan = vi.fn()
+    const agent = runtime(path, { modelGateway: { plan } })
+
+    const created = await agent.createTaskAsync({
+      ...createRequest('low-confidence-create'),
+      input: { type: 'text', text: '把这段不确定的语音发给模型', confidence: 0.5 },
+    })
+
+    expect(plan).not.toHaveBeenCalled()
+    expect(created.task).toMatchObject({ phase: 'collecting-information', passengers: { names: [] } })
+  })
+
+  it('does not hold a SQLite write transaction while waiting for model planning', async () => {
+    const path = await databasePath()
+    let resolvePlan: ((value: Awaited<ReturnType<ModelGateway['plan']>>) => void) | undefined
+    const waitingPlan = new Promise<Awaited<ReturnType<ModelGateway['plan']>>>((resolve) => { resolvePlan = resolve })
+    const first = runtime(path, { createId: () => 'waiting', modelGateway: { plan: vi.fn(() => waitingPlan) } })
+    const second = runtime(path, { createId: () => 'concurrent' })
+
+    const pending = first.createTaskAsync({
+      ...createRequest('model-waiting'),
+      input: { type: 'text', text: '麻烦去航站楼把妈妈接回来' },
+    })
+    const other = second.createTask(createRequest('concurrent-write'))
+    resolvePlan!({
+      source: 'fallback',
+      plan: {
+        intent: 'unknown', confidence: 0.2, slotUpdates: {}, missingSlots: ['passengers', 'flightNumber'],
+        proposedEvents: [], assistantText: '我还不能确定你的接机安排，请换一种说法。',
+      },
+    })
+
+    await expect(pending).resolves.toMatchObject({ task: { phase: 'collecting-information' } })
+    expect(other.task.taskId).toBe('pickup-concurrent')
+  })
+
+  it('coalesces concurrent duplicate create preflights without holding a write transaction', async () => {
+    const path = await databasePath()
+    let resolvePlan: ((value: Awaited<ReturnType<ModelGateway['plan']>>) => void) | undefined
+    const waitingPlan = new Promise<Awaited<ReturnType<ModelGateway['plan']>>>((resolve) => { resolvePlan = resolve })
+    const plan = vi.fn(() => waitingPlan)
+    const agent = runtime(path, { modelGateway: { plan } })
+    const request = {
+      ...createRequest('same-create'),
+      input: { type: 'text' as const, text: '麻烦去航站楼把妈妈接回来' },
+    }
+
+    const first = agent.createTaskAsync(request)
+    const second = agent.createTaskAsync(request)
+    expect(plan).toHaveBeenCalledOnce()
+    resolvePlan!({
+      source: 'fallback',
+      plan: { intent: 'unknown', confidence: 0.2, slotUpdates: {}, missingSlots: ['passengers', 'flightNumber'], proposedEvents: [], assistantText: 'fallback' },
+    })
+
+    const [created, replayed] = await Promise.all([first, second])
+    expect(replayed.task).toEqual(created.task)
+  })
+
+  it('validates async preflight inputs before reading model fields', async () => {
+    const path = await databasePath()
+    const plan = vi.fn()
+    const agent = runtime(path, { modelGateway: { plan } })
+
+    await expect(agent.createTaskAsync({ clientRequestId: 'invalid' } as never)).rejects.toMatchObject({ name: 'ZodError' })
+    await expect(agent.submitEventAsync('missing', { clientRequestId: 'invalid' } as never)).rejects.toMatchObject({ name: 'ZodError' })
+    expect(plan).not.toHaveBeenCalled()
+  })
+
+  it('does not plan stale user input with the model', async () => {
+    const path = await databasePath()
+    const plan = vi.fn()
+    const agent = runtime(path, { modelGateway: { plan } })
+    const created = agent.createTask(createRequest('stale-input-task'))
+
+    await expect(agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'stale-model-input',
+      expectedTaskRevision: created.task.taskRevision - 1,
+      event: {
+        eventId: 'stale-model-input',
+        type: 'user.input',
+        text: '把这段过期输入发给模型',
+        timestamp: '2026-07-22T12:01:00+08:00',
+      },
+    })).rejects.toMatchObject({ code: 'TASK_REVISION_CONFLICT' })
+
+    expect(plan).not.toHaveBeenCalled()
+  })
+
+  it('does not plan terminal or stale-timestamp user input with the model', async () => {
+    const path = await databasePath()
+    const plan = vi.fn()
+    const agent = runtime(path, { modelGateway: { plan } })
+    const created = agent.createTask(createRequest('terminal-input-task'))
+    const cancelled = agent.cancelTask(created.task.taskId, {
+      clientRequestId: 'cancel-terminal-input',
+      expectedTaskRevision: created.task.taskRevision,
+      eventId: 'cancel-terminal-input',
+    })
+
+    const terminal = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'terminal-model-input',
+      expectedTaskRevision: cancelled.task.taskRevision,
+      event: {
+        eventId: 'terminal-model-input',
+        type: 'user.input',
+        text: '把这段终态输入发给模型',
+        timestamp: '2026-07-22T12:02:00+08:00',
+      },
+    })
+    expect(terminal.task).toEqual(cancelled.task)
+
+    const reset = agent.resetTask(created.task.taskId, {
+      clientRequestId: 'reset-stale-timestamp-task',
+      expectedTaskRevision: cancelled.task.taskRevision,
+    })
+    const stale = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'stale-timestamp-input',
+      expectedTaskRevision: reset.task.taskRevision,
+      event: {
+        eventId: 'stale-timestamp-input',
+        type: 'user.input',
+        text: '把这段旧输入发给模型',
+        timestamp: '2026-07-22T11:59:00+08:00',
+      },
+    })
+    expect(stale.task).toEqual(reset.task)
+    expect(plan).not.toHaveBeenCalled()
+  })
+
+  it('falls back unchanged when the model planner rejects an unknown event', async () => {
+    const path = await databasePath()
+    const fallbackPlan: Plan = {
+      intent: 'unknown', confidence: 0.2, slotUpdates: {}, missingSlots: ['passengers', 'flightNumber'], proposedEvents: [], assistantText: 'fallback',
+    }
+    const plan = vi.fn(async () => ({
+      source: 'fallback' as const,
+      plan: fallbackPlan,
+    }))
+    const agent = runtime(path, { modelGateway: { plan } })
+    const created = agent.createTask(createRequest())
+
+    const updated = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'unknown-event', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'unknown-event', type: 'user.input', text: '完全未知的表达', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(plan).toHaveBeenCalledOnce()
+    expect(updated.task.phase).toBe(created.task.phase)
+    expect(updated.task.flight?.flightNumber).toBe(created.task.flight?.flightNumber)
+    expect(updated.task.passengers).toEqual(created.task.passengers)
+    expect(updated.task.processedEventIds).toEqual(created.task.processedEventIds)
+    expect(updated.meta.modelUsed).toBeUndefined()
+  })
+
+  it('preserves model provenance on durable user-input event replays after restart', async () => {
+    const path = await databasePath()
+    const modelGateway = new ModelGateway({
+      adapter: {
+        modelId: 'event-model',
+        plan: async () => ({
+          confidence: 0.95,
+          canonicalInput: '去机场接妈妈',
+          intentHint: 'create-airport-pickup',
+          evidence: { passengers: ['妈妈'] },
+        }),
+      },
+    })
+    const agent = runtime(path, { modelGateway })
+    const created = agent.createTask({
+      ...createRequest('empty-task'),
+      input: { type: 'text', text: '先创建任务', confidence: 0.5 },
+    })
+    const event = {
+      clientRequestId: 'model-event',
+      expectedTaskRevision: created.task.taskRevision,
+      event: {
+        eventId: 'model-event',
+        type: 'user.input' as const,
+        text: '劳驾替我去航站楼把妈妈接回来',
+        timestamp: '2026-07-22T12:01:00+08:00',
+      },
+    }
+
+    const updated = await agent.submitEventAsync(created.task.taskId, event)
+    expect(updated.task.passengers.names).toEqual(['妈妈'])
+    expect(updated.meta.modelUsed).toBe('event-model')
+    agent.close()
+
+    const replayModelGateway = { plan: vi.fn() }
+    const restarted = runtime(path, { modelGateway: replayModelGateway })
+    const replayed = await restarted.submitEventAsync(created.task.taskId, {
+      ...event,
+      clientRequestId: 'model-event-retry',
+    })
+
+    expect(replayModelGateway.plan).not.toHaveBeenCalled()
+    expect(replayed.task).toEqual(updated.task)
+    expect(replayed.meta.modelUsed).toBe('event-model')
+  })
+
   it('restores tasks and original create results after a process restart', async () => {
     const path = await databasePath()
     const firstRuntime = runtime(path)

@@ -1,15 +1,22 @@
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
 import { EventEmitter } from 'node:events'
-import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentErrorResponse, AgentResponse, CreateTaskRequest } from '@canvasflow/schema'
 import { AgentGateway } from './gateway'
 import { createAgentHttpServer, writeTaskUpdates, type SseWritable } from './http'
+import { ModelGateway } from './model-gateway'
+import { PersistentAgentRuntime } from './persistent'
 import { MemoryTaskStore } from './store'
 
 const now = '2026-07-22T12:00:00+08:00'
 const servers: Server[] = []
 const streamReaders: ReadableStreamDefaultReader<Uint8Array>[] = []
+const persistentRuntimes: PersistentAgentRuntime[] = []
+const temporaryDirectories: string[] = []
 
 function createRequest(text = '接妈妈，航班 MU5102', clientRequestId = 'create-001'): CreateTaskRequest {
   return {
@@ -30,6 +37,17 @@ async function startServer(options: { bodyLimitBytes?: number; eventPollInterval
   return { gateway, baseUrl: `http://127.0.0.1:${address.port}` }
 }
 
+async function startPersistentServer(options: Omit<ConstructorParameters<typeof PersistentAgentRuntime>[0], 'databasePath' | 'now'> & { databasePath?: string } = {}) {
+  const { databasePath = ':memory:', ...runtimeOptions } = options
+  const runtime = new PersistentAgentRuntime({ databasePath, now: () => now, ...runtimeOptions })
+  persistentRuntimes.push(runtime)
+  const server = createAgentHttpServer(runtime, { createRequestId: () => 'persistent-http-request' })
+  servers.push(server)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  return { runtime, baseUrl: `http://127.0.0.1:${address.port}` }
+}
+
 function streamId(taskId: string, cursor: number): string {
   return `${Buffer.from(taskId).toString('base64url')}.${cursor}`
 }
@@ -39,6 +57,19 @@ async function readStreamChunk(response: Response): Promise<string> {
   streamReaders.push(reader)
   const { value } = await reader.read()
   return new TextDecoder().decode(value)
+}
+
+async function readStreamThrough(response: Response, marker: string): Promise<string> {
+  const reader = response.body!.getReader()
+  streamReaders.push(reader)
+  const decoder = new TextDecoder()
+  let content = ''
+  while (!content.includes(marker)) {
+    const { value, done } = await reader.read()
+    if (done) break
+    content += decoder.decode(value, { stream: true })
+  }
+  return content + decoder.decode()
 }
 
 async function post(baseUrl: string, path: string, body: unknown, headers: Record<string, string> = {}) {
@@ -62,6 +93,8 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve())
   })))
+  for (const runtime of persistentRuntimes.splice(0)) runtime.close()
+  for (const directory of temporaryDirectories.splice(0)) await rm(directory, { recursive: true, force: true })
 })
 
 describe('Agent HTTP API', () => {
@@ -159,6 +192,149 @@ describe('Agent HTTP API', () => {
     expect(await conflictResponse.json()).toMatchObject({ requestId: 'conflict-001', error: { code: 'TASK_REVISION_CONFLICT' }, latest: { task: created.task } })
   })
 
+  it('preserves INVALID_REQUEST responses when the persistent runtime preflights async model planning', async () => {
+    const { baseUrl } = await startPersistentServer()
+    const invalidCreate = await post(baseUrl, '/v1/tasks', { clientRequestId: 'persistent-invalid-create' })
+    expect(invalidCreate.status).toBe(400)
+    await expect(invalidCreate.json()).resolves.toMatchObject({
+      error: { code: 'INVALID_REQUEST', retryable: false },
+    })
+
+    const created = await (await post(baseUrl, '/v1/tasks', createRequest('接妈妈，航班 MU5102', 'persistent-create'))).json() as AgentResponse
+    const invalidEvent = await post(baseUrl, `/v1/tasks/${created.task.taskId}/events`, {
+      clientRequestId: 'persistent-invalid-event',
+    })
+    expect(invalidEvent.status).toBe(400)
+    await expect(invalidEvent.json()).resolves.toMatchObject({
+      error: { code: 'INVALID_REQUEST', retryable: false },
+    })
+  })
+
+  it('returns a replay response when a duplicate create joins an async model preflight', async () => {
+    let startedPlanning: (() => void) | undefined
+    let releasePlanning: ((value: unknown) => void) | undefined
+    const planningStarted = new Promise<void>((resolve) => { startedPlanning = resolve })
+    const modelOutput = new Promise<unknown>((resolve) => { releasePlanning = resolve })
+    const modelGateway = new ModelGateway({
+      adapter: {
+        modelId: 'waiting-model',
+        plan: vi.fn(async () => {
+          startedPlanning!()
+          return modelOutput
+        }),
+      },
+    })
+    const { baseUrl, runtime } = await startPersistentServer({ createId: () => 'concurrent', modelGateway })
+    const createTaskWithStatus = vi.spyOn(runtime, 'createTaskWithStatusAsync')
+    const request = createRequest('劳驾替我去航站楼把妈妈接回来', 'concurrent-create')
+
+    const first = post(baseUrl, '/v1/tasks', request)
+    await planningStarted
+    const replay = post(baseUrl, '/v1/tasks', request)
+    await vi.waitFor(() => expect(createTaskWithStatus).toHaveBeenCalledTimes(2))
+    releasePlanning!({
+      confidence: 0.95,
+      canonicalInput: '去机场接妈妈',
+      intentHint: 'create-airport-pickup',
+      evidence: { passengers: ['妈妈'] },
+    })
+
+    const [createdResponse, replayResponse] = await Promise.all([first, replay])
+    expect(createdResponse.status).toBe(201)
+    expect(createdResponse.headers.get('location')).toBe('/v1/tasks/pickup-concurrent')
+    expect(replayResponse.status).toBe(200)
+    expect(replayResponse.headers.get('location')).toBeNull()
+    const created = await createdResponse.json() as AgentResponse
+    const replayed = await replayResponse.json() as AgentResponse
+    expect(replayed).toMatchObject({ task: created.task, ui: created.ui, effects: created.effects })
+  })
+
+  it('returns a replay response when another persistent runtime wins the shared SQLite create', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'canvasflow-http-'))
+    temporaryDirectories.push(directory)
+    const databasePath = join(directory, 'agent.sqlite')
+    let startedPlanning: (() => void) | undefined
+    let releasePlanning: ((value: unknown) => void) | undefined
+    const planningStarted = new Promise<void>((resolve) => { startedPlanning = resolve })
+    const modelOutput = new Promise<unknown>((resolve) => { releasePlanning = resolve })
+    const slowModel = new ModelGateway({
+      adapter: {
+        modelId: 'slow-model',
+        plan: vi.fn(async () => {
+          startedPlanning!()
+          return modelOutput
+        }),
+      },
+    })
+    const first = await startPersistentServer({ databasePath, createId: () => 'first', modelGateway: slowModel })
+    const second = await startPersistentServer({ databasePath, createId: () => 'second' })
+    const request = createRequest('劳驾替我去航站楼把妈妈接回来', 'cross-runtime-create')
+
+    const delayed = post(first.baseUrl, '/v1/tasks', request)
+    await planningStarted
+    const created = await post(second.baseUrl, '/v1/tasks', request)
+    releasePlanning!({
+      confidence: 0.95,
+      canonicalInput: '去机场接妈妈',
+      intentHint: 'create-airport-pickup',
+      evidence: { passengers: ['妈妈'] },
+    })
+    const replay = await delayed
+
+    expect(created.status).toBe(201)
+    expect(created.headers.get('location')).toBe('/v1/tasks/pickup-second')
+    expect(replay.status).toBe(200)
+    expect(replay.headers.get('location')).toBeNull()
+    const createdResponse = await created.json() as AgentResponse
+    const replayedResponse = await replay.json() as AgentResponse
+    expect(replayedResponse).toMatchObject({ task: createdResponse.task, ui: createdResponse.ui, effects: createdResponse.effects })
+  })
+
+  it('preserves each caller request ID when duplicate events join an async model preflight', async () => {
+    let startedPlanning: (() => void) | undefined
+    let releasePlanning: ((value: unknown) => void) | undefined
+    const planningStarted = new Promise<void>((resolve) => { startedPlanning = resolve })
+    const modelOutput = new Promise<unknown>((resolve) => { releasePlanning = resolve })
+    const modelGateway = new ModelGateway({
+      adapter: {
+        modelId: 'waiting-event-model',
+        plan: vi.fn(async () => {
+          startedPlanning!()
+          return modelOutput
+        }),
+      },
+    })
+    const { baseUrl, runtime } = await startPersistentServer({ modelGateway })
+    const created = await (await post(baseUrl, '/v1/tasks', createRequest())).json() as AgentResponse
+    const submitEvent = vi.spyOn(runtime, 'submitEventAsync')
+    const event = {
+      eventId: 'duplicate-unknown-input', type: 'user.input' as const, text: '完全未知的表达', timestamp: '2026-07-22T12:01:00+08:00',
+    }
+    const first = post(baseUrl, `/v1/tasks/${created.task.taskId}/events`, {
+      clientRequestId: 'event-first', expectedTaskRevision: created.task.taskRevision, event,
+    })
+    await planningStarted
+    const replay = post(baseUrl, `/v1/tasks/${created.task.taskId}/events`, {
+      clientRequestId: 'event-retry', expectedTaskRevision: created.task.taskRevision, event,
+    })
+    await vi.waitFor(() => expect(submitEvent).toHaveBeenCalledTimes(2))
+    releasePlanning!({
+      confidence: 0.2,
+      canonicalInput: '去机场接妈妈',
+      intentHint: 'create-airport-pickup',
+      evidence: { passengers: ['妈妈'] },
+    })
+
+    const [firstResponse, replayResponse] = await Promise.all([first, replay])
+    expect(firstResponse.status).toBe(200)
+    expect(replayResponse.status).toBe(200)
+    const firstBody = await firstResponse.json() as AgentResponse
+    const replayBody = await replayResponse.json() as AgentResponse
+    expect(firstBody.requestId).toBe('event-first')
+    expect(replayBody.requestId).toBe('event-retry')
+    expect(replayBody).toMatchObject({ task: firstBody.task, ui: firstBody.ui, effects: firstBody.effects })
+  })
+
   it('rejects malformed transport input and enforces the body limit', async () => {
     const { baseUrl } = await startServer({ bodyLimitBytes: 64 })
     const contentTypeResponse = await fetch(`${baseUrl}/v1/tasks`, { method: 'POST', body: '{}' })
@@ -215,7 +391,7 @@ describe('Agent HTTP API', () => {
     const response = await fetch(`${baseUrl}/v1/tasks/${created.task.taskId}/events`, {
       headers: { accept: 'text/event-stream', 'last-event-id': streamId(created.task.taskId, 1) },
     })
-    const chunk = await readStreamChunk(response)
+    const chunk = await readStreamThrough(response, `id: ${streamId(created.task.taskId, 3)}\n`)
     expect(chunk).not.toContain(`id: ${streamId(created.task.taskId, 1)}\n`)
     expect(chunk.indexOf(`id: ${streamId(created.task.taskId, 2)}\n`)).toBeGreaterThanOrEqual(0)
     expect(chunk.indexOf(`id: ${streamId(created.task.taskId, 3)}\n`)).toBeGreaterThan(

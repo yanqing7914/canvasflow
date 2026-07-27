@@ -92,6 +92,8 @@ export type AgentGatewayOptions = {
   providers?: ProviderRegistry
   policyGate?: PolicyGate
   planner?: Pick<Planner, 'plan'>
+  /** Trusted model provenance supplied by the persistent runtime for this operation. */
+  modelUsed?: string
   mode?: ProviderMode
   /**
    * Side-effect runtime for opaque confirmations and preference-backed notify.
@@ -118,10 +120,12 @@ export class AgentGateway {
   readonly #runtime: SideEffectRuntime
   readonly #preferences: Record<string, MemberPreferenceRecord>
   readonly #mode: ProviderMode
+  readonly #modelUsed: string | undefined
 
   constructor(options: AgentGatewayOptions = {}) {
     this.#store = options.store ?? new MemoryTaskStore()
     this.#mode = options.mode ?? 'fixture'
+    this.#modelUsed = options.modelUsed
     this.#now = options.now ?? (() => new Date().toISOString())
     this.#createId = options.createId ?? (() => crypto.randomUUID())
     const runtime = options.runtime ?? createSideEffectRuntime()
@@ -222,6 +226,22 @@ export class AgentGateway {
 
   hasCreateResult(clientRequestId: string): boolean {
     return this.#store.getByClientRequestId(clientRequestId) !== undefined
+  }
+
+  /**
+   * Returns the state that may safely be sent to the optional model planner.
+   * Replays, stale writes, and terminal tasks are resolved by submitEvent without
+   * needing to disclose the caller's text to a model provider.
+   */
+  userInputPlanningState(taskId: string, input: SubmitEventRequest): AirportPickupTaskState | undefined {
+    const request = submitEventRequestSchema.parse(input)
+    if (request.event.type !== 'user.input') return undefined
+    const current = this.#requireTask(taskId)
+    if (this.#store.getEventResult(taskId, request.event.eventId)) return undefined
+    if (request.expectedTaskRevision !== current.task.taskRevision) return undefined
+    if (current.task.phase === 'completed' || current.task.phase === 'cancelled') return undefined
+    if (Date.parse(request.event.timestamp) < Date.parse(current.task.updatedAt)) return undefined
+    return current.task
   }
 
   cancelTask(taskId: string, input: CancelTaskRequest): AgentResponse {
@@ -1691,6 +1711,7 @@ export class AgentGateway {
     return {
       task: { ...task, uiRevision: publishedUi.uiRevision },
       ui: publishedUi,
+      ...(this.#modelUsed ? { modelUsed: this.#modelUsed } : {}),
       toolResults,
       effectReceipts: privateReceipts,
       requestContext,
@@ -1745,6 +1766,7 @@ export class AgentGateway {
     return {
       task: { ...task, uiRevision: ui.uiRevision },
       ui: applyRequestPresentation(ui, requestContext),
+      ...(this.#modelUsed ? { modelUsed: this.#modelUsed } : {}),
       toolResults,
       effectReceipts,
       requestContext,
@@ -1903,7 +1925,12 @@ export class AgentGateway {
       ui: stored.ui,
       assistant,
       effects,
-      meta: { mode: this.#mode, durationMs, fallbackUsed: stored.ui.meta.generatedBy === 'fallback' },
+      meta: {
+        mode: this.#mode,
+        durationMs,
+        ...(stored.modelUsed ? { modelUsed: stored.modelUsed } : {}),
+        fallbackUsed: stored.ui.meta.generatedBy === 'fallback',
+      },
     })
   }
 }
