@@ -5,11 +5,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import type { AgentErrorResponse, AgentResponse, CreateTaskRequest } from '@canvasflow/schema'
 import { AgentGateway } from './gateway'
 import { createAgentHttpServer, writeTaskUpdates, type SseWritable } from './http'
+import { PersistentAgentRuntime } from './persistent'
 import { MemoryTaskStore } from './store'
 
 const now = '2026-07-22T12:00:00+08:00'
 const servers: Server[] = []
 const streamReaders: ReadableStreamDefaultReader<Uint8Array>[] = []
+const persistentRuntimes: PersistentAgentRuntime[] = []
 
 function createRequest(text = '接妈妈，航班 MU5102', clientRequestId = 'create-001'): CreateTaskRequest {
   return {
@@ -30,6 +32,16 @@ async function startServer(options: { bodyLimitBytes?: number; eventPollInterval
   return { gateway, baseUrl: `http://127.0.0.1:${address.port}` }
 }
 
+async function startPersistentServer() {
+  const runtime = new PersistentAgentRuntime({ databasePath: ':memory:', now: () => now })
+  persistentRuntimes.push(runtime)
+  const server = createAgentHttpServer(runtime, { createRequestId: () => 'persistent-http-request' })
+  servers.push(server)
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address() as AddressInfo
+  return { runtime, baseUrl: `http://127.0.0.1:${address.port}` }
+}
+
 function streamId(taskId: string, cursor: number): string {
   return `${Buffer.from(taskId).toString('base64url')}.${cursor}`
 }
@@ -39,6 +51,19 @@ async function readStreamChunk(response: Response): Promise<string> {
   streamReaders.push(reader)
   const { value } = await reader.read()
   return new TextDecoder().decode(value)
+}
+
+async function readStreamThrough(response: Response, marker: string): Promise<string> {
+  const reader = response.body!.getReader()
+  streamReaders.push(reader)
+  const decoder = new TextDecoder()
+  let content = ''
+  while (!content.includes(marker)) {
+    const { value, done } = await reader.read()
+    if (done) break
+    content += decoder.decode(value, { stream: true })
+  }
+  return content + decoder.decode()
 }
 
 async function post(baseUrl: string, path: string, body: unknown, headers: Record<string, string> = {}) {
@@ -62,6 +87,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve())
   })))
+  for (const runtime of persistentRuntimes.splice(0)) runtime.close()
 })
 
 describe('Agent HTTP API', () => {
@@ -159,6 +185,24 @@ describe('Agent HTTP API', () => {
     expect(await conflictResponse.json()).toMatchObject({ requestId: 'conflict-001', error: { code: 'TASK_REVISION_CONFLICT' }, latest: { task: created.task } })
   })
 
+  it('preserves INVALID_REQUEST responses when the persistent runtime preflights async model planning', async () => {
+    const { baseUrl } = await startPersistentServer()
+    const invalidCreate = await post(baseUrl, '/v1/tasks', { clientRequestId: 'persistent-invalid-create' })
+    expect(invalidCreate.status).toBe(400)
+    await expect(invalidCreate.json()).resolves.toMatchObject({
+      error: { code: 'INVALID_REQUEST', retryable: false },
+    })
+
+    const created = await (await post(baseUrl, '/v1/tasks', createRequest('接妈妈，航班 MU5102', 'persistent-create'))).json() as AgentResponse
+    const invalidEvent = await post(baseUrl, `/v1/tasks/${created.task.taskId}/events`, {
+      clientRequestId: 'persistent-invalid-event',
+    })
+    expect(invalidEvent.status).toBe(400)
+    await expect(invalidEvent.json()).resolves.toMatchObject({
+      error: { code: 'INVALID_REQUEST', retryable: false },
+    })
+  })
+
   it('rejects malformed transport input and enforces the body limit', async () => {
     const { baseUrl } = await startServer({ bodyLimitBytes: 64 })
     const contentTypeResponse = await fetch(`${baseUrl}/v1/tasks`, { method: 'POST', body: '{}' })
@@ -215,7 +259,7 @@ describe('Agent HTTP API', () => {
     const response = await fetch(`${baseUrl}/v1/tasks/${created.task.taskId}/events`, {
       headers: { accept: 'text/event-stream', 'last-event-id': streamId(created.task.taskId, 1) },
     })
-    const chunk = await readStreamChunk(response)
+    const chunk = await readStreamThrough(response, `id: ${streamId(created.task.taskId, 3)}\n`)
     expect(chunk).not.toContain(`id: ${streamId(created.task.taskId, 1)}\n`)
     expect(chunk.indexOf(`id: ${streamId(created.task.taskId, 2)}\n`)).toBeGreaterThanOrEqual(0)
     expect(chunk.indexOf(`id: ${streamId(created.task.taskId, 3)}\n`)).toBeGreaterThan(

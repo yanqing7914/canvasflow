@@ -12,6 +12,7 @@ import type {
   SubmitEventRequest,
   TaskUpdateEnvelope,
 } from '@canvasflow/schema'
+import { createTaskRequestSchema, submitEventRequestSchema } from '@canvasflow/schema'
 import {
   createProviderRegistry,
   createSideEffectRuntime,
@@ -23,6 +24,8 @@ import {
 } from '@canvasflow/tools'
 import { AgentGateway, type AgentGatewayOptions } from './gateway'
 import type { AgentHttpGateway } from './http'
+import { ModelGateway } from './model-gateway'
+import type { Plan, PlannerInput } from './planner'
 import type { StoredEventResult, StoredIdempotencyResult, StoredTask, TaskStore, TaskUpdateRead } from './store'
 import { createTaskUpdate } from './task-updates'
 
@@ -227,6 +230,8 @@ export type PersistentAgentRuntimeOptions = {
   createId?: AgentGatewayOptions['createId']
   compose?: AgentGatewayOptions['compose']
   policyGate?: AgentGatewayOptions['policyGate']
+  /** Optional rules-first model planner. It is evaluated before SQLite writes. */
+  modelGateway?: Pick<ModelGateway, 'plan'>
   /** Maximum retained SSE snapshots for each task; stale cursors receive an authoritative resync snapshot. */
   maxTaskUpdatesPerTask?: number
 }
@@ -242,6 +247,8 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
   readonly #mode: ProviderMode
   readonly #providerFactory: ProviderFactory
   readonly #options: Omit<PersistentAgentRuntimeOptions, 'databasePath' | 'mode' | 'providerFactory'>
+  readonly #modelGateway: Pick<ModelGateway, 'plan'> | undefined
+  readonly #inFlightOperations = new Map<string, Promise<AgentResponse>>()
   #closed = false
 
   constructor(options: PersistentAgentRuntimeOptions) {
@@ -262,6 +269,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       policyGate: options.policyGate,
       maxTaskUpdatesPerTask: options.maxTaskUpdatesPerTask,
     }
+    this.#modelGateway = options.modelGateway
     if (options.databasePath !== ':memory:') mkdirSync(dirname(resolve(options.databasePath)), { recursive: true })
     this.#database = new DatabaseSync(options.databasePath)
     this.#database.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
@@ -282,12 +290,28 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     return this.#run((gateway) => gateway.createTask(input))
   }
 
+  async createTaskAsync(input: CreateTaskRequest): Promise<AgentResponse> {
+    const request = createTaskRequestSchema.parse(input)
+    return this.#coalesceOperation(`create:${request.clientRequestId}`, async () => {
+      const planned = await this.#planCreate(request)
+      return this.#run((gateway) => gateway.createTask(request), planned)
+    })
+  }
+
   getTask(taskId: string, requestId?: string): AgentResponse {
     return this.#read((gateway) => gateway.getTask(taskId, requestId))
   }
 
   submitEvent(taskId: string, input: SubmitEventRequest): AgentResponse {
     return this.#run((gateway) => gateway.submitEvent(taskId, input))
+  }
+
+  async submitEventAsync(taskId: string, input: SubmitEventRequest): Promise<AgentResponse> {
+    const request = submitEventRequestSchema.parse(input)
+    return this.#coalesceOperation(`event:${taskId}:${request.event.eventId}`, async () => {
+      const planned = await this.#planEvent(taskId, request)
+      return this.#run((gateway) => gateway.submitEvent(taskId, request), planned)
+    })
   }
 
   submitAction(taskId: string, input: SubmitActionRequest): AgentResponse {
@@ -316,7 +340,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     this.#closed = true
   }
 
-  #run<T>(operation: (gateway: AgentGateway) => T): T {
+  #run<T>(operation: (gateway: AgentGateway) => T, plannedInput?: Plan): T {
     this.#assertOpen()
     // Serializes Gateway calls across processes sharing this SQLite file.
     this.#database.exec('BEGIN IMMEDIATE')
@@ -334,6 +358,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
         createId: this.#options.createId,
         compose: this.#options.compose,
         policyGate: this.#options.policyGate,
+        ...(plannedInput ? { planner: { plan: () => plannedInput } } : {}),
       })
       const result = operation(gateway)
       this.#persistRuntime(runtime)
@@ -360,6 +385,46 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       now: this.#options.now, createId: this.#options.createId, compose: this.#options.compose,
       policyGate: this.#options.policyGate,
     }))
+  }
+
+  async #planCreate(input: CreateTaskRequest): Promise<Plan | undefined> {
+    if (!this.#modelGateway || this.hasCreateResult(input.clientRequestId)) return undefined
+    return this.#runModelPlan({
+      text: input.input.text,
+      eventId: `${input.clientRequestId}:input`,
+      timestamp: this.#options.now?.() ?? new Date().toISOString(),
+    })
+  }
+
+  async #planEvent(taskId: string, input: SubmitEventRequest): Promise<Plan | undefined> {
+    if (!this.#modelGateway || input.event.type !== 'user.input') return undefined
+    const existing = this.#read((gateway) => {
+      try {
+        return gateway.getTask(taskId).task
+      } catch {
+        return undefined
+      }
+    })
+    if (!existing || existing.processedEventIds.includes(input.event.eventId)) return undefined
+    return this.#runModelPlan({
+      text: input.event.text,
+      state: existing,
+      eventId: input.event.eventId,
+      timestamp: input.event.timestamp,
+    })
+  }
+
+  async #runModelPlan(input: PlannerInput): Promise<Plan | undefined> {
+    const result = await this.#modelGateway!.plan(input)
+    return result.plan
+  }
+
+  #coalesceOperation(key: string, create: () => Promise<AgentResponse>): Promise<AgentResponse> {
+    const existing = this.#inFlightOperations.get(key)
+    if (existing) return existing
+    const pending = create().finally(() => this.#inFlightOperations.delete(key))
+    this.#inFlightOperations.set(key, pending)
+    return pending
   }
 
   #migrate(): void {
