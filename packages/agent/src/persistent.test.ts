@@ -101,6 +101,8 @@ describe('PersistentAgentRuntime', () => {
 
     expect(plan).toHaveBeenCalledTimes(1)
     expect(first.task).toEqual(replay.task)
+    expect(first.meta.modelUsed).toBeUndefined()
+    expect(replay.meta.modelUsed).toBeUndefined()
   })
 
   it('does not hold a SQLite write transaction while waiting for model planning', async () => {
