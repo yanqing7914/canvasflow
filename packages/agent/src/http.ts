@@ -26,10 +26,10 @@ export interface AgentHttpGateway {
   resetTask(taskId: string, input: ResetTaskRequest): AgentResponse
   getTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead
   hasCreateResult?(clientRequestId: string): boolean
-  /** Indicates that a matching async create has started but has not persisted its result yet. */
-  hasCreateInFlight?(clientRequestId: string): boolean
   /** Optional preflight methods for runtimes that need async work before a write transaction. */
   createTaskAsync?(input: CreateTaskRequest): Promise<AgentResponse>
+  /** Reports whether the durable create transaction replayed an existing result. */
+  createTaskWithStatusAsync?(input: CreateTaskRequest): Promise<{ response: AgentResponse; replay: boolean }>
   submitEventAsync?(taskId: string, input: SubmitEventRequest): Promise<AgentResponse>
 }
 
@@ -342,15 +342,15 @@ export function createAgentHttpHandler(gateway: AgentHttpGateway, options: Agent
       if (request.method === 'POST' && taskRoot) {
         const body = await readJson(request, bodyLimitBytes)
         const clientRequestId = bodyClientRequestId(body)
-        // A duplicate may join an async model preflight before its result is persisted.
-        const replay = clientRequestId !== undefined && (
-          (gateway.hasCreateResult?.(clientRequestId) ?? false)
-          || (gateway.hasCreateInFlight?.(clientRequestId) ?? false)
-        )
         const createRequest = body as CreateTaskRequest
-        const result = gateway.createTaskAsync
+        const existingReplay = clientRequestId !== undefined && (gateway.hasCreateResult?.(clientRequestId) ?? false)
+        const durableResult = gateway.createTaskWithStatusAsync
+          ? await gateway.createTaskWithStatusAsync(createRequest)
+          : undefined
+        const result = durableResult?.response ?? (gateway.createTaskAsync
           ? await gateway.createTaskAsync(createRequest)
-          : gateway.createTask(createRequest)
+          : gateway.createTask(createRequest))
+        const replay = durableResult?.replay ?? existingReplay
         writeJson(
           response,
           replay ? 200 : 201,

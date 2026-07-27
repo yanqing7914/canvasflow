@@ -236,6 +236,12 @@ export type PersistentAgentRuntimeOptions = {
   maxTaskUpdatesPerTask?: number
 }
 
+export type CreateTaskExecution = {
+  response: AgentResponse
+  /** Whether the SQLite transaction replayed an existing create result. */
+  replay: boolean
+}
+
 export function providerModeFromEnvironment(environment: NodeJS.ProcessEnv = process.env): ProviderMode {
   const mode = environment.AGENT_PROVIDER_MODE ?? 'fixture'
   if (mode === 'fixture' || mode === 'mock' || mode === 'live') return mode
@@ -248,7 +254,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
   readonly #providerFactory: ProviderFactory
   readonly #options: Omit<PersistentAgentRuntimeOptions, 'databasePath' | 'mode' | 'providerFactory'>
   readonly #modelGateway: Pick<ModelGateway, 'plan'> | undefined
-  readonly #inFlightOperations = new Map<string, Promise<AgentResponse>>()
+  readonly #inFlightOperations = new Map<string, Promise<unknown>>()
   #closed = false
 
   constructor(options: PersistentAgentRuntimeOptions) {
@@ -286,21 +292,29 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     ) !== undefined
   }
 
-  hasCreateInFlight(clientRequestId: string): boolean {
-    this.#assertOpen()
-    return this.#inFlightOperations.has(`create:${clientRequestId}`)
-  }
-
   createTask(input: CreateTaskRequest): AgentResponse {
     return this.#run((gateway) => gateway.createTask(input))
   }
 
   async createTaskAsync(input: CreateTaskRequest): Promise<AgentResponse> {
+    return (await this.createTaskWithStatusAsync(input)).response
+  }
+
+  async createTaskWithStatusAsync(input: CreateTaskRequest): Promise<CreateTaskExecution> {
     const request = createTaskRequestSchema.parse(input)
-    return this.#coalesceOperation(`create:${request.clientRequestId}`, async () => {
+    const key = `create:${request.clientRequestId}`
+    const existing = this.#inFlightOperations.get(key) as Promise<CreateTaskExecution> | undefined
+    // Every caller after the owner is a replay, even when it shares the local preflight promise.
+    if (existing) return existing.then(({ response }) => ({ response, replay: true }))
+    const pending = (async () => {
       const planned = await this.#planCreate(request)
-      return this.#run((gateway) => gateway.createTask(request), planned)
-    })
+      return this.#run((gateway) => {
+        const replay = gateway.hasCreateResult(request.clientRequestId)
+        return { response: gateway.createTask(request), replay }
+      }, planned)
+    })().finally(() => this.#inFlightOperations.delete(key))
+    this.#inFlightOperations.set(key, pending)
+    return pending
   }
 
   getTask(taskId: string, requestId?: string): AgentResponse {
@@ -424,8 +438,8 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     return result.plan
   }
 
-  #coalesceOperation(key: string, create: () => Promise<AgentResponse>): Promise<AgentResponse> {
-    const existing = this.#inFlightOperations.get(key)
+  #coalesceOperation<T>(key: string, create: () => Promise<T>): Promise<T> {
+    const existing = this.#inFlightOperations.get(key) as Promise<T> | undefined
     if (existing) return existing
     const pending = create().finally(() => this.#inFlightOperations.delete(key))
     this.#inFlightOperations.set(key, pending)

@@ -1,6 +1,9 @@
 import type { AddressInfo } from 'node:net'
 import type { Server } from 'node:http'
 import { EventEmitter } from 'node:events'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AgentErrorResponse, AgentResponse, CreateTaskRequest } from '@canvasflow/schema'
 import { AgentGateway } from './gateway'
@@ -13,6 +16,7 @@ const now = '2026-07-22T12:00:00+08:00'
 const servers: Server[] = []
 const streamReaders: ReadableStreamDefaultReader<Uint8Array>[] = []
 const persistentRuntimes: PersistentAgentRuntime[] = []
+const temporaryDirectories: string[] = []
 
 function createRequest(text = '接妈妈，航班 MU5102', clientRequestId = 'create-001'): CreateTaskRequest {
   return {
@@ -33,8 +37,9 @@ async function startServer(options: { bodyLimitBytes?: number; eventPollInterval
   return { gateway, baseUrl: `http://127.0.0.1:${address.port}` }
 }
 
-async function startPersistentServer(options: Omit<ConstructorParameters<typeof PersistentAgentRuntime>[0], 'databasePath' | 'now'> = {}) {
-  const runtime = new PersistentAgentRuntime({ databasePath: ':memory:', now: () => now, ...options })
+async function startPersistentServer(options: Omit<ConstructorParameters<typeof PersistentAgentRuntime>[0], 'databasePath' | 'now'> & { databasePath?: string } = {}) {
+  const { databasePath = ':memory:', ...runtimeOptions } = options
+  const runtime = new PersistentAgentRuntime({ databasePath, now: () => now, ...runtimeOptions })
   persistentRuntimes.push(runtime)
   const server = createAgentHttpServer(runtime, { createRequestId: () => 'persistent-http-request' })
   servers.push(server)
@@ -89,6 +94,7 @@ afterEach(async () => {
     server.close((error) => error ? reject(error) : resolve())
   })))
   for (const runtime of persistentRuntimes.splice(0)) runtime.close()
+  for (const directory of temporaryDirectories.splice(0)) await rm(directory, { recursive: true, force: true })
 })
 
 describe('Agent HTTP API', () => {
@@ -219,13 +225,13 @@ describe('Agent HTTP API', () => {
       },
     })
     const { baseUrl, runtime } = await startPersistentServer({ createId: () => 'concurrent', modelGateway })
-    const hasCreateInFlight = vi.spyOn(runtime, 'hasCreateInFlight')
+    const createTaskWithStatus = vi.spyOn(runtime, 'createTaskWithStatusAsync')
     const request = createRequest('劳驾替我去航站楼把妈妈接回来', 'concurrent-create')
 
     const first = post(baseUrl, '/v1/tasks', request)
     await planningStarted
     const replay = post(baseUrl, '/v1/tasks', request)
-    await vi.waitFor(() => expect(hasCreateInFlight).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(createTaskWithStatus).toHaveBeenCalledTimes(2))
     releasePlanning!({
       confidence: 0.95,
       canonicalInput: '去机场接妈妈',
@@ -238,7 +244,50 @@ describe('Agent HTTP API', () => {
     expect(createdResponse.headers.get('location')).toBe('/v1/tasks/pickup-concurrent')
     expect(replayResponse.status).toBe(200)
     expect(replayResponse.headers.get('location')).toBeNull()
-    expect(await replayResponse.json()).toEqual(await createdResponse.json())
+    const created = await createdResponse.json() as AgentResponse
+    const replayed = await replayResponse.json() as AgentResponse
+    expect(replayed).toMatchObject({ task: created.task, ui: created.ui, effects: created.effects })
+  })
+
+  it('returns a replay response when another persistent runtime wins the shared SQLite create', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'canvasflow-http-'))
+    temporaryDirectories.push(directory)
+    const databasePath = join(directory, 'agent.sqlite')
+    let startedPlanning: (() => void) | undefined
+    let releasePlanning: ((value: unknown) => void) | undefined
+    const planningStarted = new Promise<void>((resolve) => { startedPlanning = resolve })
+    const modelOutput = new Promise<unknown>((resolve) => { releasePlanning = resolve })
+    const slowModel = new ModelGateway({
+      adapter: {
+        modelId: 'slow-model',
+        plan: vi.fn(async () => {
+          startedPlanning!()
+          return modelOutput
+        }),
+      },
+    })
+    const first = await startPersistentServer({ databasePath, createId: () => 'first', modelGateway: slowModel })
+    const second = await startPersistentServer({ databasePath, createId: () => 'second' })
+    const request = createRequest('劳驾替我去航站楼把妈妈接回来', 'cross-runtime-create')
+
+    const delayed = post(first.baseUrl, '/v1/tasks', request)
+    await planningStarted
+    const created = await post(second.baseUrl, '/v1/tasks', request)
+    releasePlanning!({
+      confidence: 0.95,
+      canonicalInput: '去机场接妈妈',
+      intentHint: 'create-airport-pickup',
+      evidence: { passengers: ['妈妈'] },
+    })
+    const replay = await delayed
+
+    expect(created.status).toBe(201)
+    expect(created.headers.get('location')).toBe('/v1/tasks/pickup-second')
+    expect(replay.status).toBe(200)
+    expect(replay.headers.get('location')).toBeNull()
+    const createdResponse = await created.json() as AgentResponse
+    const replayedResponse = await replay.json() as AgentResponse
+    expect(replayedResponse).toMatchObject({ task: createdResponse.task, ui: createdResponse.ui, effects: createdResponse.effects })
   })
 
   it('rejects malformed transport input and enforces the body limit', async () => {
