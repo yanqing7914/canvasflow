@@ -37,9 +37,9 @@ async function startServer(options: { bodyLimitBytes?: number; eventPollInterval
   return { gateway, baseUrl: `http://127.0.0.1:${address.port}` }
 }
 
-async function startPersistentServer(options: Omit<ConstructorParameters<typeof PersistentAgentRuntime>[0], 'databasePath' | 'now'> & { databasePath?: string } = {}) {
-  const { databasePath = ':memory:', ...runtimeOptions } = options
-  const runtime = new PersistentAgentRuntime({ databasePath, now: () => now, ...runtimeOptions })
+async function startPersistentServer(options: Omit<ConstructorParameters<typeof PersistentAgentRuntime>[0], 'databasePath'> & { databasePath?: string } = {}) {
+  const { databasePath = ':memory:', now: runtimeNow = () => now, ...runtimeOptions } = options
+  const runtime = new PersistentAgentRuntime({ databasePath, now: runtimeNow, ...runtimeOptions })
   persistentRuntimes.push(runtime)
   const server = createAgentHttpServer(runtime, { createRequestId: () => 'persistent-http-request' })
   servers.push(server)
@@ -210,6 +210,64 @@ describe('Agent HTTP API', () => {
     await expect(invalidEvent.json()).resolves.toMatchObject({
       error: { code: 'INVALID_REQUEST', retryable: false },
     })
+  })
+
+  it('expires a pending memory confirmation through the HTTP API without persisting the proposal', async () => {
+    let clock = Date.parse(now)
+    const { baseUrl } = await startPersistentServer({
+      now: () => new Date(clock).toISOString(),
+      nowMs: () => clock,
+      createId: () => 'expiry',
+    })
+    const createdResponse = await post(baseUrl, '/v1/tasks', createRequest('接妈妈，航班 MU5102', 'expiry-create'))
+    expect(createdResponse.status).toBe(201)
+    let current = await createdResponse.json() as AgentResponse
+
+    const startResponse = await post(baseUrl, `/v1/tasks/${current.task.taskId}/actions`, {
+      clientRequestId: 'expiry-start-navigation',
+      expectedTaskRevision: current.task.taskRevision,
+      expectedUiRevision: current.ui.uiRevision,
+      actionId: 'start-navigation',
+      componentId: 'navigation-plan',
+      idempotencyKey: 'expiry-start-navigation',
+    })
+    expect(startResponse.status).toBe(200)
+    current = await startResponse.json() as AgentResponse
+
+    const events = [
+      { type: 'vehicle.entered-airport-geofence' },
+      { type: 'vehicle.parked' },
+      { type: 'user.confirmed-passengers-onboard' },
+      { type: 'destination.arrived', destination: '家' },
+    ] as const
+    for (const [index, event] of events.entries()) {
+      clock += 60_000
+      const response = await post(baseUrl, `/v1/tasks/${current.task.taskId}/events`, {
+        clientRequestId: `expiry-event-${index}`,
+        expectedTaskRevision: current.task.taskRevision,
+        event: { ...event, eventId: `expiry-event-${index}`, timestamp: new Date(clock).toISOString() },
+      })
+      expect(response.status).toBe(200)
+      current = await response.json() as AgentResponse
+    }
+    const confirmationId = current.task.pendingConfirmation?.confirmationId
+    expect(confirmationId).toBeTruthy()
+    expect(current.task.memoryProposal).toMatchObject({ status: 'pending' })
+
+    clock = Date.parse(current.task.pendingConfirmation!.expiresAt!) + 1
+    const expiredResponse = await post(baseUrl, `/v1/tasks/${current.task.taskId}/confirmations/${confirmationId}`, {
+      clientRequestId: 'expiry-confirmation',
+      expectedTaskRevision: current.task.taskRevision,
+      decision: 'accept',
+      idempotencyKey: 'expiry-confirmation',
+    })
+    expect(expiredResponse.status).toBe(200)
+    const expired = await expiredResponse.json() as AgentResponse
+    expect(expired).toMatchObject({
+      task: { memoryProposal: { status: 'expired', errorCode: 'PROPOSAL_EXPIRED' } },
+      effects: [{ type: 'memory.reject-update', status: 'failed', errorCode: 'PROPOSAL_EXPIRED' }],
+    })
+    expect(expired.task.pendingConfirmation).toBeUndefined()
   })
 
   it('returns a replay response when a duplicate create joins an async model preflight', async () => {
