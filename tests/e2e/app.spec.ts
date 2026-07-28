@@ -45,7 +45,11 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     await page.setViewportSize(viewport)
     await page.goto('/')
     const taskInput = page.getByLabel('任务输入')
+    const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
     const submit = page.getByRole('button', { name: '发送' })
+    // Wait for the mounted surface before pressing a key: a Tab that arrives
+    // pre-hydration lands on nothing and is not replayed.
+    await expect(submit).toBeVisible()
     await page.keyboard.press('Tab')
     await expect(taskInput).toBeFocused()
     await page.keyboard.press('Enter')
@@ -56,6 +60,11 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     await expect(surface.locator('[data-component-type="status-banner"]')).toBeVisible()
     await taskInput.fill('MU5102')
     await page.keyboard.press('Tab')
+    // A disabled voice entry drops out of the tab order rather than trapping it.
+    if (await mic.isEnabled()) {
+      await expect(mic).toBeFocused()
+      await page.keyboard.press('Tab')
+    }
     await expect(submit).toBeFocused()
     await page.keyboard.press('Enter')
     const startNavigation = page.getByRole('button', { name: '开始导航' })
@@ -120,6 +129,51 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await page.getByRole('button', { name: '保存本次偏好' }).click()
   await expect(page.getByLabel('Effect receipts')).toContainText('memory.confirm-update:succeeded')
   await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
+})
+
+test('keeps the task usable around a voice attempt', async ({ page }) => {
+  await page.goto('/')
+  const console = page.getByRole('region', { name: 'Event console' })
+  const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
+  await expect(mic).toBeVisible()
+
+  // Headless Chromium exposes the Web Speech API but has no speech service
+  // behind it, so the outcome of a real turn is not deterministic. What must
+  // hold is that pressing the microphone never strands the driver: the entry
+  // returns to a usable state and the text path still completes the turn.
+  if (await mic.isEnabled()) {
+    await mic.click()
+    // The text path is closed on purpose while the microphone is capturing, so
+    // end the turn before typing. A second press either hands back a transcript
+    // or reports that nothing was heard; both reopen the field.
+    const capturing = page.getByRole('button', { name: '停止语音输入' })
+    if (await capturing.isVisible()) await capturing.click()
+    await expect(
+      page.getByRole('button', { name: /开始语音输入|重试语音输入|放弃这次语音输入/ }),
+    ).toBeEnabled()
+  }
+
+  const send = page.getByRole('button', { name: '发送' })
+  await expect(send).toBeEnabled()
+  await send.click()
+  await expect(console).toContainText('collecting-information')
+})
+
+test('falls back to text when the browser has no speech recognition', async ({ page }) => {
+  await page.addInitScript(() => {
+    const scope = window as unknown as Record<string, unknown>
+    delete scope.SpeechRecognition
+    delete scope.webkitSpeechRecognition
+  })
+  await page.goto('/')
+
+  const mic = page.getByRole('button', { name: '语音入口暂不可用' })
+  await expect(mic).toBeVisible()
+  await expect(mic).toBeDisabled()
+
+  await page.getByLabel('任务输入').fill('我现在要去机场接妈妈和豆豆')
+  await page.getByRole('button', { name: '发送' }).click()
+  await expect(page.getByRole('region', { name: 'Event console' })).toContainText('collecting-information')
 })
 
 test('applies an out-of-band task update through the durable SSE stream', async ({ page }) => {

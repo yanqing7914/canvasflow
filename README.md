@@ -24,6 +24,7 @@ flowchart LR
 - `packages/agent`: deterministic Planner and reducer, rules-first Model Gateway boundary, AgentGateway, policy-gated effects, HTTP/SSE handling, idempotency, and SQLite persistence.
 - `packages/tools`: validated fixture/mock Provider registry, side-effect runtimes, and live-provider interfaces.
 - `packages/ui`: deterministic UISpec composition and schema-safe UI projection.
+- `packages/voice`: dependency-injected voice state machine and Web Speech adapter, with no task knowledge.
 - `apps/demo`: React demo that sends task input, actions, and confirmations through the Agent HTTP API.
 - `fixtures/airport-pickup`: 16 scenario contracts plus `timelines/main-flow.json`, shared by Agent, Provider, UI, and replay tests.
 
@@ -129,6 +130,8 @@ The current Chromium suite covers two complete flows through the real Agent API:
 - Complete airport pickup, execute outbound and return-trip effects, arrive home, and accept memory persistence.
 - Complete the same trip and reject the arrival memory proposal.
 
+It also checks that a voice attempt leaves the task usable and that the text path still completes the turn when the browser exposes no speech recognition.
+
 ## Demo Flow
 
 1. Create an airport-pickup task and provide the missing passenger or flight slots.
@@ -138,6 +141,18 @@ The current Chromium suite covers two complete flows through the real Agent API:
 5. Use the reversible cabin action if needed.
 6. Arrive home and accept or reject the long-term memory proposal.
 
+## Voice Input
+
+The demo accepts spoken task input through the browser's own Web Speech API, with no server of ours and no added dependency. `packages/voice` holds a pure state machine (`idle → listening → transcribing → submitting → speaking`, plus `error`) and the peripheral adapter; neither knows anything about airport pickup.
+
+- A recognized transcript lands in the existing task input, where it can be corrected before 发送 submits it.
+- The text path closes while the microphone is capturing or its transcript is in flight, because the field still holds the previous turn's words until the voice turn hands new ones back. It reopens as soon as there is something to confirm. Typing an answer during playback barges in first, so the car stops talking instead of talking over the driver.
+- Submission goes through the same Agent API call as typed text, tagged `source: 'voice'` with the engine's confidence. The frontend performs no task understanding; the spoken reply is whatever the Agent returns in `assistant`, played only when `shouldSpeak` is set.
+- Pressing the microphone during playback barges in and starts a new turn.
+- Every failure — no speech API, an insecure origin, a denied microphone, silence, a timeout — states what happened in the voice status line and leaves the text field usable, so a voice failure never blocks the task.
+- Voice failures never mutate `TaskState`, and a rejected submission keeps the transcript in the field for a text retry.
+- Wake word and local voice activity detection are out of scope for the POC.
+
 ## Known Limitations
 
 - The shipped demo defaults to deterministic Fixture mode and includes no model key, vehicle credential, or live Provider dependency.
@@ -146,6 +161,7 @@ The current Chromium suite covers two complete flows through the real Agent API:
 - The built-in server cannot start in `live` Provider mode without an injected durable provider factory.
 - Real flight, navigation, vehicle, messaging, and memory backends require deployment-specific adapters, credentials, reliability limits, and operational review.
 - Fixture geometry and task facts are fictional competition data, not production navigation or aviation data.
+- Speech recognition availability and accuracy depend on the browser and its speech service. Headless Chromium exposes the API without a service behind it, so the E2E suite asserts that a voice attempt never blocks the task rather than replaying a real recognition turn.
 
 ## Contribution Flow
 
