@@ -404,6 +404,39 @@ test('cancels a flight before navigation and rejects the navigation action', asy
   })
 })
 
+test('does not create a landing notification when no passenger authorized one', async ({ page }) => {
+  await page.goto('/')
+  const createdResponse = await postApi(page, '/v1/tasks', {
+    clientRequestId: 'e2e-no-notify-authority-create',
+    input: { type: 'text', text: '接爸爸，航班 MU5102' },
+    ...apiRequest,
+  })
+  expect(createdResponse.status()).toBe(201)
+  const created = await createdResponse.json()
+  expect(created.task.passengers).toMatchObject({ memberIds: ['dad'], names: ['爸爸'] })
+
+  const landedResponse = await postApi(page, `/v1/tasks/${created.task.taskId}/events`, {
+    clientRequestId: 'e2e-no-notify-authority-landed',
+    expectedTaskRevision: created.task.taskRevision,
+    event: {
+      eventId: 'e2e-no-notify-authority-landed',
+      type: 'flight.updated',
+      flight: {
+        flightNumber: 'MU5102', status: 'landed',
+        scheduledArrival: '2026-07-22T20:30:00+08:00',
+        estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+      },
+      timestamp: futureTimestamp(2),
+    },
+  })
+  expect(landedResponse.status()).toBe(200)
+  await expect(landedResponse.json()).resolves.toMatchObject({
+    task: { message: { autoNotifyAuthorized: false, status: 'idle', landingNoticeSent: false } },
+    effects: [],
+  })
+  await expect(page.getByLabel('Effect receipts')).toHaveCount(0)
+})
+
 test('shows a deterministic fallback when the flight provider times out', async ({ page }) => {
   await page.goto('/')
   await page.getByLabel('任务输入').fill('接妈妈，航班 MU0000')
