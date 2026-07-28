@@ -25,10 +25,11 @@ export interface AgentHttpGateway {
   cancelTask(taskId: string, input: CancelTaskRequest): AgentResponse
   resetTask(taskId: string, input: ResetTaskRequest): AgentResponse
   getTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead
-  hasCreateResult?(clientRequestId: string): boolean
-  /** Optional preflight methods for runtimes that need async work before a write transaction. */
-  createTaskAsync?(input: CreateTaskRequest): Promise<AgentResponse>
-  /** Reports whether the durable create transaction replayed an existing result. */
+  hasCreateResult(clientRequestId: string): boolean
+  /**
+   * Async runtimes must report whether the durable create transaction replayed
+   * an existing result so HTTP can preserve 201-versus-200 semantics.
+   */
   createTaskWithStatusAsync?(input: CreateTaskRequest): Promise<{ response: AgentResponse; replay: boolean }>
   submitEventAsync?(taskId: string, input: SubmitEventRequest): Promise<AgentResponse>
 }
@@ -343,13 +344,11 @@ export function createAgentHttpHandler(gateway: AgentHttpGateway, options: Agent
         const body = await readJson(request, bodyLimitBytes)
         const clientRequestId = bodyClientRequestId(body)
         const createRequest = body as CreateTaskRequest
-        const existingReplay = clientRequestId !== undefined && (gateway.hasCreateResult?.(clientRequestId) ?? false)
+        const existingReplay = clientRequestId !== undefined && gateway.hasCreateResult(clientRequestId)
         const durableResult = gateway.createTaskWithStatusAsync
           ? await gateway.createTaskWithStatusAsync(createRequest)
           : undefined
-        const result = durableResult?.response ?? (gateway.createTaskAsync
-          ? await gateway.createTaskAsync(createRequest)
-          : gateway.createTask(createRequest))
+        const result = durableResult?.response ?? gateway.createTask(createRequest)
         const replay = durableResult?.replay ?? existingReplay
         writeJson(
           response,
