@@ -705,6 +705,96 @@ describe('demo integration', () => {
       expect(input).toHaveValue('')
     })
 
+    it('closes the text path while the microphone is capturing', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+
+      // The field still holds the previous turn's words; sending them now would
+      // create a task out of something the driver never meant to send.
+      const input = screen.getByLabelText('任务输入')
+      const send = screen.getByRole('button', { name: '发送' })
+      expect(input).toBeDisabled()
+      expect(send).toBeDisabled()
+
+      await user.click(send)
+      await user.keyboard('{Enter}')
+      expect(create).not.toHaveBeenCalled()
+
+      // Ending the turn hands the words back and reopens the text path.
+      emit(() => speech.engine().emit('去机场接妈妈和豆豆', true))
+      expect(input).toBeEnabled()
+      expect(send).toBeEnabled()
+      await user.click(send)
+      await screen.findByText(/collecting-information/)
+      expect(create).toHaveBeenCalledWith('去机场接妈妈和豆豆', {
+        vehicleContext: expect.anything(),
+        source: 'voice',
+      })
+    })
+
+    it('keeps the text path closed until a submitted transcript comes back', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      let release: (value: AgentResponse) => void = () => {}
+      const create = vi.fn().mockReturnValue(new Promise<AgentResponse>((resolve) => { release = resolve }))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('去机场接妈妈和豆豆', true))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByRole('button', { name: '正在提交语音内容' })
+
+      // A second 发送 mid-flight would send the same words twice.
+      expect(screen.getByLabelText('任务输入')).toBeDisabled()
+      expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
+
+      await act(async () => { release(apiResponse(createInitialTask())) })
+      await screen.findByText(/collecting-information/)
+      expect(create).toHaveBeenCalledOnce()
+    })
+
+    it('treats answering by hand during playback as a barge-in', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const task = createInitialTask()
+      const event = vi.fn().mockResolvedValue(apiResponse(applyEvent(task, {
+        eventId: 'demo-typed-answer',
+        type: 'user.input',
+        text: 'MU5102',
+        timestamp: new Date().toISOString(),
+      })))
+      const api = {
+        create: vi.fn().mockResolvedValue(spokenResponse(task, '好的，请告诉我她们的航班号。')),
+        event,
+        action: vi.fn(),
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('去机场接妈妈和豆豆', true))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByRole('button', { name: '打断语音播报并重新输入' })
+      const cancelledBefore = speech.synthesis.cancelled
+
+      // Typing an answer while the car is still talking must stop the playback,
+      // not talk over it.
+      const input = screen.getByLabelText('任务输入')
+      await user.clear(input)
+      await user.type(input, 'MU5102')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      await waitFor(() => expect(event).toHaveBeenCalledOnce())
+      expect(speech.synthesis.cancelled).toBeGreaterThan(cancelledBefore)
+      expect(await screen.findByRole('button', { name: '开始语音输入' })).toBeInTheDocument()
+    })
+
     it('sends a corrected transcript and drops the engine confidence', async () => {
       const user = userEvent.setup()
       const speech = createFakeSpeech()

@@ -165,6 +165,12 @@ export default function App({
     speech,
   })
   const voiceTranscript = voice.state === 'transcribing' ? voice.transcript : undefined
+  // While the microphone is capturing or its transcript is in flight, the field
+  // still holds the *previous* turn's words. Sending those would create a task
+  // from something the driver never meant to send, so the text path is closed
+  // until the voice turn hands the words back. `transcribing` stays open on
+  // purpose: that is where 发送 confirms.
+  const textPathLocked = voice.state === 'listening' || voice.state === 'submitting'
 
   // A finished transcript lands in the existing text field rather than in a
   // second input: one place to read, one place to correct, one 发送 to confirm.
@@ -174,12 +180,17 @@ export default function App({
   }, [voiceTranscript])
 
   function submitText() {
+    // The microphone owns the turn while it is capturing or submitting, so 发送
+    // must not race it. See `textPathLocked`.
+    if (textPathLocked) return
     // While a transcript is awaiting confirmation, 发送 confirms it through the
     // machine so the voice loop keeps its state instead of being bypassed.
     if (voice.state === 'transcribing') {
       voice.submit(text)
       return
     }
+    // Answering by hand during playback is a barge-in too: stop talking first.
+    if (voice.state === 'speaking') voice.cancel()
     void sendInput(text)
   }
 
@@ -294,14 +305,14 @@ export default function App({
 
   return <main className="demo-shell">
     <header><p className="eyebrow">CanvasFlow / Agent API</p><h1>机场接人任务卡片</h1><p>文本、Action、confirmation 与时间线事件统一通过 Gateway。</p></header>
-    <section className="prompt" aria-label="Agent input"><input aria-label="任务输入" value={text} disabled={pending} onChange={(event) => changeText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitText() }} placeholder="告诉我接谁、航班号或下一步" /><button
+    <section className="prompt" aria-label="Agent input"><input aria-label="任务输入" value={text} disabled={pending || textPathLocked} onChange={(event) => changeText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitText() }} placeholder="告诉我接谁、航班号或下一步" /><button
       type="button"
       className={`mic-button mic-${micState}`}
       aria-label={microphoneCopy.aria}
       aria-pressed={micState === 'listening'}
       disabled={!voice.available || pending || micState === 'submitting'}
       onClick={pressMicrophone}
-    >{microphoneCopy.text}</button><button type="button" onClick={submitText} disabled={pending}>发送</button></section>
+    >{microphoneCopy.text}</button><button type="button" onClick={submitText} disabled={pending || textPathLocked}>发送</button></section>
     {/* Rendered unconditionally so the region exists before the first announcement. */}
     <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
     <section className="console" aria-label="Event console"><div><span className="label">阶段</span><strong>{spec?.title ?? '等待创建任务'}</strong><small>{task ? `${task.phase} · taskRevision ${task.taskRevision} · uiRevision ${spec?.uiRevision}` : '尚无任务'}</small></div><button type="button" onClick={advance} disabled={pending || (!response && !localOnly) || !task || task.phase === 'completed' || task.phase === 'cancelled'}>推进下一事件</button></section>

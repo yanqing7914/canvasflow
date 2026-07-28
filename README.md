@@ -146,6 +146,7 @@ It also checks that a voice attempt leaves the task usable and that the text pat
 The demo accepts spoken task input through the browser's own Web Speech API, with no server of ours and no added dependency. `packages/voice` holds a pure state machine (`idle → listening → transcribing → submitting → speaking`, plus `error`) and the peripheral adapter; neither knows anything about airport pickup.
 
 - A recognized transcript lands in the existing task input, where it can be corrected before 发送 submits it.
+- The text path closes while the microphone is capturing or its transcript is in flight, because the field still holds the previous turn's words until the voice turn hands new ones back. It reopens as soon as there is something to confirm. Typing an answer during playback barges in first, so the car stops talking instead of talking over the driver.
 - Submission goes through the same Agent API call as typed text, tagged `source: 'voice'` with the engine's confidence. The frontend performs no task understanding; the spoken reply is whatever the Agent returns in `assistant`, played only when `shouldSpeak` is set.
 - Pressing the microphone during playback barges in and starts a new turn.
 - Every failure — no speech API, an insecure origin, a denied microphone, silence, a timeout — states what happened in the voice status line and leaves the text field usable, so a voice failure never blocks the task.

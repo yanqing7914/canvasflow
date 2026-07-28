@@ -143,12 +143,19 @@ test('keeps the task usable around a voice attempt', async ({ page }) => {
   // returns to a usable state and the text path still completes the turn.
   if (await mic.isEnabled()) {
     await mic.click()
+    // The text path is closed on purpose while the microphone is capturing, so
+    // end the turn before typing. A second press either hands back a transcript
+    // or reports that nothing was heard; both reopen the field.
+    const capturing = page.getByRole('button', { name: '停止语音输入' })
+    if (await capturing.isVisible()) await capturing.click()
     await expect(
-      page.getByRole('button', { name: /开始语音输入|停止语音输入|重试语音输入|放弃这次语音输入/ }),
+      page.getByRole('button', { name: /开始语音输入|重试语音输入|放弃这次语音输入/ }),
     ).toBeEnabled()
   }
 
-  await page.getByRole('button', { name: '发送' }).click()
+  const send = page.getByRole('button', { name: '发送' })
+  await expect(send).toBeEnabled()
+  await send.click()
   await expect(console).toContainText('collecting-information')
 })
 
