@@ -27,7 +27,7 @@ export type PolicyDecision =
 
 export interface PolicyGate {
   authorizeNavigationStart(task: AirportPickupTaskState, routeId: string, vehicle?: VehicleContext): PolicyDecision
-  authorizeReturnTrip(task: AirportPickupTaskState): PolicyDecision
+  authorizeReturnTrip(task: AirportPickupTaskState, vehicle?: VehicleContext): PolicyDecision
   authorizeCabinRevert(task: AirportPickupTaskState, vehicle?: VehicleContext): PolicyDecision
   authorizeLandingMessage(task: AirportPickupTaskState): PolicyDecision
   authorizeLandingMessageRetry(task: AirportPickupTaskState, confirmationId?: string): PolicyDecision
@@ -56,10 +56,14 @@ export class DefaultPolicyGate implements PolicyGate {
     return { allowed: true }
   }
 
-  authorizeReturnTrip(task: AirportPickupTaskState): PolicyDecision {
+  authorizeReturnTrip(task: AirportPickupTaskState, vehicle?: VehicleContext): PolicyDecision {
     if (task.phase === 'completed' || task.phase === 'cancelled') return { allowed: false, errorCode: 'TASK_TERMINAL' }
     if (task.phase !== 'returning-home' || !task.passengers.confirmedOnboard) return { allowed: false, errorCode: 'INVALID_TASK_PHASE' }
     if (task.flight?.status === 'cancelled') return { allowed: false, errorCode: 'FLIGHT_CANCELLED' }
+    // Return-route, cabin, and media changes are a parked-only workflow. Do
+    // not trust a stale UI action when the latest vehicle context is missing.
+    if (!vehicle) return { allowed: false, errorCode: 'VEHICLE_CONTEXT_REQUIRED' }
+    if (vehicle.speedKph > 0 || vehicle.gear !== 'P') return { allowed: false, errorCode: 'VEHICLE_MOVING' }
     return { allowed: true }
   }
 
@@ -200,6 +204,16 @@ export class EffectExecutor {
   constructor(registry: ProviderRegistry, policy: PolicyGate = new DefaultPolicyGate()) {
     this.#registry = registry
     this.#policy = policy
+  }
+
+  /** Shared preflight for workflows that must not resolve preferences while driving. */
+  authorizeReturnTrip(task: AirportPickupTaskState, vehicle?: VehicleContext): PolicyDecision {
+    return this.#policy.authorizeReturnTrip(task, vehicle)
+  }
+
+  /** Preflight terminal cleanup without invoking the cabin provider. */
+  authorizeCabinRevert(task: AirportPickupTaskState, vehicle?: VehicleContext): PolicyDecision {
+    return this.#policy.authorizeCabinRevert(task, vehicle)
   }
 
   startNavigation(input: {
@@ -532,6 +546,7 @@ export class EffectExecutor {
     mediaTitle?: string
     idempotencyKey: string
     effectId: string
+    vehicle?: VehicleContext
   }): CabinPreferenceExecution {
     const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
       effectId: input.effectId,
@@ -540,7 +555,7 @@ export class EffectExecutor {
       tool: 'vehicle.apply-cabin-profile',
       ...(errorCode ? { errorCode } : {}),
     })
-    const policy = this.#policy.authorizeReturnTrip(input.task)
+    const policy = this.authorizeReturnTrip(input.task, input.vehicle)
     if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
     if (input.temperatureC === undefined && input.mediaTitle === undefined) {
       return { succeeded: false, effect: effect('failed', 'PREFERENCE_UNAVAILABLE') }
@@ -655,6 +670,7 @@ export class EffectExecutor {
     idempotencyKey: string
     effectIdPrefix: string
     completed?: { route: boolean; cabin: boolean; media: boolean; cabinEffectId?: string }
+    vehicle?: VehicleContext
   }): ReturnTripExecution {
     const effects: EffectRecord[] = []
     const navigation = { routeId: '', destination: '', eta: '' }
@@ -771,7 +787,7 @@ export class EffectExecutor {
         ...(residual.route && navigation.routeId ? { navigation } : {}),
       }
     }
-    const policy = this.#policy.authorizeReturnTrip(input.task)
+    const policy = this.authorizeReturnTrip(input.task, input.vehicle)
     if (!policy.allowed) return failed('return-trip', policy.errorCode)
     const destinationId = input.preferences.homeDestinationId
     if (!destinationId && !(input.completed?.route === true)) return failed('navigation.update-route', 'PREFERENCE_UNAVAILABLE')
