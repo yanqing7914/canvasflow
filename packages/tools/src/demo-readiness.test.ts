@@ -83,11 +83,35 @@ function executeReadTool(
     })
   }
   if (tool === 'navigation.update-route') {
+    const via = timeline.id === 'route-reroute'
+      ? [{ id: 'via-ring-road-01', name: '外环快速路' }]
+      : step.event.type === 'charging.started'
+        ? [{ id: 'station-hongqiao-01', name: '虹桥超充站' }]
+        : undefined
+    const returningHome = step.event.type === 'user.confirmed-passengers-onboard'
+    const destination = returningHome
+      ? { id: 'destination-home', name: '家' }
+      : { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' }
+    const currentRouteId = state.navigation?.routeId ?? 'route-airport-001'
+    if (currentRouteId === 'route-airport-via-charge-001') {
+      const prior = registry['navigation.plan-route'](ctx, {
+        origin: { ...DEMO_ORIGIN },
+        destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+        via: [{ id: 'station-hongqiao-01', name: '虹桥超充站' }],
+      })
+      if (!prior.ok) return prior
+    }
+    const planned = registry['navigation.plan-route'](ctx, {
+      origin: { ...DEMO_ORIGIN },
+      destination,
+      ...(via ? { via } : {}),
+    })
+    if (!planned.ok || !planned.data) return planned
     return registry[tool](ctx, {
-      routeId: state.navigation?.routeId ?? 'route-airport-001',
-      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
-      ...(timeline.id === 'route-reroute' ? { via: [{ id: 'via-ring-road-01', name: '外环快速路' }] } : {}),
-      idempotencyKey: `${timeline.id}:navigation-update`,
+      routeId: currentRouteId,
+      destination,
+      ...(via ? { via } : {}),
+      idempotencyKey: `${timeline.id}:${step.event.eventId}:navigation-update`,
     })
   }
   if (tool === 'vehicle.get-status') {
@@ -126,6 +150,48 @@ function executeReadTool(
       text: prepared.data.text,
       confirmationId: prepared.data.confirmationId,
       idempotencyKey: `${timeline.id}:message-send`,
+    })
+  }
+  if (tool === 'memory.get-preferences') {
+    return registry[tool](ctx, {
+      memberIds: state.passengers.memberIds,
+      scopes: ['cabin', 'media'],
+    })
+  }
+  if (tool === 'vehicle.apply-cabin-profile') {
+    const preferences = registry['memory.get-preferences'](ctx, {
+      memberIds: state.passengers.memberIds,
+      scopes: ['cabin', 'media'],
+    })
+    if (!preferences.ok || !preferences.data) return preferences
+    const temperatureC = preferences.data.members.find((member) => member.rearTemperatureC !== undefined)?.rearTemperatureC
+    const mediaTitle = preferences.data.members.find((member) => member.mediaTitle !== undefined)?.mediaTitle
+    return registry[tool](ctx, {
+      zone: 'rear',
+      ...(temperatureC !== undefined ? { temperatureC } : {}),
+      ...(mediaTitle !== undefined ? { mediaTitle } : {}),
+      sourceMemberIds: state.passengers.memberIds,
+      idempotencyKey: `${timeline.id}:cabin-profile`,
+    })
+  }
+  if (tool === 'media.play') {
+    const preferences = registry['memory.get-preferences'](ctx, {
+      memberIds: state.passengers.memberIds,
+      scopes: ['media'],
+    })
+    if (!preferences.ok || !preferences.data) return preferences
+    const mediaTitle = preferences.data.members.find((member) => member.mediaTitle !== undefined)?.mediaTitle
+    if (!mediaTitle) return preferences
+    return registry[tool](ctx, {
+      mediaTitle,
+      sourceMemberId: 'doubao',
+      idempotencyKey: `${timeline.id}:media-play`,
+    })
+  }
+  if (tool === 'memory.propose-update') {
+    return registry[tool](ctx, {
+      memberId: state.passengers.memberIds[0] ?? 'mom',
+      changes: { rearTemperatureC: 25 },
     })
   }
   throw new Error(`Unsupported demo-readiness tool: ${tool}`)
@@ -207,6 +273,7 @@ describe('voice fallback fixtures', () => {
 
 describe('replayable exception timelines', () => {
   const names = [
+    'main-flow.json',
     'provider-timeout.json',
     'flight-delayed.json',
     'flight-cancelled.json',
