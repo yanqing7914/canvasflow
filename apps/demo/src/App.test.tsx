@@ -7,6 +7,7 @@ import { applyEvent, createInitialTask } from '@canvasflow/agent'
 import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, TaskUpdateEnvelope, UISpec, VehicleContext } from '@canvasflow/schema'
 import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
+import { createFakeSpeech } from './test/speech'
 
 describe('demo integration', () => {
   function apiResponse(task: AirportPickupTaskState): AgentResponse {
@@ -664,5 +665,195 @@ describe('demo integration', () => {
     expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
     expect(screen.getByText('无法重试发送')).toBeInTheDocument()
     expect(screen.getByText('没有已授权的落地通知联系人')).toBeInTheDocument()
+  })
+
+  describe('voice input', () => {
+    /** Fake engine callbacks reach React from outside its event system. */
+    const emit = (fn: () => void) => act(() => { fn() })
+
+    function spokenResponse(task: AirportPickupTaskState, text: string): AgentResponse {
+      return { ...apiResponse(task), assistant: { text, shouldSpeak: true } }
+    }
+
+    it('sends a confirmed transcript through the Agent API and speaks the reply', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const created = spokenResponse(createInitialTask(), '好的，请告诉我她们的航班号。')
+      const create = vi.fn().mockResolvedValue(created)
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('我现在要去机场接妈妈和豆豆', true, 0.94))
+
+      // The transcript lands in the one existing input, ready to correct.
+      const input = screen.getByLabelText('任务输入')
+      expect(input).toHaveValue('我现在要去机场接妈妈和豆豆')
+      expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('已转写，确认或编辑后发送。')
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText(/collecting-information/)
+
+      // Source and confidence are reported; the meaning of the words is not.
+      expect(create).toHaveBeenCalledWith('我现在要去机场接妈妈和豆豆', {
+        vehicleContext: expect.anything(),
+        source: 'voice',
+        confidence: 0.94,
+      })
+      await waitFor(() => expect(speech.synthesis.spoken).toHaveLength(1))
+      expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('好的，请告诉我她们的航班号。')
+      expect(input).toHaveValue('')
+    })
+
+    it('sends a corrected transcript and drops the engine confidence', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('去机场接马麻', true, 0.41))
+
+      const input = screen.getByLabelText('任务输入')
+      await user.clear(input)
+      await user.type(input, '去机场接妈妈')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText(/collecting-information/)
+
+      // A hand-edited transcript is no longer the engine's guess, so no
+      // confidence is claimed for it.
+      expect(create).toHaveBeenCalledWith('去机场接妈妈', {
+        vehicleContext: expect.anything(),
+        source: 'voice',
+      })
+    })
+
+    it('barges in on playback and starts a fresh recognition turn', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = {
+        create: vi.fn().mockResolvedValue(spokenResponse(createInitialTask(), '好的，请告诉我她们的航班号。')),
+        event: vi.fn(),
+        action: vi.fn(),
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('去机场接妈妈和豆豆', true))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      const bargeIn = await screen.findByRole('button', { name: '打断语音播报并重新输入' })
+      const cancelledBefore = speech.synthesis.cancelled
+
+      await user.click(bargeIn)
+      expect(speech.synthesis.cancelled).toBeGreaterThan(cancelledBefore)
+      expect(speech.engines).toHaveLength(2)
+      expect(speech.engine().started).toBe(1)
+      expect(screen.getByRole('button', { name: '停止语音输入' })).toBeInTheDocument()
+    })
+
+    it('abandons a transcript on a second press but keeps the words in the field', async () => {
+      const user = userEvent.setup()
+      const create = vi.fn()
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      const speech = createFakeSpeech()
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('去机场接妈妈', true))
+      await user.click(screen.getByRole('button', { name: '放弃这次语音输入' }))
+
+      expect(screen.getByRole('button', { name: '开始语音输入' })).toBeInTheDocument()
+      expect(screen.getByLabelText('任务输入')).toHaveValue('去机场接妈妈')
+      expect(create).not.toHaveBeenCalled()
+    })
+
+    it('keeps a rejected transcript in the field so it can be retried as text', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const create = vi.fn()
+        .mockRejectedValueOnce(new Error('temporary create failure'))
+        .mockResolvedValueOnce(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('去机场接妈妈和豆豆', true))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByRole('alert')
+
+      const input = screen.getByLabelText('任务输入')
+      expect(input).toHaveValue('去机场接妈妈和豆豆')
+      expect(speech.synthesis.spoken).toHaveLength(0)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText(/collecting-information/)
+      expect(create).toHaveBeenCalledTimes(2)
+    })
+
+    it('explains a denied microphone and leaves the text path working', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().fail('not-allowed'))
+
+      expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('麦克风权限未开启')
+      expect(screen.getByRole('button', { name: '重试语音输入' })).toHaveTextContent('语音出错')
+
+      // The text field never became unusable, so the turn can still be completed.
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText(/collecting-information/)
+      expect(create).toHaveBeenCalledWith('我现在要去机场接妈妈和豆豆', { vehicleContext: expect.anything() })
+    })
+
+    it('reports an empty recognition result instead of submitting nothing', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const create = vi.fn()
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().onend?.())
+
+      expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('没有听到内容')
+      expect(create).not.toHaveBeenCalled()
+    })
+
+    it('disables the entry point without a speech engine and keeps the text path', async () => {
+      const user = userEvent.setup()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      // No `speech` prop: jsdom exposes no Web Speech API, which is the same
+      // situation as a browser without it.
+      render(<App api={api} />)
+
+      const mic = screen.getByRole('button', { name: '语音入口暂不可用' })
+      expect(mic).toBeDisabled()
+      expect(mic).toHaveTextContent('语音不可用')
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText(/collecting-information/)
+      expect(create).toHaveBeenCalledOnce()
+    })
+
+    it('releases the microphone when the surface unmounts', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      const rendered = render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      expect(speech.engine().started).toBe(1)
+
+      rendered.unmount()
+      expect(speech.engine().aborted).toBeGreaterThan(0)
+      expect(speech.engine().onresult).toBeNull()
+    })
   })
 })

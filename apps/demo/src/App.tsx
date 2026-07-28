@@ -6,9 +6,11 @@ import {
 import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
 import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, TaskUpdateEnvelope, VehicleContext } from '@canvasflow/schema'
+import type { SpeechControllerDeps } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
 import { UISpecRenderer } from './UISpecRenderer'
+import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 
 const defaultClient = new AgentApiClient('/v1')
 type DemoAgentApi = Pick<AgentApiClient, 'create' | 'event' | 'action' | 'confirmation'>
@@ -16,16 +18,36 @@ type DemoAgentApi = Pick<AgentApiClient, 'create' | 'event' | 'action' | 'confir
 
 const demoRuntime = createSideEffectRuntime()
 
+/** Whether the Gateway accepted the input, plus any reply worth speaking. */
+type InputOutcome = { sent: boolean; speak?: string }
+
+/** Microphone copy per voice state, plus the disabled-entry case. */
+const voiceButtonLabels = {
+  unavailable: { aria: '语音入口暂不可用', text: '语音不可用' },
+  idle: { aria: '开始语音输入', text: '语音' },
+  listening: { aria: '停止语音输入', text: '正在聆听' },
+  transcribing: { aria: '放弃这次语音输入', text: '待确认' },
+  submitting: { aria: '正在提交语音内容', text: '提交中' },
+  speaking: { aria: '打断语音播报并重新输入', text: '正在播报' },
+  error: { aria: '重试语音输入', text: '语音出错' },
+} as const
+
 export default function App({
   api = defaultClient,
   initialTask,
   composeContext = {},
   initialVehicleContext = defaultDemoVehicleContext,
+  voiceEnabled = true,
+  speech,
 }: {
   api?: DemoAgentApi
   initialTask?: AirportPickupTaskState
   composeContext?: ComposerContext
   initialVehicleContext?: VehicleContext
+  /** Lets a test or a kiosk build turn the voice entry point off entirely. */
+  voiceEnabled?: boolean
+  /** Test seam for injecting fake Web Speech engines. */
+  speech?: SpeechControllerDeps
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
   const [response, setResponse] = useState<AgentResponse>()
@@ -87,33 +109,95 @@ export default function App({
     }
   }
 
-  function submitText() {
-    const value = text.trim()
-    if (!value || pendingRef.current) return
+  /** The Agent decides what to say; the client only decides whether to play it. */
+  function spokenReply(next: AgentResponse): string | undefined {
+    return next.assistant?.shouldSpeak ? next.assistant.text : undefined
+  }
+
+  /**
+   * The single input path. Text and voice both arrive here, so voice never gets
+   * its own interpretation of what the driver said — `meta` only tells the
+   * Gateway where the words came from.
+   */
+  async function sendInput(value: string, meta?: VoiceSubmitMeta): Promise<InputOutcome> {
+    const trimmed = value.trim()
+    if (!trimmed || pendingRef.current) return { sent: false }
     if (!response && !localOnly) {
-      void run(() => api.create(value, { vehicleContext })).then((created) => {
-        if (created) {
-          setStepIndex(1)
-          setText('')
-        }
-      })
-    } else if (!response) {
+      const created = await run(() => api.create(trimmed, {
+        vehicleContext,
+        ...(meta ? { source: meta.source } : {}),
+        ...(meta?.confidence === undefined ? {} : { confidence: meta.confidence }),
+      }))
+      if (!created) return { sent: false }
+      setStepIndex(1)
+      setText('')
+      return { sent: true, speak: spokenReply(created) }
+    }
+    if (!response) {
       setLocalTask((current) => current ? applyEvent(current, {
         eventId: `demo-input-${Date.now()}`,
         type: 'user.input',
-        text: value,
+        text: trimmed,
         timestamp: new Date().toISOString(),
       }, demoRuntime.preferences) : current)
       setText('')
-    } else {
-      const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
-      void run(() => api.event(response.task, { type: 'user.input', text: value })).then((next) => {
-        if (next) {
-          if (nextTimelineIndex !== undefined) setStepIndex(nextTimelineIndex)
-          setText('')
-        }
-      })
+      return { sent: true }
     }
+    const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
+    const next = await run(() => api.event(response.task, { type: 'user.input', text: trimmed }))
+    if (!next) return { sent: false }
+    if (nextTimelineIndex !== undefined) setStepIndex(nextTimelineIndex)
+    setText('')
+    return { sent: true, speak: spokenReply(next) }
+  }
+
+  async function submitVoiceTranscript(transcript: string, meta: VoiceSubmitMeta) {
+    const outcome = await sendInput(transcript, meta)
+    // A refused turn must not lose what the driver said: park the transcript in
+    // the text field so 发送 can retry it without speaking again.
+    if (!outcome.sent) setText(transcript)
+    return outcome.speak
+  }
+
+  const voice = useVoice({
+    enabled: voiceEnabled,
+    onTranscript: submitVoiceTranscript,
+    speech,
+  })
+  const voiceTranscript = voice.state === 'transcribing' ? voice.transcript : undefined
+
+  // A finished transcript lands in the existing text field rather than in a
+  // second input: one place to read, one place to correct, one 发送 to confirm.
+  useEffect(() => {
+    if (voiceTranscript === undefined) return
+    setText(voiceTranscript)
+  }, [voiceTranscript])
+
+  function submitText() {
+    // While a transcript is awaiting confirmation, 发送 confirms it through the
+    // machine so the voice loop keeps its state instead of being bypassed.
+    if (voice.state === 'transcribing') {
+      voice.submit(text)
+      return
+    }
+    void sendInput(text)
+  }
+
+  function changeText(value: string) {
+    setText(value)
+    // Editing a transcript is still the same turn; tell the machine so the
+    // engine's confidence is dropped along with its guess.
+    if (voice.state === 'transcribing') voice.edit(value)
+  }
+
+  function pressMicrophone() {
+    // Confirming is 发送's job, so here the button only leaves the voice turn.
+    // The transcript stays in the text field on purpose.
+    if (voice.state === 'transcribing') {
+      voice.cancel()
+      return
+    }
+    voice.press()
   }
 
   function advance() {
@@ -193,9 +277,33 @@ export default function App({
     return index === -1 ? undefined : index + 1
   }
 
+  const micState = voice.available ? voice.state : 'unavailable'
+  const microphoneCopy = voiceButtonLabels[micState]
+  // One polite live region for the whole voice loop, so the mic state and the
+  // interim words reach a screen reader without competing announcements.
+  const voiceStatus = voice.error?.message
+    ?? (voice.state === 'listening'
+      ? voice.display || '正在聆听…'
+      : voice.state === 'transcribing'
+        ? '已转写，确认或编辑后发送。'
+        : voice.state === 'submitting'
+          ? '正在提交…'
+          : voice.state === 'speaking'
+            ? voice.speaking ?? '正在播报'
+            : '')
+
   return <main className="demo-shell">
     <header><p className="eyebrow">CanvasFlow / Agent API</p><h1>机场接人任务卡片</h1><p>文本、Action、confirmation 与时间线事件统一通过 Gateway。</p></header>
-    <section className="prompt" aria-label="Agent input"><input aria-label="任务输入" value={text} disabled={pending} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitText() }} placeholder="告诉我接谁、航班号或下一步" /><button type="button" onClick={submitText} disabled={pending}>发送</button></section>
+    <section className="prompt" aria-label="Agent input"><input aria-label="任务输入" value={text} disabled={pending} onChange={(event) => changeText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitText() }} placeholder="告诉我接谁、航班号或下一步" /><button
+      type="button"
+      className={`mic-button mic-${micState}`}
+      aria-label={microphoneCopy.aria}
+      aria-pressed={micState === 'listening'}
+      disabled={!voice.available || pending || micState === 'submitting'}
+      onClick={pressMicrophone}
+    >{microphoneCopy.text}</button><button type="button" onClick={submitText} disabled={pending}>发送</button></section>
+    {/* Rendered unconditionally so the region exists before the first announcement. */}
+    <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
     <section className="console" aria-label="Event console"><div><span className="label">阶段</span><strong>{spec?.title ?? '等待创建任务'}</strong><small>{task ? `${task.phase} · taskRevision ${task.taskRevision} · uiRevision ${spec?.uiRevision}` : '尚无任务'}</small></div><button type="button" onClick={advance} disabled={pending || (!response && !localOnly) || !task || task.phase === 'completed' || task.phase === 'cancelled'}>推进下一事件</button></section>
     {error && <p role="alert">{error}</p>}
     {spec && task && <UISpecRenderer
