@@ -1,0 +1,31 @@
+{
+  "id": "message-failed",
+  "title": "落地通知发送失败",
+  "description": "落地通知 Provider 返回 SEND_FAILED；任务保留原联系人，UI 只提供显式重试，不自动重复发送。",
+  "mode": "fixture",
+  "initialTaskState": {
+    "taskId": "pickup-message-failed-001",
+    "surfaceId": "airport-pickup-main",
+    "taskRevision": 4,
+    "uiRevision": 4,
+    "phase": "driving-to-airport",
+    "passengers": { "memberIds": ["mom"], "names": ["妈妈"], "confirmedOnboard": false },
+    "flight": { "flightNumber": "MU5102", "status": "landed", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:40:00+08:00", "terminal": "T2" },
+    "navigation": { "routeId": "route-airport-001", "destination": "虹桥机场 T2", "eta": "2026-07-22T20:52:00+08:00", "status": "active" },
+    "charging": { "recommended": false, "accepted": false, "status": "none" },
+    "message": { "autoNotifyAuthorized": true, "status": "scheduled", "landingNoticeSent": false, "pendingMessageId": "pickup-message-failed-001:MU5102:landing", "pendingContactId": "contact-fail", "idempotencyKey": "pickup-message-failed-001:MU5102:landing" },
+    "processedEventIds": [],
+    "updatedAt": "2026-07-22T20:40:00+08:00"
+  },
+  "steps": [
+    {
+      "event": { "eventId": "message-provider-failed", "type": "message.failed", "messageId": "pickup-message-failed-001:MU5102:landing", "errorCode": "SEND_FAILED", "timestamp": "2026-07-22T20:41:00+08:00" },
+      "toolCalls": ["message.prepare", "message.send"],
+      "expectedToolErrors": { "message.send": "SEND_FAILED" },
+      "expectedUI": { "generatedBy": "composer", "primaryComponent": "message-preview", "priority": "high" },
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 5,
+      "note": "失败后不设 landingNoticeSent；pendingContactId 保留给用户显式重试"
+    }
+  ]
+}

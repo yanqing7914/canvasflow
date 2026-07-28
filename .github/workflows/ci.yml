@@ -52,7 +52,7 @@ jobs:
           path: |
             package.json
             package-lock.json
-            tsconfig.base.json
+            tsconfig.json
             scripts/dev.mjs
             apps/demo/package.json
             apps/demo/server.ts

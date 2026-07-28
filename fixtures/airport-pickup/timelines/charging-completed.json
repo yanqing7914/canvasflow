@@ -1,0 +1,31 @@
+{
+  "id": "charging-completed",
+  "title": "补能完成后保持机场任务",
+  "description": "补能完成事件更新充电状态；车辆快照切到 post-charge，机场路线和航班事实不被覆盖。",
+  "mode": "fixture",
+  "initialTaskState": {
+    "taskId": "pickup-charging-completed-001",
+    "surfaceId": "airport-pickup-main",
+    "taskRevision": 4,
+    "uiRevision": 4,
+    "phase": "driving-to-airport",
+    "passengers": { "memberIds": ["mom", "doubao"], "names": ["妈妈", "豆豆"], "confirmedOnboard": false },
+    "flight": { "flightNumber": "MU5102", "status": "in-air", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:40:00+08:00", "terminal": "T2" },
+    "navigation": { "routeId": "route-airport-via-charge-001", "destination": "虹桥机场 T2", "eta": "2026-07-22T20:37:00+08:00", "status": "active" },
+    "charging": { "recommended": true, "accepted": true, "status": "active" },
+    "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false },
+    "processedEventIds": [],
+    "updatedAt": "2026-07-22T20:17:00+08:00"
+  },
+  "steps": [
+    {
+      "event": { "eventId": "charging-provider-completed", "type": "charging.completed", "batteryPercent": 78, "timestamp": "2026-07-22T20:18:00+08:00" },
+      "toolCalls": ["vehicle.get-status", "charging.recommend"],
+      "expectedToolErrors": {},
+      "expectedUI": { "generatedBy": "composer", "primaryComponent": "charging-recommendation", "priority": "normal" },
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 5,
+      "note": "完成补能后显示 post-charge 状态，不自动篡改现有机场路线"
+    }
+  ]
+}
