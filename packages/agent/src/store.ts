@@ -125,20 +125,14 @@ export class MemoryTaskStore implements TaskStore {
 
   reset(value: StoredTask): StoredTask {
     const taskId = value.task.taskId
-    const createRequestIds = [...this.#createResults.entries()]
-      .filter(([, stored]) => stored.task.taskId === taskId)
-      .map(([clientRequestId]) => clientRequestId)
     for (const key of this.#eventResults.keys()) {
       if (key.startsWith(`${taskId}:`)) this.#eventResults.delete(key)
     }
     for (const key of this.#idempotencyResults.keys()) {
       if (key.startsWith(`${taskId}:`)) this.#idempotencyResults.delete(key)
     }
-    const stored = this.save(value)
-    for (const clientRequestId of createRequestIds) {
-      this.#createResults.set(clientRequestId, structuredClone(stored))
-    }
-    return stored
+    // A create key owns its first response for its full retention period.
+    return this.save(value)
   }
 
   readTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead {

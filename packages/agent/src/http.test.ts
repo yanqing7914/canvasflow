@@ -123,7 +123,8 @@ describe('Agent HTTP API', () => {
 
   it('routes event, action, confirmation, cancellation, and reset requests', async () => {
     const { baseUrl } = await startServer()
-    const created = await (await post(baseUrl, '/v1/tasks', createRequest())).json() as AgentResponse
+    const createdResponse = await post(baseUrl, '/v1/tasks', createRequest())
+    const created = await createdResponse.json() as AgentResponse
     const taskId = created.task.taskId
 
     const eventResponse = await post(baseUrl, `/v1/tasks/${taskId}/events`, {
@@ -168,7 +169,8 @@ describe('Agent HTTP API', () => {
 
     const createRetry = await post(baseUrl, '/v1/tasks', createRequest())
     expect(createRetry.status).toBe(200)
-    expect((await createRetry.json()).task).toEqual(reset.task)
+    expect(createRetry.headers.get('location')).toBeNull()
+    expect(await createRetry.json()).toMatchObject({ task: created.task, ui: created.ui })
   })
 
   it('returns one error shape for invalid requests, missing tasks, and revision conflicts', async () => {
