@@ -497,14 +497,27 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
           FOREIGN KEY(task_id) REFERENCES agent_tasks(task_id) ON DELETE CASCADE
         );
       `)
-      const missingUpdates = this.#database.prepare(`
-        SELECT tasks.stored_json, COALESCE(cursors.latest_cursor, 1) AS cursor
+      // Recover cursor rows independently from envelopes. An interrupted or
+      // partially restored database may retain updates while losing its cursor.
+      this.#database.exec(`
+        INSERT INTO agent_task_update_cursors (task_id, latest_cursor)
+        SELECT tasks.task_id, COALESCE(MAX(updates.cursor), 1)
         FROM agent_tasks AS tasks
-        LEFT JOIN agent_task_update_cursors AS cursors ON cursors.task_id = tasks.task_id
+        LEFT JOIN agent_task_updates AS updates ON updates.task_id = tasks.task_id
+        GROUP BY tasks.task_id
+        ON CONFLICT(task_id) DO UPDATE SET latest_cursor = MAX(
+          agent_task_update_cursors.latest_cursor,
+          excluded.latest_cursor
+        );
+      `)
+      const missingUpdates = this.#database.prepare(`
+        SELECT tasks.stored_json, cursors.latest_cursor AS cursor
+        FROM agent_tasks AS tasks
+        JOIN agent_task_update_cursors AS cursors ON cursors.task_id = tasks.task_id
         WHERE NOT EXISTS (
           SELECT 1 FROM agent_task_updates AS updates
           WHERE updates.task_id = tasks.task_id
-            AND updates.cursor = COALESCE(cursors.latest_cursor, 1)
+            AND updates.cursor = cursors.latest_cursor
         )
       `).all() as SqlRow[]
       for (const row of missingUpdates) {
