@@ -415,6 +415,30 @@ describe('PersistentAgentRuntime', () => {
     })
   })
 
+  it('restores a missing update cursor from retained envelopes before the next write', async () => {
+    const path = await databasePath()
+    const firstRuntime = runtime(path)
+    const created = firstRuntime.createTask(createRequest())
+    firstRuntime.close()
+    const database = new DatabaseSync(path)
+    database.prepare('DELETE FROM agent_task_update_cursors WHERE task_id = ?').run(created.task.taskId)
+    database.close()
+
+    const repaired = runtime(path)
+    expect(repaired.getTaskUpdates(created.task.taskId)).toMatchObject({
+      latestCursor: 1,
+      updates: [expect.objectContaining({ cursor: 1, snapshot: expect.objectContaining({ task: created.task }) })],
+    })
+    const moving = repaired.submitEvent(created.task.taskId, {
+      clientRequestId: 'cursor-repair-moving', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'cursor-repair-moving', type: 'vehicle.moving', speedKph: 80, timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+    expect(repaired.getTaskUpdates(created.task.taskId, 1)).toMatchObject({
+      latestCursor: 2,
+      updates: [expect.objectContaining({ cursor: 2, snapshot: expect.objectContaining({ ui: moving.ui }) })],
+    })
+  })
+
   it('restores request presentation context after a process restart', async () => {
     const path = await databasePath()
     const firstRuntime = runtime(path)
