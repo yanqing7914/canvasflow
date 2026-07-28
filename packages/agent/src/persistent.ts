@@ -167,10 +167,8 @@ export class SqliteTaskStore implements TaskStore {
     const taskId = value.task.taskId
     this.#database.prepare('DELETE FROM agent_event_results WHERE task_id = ?').run(taskId)
     this.#database.prepare('DELETE FROM agent_idempotency_results WHERE task_id = ?').run(taskId)
-    const stored = this.save(value)
-    this.#database.prepare('UPDATE agent_create_results SET stored_json = ? WHERE task_id = ?')
-      .run(JSON.stringify(stored), taskId)
-    return stored
+    // Keep the immutable create receipt so a retried POST returns its original result.
+    return this.save(value)
   }
 
   readTaskUpdates(taskId: string, afterCursor?: number): TaskUpdateRead {

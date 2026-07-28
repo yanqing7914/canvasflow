@@ -325,6 +325,27 @@ describe('PersistentAgentRuntime', () => {
     expect(restarted.createTask(createRequest()).task).toEqual(created.task)
   })
 
+  it('preserves the original create result when reset is persisted and restarted', async () => {
+    const path = await databasePath()
+    const firstRuntime = runtime(path)
+    const created = firstRuntime.createTask(createRequest())
+    const cancelled = firstRuntime.cancelTask(created.task.taskId, {
+      clientRequestId: 'cancel-before-reset', expectedTaskRevision: created.task.taskRevision, eventId: 'cancel-before-reset',
+    })
+    const reset = firstRuntime.resetTask(created.task.taskId, {
+      clientRequestId: 'reset-create-replay', expectedTaskRevision: cancelled.task.taskRevision,
+    })
+    expect(reset.task).not.toEqual(created.task)
+    expect(firstRuntime.createTask(createRequest()).task).toEqual(created.task)
+    firstRuntime.close()
+
+    const restarted = runtime(path)
+    const replay = restarted.createTask(createRequest())
+    expect(replay.task).toEqual(created.task)
+    expect(replay.ui).toEqual(created.ui)
+    expect(restarted.getTask(created.task.taskId).task).toEqual(reset.task)
+  })
+
   it('restores update cursors after restart and exposes cross-runtime writes', async () => {
     const path = await databasePath()
     const firstRuntime = runtime(path)
