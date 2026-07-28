@@ -400,6 +400,37 @@ describe('Agent HTTP API', () => {
     await streamReaders.at(-1)?.cancel()
   })
 
+  it('resyncs a stale durable cursor with only the latest authoritative snapshot', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'canvasflow-http-sse-'))
+    temporaryDirectories.push(directory)
+    const { baseUrl, runtime } = await startPersistentServer({
+      databasePath: join(directory, 'agent.sqlite'),
+      maxTaskUpdatesPerTask: 2,
+    })
+    const created = runtime.createTask(createRequest('接妈妈，航班 MU5102', 'sse-retained-create'))
+    const cancelled = runtime.cancelTask(created.task.taskId, {
+      clientRequestId: 'sse-retained-cancel',
+      expectedTaskRevision: created.task.taskRevision,
+      eventId: 'sse-retained-cancel',
+    })
+    const reset = runtime.resetTask(created.task.taskId, {
+      clientRequestId: 'sse-retained-reset',
+      expectedTaskRevision: cancelled.task.taskRevision,
+    })
+
+    const response = await fetch(`${baseUrl}/v1/tasks/${created.task.taskId}/events`, {
+      headers: { accept: 'text/event-stream', 'last-event-id': streamId(created.task.taskId, 0) },
+    })
+    const chunk = await readStreamThrough(response, `id: ${streamId(created.task.taskId, 3)}\n`)
+
+    expect(response.status).toBe(200)
+    expect(chunk).not.toContain(`id: ${streamId(created.task.taskId, 1)}\n`)
+    expect(chunk).not.toContain(`id: ${streamId(created.task.taskId, 2)}\n`)
+    expect(chunk).toContain(`id: ${streamId(created.task.taskId, 3)}\n`)
+    expect(chunk).toContain(`"snapshot":${JSON.stringify({ task: reset.task, ui: reset.ui })}`)
+    await streamReaders.at(-1)?.cancel()
+  })
+
   it('rejects invalid, foreign-task, and future Last-Event-ID values before SSE headers', async () => {
     const { baseUrl } = await startServer()
     const first = await (await post(baseUrl, '/v1/tasks', createRequest('接妈妈，航班 MU5102', 'first'))).json() as AgentResponse
