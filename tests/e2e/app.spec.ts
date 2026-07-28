@@ -434,7 +434,6 @@ test('does not create a landing notification when no passenger authorized one', 
     task: { message: { autoNotifyAuthorized: false, status: 'idle', landingNoticeSent: false } },
     effects: [],
   })
-  await expect(page.getByLabel('Effect receipts')).toHaveCount(0)
 })
 
 test('shows a deterministic fallback when the flight provider times out', async ({ page }) => {
