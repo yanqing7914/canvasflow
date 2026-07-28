@@ -1,0 +1,26 @@
+{
+  "id": "flight-cancelled",
+  "title": "航班取消安全阻断",
+  "description": "MU5104 被取消；工具层不发送落地消息，Agent/Policy 应阻止后续导航。",
+  "mode": "fixture",
+  "initialTaskState": { "taskId": "pickup-cancelled-001", "surfaceId": "airport-pickup-main", "taskRevision": 0, "uiRevision": 0, "phase": "collecting-information", "passengers": { "memberIds": [], "names": [], "confirmedOnboard": false }, "charging": { "recommended": false, "accepted": false, "status": "none" }, "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false }, "processedEventIds": [], "updatedAt": "2026-07-22T20:00:00+08:00" },
+  "steps": [
+    {
+      "event": { "eventId": "cancelled-task-input", "type": "user.input", "text": "接妈妈，航班 MU5104", "timestamp": "2026-07-22T20:01:00+08:00" },
+      "toolCalls": ["family.resolve-members", "flight.get-status"],
+      "statePatch": { "passengers": { "memberIds": ["mom"], "names": ["妈妈"], "confirmedOnboard": false } },
+      "expectedPhase": "preparing",
+      "expectedTaskRevision": 1,
+      "note": "取消状态尚未改变任务阶段，后续出发由 Policy 阻断"
+    },
+    {
+      "event": { "eventId": "cancelled-flight-update", "type": "flight.updated", "flight": { "flightNumber": "MU5104", "status": "cancelled", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:30:00+08:00", "terminal": "T2" }, "timestamp": "2026-07-22T20:10:00+08:00" },
+      "toolCalls": ["flight.get-status"],
+      "expectedToolErrors": {},
+      "expectedUI": { "generatedBy": "composer", "primaryComponent": "flight-status", "priority": "normal" },
+      "expectedPhase": "preparing",
+      "expectedTaskRevision": 2,
+      "note": "取消航班不得进入自动通知或导航"
+    }
+  ]
+}

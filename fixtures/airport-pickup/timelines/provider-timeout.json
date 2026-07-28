@@ -1,0 +1,27 @@
+{
+  "id": "provider-timeout",
+  "title": "航班 Provider 超时降级",
+  "description": "MU0000 确定性触发航班 Provider 超时；任务事实保留，前端可展示降级卡片并允许显式重试。",
+  "mode": "fixture",
+  "initialTaskState": { "taskId": "pickup-timeout-001", "surfaceId": "airport-pickup-main", "taskRevision": 0, "uiRevision": 0, "phase": "collecting-information", "passengers": { "memberIds": [], "names": [], "confirmedOnboard": false }, "charging": { "recommended": false, "accepted": false, "status": "none" }, "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false }, "processedEventIds": [], "updatedAt": "2026-07-22T20:00:00+08:00" },
+  "steps": [
+    {
+      "event": { "eventId": "timeout-task-input", "type": "user.input", "text": "接妈妈，航班 MU0000", "timestamp": "2026-07-22T20:01:00+08:00" },
+      "toolCalls": ["family.resolve-members", "flight.get-status"],
+      "expectedToolErrors": { "flight.get-status": "PROVIDER_TIMEOUT" },
+      "statePatch": { "passengers": { "memberIds": ["mom"], "names": ["妈妈"], "confirmedOnboard": false } },
+      "expectedPhase": "preparing",
+      "expectedTaskRevision": 1,
+      "note": "本地解析先保留用户意图，但航班事实尚未被 Provider 验证"
+    },
+    {
+      "event": { "eventId": "timeout-flight-provider", "type": "provider.timeout", "provider": "flight.get-status", "timestamp": "2026-07-22T20:01:01+08:00" },
+      "toolCalls": ["flight.get-status"],
+      "expectedToolErrors": { "flight.get-status": "PROVIDER_TIMEOUT" },
+      "expectedUI": { "generatedBy": "fallback", "primaryComponent": "status-banner", "priority": "high", "fallback": { "title": "航班数据暂时不可用", "message": "已保留乘客和航班输入，可稍后重试。" } },
+      "expectedPhase": "preparing",
+      "expectedTaskRevision": 1,
+      "note": "超时是错误信号，不应覆盖已有任务事实"
+    }
+  ]
+}
