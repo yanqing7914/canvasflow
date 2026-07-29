@@ -9,7 +9,7 @@ import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, TaskUpd
 import type { SpeechControllerDeps } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
-import { UISpecRenderer } from './UISpecRenderer'
+import { UISpecRenderer } from './ui'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 
 const defaultClient = new AgentApiClient('/v1')

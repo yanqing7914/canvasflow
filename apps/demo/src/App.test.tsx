@@ -427,8 +427,10 @@ describe('demo integration', () => {
     expect(screen.getByText(/preparing/)).toBeInTheDocument()
 
     await user.click(advance) // charging recommend
-    expect(screen.getByText('charging-recommendation')).toBeInTheDocument()
-    expect(screen.getByLabelText('当前电量 42%')).toBeInTheDocument()
+    // The card is identified by what the driver reads, not by its component type: the
+    // renderer no longer prints schema vocabulary on the task surface.
+    expect(document.querySelector('[data-component-type="charging-recommendation"]')).toBeInTheDocument()
+    expect(screen.getByLabelText('电量从 42% 到 18%')).toBeInTheDocument()
     expect(screen.getByText('18%')).toBeInTheDocument()
 
     await user.click(advance) // navigation.started
@@ -595,7 +597,9 @@ describe('demo integration', () => {
     )
     expect(screen.getByText('界面暂时降级')).toBeInTheDocument()
     expect(screen.getByText('已切换到安全模板。')).toBeInTheDocument()
-    expect(screen.getByText('status-banner')).toBeInTheDocument()
+    expect(document.querySelector('[data-component-type="status-banner"]')).toBeInTheDocument()
+    // A degraded surface must not explain itself in schema terms.
+    expect(screen.queryByText('status-banner')).not.toBeInTheDocument()
   })
 
   it('renders media-only cabin preferences without inventing temperature', () => {
