@@ -337,6 +337,70 @@ describe('AgentGateway', () => {
     expect(started.task.phase).toBe('driving-to-airport')
   })
 
+  it('rejects a stale onboard confirmation while the latest vehicle context is moving', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const plan = vi.fn(base['navigation.plan-route'])
+    const update = vi.fn(base['navigation.update-route'])
+    const cabin = vi.fn(base['vehicle.apply-cabin-profile'])
+    const media = vi.fn(base['media.play'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => now,
+      createId: () => 'moving-return',
+      runtime,
+      providers: {
+        ...base,
+        'navigation.plan-route': plan,
+        'navigation.update-route': update,
+        'vehicle.apply-cabin-profile': cabin,
+        'media.play': media,
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'moving-return-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'moving-return-start',
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'moving-return-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'moving-return-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    const waiting = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'moving-return-parked', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'moving-return-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' },
+    })
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'moving-return-sensor', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'moving-return-sensor', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:04:00+08:00' },
+    })
+    expect(moving.task).toMatchObject({
+      taskRevision: waiting.task.taskRevision,
+      updatedAt: waiting.task.updatedAt,
+      passengers: waiting.task.passengers,
+      phase: 'waiting-for-passengers',
+    })
+    expect(moving.ui.presentation.density).toBe('compact')
+    // Task creation plans the outbound route. The stale onboard request must
+    // not add any return-trip provider call after the moving sensor update.
+    plan.mockClear()
+    update.mockClear()
+    cabin.mockClear()
+    media.mockClear()
+
+    const denied = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'moving-return-onboard', expectedTaskRevision: moving.task.taskRevision,
+      event: { eventId: 'moving-return-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:05:00+08:00' },
+    })
+
+    expect(denied.task).toEqual(moving.task)
+    expect(denied.effects).toEqual([expect.objectContaining({ type: 'return-trip', status: 'failed', errorCode: 'VEHICLE_MOVING' })])
+    expect(plan).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(cabin).not.toHaveBeenCalled()
+    expect(media).not.toHaveBeenCalled()
+  })
+
   it('rejects stale parked context after a newer moving event without changing task facts', () => {
     const gateway = createGateway()
     const created = gateway.createTask({
@@ -1343,6 +1407,179 @@ describe('AgentGateway', () => {
     expect(reset.effects).toContainEqual(expect.objectContaining({
       type: 'vehicle.revert-cabin-profile', status: 'succeeded',
     }))
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
+  it.each(['cancel', 'arrival', 'flight cancellation'] as const)(
+    'accepts %s while moving and finishes the deferred cabin cleanup after parking',
+    (operation) => {
+      const runtime = createSideEffectRuntime()
+      const base = createProviderRegistry(runtime)
+      const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+        providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
+      })
+      const returning = returningTask(gateway)
+      const moving = gateway.submitEvent(returning.task.taskId, {
+        clientRequestId: `${operation}-moving`, expectedTaskRevision: returning.task.taskRevision,
+        event: { eventId: `${operation}-moving`, type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:05:00+08:00' },
+      })
+      const submitTerminal = (expectedTaskRevision: number) => operation === 'cancel'
+        ? gateway.cancelTask(returning.task.taskId, {
+            clientRequestId: `${operation}-request`, expectedTaskRevision, eventId: `${operation}-terminal`,
+          })
+        : gateway.submitEvent(returning.task.taskId, operation === 'arrival'
+          ? {
+              clientRequestId: `${operation}-request`, expectedTaskRevision,
+              event: { eventId: `${operation}-terminal`, type: 'destination.arrived', destination: '家', timestamp: '2026-07-22T12:06:00+08:00' },
+            }
+          : {
+              clientRequestId: `${operation}-request`, expectedTaskRevision,
+              event: {
+                eventId: `${operation}-terminal`, type: 'flight.updated',
+                flight: { flightNumber: 'MU5102', status: 'cancelled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+                timestamp: '2026-07-22T12:06:00+08:00',
+              },
+            })
+
+      const deferred = submitTerminal(moving.task.taskRevision)
+
+      expect(deferred.effects).toContainEqual(expect.objectContaining({
+        type: 'vehicle.revert-cabin-profile', status: 'failed', errorCode: 'VEHICLE_MOVING',
+      }))
+      expect(revertCabin).not.toHaveBeenCalled()
+      if (operation === 'cancel') expect(deferred.task.phase).toBe('cancelled')
+      if (operation === 'arrival') expect(deferred.task.phase).toBe('completed')
+      if (operation === 'flight cancellation') expect(deferred.task.flight?.status).toBe('cancelled')
+
+      const parked = gateway.submitEvent(returning.task.taskId, {
+        clientRequestId: `${operation}-parked`, expectedTaskRevision: deferred.task.taskRevision,
+        event: { eventId: `${operation}-parked`, type: 'vehicle.parked', timestamp: '2026-07-22T12:07:00+08:00' },
+      })
+
+      expect(revertCabin).toHaveBeenCalledTimes(1)
+      expect(parked.effects).toContainEqual(expect.objectContaining({
+        type: 'vehicle.revert-cabin-profile', status: 'succeeded',
+      }))
+    },
+  )
+
+  it('resets while moving and finishes deferred cleanup without consuming the next trip parking event', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
+    })
+    const returning = returningTask(gateway)
+    const oldCabinEffectId = returning.task.returnTrip?.workflowId
+    const moving = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'reset-moving', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'reset-moving', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:05:00+08:00' },
+    })
+
+    const deferred = gateway.resetTask(returning.task.taskId, {
+      clientRequestId: 'deferred-reset', expectedTaskRevision: moving.task.taskRevision,
+    })
+
+    expect(deferred.task.phase).toBe('collecting-information')
+    expect(deferred.effects).toEqual([expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'failed', errorCode: 'VEHICLE_MOVING',
+    })])
+    expect(revertCabin).not.toHaveBeenCalled()
+
+    const prepared = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'reset-new-trip', expectedTaskRevision: deferred.task.taskRevision,
+      event: { eventId: 'reset-new-trip', type: 'user.input', text: '接妈妈，航班 MU5102', timestamp: '2026-07-22T12:06:00+08:00' },
+    })
+    const parkedForNewTrip = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'reset-first-parked', expectedTaskRevision: prepared.task.taskRevision,
+      event: { eventId: 'reset-first-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:07:00+08:00' },
+    })
+    const started = gateway.submitAction(returning.task.taskId, {
+      clientRequestId: 'reset-new-trip-start', expectedTaskRevision: parkedForNewTrip.task.taskRevision,
+      expectedUiRevision: parkedForNewTrip.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'reset-new-trip-start',
+    })
+    const approaching = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'reset-new-trip-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'reset-new-trip-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:08:00+08:00' },
+    })
+    const parked = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'reset-parked', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'reset-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:09:00+08:00' },
+    })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(parkedForNewTrip.effects).toContainEqual(expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'succeeded',
+    }))
+    expect(runtime.cabinEffects.has(oldCabinEffectId!)).toBe(false)
+    expect(parked.task.phase).toBe('waiting-for-passengers')
+  })
+
+  it('retains deferred cabin cleanup when reset message authorization revocation fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'vehicle.revert-cabin-profile': revertCabin,
+        'message.revoke-authorization': (context) => ({
+          ok: false, data: null,
+          error: { code: 'REVOKE_FAILED', message: 'offline', retryable: true },
+          meta: { requestId: context.requestId!, taskId: context.taskId, tool: 'message.revoke-authorization', provider: 'fixture', durationMs: 1, generatedAt: now },
+        }),
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'deferred-revoke-start',
+    })
+    const landed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-landed', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'deferred-revoke-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' },
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-geofence', expectedTaskRevision: landed.task.taskRevision,
+      event: { eventId: 'deferred-revoke-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T20:41:00+08:00' },
+    })
+    const waiting = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-waiting', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'deferred-revoke-waiting', type: 'vehicle.parked', timestamp: '2026-07-22T20:42:00+08:00' },
+    })
+    const returning = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-onboard', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'deferred-revoke-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T20:43:00+08:00' },
+    })
+    expect(returning.task.message.authorizationId).toBeDefined()
+
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-moving', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'deferred-revoke-moving', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T20:44:00+08:00' },
+    })
+    const failedReset = gateway.resetTask(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-reset', expectedTaskRevision: moving.task.taskRevision,
+    })
+
+    expect(failedReset.task).toEqual(moving.task)
+    expect(failedReset.effects).toContainEqual(expect.objectContaining({
+      type: 'message.revoke-authorization', status: 'failed', errorCode: 'REVOKE_FAILED',
+    }))
+
+    const parked = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-parked', expectedTaskRevision: failedReset.task.taskRevision,
+      event: { eventId: 'deferred-revoke-parked', type: 'vehicle.parked', timestamp: '2026-07-22T20:45:00+08:00' },
+    })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(parked.effects).toEqual([expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'succeeded',
+    })])
     expect(runtime.cabinCurrent.temperatureC).toBe(22)
   })
 

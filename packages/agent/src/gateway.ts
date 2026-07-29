@@ -17,6 +17,7 @@ import {
   type SubmitConfirmationRequest,
   type SubmitEventRequest,
   type ReturnTripState,
+  type EffectRecord,
   type UISpec,
   type ProviderMode,
 } from '@canvasflow/schema'
@@ -51,6 +52,14 @@ import {
   type ReadToolResults,
 } from './orchestration'
 import { MemoryTaskStore, type StoredTask, type TaskStore, type TaskUpdateRead } from './store'
+
+const returnTripPolicyErrorCodes = new Set([
+  'TASK_TERMINAL',
+  'INVALID_TASK_PHASE',
+  'FLIGHT_CANCELLED',
+  'VEHICLE_CONTEXT_REQUIRED',
+  'VEHICLE_MOVING',
+])
 
 function enforceGatewayProviderMode(registry: ProviderRegistry, mode: ProviderMode): ProviderRegistry {
   return Object.fromEntries(
@@ -270,7 +279,23 @@ export class AgentGateway {
     }
     this.#assertRevisions(current, request.expectedTaskRevision)
 
+    const activeCabin = current.effectReceipts?.activeCabin
     let effects: AgentResponse['effects'] = []
+    let receiptsAfterResetCleanup = current.effectReceipts
+    if (activeCabin && (activeCabin.state === 'applied' || activeCabin.state === 'deferred' || activeCabin.state === 'revert-failed')) {
+      const policy = this.#effectExecutor.authorizeCabinRevert(current.task, current.requestContext?.vehicle)
+      if (!policy.allowed && isDeferredCabinCleanup(policy.errorCode)) {
+        effects = [cabinCleanupDeferredEffect(
+          `${request.clientRequestId}:reset-cabin`,
+          policy.errorCode,
+        )]
+        receiptsAfterResetCleanup = {
+          ...current.effectReceipts,
+          activeCabin: { ...activeCabin, state: 'deferred', lastErrorCode: policy.errorCode },
+        }
+      }
+    }
+
     if (current.task.pendingConfirmation?.action === 'send-message') {
       const revocation = this.#effectExecutor.revokeLandingMessageConfirmation({
         task: current.task,
@@ -281,11 +306,15 @@ export class AgentGateway {
       effects = [revocation.effect]
       if (!revocation.succeeded) {
         const reconciled = revocation.ambiguous
-          ? this.#store.save(this.#publish({
-            ...current.task,
-            taskRevision: current.task.taskRevision + 1,
-            pendingConfirmation: undefined,
-            }, current.toolResults, current.requestContext, current.effectReceipts))
+          ? this.#store.save(this.#publish(
+            { ...current.task, taskRevision: current.task.taskRevision + 1, pendingConfirmation: undefined },
+            current.toolResults,
+            current.requestContext,
+            receiptsAfterResetCleanup,
+          ))
+          : receiptsAfterResetCleanup?.activeCabin?.state === 'deferred'
+            // Preserve the public reset-failure snapshot while retaining private recovery state.
+            ? this.#store.save({ ...current, effectReceipts: receiptsAfterResetCleanup })
           : current
         this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: reconciled, effects })
         return this.#response(request.clientRequestId, reconciled, effects, performance.now() - startedAt)
@@ -302,19 +331,26 @@ export class AgentGateway {
       effects = [...effects, revocation.effect]
       if (!revocation.succeeded) {
         const reconciled = revocation.ambiguous
-          ? this.#store.save(this.#publish({
+          ? this.#store.save(this.#publish(
+            {
               ...current.task,
               taskRevision: current.task.taskRevision + 1,
               message: { ...current.task.message, authorizationId: undefined },
-            }, current.toolResults, current.requestContext, current.effectReceipts))
+            },
+            current.toolResults,
+            current.requestContext,
+            receiptsAfterResetCleanup,
+          ))
+          : receiptsAfterResetCleanup?.activeCabin?.state === 'deferred'
+            // Preserve the public reset-failure snapshot while retaining private recovery state.
+            ? this.#store.save({ ...current, effectReceipts: receiptsAfterResetCleanup })
           : current
         this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: reconciled, effects })
         return this.#response(request.clientRequestId, reconciled, effects, performance.now() - startedAt)
       }
     }
 
-    const activeCabin = current.effectReceipts?.activeCabin
-    if (activeCabin && (activeCabin.state === 'applied' || activeCabin.state === 'revert-failed')) {
+    if (effects.length === 0 && activeCabin && (activeCabin.state === 'applied' || activeCabin.state === 'deferred' || activeCabin.state === 'revert-failed')) {
       const cleanup = this.#effectExecutor.revertCabinProfile({
         task: current.task,
         cabinEffectId: activeCabin.providerEffectId,
@@ -348,7 +384,9 @@ export class AgentGateway {
       }
     }
 
-    resetSideEffectRuntimeTask(this.#runtime, taskId)
+    if (receiptsAfterResetCleanup?.activeCabin?.state !== 'deferred') {
+      resetSideEffectRuntimeTask(this.#runtime, taskId)
+    }
 
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
     const initial = createInitialTask(taskId, timestamp)
@@ -366,7 +404,7 @@ export class AgentGateway {
             : timestamp,
         }
       : undefined
-    const stored = this.#store.reset(this.#publish(resetTask, undefined, requestContext))
+    const stored = this.#store.reset(this.#publish(resetTask, undefined, requestContext, receiptsAfterResetCleanup))
     this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
   }
@@ -387,6 +425,32 @@ export class AgentGateway {
         false,
         current,
       )
+    }
+
+    const deferredReceipt = current.effectReceipts?.activeCabin
+    // A reset starts a new task but can retain an old cabin effect awaiting a
+    // parked vehicle. Clean it up alongside (not instead of) this event.
+    let resumedCleanupEffects: AgentResponse['effects'] = []
+    let resumedCleanupReceipts = current.effectReceipts
+    if (
+      request.event.type === 'vehicle.parked'
+      && current.task.phase === 'collecting-information'
+      && deferredReceipt?.state === 'deferred'
+    ) {
+      const cleanup = this.#effectExecutor.revertCabinProfile({
+        task: current.task,
+        cabinEffectId: deferredReceipt.providerEffectId,
+        idempotencyKey: `${request.event.eventId}:deferred-reset-cabin`,
+        effectId: `${request.event.eventId}:deferred-reset-cabin`,
+        vehicle: this.#contextAfterEvent(current.requestContext, request.event)?.vehicle,
+        allowDeferredCleanup: true,
+      })
+      resumedCleanupEffects = [cleanup.effect]
+      resumedCleanupReceipts = this.#deferredCleanupReceipts(current.effectReceipts, deferredReceipt, cleanup)
+      if (cleanup.succeeded) resetSideEffectRuntimeTask(this.#runtime, taskId)
+    } else {
+      const deferredCleanup = this.#resumeDeferredCabinCleanup(taskId, current, request, startedAt)
+      if (deferredCleanup) return deferredCleanup
     }
 
     const plan = request.event.type === 'user.input'
@@ -412,13 +476,35 @@ export class AgentGateway {
 
     // Only revoke live capabilities after freshness and reducer acceptance checks.
     // A stale terminal event must not consume a credential that remains visible in state.
-    let preEffects: AgentResponse['effects'] = []
-    let receiptsAfterTerminalCleanup = current.effectReceipts
+    let preEffects: AgentResponse['effects'] = resumedCleanupEffects
+    let receiptsAfterTerminalCleanup = resumedCleanupReceipts
     const closesTask = request.event.type === 'user.cancelled-task'
       || request.event.type === 'destination.arrived'
       || (request.event.type === 'flight.updated' && request.event.flight.status === 'cancelled')
     const activeCabin = current.effectReceipts?.activeCabin
-    if (closesTask && activeCabin && (activeCabin.state === 'applied' || activeCabin.state === 'revert-failed')) {
+    if (closesTask && activeCabin && (activeCabin.state === 'applied' || activeCabin.state === 'deferred' || activeCabin.state === 'revert-failed')) {
+      const policy = this.#effectExecutor.authorizeCabinRevert(current.task, current.requestContext?.vehicle)
+      if (!policy.allowed && isDeferredCabinCleanup(policy.errorCode)) {
+        preEffects = [cabinCleanupDeferredEffect(
+          `${request.event.eventId}:terminal-cabin`,
+          policy.errorCode,
+        )]
+        if (next.returnTrip) {
+          next.returnTrip = {
+            ...next.returnTrip,
+            cabin: {
+              ...next.returnTrip.cabin,
+              revert: { status: 'failed', errorCode: policy.errorCode },
+            },
+          }
+        }
+        receiptsAfterTerminalCleanup = {
+          ...current.effectReceipts,
+          activeCabin: { ...activeCabin, state: 'deferred', lastErrorCode: policy.errorCode },
+        }
+      }
+    }
+    if (closesTask && preEffects.length === 0 && activeCabin && (activeCabin.state === 'applied' || activeCabin.state === 'deferred' || activeCabin.state === 'revert-failed')) {
       const cleanup = this.#effectExecutor.revertCabinProfile({
         task: current.task,
         cabinEffectId: activeCabin.providerEffectId,
@@ -558,6 +644,18 @@ export class AgentGateway {
       && current.task.phase === 'returning-home'
       && plan?.intent === 'apply-cabin-preferences'
     ) {
+      const policy = this.#effectExecutor.authorizeReturnTrip(current.task, current.requestContext?.vehicle)
+      if (!policy.allowed) {
+        const effects: AgentResponse['effects'] = [{
+          effectId: `${request.event.eventId}:0`,
+          type: 'vehicle.apply-cabin-profile',
+          status: 'failed',
+          tool: 'vehicle.apply-cabin-profile',
+          errorCode: policy.errorCode,
+        }]
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects })
+        return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+      }
       let preferences: ReadToolResults['memory.get-preferences']
       try {
         preferences = this.#orchestrator.resolveReturnTripPreferences(
@@ -648,6 +746,7 @@ export class AgentGateway {
         mediaTitle: mediaMember?.mediaTitle,
         idempotencyKey: request.event.eventId,
         effectId: `${request.event.eventId}:0`,
+        vehicle: current.requestContext?.vehicle,
       })
       if (!execution.succeeded) {
         const executionEffects = [...replacementEffects, execution.effect, ...(execution.compensationEffect ? [execution.compensationEffect] : [])]
@@ -844,6 +943,18 @@ export class AgentGateway {
       && (current.task.phase === 'waiting-for-passengers' || current.task.phase === 'returning-home')
       && next.phase === 'returning-home'
     ) {
+      const policy = this.#effectExecutor.authorizeReturnTrip(next, current.requestContext?.vehicle)
+      if (!policy.allowed) {
+        const effects: AgentResponse['effects'] = [{
+          effectId: `${request.event.eventId}:effect:0`,
+          type: 'return-trip',
+          status: 'failed',
+          tool: 'return-trip',
+          errorCode: policy.errorCode,
+        }]
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects })
+        return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+      }
       try {
         const preferences = this.#orchestrator.resolveReturnTripPreferences(
           taskId,
@@ -875,11 +986,12 @@ export class AgentGateway {
               ? current.effectReceipts.activeCabin.providerEffectId
               : undefined,
           } : undefined,
+          vehicle: current.requestContext?.vehicle,
         })
         const policyDenied = !execution.succeeded
           && execution.effect.length === 1
           && execution.effect[0]?.type === 'return-trip'
-          && execution.effect[0]?.errorCode === 'FLIGHT_CANCELLED'
+          && returnTripPolicyErrorCodes.has(execution.effect[0]?.errorCode ?? '')
         if (policyDenied) {
           this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: execution.effect })
           return this.#response(request.clientRequestId, current, execution.effect, performance.now() - startedAt)
@@ -1252,6 +1364,26 @@ export class AgentGateway {
       throw new AgentGatewayError('INVALID_REQUEST', 'Retry return-trip action is not registered for the current task state', false, current)
     }
 
+    const executionTask = current.task.phase === 'waiting-for-passengers'
+      ? applyEvent(current.task, {
+          eventId: workflowId,
+          type: 'user.confirmed-passengers-onboard',
+          timestamp: this.#eventTimestamp(current.task.updatedAt),
+        }, this.#preferences)
+      : current.task
+    const policy = this.#effectExecutor.authorizeReturnTrip(executionTask, current.requestContext?.vehicle)
+    if (!policy.allowed) {
+      const effects: AgentResponse['effects'] = [{
+        effectId: `${workflowId}:retry:${request.idempotencyKey}:0`,
+        type: 'return-trip',
+        status: 'failed',
+        tool: 'return-trip',
+        errorCode: policy.errorCode,
+      }]
+      this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored: current, effects })
+      return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt)
+    }
+
     let preferences
     try {
       preferences = this.#orchestrator.resolveReturnTripPreferences(taskId, request.clientRequestId, current.task.passengers.memberIds)
@@ -1268,13 +1400,6 @@ export class AgentGateway {
       }
       this.#throwProviderError(error, current)
     }
-    const executionTask = current.task.phase === 'waiting-for-passengers'
-      ? applyEvent(current.task, {
-          eventId: workflowId,
-          type: 'user.confirmed-passengers-onboard',
-          timestamp: this.#eventTimestamp(current.task.updatedAt),
-        }, this.#preferences)
-      : current.task
     const records = preferences.data.members
     const homeDestinationId = records.find((member) => member.homeDestinationId)?.homeDestinationId ?? current.task.returnTrip?.homeDestinationId
     const cabinMember = records.find((member) => member.rearTemperatureC !== undefined || member.mediaTitle !== undefined)
@@ -1299,8 +1424,16 @@ export class AgentGateway {
           ? current.effectReceipts.activeCabin.providerEffectId
           : undefined,
       } : undefined,
+      vehicle: current.requestContext?.vehicle,
     })
     if (!execution.succeeded) {
+      const policyDenied = execution.effect.length === 1
+        && execution.effect[0]?.type === 'return-trip'
+        && returnTripPolicyErrorCodes.has(execution.effect[0]?.errorCode ?? '')
+      if (policyDenied) {
+        this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored: current, effects: execution.effect })
+        return this.#response(request.clientRequestId, current, execution.effect, performance.now() - startedAt)
+      }
       const failedTask = execution.rolledBack
         ? current.task
         : this.#applyReturnTripExecution(executionTask, workflowId, homeDestinationId, execution)
@@ -1657,8 +1790,10 @@ export class AgentGateway {
     requestContext?: StoredTask['requestContext'],
     effectReceipts?: StoredTask['effectReceipts'],
   ): StoredTask {
+    // A terminal transition may defer a parked-only cabin cleanup. Keep only
+    // that private receipt so a later parked event can safely finish it.
     const privateReceipts = task.phase === 'completed' || task.phase === 'cancelled'
-      ? undefined
+      ? effectReceipts?.activeCabin?.state === 'deferred' ? effectReceipts : undefined
       : effectReceipts
     const canSafelyRevertCabin = requestContext !== undefined
       && requestContext.vehicle.speedKph === 0
@@ -1835,6 +1970,52 @@ export class AgentGateway {
     return context
   }
 
+  #resumeDeferredCabinCleanup(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse | undefined {
+    const receipt = current.effectReceipts?.activeCabin
+    if (request.event.type !== 'vehicle.parked' || receipt?.state !== 'deferred') return undefined
+
+    const updatedContext = this.#contextAfterEvent(current.requestContext, request.event)
+    const cleanup = this.#effectExecutor.revertCabinProfile({
+      task: current.task,
+      cabinEffectId: receipt.providerEffectId,
+      idempotencyKey: `${request.event.eventId}:deferred-terminal-cabin`,
+      effectId: `${request.event.eventId}:deferred-terminal-cabin`,
+      vehicle: updatedContext?.vehicle,
+      allowDeferredCleanup: true,
+    })
+    const effectReceipts = this.#deferredCleanupReceipts(current.effectReceipts, receipt, cleanup)
+    const stored = this.#store.save(this.#publish(
+      current.task,
+      current.toolResults,
+      updatedContext,
+      effectReceipts,
+    ))
+    if (cleanup.succeeded && current.task.phase === 'collecting-information') {
+      resetSideEffectRuntimeTask(this.#runtime, taskId)
+    }
+    const effects = [cleanup.effect]
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects })
+    return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
+  }
+
+  #deferredCleanupReceipts(
+    existing: StoredTask['effectReceipts'],
+    receipt: NonNullable<StoredTask['effectReceipts']>['activeCabin'],
+    cleanup: ReturnType<EffectExecutor['revertCabinProfile']>,
+  ): StoredTask['effectReceipts'] {
+    if (!receipt) return existing
+    return cleanup.succeeded
+      ? { ...existing, activeCabin: { ...receipt, state: 'reverted' as const, lastErrorCode: undefined } }
+      : cleanup.ambiguous
+        ? { ...existing, activeCabin: { ...receipt, state: 'unknown' as const, lastErrorCode: cleanup.effect.errorCode } }
+        : { ...existing, activeCabin: { ...receipt, state: 'deferred' as const, lastErrorCode: cleanup.effect.errorCode } }
+  }
+
   #acceptsContextOnlyEvent(
     task: AirportPickupTaskState,
     context: StoredTask['requestContext'],
@@ -1942,4 +2123,18 @@ function isCabinRevertPolicyDenial(errorCode: string | undefined): boolean {
     || errorCode === 'INVALID_TASK_STATE'
     || errorCode === 'VEHICLE_CONTEXT_REQUIRED'
     || errorCode === 'VEHICLE_MOVING'
+}
+
+function isDeferredCabinCleanup(errorCode: string | undefined): errorCode is 'VEHICLE_CONTEXT_REQUIRED' | 'VEHICLE_MOVING' {
+  return errorCode === 'VEHICLE_CONTEXT_REQUIRED' || errorCode === 'VEHICLE_MOVING'
+}
+
+function cabinCleanupDeferredEffect(effectId: string, errorCode: 'VEHICLE_CONTEXT_REQUIRED' | 'VEHICLE_MOVING'): EffectRecord {
+  return {
+    effectId,
+    type: 'vehicle.revert-cabin-profile',
+    status: 'failed',
+    tool: 'vehicle.revert-cabin-profile',
+    errorCode,
+  }
 }

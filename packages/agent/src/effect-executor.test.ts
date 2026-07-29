@@ -42,6 +42,8 @@ const providerMeta = (taskId: string, tool: string, requestId: string) => ({
   generatedAt: '2026-07-22T12:00:00+08:00',
 })
 
+const parkedVehicle = { speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P' as const, isNight: false }
+
 describe('EffectExecutor', () => {
   it('applies a returning-home cabin preference through the provider', () => {
     const runtime = createSideEffectRuntime()
@@ -61,6 +63,7 @@ describe('EffectExecutor', () => {
       temperatureC: 25,
       idempotencyKey: 'cabin-001',
       effectId: 'cabin-001:0',
+      vehicle: parkedVehicle,
     })
 
     expect(applyCabin).toHaveBeenCalledWith(
@@ -86,6 +89,34 @@ describe('EffectExecutor', () => {
     })
     expect(applyCabin).not.toHaveBeenCalled()
     expect(result).toMatchObject({ succeeded: false, effect: { status: 'failed', errorCode: 'INVALID_TASK_PHASE' } })
+  })
+
+  it('policy-denies return-trip effects while moving without calling providers', () => {
+    const registry = createProviderRegistry()
+    const plan = vi.fn(registry['navigation.plan-route'])
+    const update = vi.fn(registry['navigation.update-route'])
+    const cabin = vi.fn(registry['vehicle.apply-cabin-profile'])
+    const media = vi.fn(registry['media.play'])
+    const result = new EffectExecutor({
+      ...registry,
+      'navigation.plan-route': plan,
+      'navigation.update-route': update,
+      'vehicle.apply-cabin-profile': cabin,
+      'media.play': media,
+    }).executeReturnTrip({
+      task: { ...createInitialTask(), phase: 'returning-home', passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true } },
+      memberIds: ['mom'],
+      preferences: { homeDestinationId: 'destination-home', temperatureC: 25, mediaTitle: '轻音乐', mediaMemberId: 'mom' },
+      idempotencyKey: 'moving-return',
+      effectIdPrefix: 'moving-return:effect',
+      vehicle: { ...parkedVehicle, speedKph: 20, gear: 'D' },
+    })
+
+    expect(result).toMatchObject({ succeeded: false, effect: [{ type: 'return-trip', status: 'failed', errorCode: 'VEHICLE_MOVING' }] })
+    expect(plan).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+    expect(cabin).not.toHaveBeenCalled()
+    expect(media).not.toHaveBeenCalled()
   })
 
   it('reverts the applied cabin effect through the provider while parked', () => {
@@ -214,6 +245,7 @@ describe('EffectExecutor', () => {
     expect(executor.applyCabinPreferences({
       task: returning, memberIds: ['mom'], temperatureC: 25,
       idempotencyKey: 'cabin-wrong-meta', effectId: 'cabin-wrong-meta:0',
+      vehicle: parkedVehicle,
     })).toMatchObject({ succeeded: false, effect: { status: 'failed', errorCode: 'PROVIDER_FAILED' } })
     expect(runtime.cabinCurrent.temperatureC).toBe(22)
   })
@@ -242,6 +274,7 @@ describe('EffectExecutor', () => {
     const result = executor.applyCabinPreferences({
       task: returning, memberIds: ['mom'], temperatureC: 25,
       idempotencyKey: 'cabin-invalid-output', effectId: 'cabin-invalid-output:0',
+      vehicle: parkedVehicle,
     })
 
     expect(revert).toHaveBeenCalledTimes(1)
@@ -279,6 +312,7 @@ describe('EffectExecutor', () => {
     expect(executor.applyCabinPreferences({
       task: returning, memberIds: ['mom'], temperatureC: 25,
       idempotencyKey: 'cabin-wrong-rollback-meta', effectId: 'cabin-wrong-rollback-meta:0',
+      vehicle: parkedVehicle,
     })).toMatchObject({ succeeded: false, residualApplied: true, cabinEffectId: expect.any(String) })
     expect(runtime.cabinCurrent.temperatureC).toBe(22)
   })
@@ -312,6 +346,7 @@ describe('EffectExecutor', () => {
     const result = executor.executeReturnTrip({
       task: { ...createInitialTask(), phase: 'returning-home', passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true }, flight: { ...task.flight, status: 'cancelled' } },
       memberIds: ['mom'], preferences: { homeDestinationId: 'destination-home' }, idempotencyKey: 'cancelled-return', effectIdPrefix: 'cancelled-return:effect',
+      vehicle: parkedVehicle,
     })
     expect(plan).not.toHaveBeenCalled()
     expect(result).toMatchObject({ succeeded: false, effect: [{ type: 'return-trip', errorCode: 'FLIGHT_CANCELLED' }] })
