@@ -146,10 +146,12 @@ function ComponentSurface({
   component,
   children,
   className = '',
+  role,
 }: {
   component: ComponentSpec
   children: ReactNode
   className?: string
+  role?: 'alert' | 'status'
 }) {
   const level = component.type === 'alert' || component.type === 'status-banner' ? component.props.level : undefined
   return (
@@ -159,10 +161,17 @@ function ComponentSurface({
       data-component-type={component.type}
       data-visibility={component.visibility ?? 'always'}
       data-level={level}
+      role={role}
     >
       {children}
     </article>
   )
+}
+
+// A safety or degradation state has to reach a driver who is not looking at the screen.
+// `alert` interrupts, `status` waits its turn, so only a failure claims the interruption.
+function liveRegionRole(level: 'info' | 'warning' | 'error' | 'critical'): 'alert' | 'status' {
+  return level === 'error' || level === 'critical' ? 'alert' : 'status'
 }
 
 function Metric({
@@ -450,7 +459,12 @@ function TaskProgressCard({
 
 function AlertCard({ component }: { component: Extract<ComponentSpec, { type: 'alert' }> }) {
   return (
-    <ComponentSurface component={component} className={`ui-status-card ui-status-card--alert ui-card--${component.props.level}`}>
+    <ComponentSurface
+      component={component}
+      className={`ui-status-card ui-status-card--alert ui-card--${component.props.level}`}
+      // An explicit alert is always something the driver was asked to notice.
+      role="alert"
+    >
       <span className="ui-status-card__glyph" aria-hidden="true">{levelIcon(component.props.level)}</span>
       <div className="ui-status-card__content">
         <p className="ui-status-card__kind">需要留意</p>
@@ -464,7 +478,11 @@ function AlertCard({ component }: { component: Extract<ComponentSpec, { type: 'a
 function StatusBannerCard({ component }: { component: Extract<ComponentSpec, { type: 'status-banner' }> }) {
   const tone = component.props.level === 'error' ? 'critical' : component.props.level
   return (
-    <ComponentSurface component={component} className={`ui-status-card ui-status-card--banner ui-card--${component.props.level}`}>
+    <ComponentSurface
+      component={component}
+      className={`ui-status-card ui-status-card--banner ui-card--${component.props.level}`}
+      role={liveRegionRole(component.props.level)}
+    >
       <span className="ui-status-card__glyph" aria-hidden="true">{levelIcon(component.props.level)}</span>
       <div className="ui-status-card__content">
         <p className="ui-status-card__kind">行程提示</p>

@@ -616,6 +616,41 @@ describe('UISpecRenderer', () => {
     expect(renderer.querySelector('[data-level="error"]')).toBeInTheDocument()
   })
 
+  it('announces safety and degradation states through a live region', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['warn-banner', 'error-banner', 'info-banner', 'alert', 'missing'] } },
+      components: [
+        { id: 'warn-banner', type: 'status-banner', props: { level: 'warning', title: '航班已延误' } },
+        { id: 'error-banner', type: 'status-banner', props: { level: 'error', title: '航班已取消' } },
+        { id: 'info-banner', type: 'status-banner', props: { level: 'info', title: '请补充航班号' } },
+        { id: 'alert', type: 'alert', props: { level: 'warning', title: '请留意航班动态' } },
+      ],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    // A driver who is not looking at the screen still has to learn about these.
+    // A failure interrupts; everything else waits its turn.
+    const alerts = screen.getAllByRole('alert')
+    expect(alerts.map((node) => node.getAttribute('data-component-id'))).toEqual(['error-banner', 'alert'])
+
+    const statuses = screen.getAllByRole('status')
+    expect(statuses.map((node) => node.getAttribute('data-component-id'))).toEqual([
+      'warn-banner',
+      'info-banner',
+      // An unresolvable component is a degradation the driver must hear about too.
+      'missing',
+    ])
+  })
+
+  it('announces an empty brief through a live region', () => {
+    const spec = baseSpec({ layout: { type: 'stack', gap: 'md', slots: { main: [] } }, components: [] })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(screen.getByRole('status')).toHaveTextContent('暂时没有可显示的信息')
+  })
+
   it('exposes presentation priority without turning it into a task title', () => {
     const spec = baseSpec({ presentation: { mode: 'replace', density: 'minimal', theme: 'dark', priority: 'critical' } })
 
