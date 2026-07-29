@@ -1,14 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   applyEvent,
   resolveConfirmation,
 } from '@canvasflow/agent'
 import { createSideEffectRuntime, resolveAuthorizedLandingContact } from '@canvasflow/tools'
 import { composePickupSpec, type ComposerContext } from '@canvasflow/ui'
-import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, TaskUpdateEnvelope, VehicleContext } from '@canvasflow/schema'
+import type {
+  AgentResponse,
+  AirportPickupEvent,
+  AirportPickupTaskState,
+  TaskUpdateEnvelope,
+  UISpec,
+  VehicleContext,
+} from '@canvasflow/schema'
 import type { SpeechControllerDeps } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
+import { ArrowRightIcon, CloseIcon, ControlsIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 
@@ -17,6 +25,56 @@ type DemoAgentApi = Pick<AgentApiClient, 'create' | 'event' | 'action' | 'confir
   & Partial<Pick<AgentApiClient, 'subscribeTaskUpdates'>>
 
 const demoRuntime = createSideEffectRuntime()
+
+const playableEventIds = new Set(
+  mainFlowTimeline.steps
+    .filter((step) => !step.advisory)
+    .map((step) => step.event.eventId),
+)
+const playableEventCount = playableEventIds.size
+
+/**
+ * The driver never reads a raw phase. This is a private display mapping; the
+ * enum itself stays in the demo drawer where an engineer looks for it.
+ */
+const phaseIdentityLabels: Record<AirportPickupTaskState['phase'], string> = {
+  'collecting-information': '准备接机',
+  preparing: '准备出发',
+  'driving-to-airport': '途中',
+  'approaching-airport': '即将到达',
+  'waiting-for-passengers': '等待家人',
+  'returning-home': '家人已上车',
+  completed: '行程结束',
+  cancelled: '行程已取消',
+}
+
+const conclusionComponentTypes = new Set<UISpec['components'][number]['type']>([
+  'flight-status',
+  'navigation-summary',
+  'charging-recommendation',
+  'passenger-status',
+  'message-preview',
+  'cabin-profile',
+  'status-banner',
+  'alert',
+])
+
+const focusableControlSelector = [
+  'a[href]',
+  'button:not([disabled])',
+  'input:not([disabled])',
+  'select:not([disabled])',
+  'textarea:not([disabled])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(', ')
+
+function hasContextualTripTitle(spec: UISpec): boolean {
+  // Keep the initial instruction and the completed result as the page title; elsewhere
+  // the current card conclusion leads and the title steps back into trip context.
+  if (spec.phase === 'collecting-information' && spec.meta.generatedBy !== 'fallback') return false
+  if (spec.phase === 'completed') return false
+  return spec.components.some((component) => conclusionComponentTypes.has(component.type))
+}
 
 /** Whether the Gateway accepted the input, plus any reply worth speaking. */
 type InputOutcome = { sent: boolean; speak?: string }
@@ -56,8 +114,13 @@ export default function App({
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
   const [vehicleContext, setVehicleContext] = useState(initialVehicleContext)
+  const [controlsOpen, setControlsOpen] = useState(false)
   const pendingRef = useRef(false)
   const streamCursorRef = useRef(0)
+  const controlsTriggerRef = useRef<HTMLButtonElement>(null)
+  const controlsDrawerRef = useRef<HTMLElement>(null)
+  const controlsCloseRef = useRef<HTMLButtonElement>(null)
+  const restoreControlsFocusRef = useRef(false)
   const [localTask, setLocalTask] = useState<AirportPickupTaskState | undefined>(
     localOnly ? (initialTask ?? mainFlowTimeline.initialTaskState) : undefined,
   )
@@ -288,6 +351,69 @@ export default function App({
     return index === -1 ? undefined : index + 1
   }
 
+  const closeControls = useCallback(() => {
+    restoreControlsFocusRef.current = true
+    setControlsOpen(false)
+  }, [])
+
+  function toggleControls() {
+    if (controlsOpen) {
+      closeControls()
+      return
+    }
+    setControlsOpen(true)
+  }
+
+  useEffect(() => {
+    if (controlsOpen) {
+      controlsCloseRef.current?.focus()
+      return
+    }
+    if (restoreControlsFocusRef.current) {
+      controlsTriggerRef.current?.focus()
+      restoreControlsFocusRef.current = false
+    }
+  }, [controlsOpen])
+
+  useEffect(() => {
+    if (!controlsOpen) return undefined
+
+    const handleDrawerKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        closeControls()
+        return
+      }
+      if (event.key !== 'Tab') return
+
+      const drawer = controlsDrawerRef.current
+      if (!drawer) return
+      const focusableControls = Array.from(
+        drawer.querySelectorAll<HTMLElement>(focusableControlSelector),
+      )
+      const firstControl = focusableControls[0]
+      const lastControl = focusableControls.at(-1)
+      if (!firstControl || !lastControl) {
+        event.preventDefault()
+        return
+      }
+
+      const activeElement = document.activeElement
+      if (event.shiftKey) {
+        if (activeElement === firstControl || !drawer.contains(activeElement)) {
+          event.preventDefault()
+          lastControl.focus()
+        }
+      } else if (activeElement === lastControl || !drawer.contains(activeElement)) {
+        event.preventDefault()
+        firstControl.focus()
+      }
+    }
+
+    document.addEventListener('keydown', handleDrawerKeyDown)
+    return () => document.removeEventListener('keydown', handleDrawerKeyDown)
+  }, [closeControls, controlsOpen])
+
   const micState = voice.available ? voice.state : 'unavailable'
   const microphoneCopy = voiceButtonLabels[micState]
   // One polite live region for the whole voice loop, so the mic state and the
@@ -303,26 +429,208 @@ export default function App({
             ? voice.speaking ?? '正在播报'
             : '')
 
-  return <main className="demo-shell">
-    <header><p className="eyebrow">CanvasFlow / Agent API</p><h1>机场接人任务卡片</h1><p>文本、Action、confirmation 与时间线事件统一通过 Gateway。</p></header>
-    <section className="prompt" aria-label="Agent input"><input aria-label="任务输入" value={text} disabled={pending || textPathLocked} onChange={(event) => changeText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') submitText() }} placeholder="告诉我接谁、航班号或下一步" /><button
-      type="button"
-      className={`mic-button mic-${micState}`}
-      aria-label={microphoneCopy.aria}
-      aria-pressed={micState === 'listening'}
-      disabled={!voice.available || pending || micState === 'submitting'}
-      onClick={pressMicrophone}
-    >{microphoneCopy.text}</button><button type="button" onClick={submitText} disabled={pending || textPathLocked}>发送</button></section>
-    {/* Rendered unconditionally so the region exists before the first announcement. */}
-    <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
-    <section className="console" aria-label="Event console"><div><span className="label">阶段</span><strong>{spec?.title ?? '等待创建任务'}</strong><small>{task ? `${task.phase} · taskRevision ${task.taskRevision} · uiRevision ${spec?.uiRevision}` : '尚无任务'}</small></div><button type="button" onClick={advance} disabled={pending || (!response && !localOnly) || !task || task.phase === 'completed' || task.phase === 'cancelled'}>推进下一事件</button></section>
-    {error && <p role="alert">{error}</p>}
-    {spec && task && <UISpecRenderer
-      driving={vehicleContext.speedKph > 0 || vehicleContext.gear !== 'P'}
-      onAction={handleAction}
-      pending={pending}
-      spec={spec}
-    />}
-    {effects.length > 0 && <p className="effects" aria-label="Effect receipts">{effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ')}</p>}
-  </main>
+  const isCompleted = task?.phase === 'completed'
+  const isTerminal = task?.phase === 'completed' || task?.phase === 'cancelled'
+  const playedEventCount = task
+    ? task.processedEventIds.filter((eventId) => playableEventIds.has(eventId)).length
+    : 0
+  const displayedEventCount = isCompleted ? playableEventCount : playedEventCount
+  const progressPercent = playableEventCount === 0
+    ? 0
+    : isCompleted ? 100 : Math.min(100, (displayedEventCount / playableEventCount) * 100)
+  const progressLabel = isCompleted ? '播放完成' : task?.phase === 'cancelled' ? '已取消' : '播放进度'
+  const advanceLabel = isCompleted ? '行程已完成' : task?.phase === 'cancelled' ? '行程已取消' : '推进下一事件'
+
+  // Before the first task there is no phase to name, so the brief says what it is
+  // waiting for rather than borrowing a phase label it does not have.
+  const phaseIdentity = task ? phaseIdentityLabels[task.phase] : '等待创建任务'
+  const tripTitleIsContextual = spec ? hasContextualTripTitle(spec) : false
+  const tripTitle = spec?.title || '机场接人'
+
+  return (
+    <main
+      className="demo-shell"
+      data-controls-open={controlsOpen}
+      data-phase={task?.phase}
+      data-density={spec?.presentation.density}
+      data-theme={spec?.presentation.theme}
+      data-priority={spec?.presentation.priority}
+    >
+      <section className="cockpit-stage" aria-label="机场接人任务">
+        <section
+          id="task-surface"
+          className="task-surface"
+          aria-label="当前行程"
+          data-trip-brief
+          data-phase={task?.phase}
+          data-phase-label={phaseIdentity}
+        >
+          <header className="trip-brief__header">
+            <a className="brand-lockup" href="#trip-brief-title" aria-label={`carHer ${phaseIdentity}`}>
+              <span className="brand-wordmark">carHer</span>
+              <span className="brand-separator" aria-hidden="true">·</span>
+              <span className="trip-brief__phase" data-phase-identity>{phaseIdentity}</span>
+            </a>
+            <div className="header-actions">
+              <button
+                className={`mic-button mic-${micState}`}
+                type="button"
+                aria-label={microphoneCopy.aria}
+                aria-pressed={micState === 'listening'}
+                disabled={!voice.available || pending || micState === 'submitting'}
+                onClick={pressMicrophone}
+              >
+                <MicIcon size={22} />
+                <span>{microphoneCopy.text}</span>
+              </button>
+              <button
+                ref={controlsTriggerRef}
+                className="control-toggle"
+                type="button"
+                aria-expanded={controlsOpen}
+                aria-controls="event-console"
+                aria-haspopup="dialog"
+                aria-label={controlsOpen ? '收起演示控制' : '打开演示控制'}
+                onClick={toggleControls}
+              >
+                <ControlsIcon size={22} />
+                <span>演示控制</span>
+              </button>
+            </div>
+          </header>
+
+          {/* Rendered unconditionally so the region exists before the first announcement. */}
+          <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
+
+          <form
+            className="voice-composer"
+            data-voice-state={micState}
+            aria-label="Agent input"
+            onSubmit={(event) => { event.preventDefault(); submitText() }}
+          >
+            <div className="voice-composer__row">
+              <input
+                className="voice-composer__input"
+                type="text"
+                aria-label="任务输入"
+                value={text}
+                disabled={pending || textPathLocked}
+                placeholder="告诉我接谁、航班号或下一步"
+                onChange={(event) => changeText(event.target.value)}
+              />
+              <button
+                className="voice-composer__send"
+                type="submit"
+                disabled={pending || textPathLocked}
+              >
+                发送
+              </button>
+            </div>
+          </form>
+
+          {/* A failed request is not a trip fact, but the driver still has to learn
+              that what they pressed did not go through. */}
+          {error && <p className="brief-error" role="alert">{error}</p>}
+
+          <div className="trip-brief__content" key={spec?.phase} data-phase-transition={spec?.phase}>
+            <header
+              className={`task-heading task-heading--${spec?.phase ?? 'idle'}${tripTitleIsContextual ? ' task-heading--contextual' : ''}`}
+              data-title-role={tripTitleIsContextual ? 'context' : 'primary'}
+            >
+              <h1 id="trip-brief-title">{tripTitle}</h1>
+            </header>
+            {spec && task
+              ? <UISpecRenderer
+                driving={vehicleContext.speedKph > 0 || vehicleContext.gear !== 'P'}
+                onAction={handleAction}
+                pending={pending}
+                spec={spec}
+              />
+              : <p className="brief-placeholder">告诉我接谁，我来安排这趟行程。</p>}
+          </div>
+        </section>
+      </section>
+
+      {controlsOpen ? (
+        <>
+          <button
+            className="drawer-scrim"
+            type="button"
+            aria-hidden="true"
+            tabIndex={-1}
+            onClick={closeControls}
+          />
+          <aside
+            ref={controlsDrawerRef}
+            id="event-console"
+            className="event-console"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="event-console-title"
+            aria-label="Event console"
+          >
+            <div className="console-heading">
+              <div>
+                <span className="console-kicker">演示控制</span>
+                <h2 id="event-console-title">演示控制</h2>
+              </div>
+              <button
+                ref={controlsCloseRef}
+                className="console-close"
+                type="button"
+                aria-label="关闭演示控制"
+                onClick={closeControls}
+              >
+                <CloseIcon size={24} />
+              </button>
+            </div>
+
+            <div className="console-phase">
+              <span>当前阶段</span>
+              <strong>{task ? task.phase : '尚无任务'}</strong>
+            </div>
+
+            <dl className="revision-grid">
+              <div><dt>任务 ID</dt><dd>{task?.taskId ?? '—'}</dd></div>
+              <div><dt>任务版本</dt><dd>{task ? `taskRevision ${task.taskRevision}` : '—'}</dd></div>
+              <div><dt>界面版本</dt><dd>{spec ? `uiRevision ${spec.uiRevision}` : '—'}</dd></div>
+              <div><dt>信息密度</dt><dd>{spec?.presentation.density ?? '—'}</dd></div>
+              <div><dt>优先级</dt><dd>{spec?.presentation.priority ?? '—'}</dd></div>
+            </dl>
+
+            <div
+              className="console-progress"
+              aria-label="演示进度"
+              data-playable-event-count={playableEventCount}
+            >
+              <div className="console-progress__copy">
+                <span>{progressLabel}</span>
+                <strong>{displayedEventCount} / {playableEventCount}</strong>
+              </div>
+              <div className="progress-track" aria-hidden="true">
+                <span style={{ width: `${progressPercent}%` }} />
+              </div>
+            </div>
+
+            {effects.length > 0 && (
+              <p className="console-effects" aria-label="Effect receipts">
+                {effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ')}
+              </p>
+            )}
+
+            <button
+              className="advance-button"
+              type="button"
+              onClick={advance}
+              disabled={pending || (!response && !localOnly) || !task || isTerminal}
+            >
+              <span>{advanceLabel}</span>
+              <ArrowRightIcon size={24} />
+            </button>
+            <p className="console-hint">此面板仅用于演示，不会改变行程事实或跳过操作确认。</p>
+          </aside>
+        </>
+      ) : null}
+    </main>
+  )
 }
