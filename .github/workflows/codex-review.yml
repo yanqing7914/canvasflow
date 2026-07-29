@@ -97,10 +97,12 @@ jobs:
             sudo useradd --system --create-home --home-dir /home/codex-review \
               --shell /usr/sbin/nologin --gid codex-review codex-review
           fi
-          sudo usermod -a -G codex-review runner
-          sudo chown -R runner:codex-review "$GITHUB_WORKSPACE"
-          sudo chmod -R g+rwX "$GITHUB_WORKSPACE"
-          sudo find "$GITHUB_WORKSPACE" -type d -exec chmod g+s {} +
+          # Do not add the review user to runner: that shared group can expose
+          # runner-owned temp and tooling directories. ACLs grant only the
+          # checkout plus the execute bits needed to traverse its parents.
+          sudo setfacl -m u:codex-review:--x /home/runner /home/runner/work
+          sudo setfacl -R -m u:codex-review:rwX "$GITHUB_WORKSPACE"
+          sudo find "$GITHUB_WORKSPACE" -type d -exec setfacl -d -m u:codex-review:rwX {} +
 
       - name: Configure Codex provider
         id: codex_provider
