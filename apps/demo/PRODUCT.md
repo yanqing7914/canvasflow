@@ -36,11 +36,20 @@ vehicle service.
   misrecognition can therefore never rewrite the trip on its own.
 - Text and voice share one input path, so voice never gets a private route into
   the task. `source` only tells the Gateway where the words came from.
-- The text path closes while the microphone is capturing or its transcript is in
-  flight, because the field still holds the previous turn's words until the voice
-  turn hands new ones back.
+- The keyboard is on demand, not a permanent input row. It appears when the turn
+  needs it — a transcript is waiting to be confirmed, or voice cannot carry this
+  turn — and when the driver asks for it. When voice is carrying the turn, the
+  journey content keeps the space instead.
+- The keyboard closes only when nothing depends on it. A transcript awaiting
+  confirmation, a failed voice turn, and a browser without speech recognition all
+  hold it open, and the 文字 entry reports itself as unable to dismiss it rather
+  than silently refusing. Voice is never the only way in, so that entry is
+  reachable in every state the microphone does not own.
+- The text path closes entirely while the microphone is capturing or its
+  transcript is in flight: during capture the field would still hold the previous
+  turn's words, and during submission those words have already been sent once.
 - Every voice failure (no API, insecure context, denied microphone, nothing
-  heard, engine error, timeout) states what happened and offers the text field.
+  heard, engine error, timeout) states what happened and opens the text field.
   Voice is never the only way to continue.
 - Voice activity detection and an on-device wake word are P1. This round has no
   always-on microphone and ships no model artifacts.

@@ -128,6 +128,7 @@ a:focus-visible {
 }
 
 .mic-button,
+.keyboard-toggle,
 .control-toggle,
 .console-close {
   display: inline-flex;
@@ -146,9 +147,22 @@ a:focus-visible {
 }
 
 .mic-button:hover,
+.keyboard-toggle:hover,
 .control-toggle:hover {
   border-color: #b8c4d2;
   background: #f7f9fc;
+}
+
+/* Pressed state only, not a status colour: the keyboard is a utility, not a
+   condition of the trip. */
+.keyboard-toggle--open {
+  border-color: #b8c4d2;
+  background: #eef1f5;
+}
+
+.keyboard-toggle:disabled {
+  background: #f5f7f9;
+  color: var(--muted);
 }
 
 .mic-button.mic-listening {
@@ -207,10 +221,24 @@ a:focus-visible {
   background: #fbfcfe;
 }
 
-.voice-composer[data-voice-state="error"],
-.voice-composer[data-voice-state="unavailable"] {
+/* Why the field opened is what it means, so the reason carries the colour. A
+   failed or missing voice path is red; a transcript awaiting confirmation shares
+   the blue that means "the assistant holds the turn"; a keyboard the driver
+   simply asked for stays neutral. */
+.voice-composer[data-composer-reason="error"],
+.voice-composer[data-composer-reason="unavailable"] {
   border-color: #eec2c2;
   background: var(--red-pale);
+}
+
+.voice-composer[data-composer-reason="transcript"] {
+  border-color: #bfd3fb;
+  background: var(--blue-pale);
+}
+
+.voice-composer[data-composer-reason="transcript"][data-voice-state="submitting"] {
+  border-color: #e6d4b0;
+  background: var(--amber-pale);
 }
 
 .voice-composer__notice {
@@ -242,8 +270,7 @@ a:focus-visible {
 
 .voice-composer__input::placeholder { color: var(--muted); }
 
-.voice-composer__send,
-.voice-composer__cancel {
+.voice-composer__send {
   display: inline-flex;
   min-height: 52px;
   flex: 0 0 auto;
@@ -269,14 +296,6 @@ a:focus-visible {
   background: #f2f4f6;
   color: var(--muted);
 }
-
-.voice-composer__cancel {
-  border-color: #bac6d4;
-  background: #ffffff;
-  color: var(--ink);
-}
-
-.voice-composer__cancel:hover { background: #f5f8fb; }
 
 .trip-brief__content {
   display: flex;
@@ -1555,9 +1574,11 @@ a:focus-visible {
   .header-actions { gap: 6px; }
 
   .mic-button,
+  .keyboard-toggle,
   .control-toggle { min-height: 40px; padding: 0 10px; font-size: 14px; }
 
-  .mic-button span { display: none; }
+  .mic-button span,
+  .keyboard-toggle span { display: none; }
 
   .voice-status { padding: 0 16px; font-size: 15px; }
 
@@ -1574,8 +1595,7 @@ a:focus-visible {
     font-size: 16px;
   }
 
-  .voice-composer__send,
-  .voice-composer__cancel {
+  .voice-composer__send {
     min-height: 44px;
     flex: 1 1 0;
     padding: 0 12px;
@@ -1720,6 +1740,7 @@ a:focus-visible {
   .brand-separator,
   .trip-brief__phase { font-size: 14px; }
 
+  .keyboard-toggle,
   .control-toggle { width: 40px; padding: 0; }
 
   .control-toggle span { display: none; }

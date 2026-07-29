@@ -868,10 +868,13 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '开始语音输入' }))
       emit(() => speech.engine().emit('我现在要去机场接妈妈和豆豆', true, 0.94))
 
-      // The transcript lands in the one existing input, ready to correct.
+      // The transcript opens the field, ready to correct.
       const input = screen.getByLabelText('任务输入')
       expect(input).toHaveValue('我现在要去机场接妈妈和豆豆')
       expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('已转写，确认或编辑后发送。')
+      // The driver did not ask for this field, but it is theirs now: the toggle
+      // reports what is on screen, so it never offers to open a second one.
+      expect(screen.getByRole('button', { name: '收起文字输入' })).toHaveAttribute('aria-pressed', 'true')
 
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
@@ -884,10 +887,12 @@ describe('demo integration', () => {
       })
       await waitFor(() => expect(speech.synthesis.spoken).toHaveLength(1))
       expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('好的，请告诉我她们的航班号。')
-      expect(input).toHaveValue('')
+      // Nothing is waiting to be confirmed any more, so the keyboard gives the
+      // space back rather than sitting there holding an empty field.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
     })
 
-    it('closes the text path while the microphone is capturing', async () => {
+    it('will not let the keyboard reach the previous turn while the microphone is capturing', async () => {
       const user = userEvent.setup()
       const speech = createFakeSpeech()
       const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
@@ -896,22 +901,23 @@ describe('demo integration', () => {
 
       await user.click(screen.getByRole('button', { name: '开始语音输入' }))
 
-      // The field still holds the previous turn's words; sending them now would
-      // create a task out of something the driver never meant to send.
-      const input = screen.getByLabelText('任务输入')
-      const send = screen.getByRole('button', { name: '发送' })
-      expect(input).toBeDisabled()
-      expect(send).toBeDisabled()
-
-      await user.click(send)
-      await user.keyboard('{Enter}')
+      // The captured words have not been handed back yet, so there is nothing to
+      // confirm and no field to confirm it in. Opening one now would show the
+      // *previous* turn's words, which 发送 would then submit as this turn.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '改用文字输入' })).toBeDisabled()
+      // With no field and no way to open one, there is no keyboard route into
+      // the turn at all, so nothing can be submitted by hand.
+      expect(screen.queryByRole('button', { name: '发送' })).not.toBeInTheDocument()
       expect(create).not.toHaveBeenCalled()
 
-      // Ending the turn hands the words back and reopens the text path.
+      // Ending the turn hands the words back, and the field arrives with them.
       emit(() => speech.engine().emit('去机场接妈妈和豆豆', true))
+      const input = screen.getByLabelText('任务输入')
       expect(input).toBeEnabled()
-      expect(send).toBeEnabled()
-      await user.click(send)
+      expect(input).toHaveValue('去机场接妈妈和豆豆')
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
       expect(create).toHaveBeenCalledWith('去机场接妈妈和豆豆', {
         vehicleContext: expect.anything(),
@@ -932,8 +938,14 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByRole('button', { name: '正在提交语音内容' })
 
+      // Submitting is not a reason to take the words away: they stay on screen
+      // until the Gateway has actually accepted them.
+      const input = screen.getByLabelText('任务输入')
+      expect(input).toHaveValue('去机场接妈妈和豆豆')
+      expect(screen.getByRole('form', { name: 'Agent input' }))
+        .toHaveAttribute('data-voice-state', 'submitting')
       // A second 发送 mid-flight would send the same words twice.
-      expect(screen.getByLabelText('任务输入')).toBeDisabled()
+      expect(input).toBeDisabled()
       expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
 
       await act(async () => { release(apiResponse(createInitialTask())) })
@@ -965,6 +977,9 @@ describe('demo integration', () => {
       await screen.findByRole('button', { name: '打断语音播报并重新输入' })
       const cancelledBefore = speech.synthesis.cancelled
 
+      // Reaching for the keyboard mid-playback is allowed: voice is never the
+      // only way to answer, even while the assistant still holds the turn.
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
       // Typing an answer while the car is still talking must stop the playback,
       // not talk over it.
       const input = screen.getByLabelText('任务输入')
@@ -1112,6 +1127,110 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
       expect(create).toHaveBeenCalledOnce()
+    })
+
+    it('keeps the keyboard out of the way until the turn needs it', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      // A working microphone carries the turn, so the journey content keeps the
+      // space the input row used to occupy.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+
+      // Voice is never the only way in: the keyboard is one press away, and
+      // pressing it lands the caret in the field rather than merely revealing it.
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      const input = screen.getByLabelText('任务输入')
+      expect(input).toHaveFocus()
+      expect(screen.getByRole('button', { name: '收起文字输入' })).toHaveAttribute('aria-pressed', 'true')
+
+      // A keyboard the driver opened themselves is the one they may close again.
+      await user.click(screen.getByRole('button', { name: '收起文字输入' }))
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    })
+
+    it('gives the space back once a typed message has actually been sent', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const create = vi.fn()
+        .mockRejectedValueOnce(new Error('网关不可用'))
+        .mockResolvedValueOnce(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      await user.clear(screen.getByLabelText('任务输入'))
+      await user.type(screen.getByLabelText('任务输入'), '去机场接妈妈')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      // A refused send keeps the field: the words are still in it, waiting to be
+      // retried, so taking it away would strand them.
+      await screen.findByRole('alert')
+      expect(screen.getByLabelText('任务输入')).toHaveValue('去机场接妈妈')
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+
+      // Now the words are gone, so the field that held them has done its job.
+      // Leaving it open would restore the permanent empty input row.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+    })
+
+    it('refuses to take away the only input path a failed voice turn has left', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().fail('not-allowed'))
+
+      // The microphone is refused, so the field is the turn's only remaining
+      // path. Taking it away would strand the driver, so the toggle reports
+      // itself as unable to rather than silently doing nothing.
+      expect(screen.getByLabelText('任务输入')).toBeEnabled()
+      const toggle = screen.getByRole('button', { name: '收起文字输入' })
+      expect(toggle).toBeDisabled()
+
+      await user.click(toggle)
+      expect(screen.getByLabelText('任务输入')).toBeInTheDocument()
+    })
+
+    it('states why the keyboard is the only path when voice cannot run at all', () => {
+      const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      // No `speech` prop: jsdom exposes no Web Speech API at all.
+      render(<App api={api} />)
+
+      // With no voice to fail, nothing else would explain the field, so the
+      // composer says why it is there instead of appearing without a reason.
+      const composer = screen.getByRole('form', { name: 'Agent input' })
+      expect(composer).toHaveAttribute('data-composer-reason', 'unavailable')
+      expect(composer).toHaveTextContent('当前浏览器不支持语音识别，请改用文字输入。')
+      // Text is the only path there is, so it cannot be dismissed.
+      expect(screen.getByLabelText('任务输入')).toBeEnabled()
+      expect(screen.getByRole('button', { name: '收起文字输入' })).toBeDisabled()
+    })
+
+    it('keeps an abandoned transcript on screen instead of parking it out of sight', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('去机场接妈妈', true))
+      await user.click(screen.getByRole('button', { name: '放弃这次语音输入' }))
+
+      // Leaving the voice turn keeps the words; hiding the field would keep them
+      // somewhere the driver cannot see, correct, or send.
+      expect(screen.getByLabelText('任务输入')).toHaveValue('去机场接妈妈')
+
+      // Choosing to speak again is a decision to stop typing, so the field goes.
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
     })
 
     it('releases the microphone when the surface unmounts', async () => {
