@@ -1151,6 +1151,34 @@ describe('demo integration', () => {
       expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
     })
 
+    it('gives the space back once a typed message has actually been sent', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const create = vi.fn()
+        .mockRejectedValueOnce(new Error('网关不可用'))
+        .mockResolvedValueOnce(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      await user.clear(screen.getByLabelText('任务输入'))
+      await user.type(screen.getByLabelText('任务输入'), '去机场接妈妈')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      // A refused send keeps the field: the words are still in it, waiting to be
+      // retried, so taking it away would strand them.
+      await screen.findByRole('alert')
+      expect(screen.getByLabelText('任务输入')).toHaveValue('去机场接妈妈')
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+
+      // Now the words are gone, so the field that held them has done its job.
+      // Leaving it open would restore the permanent empty input row.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+    })
+
     it('refuses to take away the only input path a failed voice turn has left', async () => {
       const user = userEvent.setup()
       const speech = createFakeSpeech()

@@ -278,7 +278,13 @@ export default function App({
     }
     // Answering by hand during playback is a barge-in too: stop talking first.
     if (voice.state === 'speaking') voice.cancel()
-    void sendInput(text)
+    void sendInput(text).then((outcome) => {
+      // The words are gone, so the field that held them has done its job. Leaving
+      // it open would put an empty input row back on screen permanently, which is
+      // the thing the on-demand keyboard exists to avoid. A refused send keeps it:
+      // `sendInput` leaves the text in place so 发送 can retry it.
+      if (outcome.sent) setKeyboardRequested(false)
+    })
   }
 
   function changeText(value: string) {

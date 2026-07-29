@@ -32,23 +32,41 @@ async function readControls(page: Page, expected: string | RegExp) {
 /**
  * The keyboard is on demand, not a permanent input row: in a browser with working
  * speech recognition it is not on screen until the turn needs it or the driver
- * asks for it. Every text step therefore opens it first. Opening an already-open
- * composer would close it, so the toggle is only pressed when the field is absent.
+ * asks for it, and it leaves again once a typed message has been sent. Every text
+ * step therefore opens it first, waiting on the 文字 entry rather than on the
+ * field — a field left over from the previous turn may still be tearing down, and
+ * filling that one detaches mid-action.
  */
 async function composer(page: Page) {
-  const input = page.getByLabel('任务输入')
-  if (await input.count() === 0) {
-    await page.getByRole('button', { name: '改用文字输入' }).click()
-    await expect(input).toBeVisible()
+  if (await page.getByLabel('任务输入').count() === 0) {
+    const toggle = page.getByRole('button', { name: '改用文字输入' })
+    await expect(toggle).toBeEnabled()
+    await toggle.click()
   }
+  // Resolve and settle the field itself rather than the toggle: when voice is
+  // unavailable the toggle is deliberately disabled forever, and a field left from
+  // the previous turn may still be disabled by a request in flight.
+  const input = page.getByLabel('任务输入')
+  await expect(input).toBeEnabled()
   return input
 }
 
-/** Types into the on-demand keyboard and sends, opening it if it is not open. */
+/**
+ * Types into the on-demand keyboard and sends, opening it if it is not open. Waits
+ * for the send to settle: an accepted typed message closes the composer, so
+ * returning early would leave the next step racing a field that is unmounting.
+ */
 async function sendText(page: Page, value?: string) {
   const input = await composer(page)
   if (value !== undefined) await input.fill(value)
   await page.getByRole('button', { name: '发送' }).click()
+  // Either the composer left (the send was accepted and text was the only reason
+  // it was open) or it is back to editable — never mid-flight.
+  await expect(async () => {
+    const field = page.getByLabel('任务输入')
+    if (await field.count() === 0) return
+    await expect(field).toBeEnabled()
+  }).toPass({ timeout: 10_000 })
 }
 
 async function expectAdvanceEnabled(page: Page, enabled: boolean) {
@@ -119,17 +137,26 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     await page.keyboard.press('Tab')
     await expect(submit).toBeFocused()
     await page.keyboard.press('Enter')
+    // The accepted message takes its keyboard with it.
+    await expect(page.getByLabel('任务输入')).toHaveCount(0)
 
     const surface = page.getByRole('region', { name: 'Generated task interface' })
     await expect(surface).toBeVisible()
     await expect(surface).toHaveAttribute('data-layout', 'stack')
     await expect(surface.locator('[data-component-type="status-banner"]')).toBeVisible()
+
+    // The keyboard left with its words, so it is out of the tab order too: this
+    // phase only asks a question, so the header is the whole of it.
+    await controls.focus()
+    await page.keyboard.press('Tab')
+    await expect(page.getByLabel('任务输入')).toHaveCount(0)
+
     await sendText(page, 'MU5102')
+    // The demo player lives in the drawer, so tabbing on from the header reaches
+    // the trip surface's own action rather than a demo control.
     const startNavigation = page.getByRole('button', { name: '开始导航' })
     await expect(startNavigation).toBeEnabled()
-    // The demo player now lives in the drawer, so tabbing on from 发送 reaches the
-    // trip surface's own action rather than a demo control.
-    await submit.focus()
+    await controls.focus()
     await page.keyboard.press('Tab')
     await expect(startNavigation).toBeFocused()
     await page.keyboard.press('Enter')
