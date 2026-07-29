@@ -1465,7 +1465,7 @@ describe('AgentGateway', () => {
     },
   )
 
-  it('resets while moving and finishes the deferred cabin cleanup after parking', () => {
+  it('resets while moving and finishes deferred cleanup without consuming the next trip parking event', () => {
     const runtime = createSideEffectRuntime()
     const base = createProviderRegistry(runtime)
     const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
@@ -1489,15 +1489,32 @@ describe('AgentGateway', () => {
     })])
     expect(revertCabin).not.toHaveBeenCalled()
 
+    const prepared = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'reset-new-trip', expectedTaskRevision: deferred.task.taskRevision,
+      event: { eventId: 'reset-new-trip', type: 'user.input', text: '接妈妈，航班 MU5102', timestamp: '2026-07-22T12:06:00+08:00' },
+    })
+    const parkedForNewTrip = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'reset-first-parked', expectedTaskRevision: prepared.task.taskRevision,
+      event: { eventId: 'reset-first-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:07:00+08:00' },
+    })
+    const started = gateway.submitAction(returning.task.taskId, {
+      clientRequestId: 'reset-new-trip-start', expectedTaskRevision: parkedForNewTrip.task.taskRevision,
+      expectedUiRevision: parkedForNewTrip.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'reset-new-trip-start',
+    })
+    const approaching = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'reset-new-trip-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'reset-new-trip-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:08:00+08:00' },
+    })
     const parked = gateway.submitEvent(returning.task.taskId, {
-      clientRequestId: 'reset-parked', expectedTaskRevision: deferred.task.taskRevision,
-      event: { eventId: 'reset-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:06:00+08:00' },
+      clientRequestId: 'reset-parked', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'reset-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:09:00+08:00' },
     })
 
     expect(revertCabin).toHaveBeenCalledTimes(1)
-    expect(parked.effects).toContainEqual(expect.objectContaining({
+    expect(parkedForNewTrip.effects).toContainEqual(expect.objectContaining({
       type: 'vehicle.revert-cabin-profile', status: 'succeeded',
     }))
+    expect(parked.task.phase).toBe('waiting-for-passengers')
   })
 
   it('keeps the original task snapshot when a later return-trip provider fails', () => {

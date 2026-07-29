@@ -415,8 +415,30 @@ export class AgentGateway {
       )
     }
 
-    const deferredCleanup = this.#resumeDeferredCabinCleanup(taskId, current, request, startedAt)
-    if (deferredCleanup) return deferredCleanup
+    const deferredReceipt = current.effectReceipts?.activeCabin
+    // A reset starts a new task but can retain an old cabin effect awaiting a
+    // parked vehicle. Clean it up alongside (not instead of) this event.
+    let resumedCleanupEffects: AgentResponse['effects'] = []
+    let resumedCleanupReceipts = current.effectReceipts
+    if (
+      request.event.type === 'vehicle.parked'
+      && current.task.phase === 'collecting-information'
+      && deferredReceipt?.state === 'deferred'
+    ) {
+      const cleanup = this.#effectExecutor.revertCabinProfile({
+        task: current.task,
+        cabinEffectId: deferredReceipt.providerEffectId,
+        idempotencyKey: `${request.event.eventId}:deferred-reset-cabin`,
+        effectId: `${request.event.eventId}:deferred-reset-cabin`,
+        vehicle: this.#contextAfterEvent(current.requestContext, request.event)?.vehicle,
+        allowDeferredCleanup: true,
+      })
+      resumedCleanupEffects = [cleanup.effect]
+      resumedCleanupReceipts = this.#deferredCleanupReceipts(current.effectReceipts, deferredReceipt, cleanup)
+    } else {
+      const deferredCleanup = this.#resumeDeferredCabinCleanup(taskId, current, request, startedAt)
+      if (deferredCleanup) return deferredCleanup
+    }
 
     const plan = request.event.type === 'user.input'
       ? this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
@@ -441,8 +463,8 @@ export class AgentGateway {
 
     // Only revoke live capabilities after freshness and reducer acceptance checks.
     // A stale terminal event must not consume a credential that remains visible in state.
-    let preEffects: AgentResponse['effects'] = []
-    let receiptsAfterTerminalCleanup = current.effectReceipts
+    let preEffects: AgentResponse['effects'] = resumedCleanupEffects
+    let receiptsAfterTerminalCleanup = resumedCleanupReceipts
     const closesTask = request.event.type === 'user.cancelled-task'
       || request.event.type === 'destination.arrived'
       || (request.event.type === 'flight.updated' && request.event.flight.status === 'cancelled')
@@ -1953,11 +1975,7 @@ export class AgentGateway {
       vehicle: updatedContext?.vehicle,
       allowDeferredCleanup: true,
     })
-    const effectReceipts = cleanup.succeeded
-      ? { ...current.effectReceipts, activeCabin: { ...receipt, state: 'reverted' as const, lastErrorCode: undefined } }
-      : cleanup.ambiguous
-        ? { ...current.effectReceipts, activeCabin: { ...receipt, state: 'unknown' as const, lastErrorCode: cleanup.effect.errorCode } }
-        : { ...current.effectReceipts, activeCabin: { ...receipt, state: 'deferred' as const, lastErrorCode: cleanup.effect.errorCode } }
+    const effectReceipts = this.#deferredCleanupReceipts(current.effectReceipts, receipt, cleanup)
     const stored = this.#store.save(this.#publish(
       current.task,
       current.toolResults,
@@ -1970,6 +1988,19 @@ export class AgentGateway {
     const effects = [cleanup.effect]
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects })
     return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
+  }
+
+  #deferredCleanupReceipts(
+    existing: StoredTask['effectReceipts'],
+    receipt: NonNullable<StoredTask['effectReceipts']>['activeCabin'],
+    cleanup: ReturnType<EffectExecutor['revertCabinProfile']>,
+  ): StoredTask['effectReceipts'] {
+    if (!receipt) return existing
+    return cleanup.succeeded
+      ? { ...existing, activeCabin: { ...receipt, state: 'reverted' as const, lastErrorCode: undefined } }
+      : cleanup.ambiguous
+        ? { ...existing, activeCabin: { ...receipt, state: 'unknown' as const, lastErrorCode: cleanup.effect.errorCode } }
+        : { ...existing, activeCabin: { ...receipt, state: 'deferred' as const, lastErrorCode: cleanup.effect.errorCode } }
   }
 
   #acceptsContextOnlyEvent(
