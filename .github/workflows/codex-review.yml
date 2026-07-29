@@ -82,7 +82,27 @@ jobs:
           persist-credentials: false
 
       - name: Copy trusted review prompt
-        run: cp trusted-base/.github/codex/prompts/review.md "$RUNNER_TEMP/review-prompt.md"
+        run: cp trusted-base/.github/codex/prompts/review.md "$GITHUB_WORKSPACE/.codex-review-prompt.md"
+
+      # `drop-sudo` can fail on newer GitHub-hosted runners. Keep the API key
+      # isolated by running Codex as a dedicated user instead of falling back
+      # to a sudo-capable read-only process.
+      - name: Prepare unprivileged Codex review user
+        run: |
+          set -euo pipefail
+          if ! getent group codex-review >/dev/null; then
+            sudo groupadd --system codex-review
+          fi
+          if ! id -u codex-review >/dev/null 2>&1; then
+            sudo useradd --system --create-home --home-dir /home/codex-review \
+              --shell /usr/sbin/nologin --gid codex-review codex-review
+          fi
+          # Do not add the review user to runner: that shared group can expose
+          # runner-owned temp and tooling directories. ACLs grant only the
+          # checkout plus the execute bits needed to traverse its parents.
+          sudo setfacl -m u:codex-review:--x /home/runner /home/runner/work
+          sudo setfacl -R -m u:codex-review:rwX "$GITHUB_WORKSPACE"
+          sudo find "$GITHUB_WORKSPACE" -type d -exec setfacl -d -m u:codex-review:rwX {} +
 
       - name: Configure Codex provider
         id: codex_provider
@@ -90,27 +110,6 @@ jobs:
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           CODEX_REVIEW_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
         run: |
-          mkdir -p "$RUNNER_TEMP/codex-home"
-
-          # Kept in a file so the fallback step can rebuild the same config for
-          # a different model instead of duplicating this logic.
-          cat > "$RUNNER_TEMP/write-codex-config.mjs" <<'NODE'
-          import fs from 'node:fs'
-
-          const model = process.argv[2] ?? ''
-          const lines = []
-          if (process.env.OPENAI_BASE_URL) {
-            lines.push(`openai_base_url = ${JSON.stringify(process.env.OPENAI_BASE_URL)}`)
-          }
-          if (model) {
-            lines.push(`model = ${JSON.stringify(model)}`)
-          }
-
-          fs.writeFileSync(`${process.env.RUNNER_TEMP}/codex-home/config.toml`, `${lines.join('\n')}\n`)
-          NODE
-
-          node "$RUNNER_TEMP/write-codex-config.mjs" "$CODEX_REVIEW_MODEL"
-
           node <<'NODE'
           const fs = require('node:fs')
 
@@ -131,18 +130,12 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           responses-api-endpoint: ${{ steps.codex_provider.outputs.responses-api-endpoint }}
-          codex-home: ${{ runner.temp }}/codex-home
-          prompt-file: ${{ runner.temp }}/review-prompt.md
+          prompt-file: ${{ github.workspace }}/.codex-review-prompt.md
           output-file: codex-review.md
           sandbox: read-only
+          safety-strategy: unprivileged-user
+          codex-user: codex-review
           model: ${{ vars.CODEX_REVIEW_MODEL }}
-
-      - name: Switch to the fallback review model
-        if: steps.codex.outcome == 'failure' && vars.CODEX_REVIEW_FALLBACK_MODEL != ''
-        env:
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          CODEX_REVIEW_FALLBACK_MODEL: ${{ vars.CODEX_REVIEW_FALLBACK_MODEL }}
-        run: node "$RUNNER_TEMP/write-codex-config.mjs" "$CODEX_REVIEW_FALLBACK_MODEL"
 
       - name: Run Codex review (fallback model)
         id: codex_fallback
@@ -152,10 +145,11 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           responses-api-endpoint: ${{ steps.codex_provider.outputs.responses-api-endpoint }}
-          codex-home: ${{ runner.temp }}/codex-home
-          prompt-file: ${{ runner.temp }}/review-prompt.md
+          prompt-file: ${{ github.workspace }}/.codex-review-prompt.md
           output-file: codex-review.md
           sandbox: read-only
+          safety-strategy: unprivileged-user
+          codex-user: codex-review
           model: ${{ vars.CODEX_REVIEW_FALLBACK_MODEL }}
 
       # Distinguish "the review could not run" from "the review said BLOCK", so

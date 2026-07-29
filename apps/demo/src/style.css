@@ -1,264 +1,1788 @@
 :root {
-  color: #f4f0e5;
-  background: #08110f;
-  font-family: "Avenir Next", "Gill Sans", sans-serif;
+  color: #102033;
+  background: #edf0f4;
+  font-family: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", sans-serif;
   font-synthesis: none;
-  --acid: #e8ff65;
-  --amber: #ffb447;
-  --ink: #09120f;
-  --paper: #f1eee2;
-  --muted: #a9b6af;
-  --line: rgba(244, 240, 229, 0.16);
+  text-rendering: optimizeLegibility;
 }
 
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; min-height: 100vh; }
-button, input { font: inherit; }
-button { border: 0; cursor: pointer; }
-button:disabled { cursor: default; opacity: 0.45; }
-button:focus-visible, input:focus-visible { outline: 3px solid var(--acid); outline-offset: 3px; }
 
-.demo-shell {
-  min-height: 100vh;
-  overflow: hidden;
-  padding: clamp(1.25rem, 3vw, 3rem);
-  background:
-    linear-gradient(rgba(232, 255, 101, 0.035) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(232, 255, 101, 0.035) 1px, transparent 1px),
-    radial-gradient(circle at 10% 4%, #265041 0, transparent 28%),
-    linear-gradient(135deg, #07110e, #102019 62%, #1b1c0c);
-  background-size: 44px 44px, 44px 44px, auto, auto;
-}
-
-header { max-width: 960px; }
-.eyebrow, .label, .surface-kicker, .card-eyebrow, .component-code {
-  color: var(--acid);
-  font-size: 0.68rem;
-  font-weight: 900;
-  letter-spacing: 0.15em;
-  text-transform: uppercase;
-}
-h1 {
-  font-family: Georgia, serif;
-  font-size: clamp(2.65rem, 6vw, 5.8rem);
-  line-height: 0.92;
-  margin: 0.5rem 0 1rem;
-  max-width: 13ch;
-}
-header p { color: #bac6bf; }
-
-.prompt { display: flex; gap: 0.75rem; margin-top: 1.8rem; max-width: 960px; }
-.prompt input {
-  background: rgba(244, 240, 229, 0.08);
-  border: 1px solid var(--line);
-  border-radius: 0;
-  color: #f4f0e5;
-  min-width: 0;
-  padding: 1rem 1.2rem;
+html,
+body,
+#root {
   width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
 }
-.prompt button, .console button {
-  background: var(--acid);
-  color: var(--ink);
-  font-weight: 900;
-  padding: 0.9rem 1.35rem;
+
+body { background: #edf0f4; }
+
+button,
+a { font: inherit; }
+
+button { cursor: pointer; }
+
+button:disabled { cursor: not-allowed; }
+
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgba(36, 107, 253, 0.45);
+  outline-offset: 3px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
   white-space: nowrap;
 }
 
-/* The microphone is a secondary control: it reads as state, not as the action. */
-.mic-button {
-  background: rgba(244, 240, 229, 0.08);
-  border: 1px solid var(--line);
-  color: #f4f0e5;
-}
-.mic-listening { background: var(--acid); border-color: var(--acid); color: var(--ink); }
-.mic-transcribing, .mic-submitting { background: var(--amber); border-color: var(--amber); color: var(--ink); }
-.mic-speaking { background: #4f9d7f; border-color: #4f9d7f; color: var(--ink); }
-.mic-error { background: #d84942; border-color: #d84942; color: white; }
-
-.voice-status {
-  color: var(--muted);
-  margin: 0.6rem 0 0;
-  max-width: 960px;
-  min-height: 1.2em;
-  overflow-wrap: anywhere;
-}
-
-.console {
-  align-items: center;
-  background: rgba(7, 17, 14, 0.78);
-  border: 1px solid var(--line);
-  border-left: 4px solid var(--amber);
-  display: flex;
-  gap: 2rem;
-  justify-content: space-between;
-  margin: 2.25rem 0 1rem;
-  padding: 1rem 1.15rem;
-}
-.console div { display: grid; gap: 0.25rem; }
-.console small { color: #8fa399; }
-
-.ui-surface {
-  --card-padding: clamp(1.1rem, 2.2vw, 2rem);
-  --surface-accent: var(--acid);
-  --surface-background: #091410;
-  --surface-border: rgba(232, 255, 101, 0.22);
-  --surface-foreground: #f4f0e5;
-  --surface-muted: var(--muted);
-  background: var(--surface-background);
-  border: 1px solid var(--surface-border);
-  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.25);
-  color: var(--surface-foreground);
-  margin-top: 1rem;
-  padding: clamp(1rem, 2.5vw, 2.25rem);
-  position: relative;
-}
-.ui-surface[data-theme="light"] {
-  --surface-accent: #1d7658;
-  --surface-background: #e8ede5;
-  --surface-border: rgba(22, 80, 60, 0.25);
-  --surface-foreground: #102019;
-  --surface-muted: #5f6f67;
-}
-.ui-surface[data-theme="dark"] {
-  --surface-accent: var(--acid);
-  --surface-background: #091410;
-  --surface-border: rgba(232, 255, 101, 0.28);
-  --surface-foreground: #f4f0e5;
-  --surface-muted: var(--muted);
-}
-.ui-surface::before {
-  background: linear-gradient(90deg, var(--surface-accent), transparent);
-  content: "";
-  height: 2px;
-  left: 0;
-  position: absolute;
-  right: 0;
-  top: 0;
-}
-.priority-high { border-color: rgba(255, 180, 71, 0.6); }
-.priority-critical { border-color: #ff665f; }
-.density-minimal { --card-padding: 1rem; max-width: 850px; }
-.density-compact { --card-padding: clamp(1rem, 1.7vw, 1.55rem); }
-
-.surface-heading { align-items: flex-start; display: flex; gap: 1rem; justify-content: space-between; margin-bottom: 1rem; }
-.surface-heading h2 { font-family: Georgia, serif; font-size: clamp(1.6rem, 3vw, 2.8rem); line-height: 1; margin: 0.35rem 0 0; }
-.surface-revision { align-items: end; border-left: 1px solid var(--line); display: grid; justify-items: end; min-width: 4rem; padding-left: 1rem; }
-.ui-surface .surface-kicker { color: var(--surface-accent); }
-.surface-revision span { color: var(--surface-muted); font-size: 0.65rem; letter-spacing: 0.16em; }
-.surface-revision strong { color: var(--surface-accent); font-family: Georgia, serif; font-size: 2rem; }
-
-.ui-layout { display: grid; min-width: 0; }
-.ui-slot { display: grid; gap: inherit; min-width: 0; }
-.gap-none { gap: 0; }
-.gap-sm { gap: 0.55rem; }
-.gap-md { gap: 1rem; }
-.gap-lg { gap: 1.5rem; }
-.layout-row > .ui-slot { grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); }
-.layout-column > .ui-slot { grid-auto-flow: row; }
-.layout-split { align-items: stretch; }
-.layout-focus { grid-template-columns: minmax(0, 1.55fr) minmax(230px, 0.45fr); }
-.layout-focus .slot-primary .ui-card:first-child { min-height: 310px; }
-
-.ui-card {
-  background: var(--paper);
-  color: #102019;
-  min-width: 0;
+.demo-shell {
+  --cabin: #edf0f4;
+  --surface: #ffffff;
+  --ink: #102033;
+  --muted: #667384;
+  --rule: #dde3ea;
+  --quiet-rule: #edf0f4;
+  --blue: #246bfd;
+  --blue-deep: #1559e5;
+  --blue-pale: #edf3ff;
+  --green: #2ead63;
+  --green-pale: #edf9f1;
+  --amber: #c77a18;
+  --amber-pale: #fff7e9;
+  --red: #c74646;
+  --red-pale: #fff0f0;
+  min-height: 100dvh;
   overflow: hidden;
-  overflow-wrap: anywhere;
-  padding: var(--card-padding);
+  background: var(--cabin);
+  color: var(--ink);
+}
+
+.cockpit-stage {
+  display: grid;
+  width: 100%;
+  height: 100dvh;
+  min-height: 100dvh;
+  padding: 24px clamp(24px, 5vw, 96px);
+  place-items: center;
+}
+
+.task-surface {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 1720px);
+  height: min(680px, calc(100dvh - 48px));
+  max-height: none;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 28px;
+  background: var(--surface);
+  box-shadow: 0 18px 46px rgba(16, 32, 51, 0.08);
+}
+
+.trip-brief__header {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 clamp(28px, 3vw, 52px);
+}
+
+.brand-lockup {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.brand-wordmark {
+  color: var(--blue);
+  font-family: Bahnschrift, "DIN Alternate", sans-serif;
+  font-size: clamp(23px, 1.7vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.055em;
+}
+
+.brand-separator,
+.trip-brief__phase {
+  color: var(--muted);
+  font-size: clamp(17px, 1.3vw, 22px);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.mic-button,
+.keyboard-toggle,
+.control-toggle,
+.console-close {
+  display: inline-flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 0 13px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 650;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.mic-button:hover,
+.keyboard-toggle:hover,
+.control-toggle:hover {
+  border-color: #b8c4d2;
+  background: #f7f9fc;
+}
+
+/* Pressed state only, not a status colour: the keyboard is a utility, not a
+   condition of the trip. */
+.keyboard-toggle--open {
+  border-color: #b8c4d2;
+  background: #eef1f5;
+}
+
+.keyboard-toggle:disabled {
+  background: #f5f7f9;
+  color: var(--muted);
+}
+
+.mic-button.mic-listening {
+  border-color: #b8e1c8;
+  background: var(--green-pale);
+  color: #1d7b48;
+}
+
+/* Awaiting confirmation and playback both read as "the assistant has the turn". */
+.mic-button.mic-transcribing,
+.mic-button.mic-speaking {
+  border-color: #bfd3fb;
+  background: var(--blue-pale);
+  color: var(--blue-deep);
+}
+
+.mic-button.mic-submitting {
+  border-color: #e6d4b0;
+  background: var(--amber-pale);
+  color: var(--amber);
+}
+
+.mic-button.mic-error {
+  border-color: #eec2c2;
+  background: var(--red-pale);
+  color: var(--red);
+}
+
+.mic-button.mic-unavailable {
+  background: #f5f7f9;
+  color: var(--muted);
+}
+
+/* Announces listening/submitting/playback without adding visual weight. */
+.voice-status {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 clamp(24px, 3vw, 52px);
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.voice-status:empty { display: none; }
+
+.voice-composer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 10px;
+  margin: clamp(14px, 1.8vh, 20px) clamp(24px, 3vw, 52px) 0;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #fbfcfe;
+}
+
+/* Why the field opened is what it means, so the reason carries the colour. A
+   failed or missing voice path is red; a transcript awaiting confirmation shares
+   the blue that means "the assistant holds the turn"; a keyboard the driver
+   simply asked for stays neutral. */
+.voice-composer[data-composer-reason="error"],
+.voice-composer[data-composer-reason="unavailable"] {
+  border-color: #eec2c2;
+  background: var(--red-pale);
+}
+
+.voice-composer[data-composer-reason="transcript"] {
+  border-color: #bfd3fb;
+  background: var(--blue-pale);
+}
+
+.voice-composer[data-composer-reason="transcript"][data-voice-state="submitting"] {
+  border-color: #e6d4b0;
+  background: var(--amber-pale);
+}
+
+.voice-composer__notice {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 620;
+  line-height: 1.5;
+}
+
+.voice-composer__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.voice-composer__input {
+  min-width: 0;
+  min-height: 52px;
+  flex: 1 1 auto;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0 14px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.voice-composer__input::placeholder { color: var(--muted); }
+
+.voice-composer__send {
+  display: inline-flex;
+  min-height: 52px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 18px;
+  font-size: 17px;
+  font-weight: 700;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.voice-composer__send {
+  background: var(--blue);
+  color: #ffffff;
+}
+
+.voice-composer__send:hover:not(:disabled) { background: var(--blue-deep); }
+
+.voice-composer__send:disabled {
+  border-color: var(--rule);
+  background: #f2f4f6;
+  color: var(--muted);
+}
+
+.trip-brief__content {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  padding: clamp(24px, 3vh, 34px) clamp(28px, 3.5vw, 62px) 28px;
+}
+
+.task-heading {
+  flex: 0 0 auto;
+  padding-bottom: 18px;
+}
+
+.task-heading h1 {
+  max-width: none;
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(48px, 3.25vw, 62px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.028em;
+  text-wrap: balance;
+}
+
+/* The semantic h1 stays present; a component-level conclusion leads when supplied. */
+.task-heading--contextual { padding-bottom: 14px; }
+
+.task-heading--contextual h1 {
+  color: #506176;
+  font-size: clamp(20px, 1.45vw, 26px);
+  font-weight: 640;
+  letter-spacing: -0.022em;
+  line-height: 1.28;
+}
+
+/* While driving, the component's ETA is the conclusion; the page title stays a quiet orientation cue. */
+.task-heading--driving-to-airport h1 {
+  max-width: 36ch;
+  font-size: clamp(18px, 1.22vw, 22px);
+}
+
+.task-heading--completed { padding-top: clamp(16px, 3vh, 30px); }
+
+.ui-spec-renderer {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 0;
+  border-top: 0;
+  animation: phase-settle 200ms cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+
+.ui-layout {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  gap: clamp(18px, 2.2vw, 36px);
+}
+
+.ui-layout--stack,
+.ui-layout--column { grid-template-columns: minmax(0, 1fr); }
+
+.ui-layout--row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.ui-layout--split {
+  grid-template-columns: var(--ui-primary-ratio, 1.45fr) var(--ui-secondary-ratio, 1fr);
+}
+
+.ui-layout--focus {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 1260px;
+  margin: 0 auto;
+}
+
+/* A one-component spec is a brief, not a dashboard tile that must consume the whole frame. */
+.ui-spec-renderer[data-single-component="true"] .ui-layout { align-content: start; }
+
+.ui-slot {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  gap: clamp(16px, 2vh, 24px);
+  align-content: stretch;
+}
+
+.ui-layout--row .ui-slot { display: contents; }
+
+.ui-component {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-content: stretch;
+  gap: 16px;
+}
+
+.ui-layout--stack .ui-slot,
+.ui-layout--focus .ui-slot,
+.ui-spec-renderer[data-single-component="true"] .ui-slot {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.ui-layout--stack .ui-component,
+.ui-layout--focus .ui-component,
+.ui-spec-renderer[data-single-component="true"] .ui-component {
+  height: 100%;
+}
+
+.ui-spec-renderer[data-single-component="true"] .ui-slot {
+  align-self: start;
+  grid-template-rows: none;
+}
+
+.ui-spec-renderer[data-single-component="true"] .ui-component {
+  width: 100%;
+  height: auto;
+  grid-template-rows: auto auto;
+  align-content: start;
+}
+
+.ui-spec-renderer[data-single-component="true"] .ui-card,
+.ui-layout > .ui-card--empty {
+  height: auto;
+  min-height: 0;
+}
+
+/* A single brief owns the frame, but its content keeps a deliberate reading width. */
+.ui-spec-renderer[data-single-component="true"] .ui-card--status-banner,
+.ui-spec-renderer[data-single-component="true"] .ui-card--alert,
+.ui-spec-renderer[data-single-component="true"] .ui-card--fallback {
+  width: min(100%, 1040px);
+  max-width: none;
+  margin: 0;
+}
+
+.ui-spec-renderer[data-single-component="true"] .ui-card--status-banner,
+.ui-spec-renderer[data-single-component="true"] .ui-card--alert {
+  height: auto;
+  min-height: 0;
+}
+
+/* Components are content regions of one trip brief, not a stack of dashboard tiles. */
+.ui-card {
   position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  padding: clamp(4px, 1vh, 12px) 0;
+  background: transparent;
 }
-.component-code {
-  color: #637169;
+
+.ui-card__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.ui-card__heading { min-width: 0; }
+
+.ui-card__icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--blue);
+}
+
+.ui-card__icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.ui-card__eyebrow {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.ui-card__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(26px, 2.1vw, 38px);
+  font-weight: 720;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+}
+
+.ui-card__body {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.ui-card__lead {
+  margin: clamp(20px, 3vh, 38px) 0 0;
+  color: var(--ink);
+  font-size: clamp(34px, 3.2vw, 56px);
+  font-weight: 750;
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+}
+
+.ui-card__summary,
+.ui-card__body > p {
+  max-width: 38ch;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: clamp(18px, 1.38vw, 22px);
+  line-height: 1.5;
+}
+
+.ui-route-facts,
+.ui-hero-metrics,
+.ui-cabin-grid {
+  display: grid;
+  margin-top: clamp(28px, 4vh, 46px);
+  padding-top: clamp(18px, 2.6vh, 30px);
+  border-top: 1px solid var(--rule);
+}
+
+.ui-route-facts,
+.ui-cabin-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.ui-hero-metrics { grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr); }
+
+.ui-card--pickup-overview .ui-route-facts { grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); }
+
+.ui-metric {
+  min-width: 0;
+  padding: 0 clamp(12px, 2vw, 30px);
+  border-left: 1px solid var(--rule);
+}
+
+.ui-metric:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.ui-metric__label {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-metric__value,
+.ui-navigation-eta {
+  display: block;
+  overflow: hidden;
+  margin-top: 6px;
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(28px, 2.35vw, 46px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.055em;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-metric__detail {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-metric--comparison { color: var(--muted); }
+
+.ui-metric--comparison .ui-metric__value { color: #58677a; }
+
+.ui-card__status-line,
+.ui-detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.ui-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #506176;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ui-status::before {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.ui-status--landed,
+.ui-status--sent,
+.ui-status--confirmed,
+.ui-status--confirmed-onboard { color: #20814a; }
+
+.ui-status--delayed,
+.ui-status--waiting,
+.ui-status--sending { color: #a6620e; }
+
+.ui-status--cancelled,
+.ui-status--failed { color: var(--red); }
+
+.ui-card--flight-status .ui-card__title {
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(38px, 4vw, 68px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.055em;
+}
+
+.ui-card--flight-status .ui-hero-metrics { margin-top: clamp(30px, 4vh, 46px); }
+
+.ui-card--flight-status .ui-metric--hero .ui-metric__value {
+  font-size: clamp(52px, 5.8vw, 92px);
+  color: var(--blue);
+}
+
+.ui-flight-brief__header,
+.ui-charge-brief__header,
+.ui-message-brief__header,
+.ui-passenger-brief__header,
+.ui-cabin-brief__header,
+.ui-progress-brief__header,
+.ui-navigation-brief__header,
+.ui-pickup-brief__header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 13px;
+}
+
+.ui-flight-brief__glyph,
+.ui-charge-brief__glyph,
+.ui-message-brief__glyph,
+.ui-passenger-brief__glyph,
+.ui-cabin-brief__glyph,
+.ui-progress-brief__glyph,
+.ui-navigation-brief__glyph,
+.ui-pickup-brief__glyph {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--blue);
+}
+
+.ui-flight-brief__glyph svg,
+.ui-charge-brief__glyph svg,
+.ui-message-brief__glyph svg,
+.ui-passenger-brief__glyph svg,
+.ui-cabin-brief__glyph svg,
+.ui-progress-brief__glyph svg,
+.ui-navigation-brief__glyph svg,
+.ui-pickup-brief__glyph svg {
+  width: 28px;
+  height: 28px;
+}
+
+.ui-flight-brief__source,
+.ui-charge-brief__eyebrow,
+.ui-message-brief__eyebrow,
+.ui-passenger-brief__eyebrow,
+.ui-cabin-brief__eyebrow,
+.ui-progress-brief__eyebrow,
+.ui-navigation-brief__eyebrow,
+.ui-pickup-brief__phase {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.ui-flight-brief__number,
+.ui-charge-brief__title,
+.ui-message-brief__contact,
+.ui-cabin-brief__title,
+.ui-progress-brief__title,
+.ui-navigation-brief__destination {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(27px, 2.2vw, 40px);
+  font-weight: 720;
+  line-height: 1.14;
+  letter-spacing: -0.035em;
+}
+
+.ui-flight-brief__number {
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(38px, 4vw, 68px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.055em;
+}
+
+.ui-flight-brief__header .ui-status { margin-left: auto; }
+
+.ui-flight-brief__arrival {
+  display: grid;
+  gap: 8px;
+  margin-top: clamp(32px, 5vh, 68px);
+}
+
+.ui-flight-brief__time {
+  color: var(--blue);
+  font-size: clamp(60px, 6.7vw, 108px);
+}
+
+.ui-flight-brief__facts { margin-top: clamp(30px, 4vh, 46px); }
+
+@media (min-width: 1180px) {
+  .ui-card--flight-status {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.9fr) minmax(340px, 1.15fr) minmax(250px, 0.75fr);
+    align-items: center;
+    column-gap: clamp(30px, 3vw, 56px);
+    padding-block: clamp(10px, 1.6vh, 18px);
+  }
+
+  .ui-flight-brief__header {
+    grid-column: 1;
+    align-self: start;
+  }
+
+  .ui-flight-brief__arrival {
+    grid-column: 2;
+    align-self: center;
+    margin-top: 0;
+    padding-inline: clamp(28px, 3vw, 52px);
+    border-inline: 1px solid var(--rule);
+  }
+
+  .ui-flight-brief__facts {
+    display: grid;
+    grid-column: 3;
+    align-self: center;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .ui-flight-brief__facts .ui-metric {
+    padding: 0;
+    border-left: 0;
+  }
+
+  .ui-flight-brief__facts .ui-metric + .ui-metric {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+  }
+}
+
+.ui-charge-brief__recommendation { margin-bottom: 0; }
+
+.ui-charge-brief__reason { margin-top: 18px; }
+
+.ui-message-brief__status { margin-top: 18px; }
+
+.ui-passenger-brief__lead {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(42px, 4.4vw, 76px);
+  font-weight: 750;
+  line-height: 1.06;
+  letter-spacing: -0.04em;
+}
+
+.ui-passenger-brief__status { margin-top: clamp(22px, 3vh, 36px); }
+
+.ui-card--passenger-status {
+  justify-content: flex-start;
+  padding-top: clamp(16px, 2.5vh, 28px);
+}
+
+.ui-passenger-brief__meeting-point { margin-top: clamp(28px, 4vh, 46px); }
+
+/* Sparse onboard states keep their confirmed fact close to the conclusion. */
+.ui-card--passenger-status:not(:has(.ui-passenger-brief__meeting-point))
+  .ui-passenger-brief__status {
+  margin-top: clamp(24px, 3.5vh, 38px);
+  padding-top: 0;
+  border-top: 0;
+}
+
+.ui-cabin-brief__facts { margin-top: clamp(30px, 4vh, 46px); }
+
+.ui-cabin-brief__state {
+  margin-top: clamp(22px, 3vh, 34px);
+  padding-top: clamp(18px, 2.5vh, 28px);
+  border-top: 1px solid var(--rule);
+}
+
+.ui-progress-brief__title { font-size: clamp(34px, 3vw, 54px); }
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress-brief__title {
+  color: var(--green);
+  font-size: clamp(30px, 2.4vw, 44px);
+}
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress {
+  margin-top: clamp(30px, 4.5vh, 52px);
+  padding-top: 0;
+}
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress__step { font-size: 16px; }
+
+.ui-status-card {
+  display: grid;
+  width: min(100%, 1040px);
+  max-width: 1040px;
+  margin: 0;
+  padding: clamp(28px, 4vh, 44px) clamp(28px, 4vw, 52px);
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: clamp(18px, 2vw, 30px);
+  border: 1px solid #dce6f4;
+  border-radius: 22px;
+  background: #f8fbff;
+}
+
+.ui-status-card::before {
+  grid-column: 1 / -1;
+  width: 54px;
+  margin-bottom: 0;
+}
+
+.ui-status-card__glyph {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.ui-status-card__content {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.ui-status-card__glyph {
+  display: grid;
+  width: clamp(46px, 5vw, 68px);
+  height: clamp(46px, 5vw, 68px);
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--blue);
+}
+
+.ui-status-card__glyph svg {
+  width: 100%;
+  height: 100%;
+}
+
+.ui-status-card__content {
+  max-width: 42rem;
+  min-width: 0;
+  text-align: left;
+}
+
+.ui-status-card__kind {
+  margin: 0 0 9px;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.ui-status-card__title {
+  max-width: 18ch;
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(42px, 4.6vw, 76px);
+  font-weight: 750;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.ui-status-card__message {
+  max-width: 42ch;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: clamp(18px, 1.4vw, 22px);
+  line-height: 1.5;
+}
+
+.ui-status-card__state { margin-top: 22px; }
+
+.ui-navigation-hero {
+  position: relative;
+  margin-top: clamp(22px, 3vh, 40px);
+  padding-bottom: 0;
+}
+
+.ui-navigation-eta {
+  margin-top: 10px;
+  color: var(--ink);
+  font-size: clamp(108px, 7.55vw, 146px);
+  line-height: 0.82;
+}
+
+.ui-navigation-brief__route-rule {
+  display: flex;
+  width: fit-content;
+  min-height: 14px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  color: var(--blue);
+}
+
+/* No location/progress field exists in the current contract: this is an activity stroke, never a route-progress claim. */
+.ui-navigation-brief__route-rule[data-route-progress="unavailable"] {
+  width: auto;
+  min-height: 14px;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.ui-navigation-brief__route-start,
+.ui-navigation-brief__route-end {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.ui-navigation-brief__route-start { background: var(--blue); }
+
+.ui-navigation-brief__route-end { color: #b9c5d3; }
+
+.ui-navigation-brief__route-rule[data-route-progress="unavailable"]
+  .ui-navigation-brief__route-end { display: none; }
+
+.ui-navigation-brief__route-line {
+  display: block;
+  width: 48px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+.ui-navigation-brief__route-rule[data-route-progress="unavailable"]
+  .ui-navigation-brief__route-line {
+  width: 48px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+.ui-card--navigation-summary .ui-route-facts {
+  width: min(100%, 760px);
+  margin-top: clamp(28px, 4vh, 46px);
+  padding-top: clamp(18px, 2.2vh, 26px);
+  border-top: 0;
+}
+
+.ui-card--navigation-summary .ui-metric { border-left: 0; }
+
+.ui-card--navigation-summary .ui-metric + .ui-metric { border-left: 1px solid var(--rule); }
+
+.ui-battery-journey {
+  display: grid;
+  margin-top: clamp(26px, 4vh, 50px);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: clamp(16px, 2vw, 28px);
+}
+
+.ui-battery-journey .ui-metric {
+  border-left: 0;
+  padding: 0;
+}
+
+.ui-battery-journey__arrow {
+  margin-bottom: 6px;
+  color: var(--blue);
+}
+
+.ui-card--charging-recommendation .ui-metric__value { color: var(--blue); }
+
+.ui-card__lead--recommendation {
+  margin-top: clamp(22px, 3vh, 34px);
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(42px, 4.1vw, 68px);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-card--attention::before,
+.ui-card--settled::before,
+.ui-card--status-banner::before,
+.ui-card--alert::before {
+  display: block;
+  width: 54px;
+  height: 3px;
+  margin-bottom: clamp(18px, 3vh, 32px);
+  background: var(--blue);
+  content: "";
+}
+
+.ui-card--attention::before { background: var(--amber); }
+
+.ui-card--settled::before { background: var(--green); }
+
+.ui-message-preview {
+  max-width: 41ch;
+  margin: clamp(24px, 4vh, 54px) 0 0;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  font-size: clamp(26px, 2.55vw, 46px);
+  font-weight: 700;
+  line-height: 1.34;
+  letter-spacing: -0.035em;
+}
+
+.ui-card--message-preview .ui-card__status-line { margin-top: 18px; }
+
+.ui-callout {
+  display: grid;
+  gap: 8px;
+  margin-top: clamp(28px, 4vh, 46px);
+  padding: clamp(20px, 3vh, 34px) 0 0;
+  border-top: 1px solid var(--rule);
+}
+
+.ui-callout__label {
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.ui-callout strong {
+  color: var(--blue);
+  font-size: clamp(32px, 3.1vw, 54px);
+  font-weight: 730;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.ui-card--passenger-status .ui-card__title {
+  font-size: clamp(42px, 4.4vw, 76px);
+  line-height: 1.06;
+}
+
+.ui-card--passenger-status .ui-status { margin-top: clamp(22px, 4vh, 48px); }
+
+.ui-card--cabin-profile .ui-cabin-grid { margin-top: clamp(32px, 5vh, 70px); }
+
+.ui-card--cabin-profile .ui-detail-row {
+  margin-top: clamp(22px, 3vh, 34px);
+  padding-top: clamp(18px, 2.5vh, 28px);
+  border-top: 1px solid var(--rule);
+}
+
+.ui-progress {
+  display: grid;
+  margin: clamp(30px, 4.5vh, 52px) 0 0;
+  padding: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  list-style: none;
+}
+
+.ui-progress__step {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 17px;
+}
+
+.ui-progress__step:not(:last-child)::after {
   position: absolute;
-  right: 1rem;
-  top: 0.8rem;
-}
-.ui-card h3 { font-family: Georgia, serif; font-size: clamp(1.7rem, 3vw, 3rem); line-height: 1.05; margin: 0.35rem 0 1.25rem; }
-.ui-card p { color: #44544c; line-height: 1.6; }
-.card-eyebrow { color: #65766d !important; margin: 0; }
-.card-headline { align-items: flex-start; display: flex; gap: 1rem; justify-content: space-between; }
-
-.overview-route, .metric-row, .flight-board, .cabin-dials { display: flex; flex-wrap: wrap; gap: 0.75rem; }
-.overview-route { align-items: center; }
-.overview-route i { background: #9caf9f; flex: 1 1 80px; height: 1px; min-width: 30px; position: relative; }
-.overview-route i::after { background: #102019; border-radius: 50%; content: ""; height: 7px; position: absolute; right: 0; top: -3px; width: 7px; }
-.overview-route span, .metric { display: grid; gap: 0.2rem; }
-.overview-route small, .metric small { color: #738178; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; }
-.overview-route strong, .metric strong { font-size: 1rem; }
-.metric { background: rgba(16, 32, 25, 0.06); flex: 1 1 120px; padding: 0.85rem; }
-
-.progress-track { display: grid; gap: 0.35rem; list-style: none; margin: 0; padding: 0; }
-.progress-track li { align-items: center; border-top: 1px solid #c8d0c9; display: grid; gap: 0.8rem; grid-template-columns: 2.25rem 1fr; padding: 0.65rem 0; }
-.progress-track li > span { color: #849189; font-family: Georgia, serif; }
-.progress-track li div { display: flex; justify-content: space-between; }
-.progress-track small { color: #849189; }
-.progress-active > span, .progress-active strong { color: #287459 !important; }
-.progress-completed { opacity: 0.62; }
-
-.banner-content { align-items: flex-start; display: flex; gap: 1rem; }
-.signal-mark { background: #2f8d68; border-radius: 50%; box-shadow: 0 0 0 8px rgba(47, 141, 104, 0.12); flex: 0 0 auto; height: 12px; margin-top: 0.5rem; width: 12px; }
-.banner-warning .signal-mark, .alert-warning .signal-mark { background: var(--amber); }
-.banner-error .signal-mark, .alert-critical .signal-mark { background: #d84942; }
-
-.status-pill, .memory-chip { background: #dce5dc; color: #375047; display: inline-flex; font-size: 0.72rem; font-weight: 900; letter-spacing: 0.08em; padding: 0.45rem 0.65rem; text-transform: uppercase; }
-.status-delayed, .status-failed { background: #ffe0b8; color: #814814; }
-.status-cancelled { background: #ffd5d2; color: #8f2f29; }
-.status-landed, .status-confirmed-onboard, .status-sent { background: #ccebd8; color: #235f44; }
-.flight-board { margin: 0.4rem 0; }
-.freshness, .route-id, .reversible-note { color: #758279 !important; font-family: ui-monospace, "SFMono-Regular", monospace; font-size: 0.72rem; }
-
-.route-line { align-items: center; display: flex; margin: 1.5rem 0; }
-.route-line span { background: #102019; border: 5px solid #cbd6cc; border-radius: 50%; height: 15px; width: 15px; }
-.route-line i { background: repeating-linear-gradient(90deg, #648174 0 7px, transparent 7px 12px); flex: 1; height: 2px; }
-.battery-reading { color: #25694f; font-family: Georgia, serif; font-size: 2.4rem; }
-.battery-track { background: #cdd5ce; height: 12px; margin: 0.6rem 0 1rem; overflow: hidden; }
-.battery-track span { background: linear-gradient(90deg, #f3a940, #4fa477); display: block; height: 100%; }
-.recommendation-copy { max-width: 64ch; }
-.message-bubble { border-left: 4px solid #2f8d68; font-family: Georgia, serif; font-size: clamp(1.25rem, 2vw, 1.8rem); line-height: 1.45; margin: 1rem 0; padding: 0.5rem 1rem; }
-
-.card-passenger-status { min-height: 250px; }
-.passenger-orbit { height: 80px; position: absolute; right: 1.2rem; top: 2.6rem; width: 110px; }
-.passenger-orbit span { background: #2f8d68; border: 5px solid #d5e0d7; border-radius: 50%; height: 24px; position: absolute; width: 24px; }
-.passenger-orbit span:nth-child(1) { left: 0; top: 28px; }
-.passenger-orbit span:nth-child(2) { left: 39px; top: 4px; }
-.passenger-orbit span:nth-child(3) { right: 0; top: 35px; }
-.meeting-point { background: #102019; color: #f4f0e5 !important; display: grid; gap: 0.25rem; margin-top: 1.5rem; padding: 1rem; }
-.meeting-point small { color: var(--acid); }
-.memory-chip { background: #102019; color: var(--acid); }
-.cabin-dials .metric { min-height: 84px; }
-
-.component-actions, .surface-actions { display: flex; flex-wrap: wrap; gap: 0.65rem; margin-top: 1rem; }
-.surface-actions { justify-content: flex-end; }
-.action-button { align-items: center; display: inline-flex; font-weight: 900; gap: 1rem; justify-content: space-between; min-width: 160px; padding: 0.85rem 1rem; }
-.action-button small { font-family: ui-monospace, "SFMono-Regular", monospace; opacity: 0.55; }
-.action-primary { background: var(--acid); color: var(--ink); }
-.action-secondary { background: #e5e4db; color: #102019; }
-.action-danger { background: #d84942; color: white; }
-.action-unavailable { background: #d5d9d4; color: #68736c; }
-.effects { color: #9fd7be; font-family: ui-monospace, "SFMono-Regular", monospace; overflow-wrap: anywhere; }
-
-@media (max-width: 760px) {
-  .demo-shell { padding: 1rem; }
-  h1 { font-size: 2.7rem; max-width: none; }
-  .prompt, .console { align-items: stretch; flex-direction: column; }
-  .prompt { display: flex; }
-  .layout-row > .ui-slot { grid-auto-flow: row; }
-  .layout-split, .layout-focus { grid-template-columns: 1fr; }
-  .surface-heading h2 { font-size: 1.8rem; }
-  .component-code { position: static; }
-  .card-headline { align-items: flex-start; flex-direction: column; }
-  .passenger-orbit { opacity: 0.38; }
-  .surface-actions, .component-actions { align-items: stretch; flex-direction: column; }
-  .action-button { width: 100%; }
+  top: 8px;
+  left: 17px;
+  width: calc(100% - 2px);
+  height: 2px;
+  background: var(--rule);
+  content: "";
 }
 
-@media (min-width: 1500px) and (max-height: 760px) {
-  .demo-shell { padding-block: 1.35rem; }
-  h1 { font-size: 4.4rem; }
-  .prompt { margin-top: 1rem; }
-  .console { margin-block: 1.25rem 0.75rem; }
-  .ui-surface { padding: 1.25rem; }
-  .ui-card { min-height: 0; }
+.ui-progress[data-has-next="true"] .ui-progress__step--active::after { background: var(--blue); }
+
+.ui-progress__marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 2px solid #aeb9c7;
+  border-radius: 50%;
+  background: #ffffff;
+  color: transparent;
+  font-size: 0;
+}
+
+.ui-progress__marker svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ui-progress__step--completed { color: #207d49; }
+
+.ui-progress__step--completed .ui-progress__marker {
+  border-color: var(--green);
+  background: var(--green);
+  color: #ffffff;
+}
+
+.ui-progress__step--active {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.ui-progress__step--active .ui-progress__marker {
+  border-color: var(--blue);
+  background: var(--blue);
+}
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress__step--active {
+  color: #207d49;
+}
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress__step--active .ui-progress__marker {
+  border-color: var(--green);
+  background: var(--green);
+  color: #ffffff;
+}
+
+/* The renderer marks the actual terminal step. Keep its finish state distinct even without a following segment. */
+.ui-progress[data-terminal="true"] .ui-progress__step[data-terminal-step="true"] {
+  color: #207d49;
+  font-weight: 700;
+}
+
+.ui-progress[data-terminal="true"] .ui-progress__step[data-terminal-step="true"] .ui-progress__marker {
+  border-color: var(--green);
+  background: var(--green);
+  color: #ffffff;
+}
+
+.ui-progress__empty {
+  margin: clamp(24px, 3vh, 34px) 0 0;
+  color: var(--muted);
+}
+
+.ui-progress__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-progress__step small {
+  color: inherit;
+  font-size: 16px;
+}
+
+.ui-card--task-progress .ui-card__title { font-size: clamp(34px, 3vw, 54px); }
+
+.ui-card--status-banner,
+.ui-card--alert {
+  justify-content: flex-start;
+  width: min(100%, 1040px);
+  max-width: 1040px;
+  margin: 0;
+}
+
+.ui-status-card.ui-card--status-banner,
+.ui-status-card.ui-card--alert,
+.ui-status-card.ui-card--fallback {
+  padding: clamp(28px, 4vh, 44px) clamp(28px, 4vw, 52px);
+}
+
+.ui-status-card[data-level="warning"] {
+  border-color: #ead7b1;
+  background: #fffaf0;
+}
+
+.ui-status-card[data-level="error"],
+.ui-status-card[data-level="critical"] {
+  border-color: #efc9c9;
+  background: #fff6f6;
+}
+
+.ui-status-card {
+  width: min(100%, 1040px);
+  max-width: 1040px;
+}
+
+.ui-card--status-banner .ui-card__title,
+.ui-card--alert .ui-card__title {
+  font-size: clamp(42px, 4.6vw, 76px);
+  line-height: 1.08;
+}
+
+.ui-card--warning::before,
+.ui-card[data-level="warning"]::before { background: var(--amber); }
+
+.ui-card--error::before,
+.ui-card--critical::before,
+.ui-card[data-level="error"]::before,
+.ui-card[data-level="critical"]::before { background: var(--red); }
+
+.ui-card--fallback {
+  justify-content: flex-start;
+  min-height: 0;
+  padding: clamp(24px, 3.8vh, 44px);
+  border: 1px dashed #b9c5d3;
+  border-radius: 16px;
+  background: #fbfcfd;
+}
+
+.ui-card--empty {
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.ui-card__empty {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.ui-card__actions,
+.ui-actions {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.ui-card__actions:has(.ui-action:only-child),
+.ui-actions:has(.ui-action:only-child) { grid-template-columns: minmax(0, 1fr); }
+
+.ui-card__actions:has(.ui-action--primary):has(.ui-action--secondary),
+.ui-actions:has(.ui-action--primary):has(.ui-action--secondary) {
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr);
+}
+
+.ui-action,
+.advance-button {
+  display: inline-flex;
+  min-height: 72px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 0 24px;
+  font-size: 20px;
+  font-weight: 700;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.ui-action--primary,
+.advance-button {
+  background: var(--blue);
+  color: #ffffff;
+}
+
+.ui-action--primary:hover,
+.advance-button:hover:not(:disabled) { background: var(--blue-deep); }
+
+.ui-action--secondary {
+  border-color: #bac6d4;
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.ui-action--secondary:hover { background: #f5f8fb; }
+
+.ui-action--unavailable {
+  border-color: var(--rule);
+  background: #f2f4f6;
+  color: var(--muted);
+}
+
+.ui-spec-renderer[data-density="compact"] .ui-card__eyebrow { font-size: 14px; }
+
+.ui-spec-renderer[data-density="compact"] .ui-card__summary,
+.ui-spec-renderer[data-density="compact"] .ui-card__body > p { font-size: 18px; }
+
+.ui-spec-renderer[data-density="compact"] .ui-metric__value { font-size: clamp(25px, 2vw, 39px); }
+
+.ui-spec-renderer[data-density="compact"] .ui-metric--route { display: none; }
+
+/* A compact flight card still leads with its supplied arrival time. */
+.ui-spec-renderer[data-density="compact"] .ui-flight-brief__time {
+  font-size: clamp(64px, 5.8vw, 94px) !important;
+}
+
+.ui-spec-renderer[data-density="minimal"] {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.ui-spec-renderer[data-density="minimal"] .ui-card__eyebrow,
+.ui-spec-renderer[data-density="minimal"] .ui-route-facts,
+.ui-spec-renderer[data-density="minimal"] .ui-cabin-grid,
+.ui-spec-renderer[data-density="minimal"] .ui-detail-row,
+.ui-spec-renderer[data-density="minimal"] .ui-card__summary,
+.ui-spec-renderer[data-density="minimal"] .ui-card__muted,
+.ui-spec-renderer[data-density="minimal"] .ui-metric--route,
+.ui-spec-renderer[data-density="minimal"] .ui-metric--comparison { display: none; }
+
+.ui-spec-renderer[data-density="minimal"] .ui-card__lead { margin-top: 16px; }
+
+/* Compact driving states favour the legal conclusion over a decorative full-height spread. */
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary,
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--passenger-status,
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--cabin-profile {
+  justify-content: flex-start;
+}
+
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary .ui-route-facts,
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--passenger-status .ui-passenger-brief__meeting-point,
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--cabin-profile .ui-cabin-brief__state {
+  margin-top: clamp(28px, 5vh, 54px);
+}
+
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary .ui-route-facts {
+  width: min(100%, 620px);
+  margin-top: clamp(32px, 6vh, 68px);
+}
+
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary .ui-navigation-brief__route-rule {
+  margin-top: 18px;
+}
+
+.ui-spec-renderer[data-priority="high"] .ui-card:first-child::before { background: var(--amber); }
+
+.ui-spec-renderer[data-priority="critical"] .ui-card:first-child::before { background: var(--red); }
+
+.drawer-scrim {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+  border: 0;
+  background: rgba(16, 32, 51, 0.19);
+}
+
+.event-console {
+  position: fixed;
+  z-index: 11;
+  top: 18px;
+  right: 18px;
+  bottom: 18px;
+  width: min(370px, calc(100vw - 36px));
+  overflow-y: auto;
+  padding: 28px;
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: -12px 18px 44px rgba(16, 32, 51, 0.16);
+  animation: drawer-in 200ms ease both;
+}
+
+.console-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.console-kicker {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.console-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 28px;
+  letter-spacing: -0.035em;
+}
+
+.console-close {
+  width: 44px;
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.console-phase {
+  display: grid;
+  gap: 7px;
+  padding: 22px 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.console-phase strong {
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", monospace;
+  font-size: 23px;
+}
+
+.revision-grid {
+  display: grid;
+  margin: 0;
+  padding: 22px 0;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.revision-grid div { min-width: 0; }
+
+.revision-grid dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.revision-grid dd {
+  overflow: hidden;
+  margin: 6px 0 0;
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", monospace;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-progress { padding: 22px 0; }
+
+.console-progress__copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.console-progress__copy strong {
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", monospace;
+  font-size: 22px;
+}
+
+.progress-track {
+  height: 5px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #e3e8ee;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  background: var(--blue);
+}
+
+.advance-button { width: 100%; }
+
+.advance-button:disabled {
+  background: #dbe2ea;
+  color: #8491a1;
+}
+
+.console-hint {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+@keyframes phase-settle {
+  from { opacity: 0.65; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes drawer-in {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 1024px) {
+  .cockpit-stage { padding: 18px 24px; }
+
+  .task-surface { width: 100%; }
+
+  .trip-brief__content { padding: 28px 34px; }
+
+  .ui-layout--split { grid-template-columns: minmax(0, 1.2fr) minmax(250px, 0.8fr); }
+
+  .ui-navigation-eta { font-size: clamp(86px, 11vw, 126px); }
+}
+
+@media (max-width: 680px) {
+  .demo-shell {
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .cockpit-stage {
+    display: block;
+    height: auto;
+    min-height: 100dvh;
+    padding: 12px;
+  }
+
+  .task-surface {
+    height: auto;
+    min-height: calc(100dvh - 24px);
+    overflow: visible;
+    border-radius: 16px;
+  }
+
+  .trip-brief__header {
+    min-height: 66px;
+    gap: 12px;
+    padding: 0 16px;
+  }
+
+  .brand-wordmark { font-size: 24px; }
+
+  .brand-separator,
+  .trip-brief__phase { font-size: 16px; }
+
+  .header-actions { gap: 6px; }
+
+  .mic-button,
+  .keyboard-toggle,
+  .control-toggle { min-height: 40px; padding: 0 10px; font-size: 14px; }
+
+  .mic-button span,
+  .keyboard-toggle span { display: none; }
+
+  .voice-status { padding: 0 16px; font-size: 15px; }
+
+  .voice-composer {
+    margin: 12px 16px 0;
+    padding: 12px;
+  }
+
+  .voice-composer__row { flex-wrap: wrap; }
+
+  .voice-composer__input {
+    min-height: 44px;
+    flex: 1 1 100%;
+    font-size: 16px;
+  }
+
+  .voice-composer__send {
+    min-height: 44px;
+    flex: 1 1 0;
+    padding: 0 12px;
+    font-size: 15px;
+  }
+
+  .trip-brief__content { padding: 24px 18px 22px; }
+
+  .task-heading { padding-bottom: 18px; }
+
+  .task-heading h1 { font-size: clamp(36px, 10vw, 52px); }
+
+  .ui-spec-renderer {
+    height: auto;
+    min-height: 0;
+    padding-top: 18px;
+  }
+
+  .ui-spec-renderer[data-single-component="true"] .ui-layout,
+  .ui-spec-renderer[data-single-component="true"] .ui-slot,
+  .ui-spec-renderer[data-single-component="true"] .ui-component {
+    width: 100%;
+    height: auto;
+  }
+
+  .ui-layout,
+  .ui-layout--row,
+  .ui-layout--split { grid-template-columns: minmax(0, 1fr); }
+
+  .ui-layout--row .ui-slot { display: grid; }
+
+  .ui-layout--stack .ui-slot,
+  .ui-layout--focus .ui-slot,
+  .ui-spec-renderer[data-single-component="true"] .ui-slot { grid-template-rows: none; }
+
+  .ui-layout--stack .ui-component,
+  .ui-layout--focus .ui-component,
+  .ui-spec-renderer[data-single-component="true"] .ui-component { height: auto; }
+
+  .ui-card { height: auto; min-height: 0; }
+
+  .ui-spec-renderer[data-single-component="true"] .ui-card {
+    min-height: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="true"] .ui-card--status-banner,
+  .ui-spec-renderer[data-single-component="true"] .ui-card--alert,
+  .ui-spec-renderer[data-single-component="true"] .ui-card--fallback {
+    width: 100%;
+    padding-top: 14px;
+  }
+
+  .ui-card--status-banner,
+  .ui-card--alert { justify-content: flex-start; }
+
+  .ui-card--navigation-summary .ui-route-facts,
+  .ui-card--passenger-status .ui-passenger-brief__meeting-point,
+  .ui-card--cabin-profile .ui-cabin-brief__state,
+  .ui-card--passenger-status:not(:has(.ui-passenger-brief__meeting-point)) .ui-passenger-brief__status {
+    margin-top: 28px;
+  }
+
+  .ui-card--navigation-summary .ui-route-facts,
+  .ui-card--cabin-profile .ui-cabin-brief__state {
+    padding-top: 22px;
+  }
+
+  .ui-card__title,
+  .ui-card--flight-status .ui-card__title { font-size: clamp(27px, 7.5vw, 40px); }
+
+  .ui-card--passenger-status .ui-card__title,
+  .ui-card--status-banner .ui-card__title,
+  .ui-card--alert .ui-card__title { font-size: clamp(36px, 10vw, 54px); }
+
+  .ui-card__lead,
+  .ui-card__lead--recommendation { font-size: clamp(34px, 9vw, 50px); }
+
+  .ui-navigation-eta { font-size: clamp(82px, 24vw, 122px); }
+
+  .ui-route-facts,
+  .ui-hero-metrics,
+  .ui-cabin-grid,
+  .ui-card--pickup-overview .ui-route-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  .ui-metric:nth-child(odd) { border-left: 0; padding-left: 0; }
+
+  .ui-metric:nth-child(even) { border-left: 1px solid var(--rule); }
+
+  .ui-metric:nth-child(n + 3) {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+  }
+
+  .ui-metric__value { font-size: clamp(24px, 7vw, 36px); }
+
+  .ui-card--flight-status .ui-metric--hero .ui-metric__value { font-size: clamp(44px, 12vw, 62px); }
+
+  .ui-card--navigation-summary .ui-metric + .ui-metric { border-left: 1px solid var(--rule); }
+
+  .ui-progress {
+    margin-top: 32px;
+    padding-top: 0;
+    overflow: hidden;
+  }
+
+  .ui-progress__label { font-size: 12px; }
+
+  .ui-progress__step small { display: none; }
+
+  .ui-card__actions,
+  .ui-actions {
+    grid-template-columns: minmax(0, 1fr);
+    padding-top: 12px;
+  }
+
+  .ui-action { min-height: 58px; font-size: 17px; }
+
+  .event-console {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: min(76dvh, 620px);
+    border: 1px solid var(--rule);
+    border-radius: 16px 16px 0 0;
+    padding: 20px;
+    animation-name: sheet-in;
+  }
+
+  .drawer-scrim { background: rgba(16, 32, 51, 0.26); }
+}
+
+@media (max-width: 420px) {
+  .trip-brief__header { gap: 8px; padding: 0 12px; }
+
+  .brand-lockup { gap: 6px; }
+
+  .brand-wordmark { font-size: 22px; }
+
+  .brand-separator,
+  .trip-brief__phase { font-size: 14px; }
+
+  .keyboard-toggle,
+  .control-toggle { width: 40px; padding: 0; }
+
+  .control-toggle span { display: none; }
+}
+
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/*
+ * The demo drawer is the only place engineering metadata is allowed to appear, so its
+ * effect receipts read as a technical log rather than as a trip fact.
+ */
+.console-effects {
+  margin: 0;
+  color: var(--muted);
+  font-family: Bahnschrift, "DIN Alternate", monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+/*
+ * A failed request is not a trip fact. It sits between the input and the journey
+ * content, uses the failure colour, and never dresses itself up as a journey card.
+ */
+.brief-error {
+  flex: 0 0 auto;
+  margin: 0 clamp(20px, 2.4vw, 44px) 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--red);
+  border-radius: 12px;
+  background: var(--red-pale);
+  color: var(--red);
+  font-size: 17px;
+}
+
+/* Before the first task the brief invites the driver instead of showing an empty frame. */
+.brief-placeholder {
+  margin: 0;
+  color: var(--muted);
+  font-size: clamp(19px, 1.5vw, 24px);
+  line-height: 1.55;
 }

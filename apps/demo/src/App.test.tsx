@@ -10,6 +10,16 @@ import { composePickupSpec } from '@canvasflow/ui'
 import { createFakeSpeech } from './test/speech'
 
 describe('demo integration', () => {
+  /**
+   * Engineering metadata and the demo player live in the controls drawer, never on
+   * the driver-facing brief. Tests that assert a raw phase or press 推进下一事件
+   * have to open it first, exactly as an engineer would.
+   */
+  async function openControls(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole('button', { name: '打开演示控制' }))
+    return screen.getByRole('dialog', { name: '演示控制' })
+  }
+
   function apiResponse(task: AirportPickupTaskState): AgentResponse {
     const ui = composePickupSpec(task)
     const withNavigationAction = task.phase === 'preparing'
@@ -68,13 +78,20 @@ describe('demo integration', () => {
     expect(spec.components[0]).toMatchObject({ type: 'status-banner', props: { title: '请补充航班号' } })
   })
 
-  it('does not fabricate a task before the Agent API creates one', () => {
+  it('does not fabricate a task before the Agent API creates one', async () => {
+    const user = userEvent.setup()
     const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
     render(<App api={api} />)
+
+    // With no task there is no phase to name, so the brief says what it waits for
+    // rather than borrowing a phase label it does not have.
     expect(screen.getByText('等待创建任务')).toBeInTheDocument()
-    expect(screen.getByText('尚无任务')).toBeInTheDocument()
+    expect(screen.getByText('告诉我接谁，我来安排这趟行程。')).toBeInTheDocument()
     expect(screen.queryByText('status-banner')).not.toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '推进下一事件' })).toBeDisabled()
+
+    const drawer = await openControls(user)
+    expect(drawer).toHaveTextContent('尚无任务')
+    expect(screen.getByRole('button', { name: /推进下一事件/ })).toBeDisabled()
   })
 
   it('applies newer validated task snapshots received over SSE and closes the stream on unmount', async () => {
@@ -105,13 +122,18 @@ describe('demo integration', () => {
     const rendered = render(<App api={api} />)
 
     await user.click(screen.getByRole('button', { name: '发送' }))
+    const drawer = await openControls(user)
     await waitFor(() => expect(api.subscribeTaskUpdates).toHaveBeenCalledWith('pickup-sse', expect.any(Function)))
     act(() => {
       onUpdate!(update)
       onUpdate!({ ...update, cursor: 1, snapshot: { task: initial.task, ui: initial.ui } })
     })
 
-    await screen.findByText(/preparing · taskRevision 1/)
+    // The newer snapshot lands and the replayed older cursor is ignored, so the
+    // revision stays at the value the newer snapshot carried.
+    await waitFor(() => expect(drawer).toHaveTextContent('preparing'))
+    expect(drawer).toHaveTextContent('taskRevision 1')
+    expect(screen.getByText('准备出发')).toBeInTheDocument()
     rendered.unmount()
     expect(close).toHaveBeenCalledOnce()
   })
@@ -194,7 +216,8 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '发送' }))
     expect(await screen.findByText('停车提示')).toBeInTheDocument()
 
-    const advance = screen.getByRole('button', { name: '推进下一事件' })
+    await openControls(user)
+    const advance = screen.getByRole('button', { name: /推进下一事件/ })
     await user.clear(screen.getByLabelText('任务输入'))
     await user.type(screen.getByLabelText('任务输入'), 'MU5102')
     await user.click(screen.getByRole('button', { name: '发送' }))
@@ -419,20 +442,27 @@ describe('demo integration', () => {
   it('advances the rendered demo from main-flow through the charging step', async () => {
     const user = userEvent.setup()
     render(<App initialTask={mainFlowTimeline.initialTaskState} />)
-    const advance = screen.getByRole('button', { name: '推进下一事件' })
-    expect(screen.getByText(/collecting-information/)).toBeInTheDocument()
+    const drawer = await openControls(user)
+    const advance = screen.getByRole('button', { name: /推进下一事件/ })
+    // The raw phase is drawer-only; the driver reads 准备接机 on the brief instead.
+    expect(drawer).toHaveTextContent('collecting-information')
+    expect(screen.getByText('准备接机')).toBeInTheDocument()
 
     await user.click(advance) // passengers
     await user.click(advance) // flight → preparing
-    expect(screen.getByText(/preparing/)).toBeInTheDocument()
+    expect(drawer).toHaveTextContent('preparing')
+    expect(screen.getByText('准备出发')).toBeInTheDocument()
 
     await user.click(advance) // charging recommend
-    expect(screen.getByText('charging-recommendation')).toBeInTheDocument()
-    expect(screen.getByLabelText('当前电量 42%')).toBeInTheDocument()
+    // The card is identified by what the driver reads, not by its component type: the
+    // renderer no longer prints schema vocabulary on the task surface.
+    expect(document.querySelector('[data-component-type="charging-recommendation"]')).toBeInTheDocument()
+    expect(screen.getByLabelText('电量从 42% 到 18%')).toBeInTheDocument()
     expect(screen.getByText('18%')).toBeInTheDocument()
 
     await user.click(advance) // navigation.started
-    expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
+    expect(drawer).toHaveTextContent('driving-to-airport')
+    expect(screen.getByText('途中')).toBeInTheDocument()
   })
 
   it('keeps the API timeline cursor synchronized and retries a failed advance', async () => {
@@ -472,15 +502,16 @@ describe('demo integration', () => {
     }
     render(<App api={api} />)
 
+    const drawer = await openControls(user)
     await user.click(screen.getByRole('button', { name: '发送' }))
     await user.clear(screen.getByLabelText('任务输入'))
     await user.type(screen.getByLabelText('任务输入'), 'MU5102')
     await user.click(screen.getByRole('button', { name: '发送' }))
-    await screen.findByText(/preparing/)
+    await waitFor(() => expect(drawer).toHaveTextContent('preparing'))
     await user.click(screen.getByRole('button', { name: '开始导航' }))
-    await screen.findByText(/driving-to-airport/)
+    await waitFor(() => expect(drawer).toHaveTextContent('driving-to-airport'))
 
-    const advance = screen.getByRole('button', { name: '推进下一事件' })
+    const advance = screen.getByRole('button', { name: /推进下一事件/ })
     await user.click(advance)
     expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({ eventId: 'event-charging-started', timestamp: undefined }))
     await user.click(advance)
@@ -509,7 +540,7 @@ describe('demo integration', () => {
     expect(create).toHaveBeenCalledTimes(1)
 
     resolveCreate(apiResponse(createInitialTask()))
-    await screen.findByText(/collecting-information/)
+    await screen.findByText('准备接机')
     expect(send).toBeEnabled()
   })
 
@@ -529,7 +560,7 @@ describe('demo integration', () => {
     expect(input).toHaveValue('接妈妈')
 
     await user.click(screen.getByRole('button', { name: '发送' }))
-    await screen.findByText(/collecting-information/)
+    await screen.findByText('准备接机')
     expect(create).toHaveBeenCalledTimes(2)
     expect(input).toHaveValue('')
   })
@@ -565,7 +596,7 @@ describe('demo integration', () => {
     expect(input).toHaveValue('MU5102')
 
     await user.click(screen.getByRole('button', { name: '发送' }))
-    await screen.findByText(/preparing/)
+    await screen.findByText('准备出发')
     expect(event).toHaveBeenCalledTimes(2)
     expect(input).toHaveValue('')
   })
@@ -581,8 +612,10 @@ describe('demo integration', () => {
   it('skips timeline events that are invalid for an injected phase', async () => {
     const user = userEvent.setup()
     render(<App initialTask={{ ...createInitialTask(), phase: 'driving-to-airport', updatedAt: '2026-07-22T20:30:00+08:00' }} />)
-    await user.click(screen.getByRole('button', { name: '推进下一事件' }))
-    expect(screen.getByText(/taskRevision 1/)).toBeInTheDocument()
+    const drawer = await openControls(user)
+    await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
+    // An invalid step must leave the task untouched, so the revision does not move.
+    expect(drawer).toHaveTextContent('taskRevision 1')
   })
 
   it('renders fallback status banner without a blank screen', () => {
@@ -595,7 +628,9 @@ describe('demo integration', () => {
     )
     expect(screen.getByText('界面暂时降级')).toBeInTheDocument()
     expect(screen.getByText('已切换到安全模板。')).toBeInTheDocument()
-    expect(screen.getByText('status-banner')).toBeInTheDocument()
+    expect(document.querySelector('[data-component-type="status-banner"]')).toBeInTheDocument()
+    // A degraded surface must not explain itself in schema terms.
+    expect(screen.queryByText('status-banner')).not.toBeInTheDocument()
   })
 
   it('renders media-only cabin preferences without inventing temperature', () => {
@@ -646,7 +681,7 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '重试发送' }))
     expect(screen.getByRole('button', { name: '重试发送' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '确认发送' })).not.toBeInTheDocument()
-    expect(screen.getByText(/driving-to-airport/)).toBeInTheDocument()
+    expect(screen.getByText('途中')).toBeInTheDocument()
   })
 
   it('shows unavailable state instead of retry when no authorized contact remains', () => {
@@ -665,6 +700,153 @@ describe('demo integration', () => {
     expect(screen.queryByRole('button', { name: '重试发送' })).not.toBeInTheDocument()
     expect(screen.getByText('无法重试发送')).toBeInTheDocument()
     expect(screen.getByText('没有已授权的落地通知联系人')).toBeInTheDocument()
+  })
+
+  describe('trip brief shell', () => {
+    const phaseLabels: Array<[AirportPickupTaskState['phase'], string]> = [
+      ['collecting-information', '准备接机'],
+      ['preparing', '准备出发'],
+      ['driving-to-airport', '途中'],
+      ['approaching-airport', '即将到达'],
+      ['waiting-for-passengers', '等待家人'],
+      ['returning-home', '家人已上车'],
+      ['completed', '行程结束'],
+      ['cancelled', '行程已取消'],
+    ]
+
+    it.each(phaseLabels)('shows %s to the driver as %s and never as the raw phase', (phase, label) => {
+      render(<App initialTask={{ ...createInitialTask(), phase }} />)
+
+      const brief = screen.getByRole('region', { name: '当前行程' })
+      expect(brief).toHaveAttribute('data-phase-label', label)
+      // Query the header's phase element specifically: a card may legitimately
+      // repeat the same words as its own supplied copy.
+      expect(brief.querySelector('[data-phase-identity]')).toHaveTextContent(label)
+      // The raw enum is engineering vocabulary; it belongs in the drawer only.
+      expect(brief.textContent).not.toContain(phase)
+    })
+
+    it('keeps engineering metadata out of the brief and inside the drawer', async () => {
+      const user = userEvent.setup()
+      render(<App initialTask={{ ...createInitialTask(), phase: 'preparing' }} />)
+
+      const brief = screen.getByRole('region', { name: '当前行程' })
+      for (const term of ['taskRevision', 'uiRevision', 'pickup-001', 'preparing', 'full', 'normal']) {
+        expect(brief.textContent).not.toContain(term)
+      }
+
+      const drawer = await openControls(user)
+      expect(drawer).toHaveTextContent('preparing')
+      expect(drawer).toHaveTextContent('taskRevision')
+      expect(drawer).toHaveTextContent('uiRevision')
+      expect(drawer).toHaveTextContent('pickup-001')
+    })
+
+    it('traps focus in the drawer, closes on Escape, and restores focus to its trigger', async () => {
+      const user = userEvent.setup()
+      render(<App initialTask={createInitialTask()} />)
+
+      const trigger = screen.getByRole('button', { name: '打开演示控制' })
+      await user.click(trigger)
+
+      const drawer = screen.getByRole('dialog', { name: '演示控制' })
+      const close = screen.getByRole('button', { name: '关闭演示控制' })
+      expect(close).toHaveFocus()
+
+      // Tabbing forward from the last control wraps to the first rather than
+      // escaping into the brief behind the modal.
+      const advance = screen.getByRole('button', { name: /推进下一事件/ })
+      advance.focus()
+      await user.tab()
+      expect(drawer).toContainElement(document.activeElement as HTMLElement)
+      await user.tab({ shift: true })
+      expect(drawer).toContainElement(document.activeElement as HTMLElement)
+
+      await user.keyboard('{Escape}')
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '打开演示控制' })).toHaveFocus()
+    })
+
+    it('reports the drawer expanded state on its trigger', async () => {
+      const user = userEvent.setup()
+      render(<App initialTask={createInitialTask()} />)
+
+      const trigger = screen.getByRole('button', { name: '打开演示控制' })
+      expect(trigger).toHaveAttribute('aria-expanded', 'false')
+      expect(trigger).toHaveAttribute('aria-haspopup', 'dialog')
+
+      await user.click(trigger)
+      expect(screen.getByRole('button', { name: '收起演示控制' })).toHaveAttribute('aria-expanded', 'true')
+
+      await user.click(screen.getByRole('button', { name: '收起演示控制' }))
+      expect(screen.getByRole('button', { name: '打开演示控制' })).toHaveAttribute('aria-expanded', 'false')
+    })
+
+    it('lets the title step back into trip context once a card carries the conclusion', () => {
+      const { unmount } = render(<App initialTask={createInitialTask()} />)
+      // While collecting information the instruction is the conclusion, so the
+      // page title leads.
+      expect(document.querySelector('[data-title-role]')).toHaveAttribute('data-title-role', 'primary')
+      unmount()
+
+      // A bare task has no flight, so nothing states a conclusion yet. Give it the
+      // flight the driver would have supplied by this phase.
+      render(<App initialTask={{
+        ...createInitialTask(),
+        phase: 'driving-to-airport',
+        flight: {
+          flightNumber: 'MU5102', trusted: true, status: 'in-air',
+          scheduledArrival: '2026-07-22T20:30:00+08:00',
+          estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+        },
+      }} />)
+      // A flight card now states the conclusion, so the title becomes context.
+      expect(document.querySelector('[data-title-role]')).toHaveAttribute('data-title-role', 'context')
+      // It stays the one semantic page title either way.
+      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    })
+
+    it('surfaces a failed request as an alert without turning it into a trip card', async () => {
+      const user = userEvent.setup()
+      const api = {
+        create: vi.fn().mockRejectedValue(new Error('网关不可用')),
+        event: vi.fn(),
+        action: vi.fn(),
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      const alert = await screen.findByRole('alert')
+      expect(alert).toHaveTextContent('网关不可用')
+      // A failure is not a journey fact, so it must not appear as a rendered card.
+      expect(alert.closest('[data-component-type]')).toBeNull()
+    })
+
+    it('shows effect receipts in the drawer rather than on the brief', async () => {
+      const user = userEvent.setup()
+      const created = apiResponse(createInitialTask())
+      const api = {
+        create: vi.fn().mockResolvedValue({
+          ...created,
+          effects: [{ type: 'navigation.start' as const, status: 'succeeded' as const }],
+        }),
+        event: vi.fn(),
+        action: vi.fn(),
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+
+      const brief = screen.getByRole('region', { name: '当前行程' })
+      expect(brief.textContent).not.toContain('navigation.start')
+
+      const drawer = await openControls(user)
+      expect(drawer).toHaveTextContent('navigation.start:succeeded')
+    })
   })
 
   describe('voice input', () => {
@@ -686,13 +868,16 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '开始语音输入' }))
       emit(() => speech.engine().emit('我现在要去机场接妈妈和豆豆', true, 0.94))
 
-      // The transcript lands in the one existing input, ready to correct.
+      // The transcript opens the field, ready to correct.
       const input = screen.getByLabelText('任务输入')
       expect(input).toHaveValue('我现在要去机场接妈妈和豆豆')
       expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('已转写，确认或编辑后发送。')
+      // The driver did not ask for this field, but it is theirs now: the toggle
+      // reports what is on screen, so it never offers to open a second one.
+      expect(screen.getByRole('button', { name: '收起文字输入' })).toHaveAttribute('aria-pressed', 'true')
 
       await user.click(screen.getByRole('button', { name: '发送' }))
-      await screen.findByText(/collecting-information/)
+      await screen.findByText('准备接机')
 
       // Source and confidence are reported; the meaning of the words is not.
       expect(create).toHaveBeenCalledWith('我现在要去机场接妈妈和豆豆', {
@@ -702,10 +887,12 @@ describe('demo integration', () => {
       })
       await waitFor(() => expect(speech.synthesis.spoken).toHaveLength(1))
       expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('好的，请告诉我她们的航班号。')
-      expect(input).toHaveValue('')
+      // Nothing is waiting to be confirmed any more, so the keyboard gives the
+      // space back rather than sitting there holding an empty field.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
     })
 
-    it('closes the text path while the microphone is capturing', async () => {
+    it('will not let the keyboard reach the previous turn while the microphone is capturing', async () => {
       const user = userEvent.setup()
       const speech = createFakeSpeech()
       const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
@@ -714,23 +901,24 @@ describe('demo integration', () => {
 
       await user.click(screen.getByRole('button', { name: '开始语音输入' }))
 
-      // The field still holds the previous turn's words; sending them now would
-      // create a task out of something the driver never meant to send.
-      const input = screen.getByLabelText('任务输入')
-      const send = screen.getByRole('button', { name: '发送' })
-      expect(input).toBeDisabled()
-      expect(send).toBeDisabled()
-
-      await user.click(send)
-      await user.keyboard('{Enter}')
+      // The captured words have not been handed back yet, so there is nothing to
+      // confirm and no field to confirm it in. Opening one now would show the
+      // *previous* turn's words, which 发送 would then submit as this turn.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '改用文字输入' })).toBeDisabled()
+      // With no field and no way to open one, there is no keyboard route into
+      // the turn at all, so nothing can be submitted by hand.
+      expect(screen.queryByRole('button', { name: '发送' })).not.toBeInTheDocument()
       expect(create).not.toHaveBeenCalled()
 
-      // Ending the turn hands the words back and reopens the text path.
+      // Ending the turn hands the words back, and the field arrives with them.
       emit(() => speech.engine().emit('去机场接妈妈和豆豆', true))
+      const input = screen.getByLabelText('任务输入')
       expect(input).toBeEnabled()
-      expect(send).toBeEnabled()
-      await user.click(send)
-      await screen.findByText(/collecting-information/)
+      expect(input).toHaveValue('去机场接妈妈和豆豆')
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
       expect(create).toHaveBeenCalledWith('去机场接妈妈和豆豆', {
         vehicleContext: expect.anything(),
         source: 'voice',
@@ -750,12 +938,18 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByRole('button', { name: '正在提交语音内容' })
 
+      // Submitting is not a reason to take the words away: they stay on screen
+      // until the Gateway has actually accepted them.
+      const input = screen.getByLabelText('任务输入')
+      expect(input).toHaveValue('去机场接妈妈和豆豆')
+      expect(screen.getByRole('form', { name: 'Agent input' }))
+        .toHaveAttribute('data-voice-state', 'submitting')
       // A second 发送 mid-flight would send the same words twice.
-      expect(screen.getByLabelText('任务输入')).toBeDisabled()
+      expect(input).toBeDisabled()
       expect(screen.getByRole('button', { name: '发送' })).toBeDisabled()
 
       await act(async () => { release(apiResponse(createInitialTask())) })
-      await screen.findByText(/collecting-information/)
+      await screen.findByText('准备接机')
       expect(create).toHaveBeenCalledOnce()
     })
 
@@ -783,6 +977,9 @@ describe('demo integration', () => {
       await screen.findByRole('button', { name: '打断语音播报并重新输入' })
       const cancelledBefore = speech.synthesis.cancelled
 
+      // Reaching for the keyboard mid-playback is allowed: voice is never the
+      // only way to answer, even while the assistant still holds the turn.
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
       // Typing an answer while the car is still talking must stop the playback,
       // not talk over it.
       const input = screen.getByLabelText('任务输入')
@@ -809,7 +1006,7 @@ describe('demo integration', () => {
       await user.clear(input)
       await user.type(input, '去机场接妈妈')
       await user.click(screen.getByRole('button', { name: '发送' }))
-      await screen.findByText(/collecting-information/)
+      await screen.findByText('准备接机')
 
       // A hand-edited transcript is no longer the engine's guess, so no
       // confidence is claimed for it.
@@ -878,7 +1075,7 @@ describe('demo integration', () => {
       expect(speech.synthesis.spoken).toHaveLength(0)
 
       await user.click(screen.getByRole('button', { name: '发送' }))
-      await screen.findByText(/collecting-information/)
+      await screen.findByText('准备接机')
       expect(create).toHaveBeenCalledTimes(2)
     })
 
@@ -897,7 +1094,7 @@ describe('demo integration', () => {
 
       // The text field never became unusable, so the turn can still be completed.
       await user.click(screen.getByRole('button', { name: '发送' }))
-      await screen.findByText(/collecting-information/)
+      await screen.findByText('准备接机')
       expect(create).toHaveBeenCalledWith('我现在要去机场接妈妈和豆豆', { vehicleContext: expect.anything() })
     })
 
@@ -928,8 +1125,112 @@ describe('demo integration', () => {
       expect(mic).toHaveTextContent('语音不可用')
 
       await user.click(screen.getByRole('button', { name: '发送' }))
-      await screen.findByText(/collecting-information/)
+      await screen.findByText('准备接机')
       expect(create).toHaveBeenCalledOnce()
+    })
+
+    it('keeps the keyboard out of the way until the turn needs it', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      // A working microphone carries the turn, so the journey content keeps the
+      // space the input row used to occupy.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+
+      // Voice is never the only way in: the keyboard is one press away, and
+      // pressing it lands the caret in the field rather than merely revealing it.
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      const input = screen.getByLabelText('任务输入')
+      expect(input).toHaveFocus()
+      expect(screen.getByRole('button', { name: '收起文字输入' })).toHaveAttribute('aria-pressed', 'true')
+
+      // A keyboard the driver opened themselves is the one they may close again.
+      await user.click(screen.getByRole('button', { name: '收起文字输入' }))
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    })
+
+    it('gives the space back once a typed message has actually been sent', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const create = vi.fn()
+        .mockRejectedValueOnce(new Error('网关不可用'))
+        .mockResolvedValueOnce(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      await user.clear(screen.getByLabelText('任务输入'))
+      await user.type(screen.getByLabelText('任务输入'), '去机场接妈妈')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      // A refused send keeps the field: the words are still in it, waiting to be
+      // retried, so taking it away would strand them.
+      await screen.findByRole('alert')
+      expect(screen.getByLabelText('任务输入')).toHaveValue('去机场接妈妈')
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+
+      // Now the words are gone, so the field that held them has done its job.
+      // Leaving it open would restore the permanent empty input row.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+    })
+
+    it('refuses to take away the only input path a failed voice turn has left', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().fail('not-allowed'))
+
+      // The microphone is refused, so the field is the turn's only remaining
+      // path. Taking it away would strand the driver, so the toggle reports
+      // itself as unable to rather than silently doing nothing.
+      expect(screen.getByLabelText('任务输入')).toBeEnabled()
+      const toggle = screen.getByRole('button', { name: '收起文字输入' })
+      expect(toggle).toBeDisabled()
+
+      await user.click(toggle)
+      expect(screen.getByLabelText('任务输入')).toBeInTheDocument()
+    })
+
+    it('states why the keyboard is the only path when voice cannot run at all', () => {
+      const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      // No `speech` prop: jsdom exposes no Web Speech API at all.
+      render(<App api={api} />)
+
+      // With no voice to fail, nothing else would explain the field, so the
+      // composer says why it is there instead of appearing without a reason.
+      const composer = screen.getByRole('form', { name: 'Agent input' })
+      expect(composer).toHaveAttribute('data-composer-reason', 'unavailable')
+      expect(composer).toHaveTextContent('当前浏览器不支持语音识别，请改用文字输入。')
+      // Text is the only path there is, so it cannot be dismissed.
+      expect(screen.getByLabelText('任务输入')).toBeEnabled()
+      expect(screen.getByRole('button', { name: '收起文字输入' })).toBeDisabled()
+    })
+
+    it('keeps an abandoned transcript on screen instead of parking it out of sight', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('去机场接妈妈', true))
+      await user.click(screen.getByRole('button', { name: '放弃这次语音输入' }))
+
+      // Leaving the voice turn keeps the words; hiding the field would keep them
+      // somewhere the driver cannot see, correct, or send.
+      expect(screen.getByLabelText('任务输入')).toHaveValue('去机场接妈妈')
+
+      // Choosing to speak again is a decision to stop typing, so the field goes.
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
     })
 
     it('releases the microphone when the surface unmounts', async () => {
