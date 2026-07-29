@@ -626,6 +626,8 @@ export class EffectExecutor {
     idempotencyKey: string
     effectId: string
     vehicle?: VehicleContext
+    /** A terminal transition may leave a previously applied cabin effect pending. */
+    allowDeferredCleanup?: boolean
   }): CabinRevertExecution {
     const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
       effectId: input.effectId,
@@ -634,8 +636,15 @@ export class EffectExecutor {
       tool: 'vehicle.revert-cabin-profile',
       ...(errorCode ? { errorCode } : {}),
     })
-    const policy = this.#policy.authorizeCabinRevert(input.task, input.vehicle)
-    if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
+    if (input.allowDeferredCleanup) {
+      if (!input.vehicle) return { succeeded: false, effect: effect('failed', 'VEHICLE_CONTEXT_REQUIRED') }
+      if (input.vehicle.speedKph > 0 || input.vehicle.gear !== 'P') {
+        return { succeeded: false, effect: effect('failed', 'VEHICLE_MOVING') }
+      }
+    } else {
+      const policy = this.#policy.authorizeCabinRevert(input.task, input.vehicle)
+      if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
+    }
 
     const providerRequestId = `${input.task.taskId}:vehicle.revert-cabin-profile:${input.idempotencyKey}`
     const result = this.#callProvider(

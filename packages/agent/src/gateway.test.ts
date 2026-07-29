@@ -1411,7 +1411,7 @@ describe('AgentGateway', () => {
   })
 
   it.each(['cancel', 'arrival', 'flight cancellation'] as const)(
-    'defers %s until cabin cleanup is safe, then allows the same terminal request to retry',
+    'accepts %s while moving and finishes the deferred cabin cleanup after parking',
     (operation) => {
       const runtime = createSideEffectRuntime()
       const base = createProviderRegistry(runtime)
@@ -1445,29 +1445,27 @@ describe('AgentGateway', () => {
 
       const deferred = submitTerminal(moving.task.taskRevision)
 
-      expect(deferred.task).toEqual(moving.task)
-      expect(deferred.effects).toEqual([expect.objectContaining({
+      expect(deferred.effects).toContainEqual(expect.objectContaining({
         type: 'vehicle.revert-cabin-profile', status: 'failed', errorCode: 'VEHICLE_MOVING',
-      })])
+      }))
       expect(revertCabin).not.toHaveBeenCalled()
+      if (operation === 'cancel') expect(deferred.task.phase).toBe('cancelled')
+      if (operation === 'arrival') expect(deferred.task.phase).toBe('completed')
+      if (operation === 'flight cancellation') expect(deferred.task.flight?.status).toBe('cancelled')
 
       const parked = gateway.submitEvent(returning.task.taskId, {
-        clientRequestId: `${operation}-parked`, expectedTaskRevision: moving.task.taskRevision,
+        clientRequestId: `${operation}-parked`, expectedTaskRevision: deferred.task.taskRevision,
         event: { eventId: `${operation}-parked`, type: 'vehicle.parked', timestamp: '2026-07-22T12:07:00+08:00' },
       })
-      const completed = submitTerminal(parked.task.taskRevision)
 
       expect(revertCabin).toHaveBeenCalledTimes(1)
-      expect(completed.effects).toContainEqual(expect.objectContaining({
+      expect(parked.effects).toContainEqual(expect.objectContaining({
         type: 'vehicle.revert-cabin-profile', status: 'succeeded',
       }))
-      if (operation === 'cancel') expect(completed.task.phase).toBe('cancelled')
-      if (operation === 'arrival') expect(completed.task.phase).toBe('completed')
-      if (operation === 'flight cancellation') expect(completed.task.flight?.status).toBe('cancelled')
     },
   )
 
-  it('does not memoize a reset deferred while cabin cleanup is unsafe', () => {
+  it('resets while moving and finishes the deferred cabin cleanup after parking', () => {
     const runtime = createSideEffectRuntime()
     const base = createProviderRegistry(runtime)
     const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
@@ -1485,22 +1483,21 @@ describe('AgentGateway', () => {
       clientRequestId: 'deferred-reset', expectedTaskRevision: moving.task.taskRevision,
     })
 
-    expect(deferred.task).toEqual(moving.task)
+    expect(deferred.task.phase).toBe('collecting-information')
     expect(deferred.effects).toEqual([expect.objectContaining({
       type: 'vehicle.revert-cabin-profile', status: 'failed', errorCode: 'VEHICLE_MOVING',
     })])
     expect(revertCabin).not.toHaveBeenCalled()
 
     const parked = gateway.submitEvent(returning.task.taskId, {
-      clientRequestId: 'reset-parked', expectedTaskRevision: moving.task.taskRevision,
+      clientRequestId: 'reset-parked', expectedTaskRevision: deferred.task.taskRevision,
       event: { eventId: 'reset-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:06:00+08:00' },
-    })
-    const reset = gateway.resetTask(returning.task.taskId, {
-      clientRequestId: 'deferred-reset', expectedTaskRevision: parked.task.taskRevision,
     })
 
     expect(revertCabin).toHaveBeenCalledTimes(1)
-    expect(reset.task.phase).toBe('collecting-information')
+    expect(parked.effects).toContainEqual(expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'succeeded',
+    }))
   })
 
   it('keeps the original task snapshot when a later return-trip provider fails', () => {

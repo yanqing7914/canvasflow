@@ -22,7 +22,7 @@ export type StoredTask = {
     activeCabin?: {
       receiptId: string
       providerEffectId: string
-      state: 'applied' | 'reverted' | 'revert-failed' | 'unknown'
+      state: 'applied' | 'deferred' | 'reverted' | 'revert-failed' | 'unknown'
       lastErrorCode?: string
     }
   }
