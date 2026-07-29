@@ -1474,6 +1474,7 @@ describe('AgentGateway', () => {
       providers: { ...base, 'vehicle.revert-cabin-profile': revertCabin },
     })
     const returning = returningTask(gateway)
+    const oldCabinEffectId = returning.task.returnTrip?.workflowId
     const moving = gateway.submitEvent(returning.task.taskId, {
       clientRequestId: 'reset-moving', expectedTaskRevision: returning.task.taskRevision,
       event: { eventId: 'reset-moving', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:05:00+08:00' },
@@ -1514,6 +1515,7 @@ describe('AgentGateway', () => {
     expect(parkedForNewTrip.effects).toContainEqual(expect.objectContaining({
       type: 'vehicle.revert-cabin-profile', status: 'succeeded',
     }))
+    expect(runtime.cabinEffects.has(oldCabinEffectId!)).toBe(false)
     expect(parked.task.phase).toBe('waiting-for-passengers')
   })
 

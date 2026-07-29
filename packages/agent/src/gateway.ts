@@ -435,6 +435,7 @@ export class AgentGateway {
       })
       resumedCleanupEffects = [cleanup.effect]
       resumedCleanupReceipts = this.#deferredCleanupReceipts(current.effectReceipts, deferredReceipt, cleanup)
+      if (cleanup.succeeded) resetSideEffectRuntimeTask(this.#runtime, taskId)
     } else {
       const deferredCleanup = this.#resumeDeferredCabinCleanup(taskId, current, request, startedAt)
       if (deferredCleanup) return deferredCleanup
