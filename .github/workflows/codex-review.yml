@@ -98,7 +98,6 @@ jobs:
               --shell /usr/sbin/nologin --gid codex-review codex-review
           fi
           sudo usermod -a -G codex-review runner
-          sudo usermod -a -G runner codex-review
           sudo chown -R runner:codex-review "$GITHUB_WORKSPACE"
           sudo chmod -R g+rwX "$GITHUB_WORKSPACE"
           sudo find "$GITHUB_WORKSPACE" -type d -exec chmod g+s {} +
