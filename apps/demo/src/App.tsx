@@ -16,7 +16,7 @@ import type {
 import type { SpeechControllerDeps } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
-import { ArrowRightIcon, CloseIcon, ControlsIcon, MicIcon } from './ui/icons'
+import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 
@@ -79,6 +79,22 @@ function hasContextualTripTitle(spec: UISpec): boolean {
 /** Whether the Gateway accepted the input, plus any reply worth speaking. */
 type InputOutcome = { sent: boolean; speak?: string }
 
+/**
+ * Why the composer is on screen. The composer is not a permanent input row: it
+ * opens when the turn actually needs a keyboard, and the reason it opened is
+ * what decides its notice and whether closing it is allowed.
+ *
+ * - `transcript`  — recognised words are waiting to be confirmed or corrected.
+ * - `unavailable` — voice cannot run at all, so text is the only path there is.
+ * - `error`       — this voice turn failed; text has to finish it.
+ * - `text`        — the driver asked for the keyboard, or words were handed back
+ *                   to them after a turn the microphone could not complete.
+ *
+ * Only `text` is dismissible. The other three mean the turn cannot be finished
+ * without the field, and closing it would strand the driver.
+ */
+type ComposerReason = 'transcript' | 'unavailable' | 'error' | 'text'
+
 /** Microphone copy per voice state, plus the disabled-entry case. */
 const voiceButtonLabels = {
   unavailable: { aria: '语音入口暂不可用', text: '语音不可用' },
@@ -115,12 +131,15 @@ export default function App({
   const [pending, setPending] = useState(false)
   const [vehicleContext, setVehicleContext] = useState(initialVehicleContext)
   const [controlsOpen, setControlsOpen] = useState(false)
+  const [keyboardRequested, setKeyboardRequested] = useState(false)
   const pendingRef = useRef(false)
   const streamCursorRef = useRef(0)
   const controlsTriggerRef = useRef<HTMLButtonElement>(null)
   const controlsDrawerRef = useRef<HTMLElement>(null)
   const controlsCloseRef = useRef<HTMLButtonElement>(null)
   const restoreControlsFocusRef = useRef(false)
+  const composerInputRef = useRef<HTMLInputElement>(null)
+  const focusComposerRef = useRef(false)
   const [localTask, setLocalTask] = useState<AirportPickupTaskState | undefined>(
     localOnly ? (initialTask ?? mainFlowTimeline.initialTaskState) : undefined,
   )
@@ -217,8 +236,12 @@ export default function App({
   async function submitVoiceTranscript(transcript: string, meta: VoiceSubmitMeta) {
     const outcome = await sendInput(transcript, meta)
     // A refused turn must not lose what the driver said: park the transcript in
-    // the text field so 发送 can retry it without speaking again.
-    if (!outcome.sent) setText(transcript)
+    // the text field so 发送 can retry it without speaking again. The field has
+    // to stay on screen for that, otherwise the words are parked out of sight.
+    if (!outcome.sent) {
+      setText(transcript)
+      setKeyboardRequested(true)
+    }
     return outcome.speak
   }
 
@@ -228,15 +251,16 @@ export default function App({
     speech,
   })
   const voiceTranscript = voice.state === 'transcribing' ? voice.transcript : undefined
-  // While the microphone is capturing or its transcript is in flight, the field
-  // still holds the *previous* turn's words. Sending those would create a task
-  // from something the driver never meant to send, so the text path is closed
-  // until the voice turn hands the words back. `transcribing` stays open on
-  // purpose: that is where 发送 confirms.
+  // The microphone owns the turn while it is capturing or while a confirmed
+  // transcript is in flight, so nothing may be sent by hand in the meantime:
+  // during `listening` the field would still hold the *previous* turn's words,
+  // and during `submitting` the words on screen have already been sent once.
+  // This closes both the 文字 entry and the field it would open. `transcribing`
+  // stays open on purpose: that is where 发送 confirms.
   const textPathLocked = voice.state === 'listening' || voice.state === 'submitting'
 
-  // A finished transcript lands in the existing text field rather than in a
-  // second input: one place to read, one place to correct, one 发送 to confirm.
+  // A finished transcript lands in the same field the text path uses rather than
+  // in a second input: one place to read, one place to correct, one 发送.
   useEffect(() => {
     if (voiceTranscript === undefined) return
     setText(voiceTranscript)
@@ -266,11 +290,15 @@ export default function App({
 
   function pressMicrophone() {
     // Confirming is 发送's job, so here the button only leaves the voice turn.
-    // The transcript stays in the text field on purpose.
+    // The transcript stays in the text field on purpose, so the field stays too.
     if (voice.state === 'transcribing') {
       voice.cancel()
+      setKeyboardRequested(true)
       return
     }
+    // Starting a fresh voice turn is a decision to speak, so the keyboard the
+    // driver may have opened earlier steps back out of the way.
+    setKeyboardRequested(false)
     voice.press()
   }
 
@@ -351,6 +379,23 @@ export default function App({
     return index === -1 ? undefined : index + 1
   }
 
+  function toggleKeyboard() {
+    if (keyboardRequested) {
+      setKeyboardRequested(false)
+      return
+    }
+    // Asking for the keyboard should land the caret in it; a driver who pressed
+    // 文字 should not have to find the field afterwards.
+    focusComposerRef.current = true
+    setKeyboardRequested(true)
+  }
+
+  useEffect(() => {
+    if (!focusComposerRef.current) return
+    focusComposerRef.current = false
+    composerInputRef.current?.focus()
+  }, [keyboardRequested])
+
   const closeControls = useCallback(() => {
     restoreControlsFocusRef.current = true
     setControlsOpen(false)
@@ -429,6 +474,31 @@ export default function App({
             ? voice.speaking ?? '正在播报'
             : '')
 
+  // The keyboard is not a permanent fixture of the cabin. It appears when the
+  // turn genuinely needs it and steps back out when it does not, so the journey
+  // content keeps the space by default. Order matters: an unfinished transcript
+  // is the most specific reason, and a missing capability the most absolute.
+  // `submitting` keeps the field: the words the driver just confirmed stay on
+  // screen until the Gateway accepts them, rather than blinking out and back.
+  const composerReason: ComposerReason | undefined = voice.state === 'transcribing' || voice.state === 'submitting'
+    ? 'transcript'
+    : !voice.available
+      ? 'unavailable'
+      : voice.error
+        ? 'error'
+        : keyboardRequested
+          ? 'text'
+          : undefined
+  // A voice failure already states itself in the live region above the field;
+  // repeating it inside the composer would say the same thing twice. Only the
+  // absolute case needs its own line, because there is no turn to have failed.
+  const composerNotice = composerReason === 'unavailable'
+    ? voice.error?.message ?? '语音入口不可用，请用文字告诉我。'
+    : undefined
+  // Closing the field is only offered when nothing depends on it staying: the
+  // other reasons mean the turn cannot be finished without it.
+  const composerDismissible = composerReason === 'text'
+
   const isCompleted = task?.phase === 'completed'
   const isTerminal = task?.phase === 'completed' || task?.phase === 'cancelled'
   const playedEventCount = task
@@ -484,6 +554,22 @@ export default function App({
                 <span>{microphoneCopy.text}</span>
               </button>
               <button
+                className={`keyboard-toggle${composerReason ? ' keyboard-toggle--open' : ''}`}
+                type="button"
+                // Reports whether the field is on screen, not merely whether this
+                // button put it there: a transcript or a failure opens it too.
+                aria-pressed={Boolean(composerReason)}
+                // Voice is an assistive utility, never the only way in. Even when
+                // the microphone is working, the keyboard stays one press away.
+                // It can only be taken back when nothing else depends on it.
+                aria-label={composerReason ? '收起文字输入' : '改用文字输入'}
+                disabled={pending || textPathLocked || (Boolean(composerReason) && !composerDismissible)}
+                onClick={toggleKeyboard}
+              >
+                <KeyboardIcon size={22} />
+                <span>文字</span>
+              </button>
+              <button
                 ref={controlsTriggerRef}
                 className="control-toggle"
                 type="button"
@@ -502,31 +588,36 @@ export default function App({
           {/* Rendered unconditionally so the region exists before the first announcement. */}
           <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
 
-          <form
-            className="voice-composer"
-            data-voice-state={micState}
-            aria-label="Agent input"
-            onSubmit={(event) => { event.preventDefault(); submitText() }}
-          >
-            <div className="voice-composer__row">
-              <input
-                className="voice-composer__input"
-                type="text"
-                aria-label="任务输入"
-                value={text}
-                disabled={pending || textPathLocked}
-                placeholder="告诉我接谁、航班号或下一步"
-                onChange={(event) => changeText(event.target.value)}
-              />
-              <button
-                className="voice-composer__send"
-                type="submit"
-                disabled={pending || textPathLocked}
-              >
-                发送
-              </button>
-            </div>
-          </form>
+          {composerReason ? (
+            <form
+              className="voice-composer"
+              data-voice-state={micState}
+              data-composer-reason={composerReason}
+              aria-label="Agent input"
+              onSubmit={(event) => { event.preventDefault(); submitText() }}
+            >
+              {composerNotice && <p className="voice-composer__notice">{composerNotice}</p>}
+              <div className="voice-composer__row">
+                <input
+                  ref={composerInputRef}
+                  className="voice-composer__input"
+                  type="text"
+                  aria-label="任务输入"
+                  value={text}
+                  disabled={pending || textPathLocked}
+                  placeholder="告诉我接谁、航班号或下一步"
+                  onChange={(event) => changeText(event.target.value)}
+                />
+                <button
+                  className="voice-composer__send"
+                  type="submit"
+                  disabled={pending || textPathLocked}
+                >
+                  发送
+                </button>
+              </div>
+            </form>
+          ) : null}
 
           {/* A failed request is not a trip fact, but the driver still has to learn
               that what they pressed did not go through. */}

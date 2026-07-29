@@ -150,6 +150,15 @@ export function MicrophoneIcon(props: IconProps) {
   )
 }
 
+export function KeyboardIcon(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <rect height="13" rx="2.5" width="20" x="2" y="5.5" />
+      <path d="M6 9.5h.01M9.5 9.5h.01M13 9.5h.01M16.5 9.5h.01M6 13h.01M18 9.5h.01M9.5 13h5M18 13h.01" />
+    </LineIcon>
+  )
+}
+
 export function ControlsIcon(props: IconProps) {
   return (
     <LineIcon {...props}>

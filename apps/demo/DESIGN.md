@@ -171,9 +171,10 @@ title, card" template:
 - Put actions immediately after the conclusion they affect. A single primary
   action fills the action area; multiple actions make their primary/secondary
   relationship apparent without turning into pills or toolbar chrome.
-- The microphone is a small, non-blocking utility entry. Voice status and the
-  editable transcript/text fallback appear between the header and the journey
-  content when a transcript needs review or voice cannot carry the turn;
+- The microphone and the keyboard are small, non-blocking utility entries that sit
+  together in the header. Voice status and the editable transcript/text fallback
+  appear between the header and the journey content when a transcript needs
+  review, voice cannot carry the turn, or the driver asks for the keyboard;
   neither creates a second trip narrative.
 - Its `idle`, `listening`, `transcribing`, `submitting`, `speaking`, `error`,
   and `unavailable` states use static text, icon, and color only. `transcribing`
@@ -183,6 +184,11 @@ title, card" template:
   misrecognition is corrected rather than acted on. The same field is the text
   fallback: it is present whenever voice cannot carry the turn, which keeps a
   voice failure from ever leaving the driver without an input path.
+- Why the field opened is what it means, so the reason carries the colour: a
+  transcript awaiting confirmation takes the blue that means the assistant holds
+  the turn, a failed or unavailable voice path takes red, and a keyboard the
+  driver simply asked for stays neutral. A keyboard nothing depends on can be
+  dismissed from the header; one the turn needs cannot, and says so.
 - Listening, submitting, and playback are announced through one polite live
   region rather than motion or a moving meter.
 - Every button is semantic, keyboard reachable, touch friendly, and has a

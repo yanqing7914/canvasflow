@@ -29,6 +29,28 @@ async function readControls(page: Page, expected: string | RegExp) {
   await expect(drawer).toBeHidden()
 }
 
+/**
+ * The keyboard is on demand, not a permanent input row: in a browser with working
+ * speech recognition it is not on screen until the turn needs it or the driver
+ * asks for it. Every text step therefore opens it first. Opening an already-open
+ * composer would close it, so the toggle is only pressed when the field is absent.
+ */
+async function composer(page: Page) {
+  const input = page.getByLabel('任务输入')
+  if (await input.count() === 0) {
+    await page.getByRole('button', { name: '改用文字输入' }).click()
+    await expect(input).toBeVisible()
+  }
+  return input
+}
+
+/** Types into the on-demand keyboard and sends, opening it if it is not open. */
+async function sendText(page: Page, value?: string) {
+  const input = await composer(page)
+  if (value !== undefined) await input.fill(value)
+  await page.getByRole('button', { name: '发送' }).click()
+}
+
 async function expectAdvanceEnabled(page: Page, enabled: boolean) {
   await page.getByRole('button', { name: '打开演示控制' }).click()
   const advance = page.getByRole('button', { name: /推进下一事件|行程已完成|行程已取消/ })
@@ -68,16 +90,15 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
   for (const viewport of [{ width: 375, height: 812 }, { width: 1920, height: 720 }]) {
     await page.setViewportSize(viewport)
     await page.goto('/')
-    const taskInput = page.getByLabel('任务输入')
     const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
-    const submit = page.getByRole('button', { name: '发送' })
+    const keyboard = page.getByRole('button', { name: '改用文字输入' })
     const controls = page.getByRole('button', { name: '打开演示控制' })
     // Wait for the mounted surface before pressing a key: a Tab that arrives
     // pre-hydration lands on nothing and is not replayed.
-    await expect(submit).toBeVisible()
+    await expect(controls).toBeVisible()
 
     // Tab order follows the brief's reading order: brand, then the header
-    // utilities, then the input row.
+    // utilities. The keyboard is not in it yet because it is not on screen.
     await page.keyboard.press('Tab')
     await expect(page.getByRole('link', { name: /carHer/ })).toBeFocused()
     await page.keyboard.press('Tab')
@@ -86,9 +107,15 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
       await expect(mic).toBeFocused()
       await page.keyboard.press('Tab')
     }
-    await expect(controls).toBeFocused()
+    await expect(keyboard).toBeFocused()
     await page.keyboard.press('Tab')
+    await expect(controls).toBeFocused()
+
+    // Asking for the keyboard puts the caret in it, so the next key is typed
+    // rather than navigating; from the field, Tab reaches its 发送.
+    const taskInput = await composer(page)
     await expect(taskInput).toBeFocused()
+    const submit = page.getByRole('button', { name: '发送' })
     await page.keyboard.press('Tab')
     await expect(submit).toBeFocused()
     await page.keyboard.press('Enter')
@@ -97,8 +124,7 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     await expect(surface).toBeVisible()
     await expect(surface).toHaveAttribute('data-layout', 'stack')
     await expect(surface.locator('[data-component-type="status-banner"]')).toBeVisible()
-    await taskInput.fill('MU5102')
-    await submit.click()
+    await sendText(page, 'MU5102')
     const startNavigation = page.getByRole('button', { name: '开始导航' })
     await expect(startNavigation).toBeEnabled()
     // The demo player now lives in the drawer, so tabbing on from 发送 reaches the
@@ -120,12 +146,11 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await expectAdvanceEnabled(page, false)
   await readControls(page, '尚无任务')
 
-  await page.getByRole('button', { name: '发送' }).click()
+  await sendText(page)
   await readControls(page, 'collecting-information')
   await expectAdvanceEnabled(page, true)
 
-  await page.getByLabel('任务输入').fill('MU5102')
-  await page.getByRole('button', { name: '发送' }).click()
+  await sendText(page, 'MU5102')
   await readControls(page, 'preparing')
   await page.getByRole('button', { name: '开始导航' }).click()
 
@@ -172,19 +197,24 @@ test('keeps the task usable around a voice attempt', async ({ page }) => {
   // returns to a usable state and the text path still completes the turn.
   if (await mic.isEnabled()) {
     await mic.click()
-    // The text path is closed on purpose while the microphone is capturing, so
+    // The keyboard is closed on purpose while the microphone is capturing, so
     // end the turn before typing. A second press either hands back a transcript
-    // or reports that nothing was heard; both reopen the field.
+    // or reports that nothing was heard; either way the keyboard reopens.
     const capturing = page.getByRole('button', { name: '停止语音输入' })
     if (await capturing.isVisible()) await capturing.click()
     await expect(
       page.getByRole('button', { name: /开始语音输入|重试语音输入|放弃这次语音输入/ }),
     ).toBeEnabled()
+    // Whatever that turn did, a keyboard is reachable: either the failure has
+    // already opened one — in which case the toggle is deliberately unable to
+    // take it away — or the 文字 entry can still bring one up.
+    const fieldAlreadyOpen = await page.getByLabel('任务输入').count() > 0
+    if (!fieldAlreadyOpen) {
+      await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+    }
   }
 
-  const send = page.getByRole('button', { name: '发送' })
-  await expect(send).toBeEnabled()
-  await send.click()
+  await sendText(page)
   await readControls(page, 'collecting-information')
 })
 
@@ -200,8 +230,7 @@ test('falls back to text when the browser has no speech recognition', async ({ p
   await expect(mic).toBeVisible()
   await expect(mic).toBeDisabled()
 
-  await page.getByLabel('任务输入').fill('我现在要去机场接妈妈和豆豆')
-  await page.getByRole('button', { name: '发送' }).click()
+  await sendText(page, '我现在要去机场接妈妈和豆豆')
   await readControls(page, 'collecting-information')
 })
 
@@ -211,7 +240,7 @@ test('applies an out-of-band task update through the durable SSE stream', async 
     response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/v1/tasks'
   ))
-  await page.getByRole('button', { name: '发送' }).click()
+  await sendText(page)
   const created = await (await createResponsePromise).json()
 
   const preparedResponse = await postApi(page, `/v1/tasks/${created.task.taskId}/events`, {
@@ -242,9 +271,8 @@ test('applies an out-of-band task update through the durable SSE stream', async 
 test('rejects the arrival memory proposal through the confirmation API', async ({ page }) => {
   await page.goto('/')
 
-  await page.getByRole('button', { name: '发送' }).click()
-  await page.getByLabel('任务输入').fill('MU5102')
-  await page.getByRole('button', { name: '发送' }).click()
+  await sendText(page)
+  await sendText(page, 'MU5102')
   await page.getByRole('button', { name: '开始导航' }).click()
 
   for (let step = 0; step < 10; step += 1) await advanceFlow(page)
@@ -297,9 +325,8 @@ test('retries a failed landing message through action and confirmation APIs', as
   })
   await page.goto('/')
 
-  await page.getByRole('button', { name: '发送' }).click()
-  await page.getByLabel('任务输入').fill('MU5102')
-  await page.getByRole('button', { name: '发送' }).click()
+  await sendText(page)
+  await sendText(page, 'MU5102')
   await page.getByRole('button', { name: '开始导航' }).click()
   await readControls(page, 'driving-to-airport')
   await advanceFlow(page) // charging.started
@@ -465,8 +492,7 @@ test('does not create a landing notification when no passenger authorized one', 
 
 test('shows a deterministic fallback when the flight provider times out', async ({ page }) => {
   await page.goto('/')
-  await page.getByLabel('任务输入').fill('接妈妈，航班 MU0000')
-  await page.getByRole('button', { name: '发送' }).click()
+  await sendText(page, '接妈妈，航班 MU0000')
 
   await expect(page.getByRole('region', { name: 'Generated task interface' })).toContainText('数据暂时不可用')
   await expect(page.getByRole('region', { name: 'Generated task interface' })).toContainText('请稍后重试')
