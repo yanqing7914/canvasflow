@@ -1731,98 +1731,37 @@ a:focus-visible {
 }
 
 /*
- * Transitional shell rules. This PR replaces the renderer and its stylesheet; the shell
- * around it still has the previous structure (prompt row, inline event console, effect
- * receipts) and is redesigned separately. Without these the shell would lose its styling
- * mid-series, so they keep it legible on the new cabin background and are deleted with the
- * markup they belong to.
+ * The demo drawer is the only place engineering metadata is allowed to appear, so its
+ * effect receipts read as a technical log rather than as a trip fact.
  */
-.demo-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  overflow: auto;
-  padding: 24px clamp(16px, 4vw, 64px);
-}
-
-.demo-shell > h1 {
-  margin: 0;
-  font-size: clamp(24px, 2.4vw, 34px);
-  letter-spacing: -0.01em;
-}
-
-.eyebrow,
-.label {
-  color: var(--muted);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.prompt {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  align-items: center;
-  max-width: 960px;
-}
-
-.prompt input {
-  flex: 1 1 260px;
-  min-width: 0;
-  height: 48px;
-  padding: 0 16px;
-  border: 1px solid var(--rule);
-  border-radius: 12px;
-  background: var(--surface);
-  color: var(--ink);
-}
-
-.prompt input:disabled { background: var(--quiet-rule); color: var(--muted); }
-
-.prompt button,
-.console button {
-  height: 48px;
-  padding: 0 20px;
-  border: 1px solid transparent;
-  border-radius: 12px;
-  background: var(--blue);
-  color: #ffffff;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.prompt button:disabled,
-.console button:disabled {
-  background: var(--quiet-rule);
-  border-color: var(--rule);
-  color: var(--muted);
-}
-
-.console {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 20px;
-  border: 1px solid var(--rule);
-  border-radius: 16px;
-  background: var(--surface);
-}
-
-.console div { display: grid; gap: 4px; }
-
-.console strong { font-size: 20px; }
-
-.console small { color: var(--muted); font-family: Bahnschrift, "DIN Alternate", monospace; }
-
-.effects {
+.console-effects {
   margin: 0;
   color: var(--muted);
   font-family: Bahnschrift, "DIN Alternate", monospace;
+  font-size: 15px;
+  line-height: 1.6;
   overflow-wrap: anywhere;
 }
 
-[role="alert"] { color: var(--red); }
+/*
+ * A failed request is not a trip fact. It sits between the input and the journey
+ * content, uses the failure colour, and never dresses itself up as a journey card.
+ */
+.brief-error {
+  flex: 0 0 auto;
+  margin: 0 clamp(20px, 2.4vw, 44px) 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--red);
+  border-radius: 12px;
+  background: var(--red-pale);
+  color: var(--red);
+  font-size: 17px;
+}
+
+/* Before the first task the brief invites the driver instead of showing an empty frame. */
+.brief-placeholder {
+  margin: 0;
+  color: var(--muted);
+  font-size: clamp(19px, 1.5vw, 24px);
+  line-height: 1.55;
+}

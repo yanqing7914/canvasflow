@@ -16,12 +16,36 @@ async function postApi(page: Page, path: string, body: unknown) {
   })
 }
 
+/**
+ * Engineering metadata and the demo player live in a modal controls drawer, never on
+ * the driver-facing brief. The drawer overlays the brief with a scrim, so it is opened
+ * to read, then closed again before the next interaction with the trip surface.
+ */
+async function readControls(page: Page, expected: string | RegExp) {
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  const drawer = page.getByRole('dialog', { name: '演示控制' })
+  await expect(drawer).toContainText(expected)
+  await page.keyboard.press('Escape')
+  await expect(drawer).toBeHidden()
+}
+
+async function expectAdvanceEnabled(page: Page, enabled: boolean) {
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  const advance = page.getByRole('button', { name: /推进下一事件|行程已完成|行程已取消/ })
+  if (enabled) await expect(advance).toBeEnabled()
+  else await expect(advance).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeHidden()
+}
+
 async function advanceFlow(page: Page) {
   const responsePromise = page.waitForResponse((response) => (
     response.request().method() === 'POST'
     && /\/v1\/tasks\/[^/]+\/(events|actions)$/.test(new URL(response.url()).pathname)
   ))
-  await page.getByRole('button', { name: '推进下一事件' }).click()
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await page.getByRole('button', { name: /推进下一事件/ }).click()
+  await page.keyboard.press('Escape')
   const response = await responsePromise
   expect(response.ok()).toBe(true)
   const result = await response.json()
@@ -47,11 +71,26 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     const taskInput = page.getByLabel('任务输入')
     const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
     const submit = page.getByRole('button', { name: '发送' })
+    const controls = page.getByRole('button', { name: '打开演示控制' })
     // Wait for the mounted surface before pressing a key: a Tab that arrives
     // pre-hydration lands on nothing and is not replayed.
     await expect(submit).toBeVisible()
+
+    // Tab order follows the brief's reading order: brand, then the header
+    // utilities, then the input row.
+    await page.keyboard.press('Tab')
+    await expect(page.getByRole('link', { name: /carHer/ })).toBeFocused()
+    await page.keyboard.press('Tab')
+    // A disabled voice entry drops out of the tab order rather than trapping it.
+    if (await mic.isEnabled()) {
+      await expect(mic).toBeFocused()
+      await page.keyboard.press('Tab')
+    }
+    await expect(controls).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(taskInput).toBeFocused()
+    await page.keyboard.press('Tab')
+    await expect(submit).toBeFocused()
     await page.keyboard.press('Enter')
 
     const surface = page.getByRole('region', { name: 'Generated task interface' })
@@ -59,24 +98,16 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     await expect(surface).toHaveAttribute('data-layout', 'stack')
     await expect(surface.locator('[data-component-type="status-banner"]')).toBeVisible()
     await taskInput.fill('MU5102')
-    await page.keyboard.press('Tab')
-    // A disabled voice entry drops out of the tab order rather than trapping it.
-    if (await mic.isEnabled()) {
-      await expect(mic).toBeFocused()
-      await page.keyboard.press('Tab')
-    }
-    await expect(submit).toBeFocused()
-    await page.keyboard.press('Enter')
+    await submit.click()
     const startNavigation = page.getByRole('button', { name: '开始导航' })
-    const advance = page.getByRole('button', { name: '推进下一事件' })
     await expect(startNavigation).toBeEnabled()
+    // The demo player now lives in the drawer, so tabbing on from 发送 reaches the
+    // trip surface's own action rather than a demo control.
     await submit.focus()
-    await page.keyboard.press('Tab')
-    await expect(advance).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(startNavigation).toBeFocused()
     await page.keyboard.press('Enter')
-    await expect(page.getByRole('region', { name: 'Event console' })).toContainText('driving-to-airport')
+    await readControls(page, 'driving-to-airport')
     await expectNoHorizontalOverflow(page)
   }
 })
@@ -84,56 +115,54 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
 test('completes the airport pickup flow through the Agent API', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { name: '机场接人任务卡片' })).toBeVisible()
-  const console = page.getByRole('region', { name: 'Event console' })
-  const advance = page.getByRole('button', { name: '推进下一事件' })
-  await expect(advance).toBeDisabled()
-  await expect(console).toContainText('尚无任务')
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  // Without a task there is nothing to advance, and the drawer says so.
+  await expectAdvanceEnabled(page, false)
+  await readControls(page, '尚无任务')
 
   await page.getByRole('button', { name: '发送' }).click()
-  await expect(console).toContainText('collecting-information')
-  await expect(advance).toBeEnabled()
+  await readControls(page, 'collecting-information')
+  await expectAdvanceEnabled(page, true)
 
   await page.getByLabel('任务输入').fill('MU5102')
   await page.getByRole('button', { name: '发送' }).click()
-  await expect(console).toContainText('preparing')
+  await readControls(page, 'preparing')
   await page.getByRole('button', { name: '开始导航' }).click()
 
-  await expect(console).toContainText('driving-to-airport')
-  await expect(page.getByLabel('Effect receipts')).toContainText('navigation.start:succeeded')
+  await readControls(page, 'driving-to-airport')
+  await readControls(page, 'navigation.start:succeeded')
 
   await advanceFlow(page) // charging.started
-  await expect(console).toContainText('driving-to-airport')
+  await readControls(page, 'driving-to-airport')
   const inAir = await advanceFlow(page)
   expect(inAir.task.flight.status).toBe('in-air')
   await advanceFlow(page) // charging.completed
   await expect(page.getByText(/补能完成/)).toBeVisible()
   await advanceFlow(page) // flight landed
-  await expect(console).toContainText('落地通知')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('落地通知')
   await advanceFlow(page) // message.sent
-  await expect(page.getByLabel('Effect receipts')).toContainText('message.send:succeeded')
+  await readControls(page, 'message.send:succeeded')
   await advanceFlow(page) // airport geofence
-  await expect(console).toContainText('approaching-airport')
+  await readControls(page, 'approaching-airport')
   await advanceFlow(page) // parked
-  await expect(console).toContainText('waiting-for-passengers')
+  await readControls(page, 'waiting-for-passengers')
   await advanceFlow(page) // passengers onboard
-  await expect(console).toContainText('returning-home')
-  await expect(page.getByLabel('Effect receipts')).toContainText('navigation.update-route:succeeded')
-  await expect(page.getByLabel('Effect receipts')).toContainText('vehicle.apply-cabin-profile:succeeded')
-  await expect(page.getByLabel('Effect receipts')).toContainText('media.play:succeeded')
+  await readControls(page, 'returning-home')
+  await readControls(page, 'navigation.update-route:succeeded')
+  await readControls(page, 'vehicle.apply-cabin-profile:succeeded')
+  await readControls(page, 'media.play:succeeded')
   await advanceFlow(page) // cabin preference input
   await advanceFlow(page) // destination.arrived
-  await expect(console).toContainText('completed')
-  await expect(page.getByLabel('Effect receipts')).toContainText('memory.propose-update:pending-confirmation')
+  await readControls(page, 'completed')
+  await readControls(page, 'memory.propose-update:pending-confirmation')
 
   await page.getByRole('button', { name: '保存本次偏好' }).click()
-  await expect(page.getByLabel('Effect receipts')).toContainText('memory.confirm-update:succeeded')
+  await readControls(page, 'memory.confirm-update:succeeded')
   await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
 })
 
 test('keeps the task usable around a voice attempt', async ({ page }) => {
   await page.goto('/')
-  const console = page.getByRole('region', { name: 'Event console' })
   const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
   await expect(mic).toBeVisible()
 
@@ -156,7 +185,7 @@ test('keeps the task usable around a voice attempt', async ({ page }) => {
   const send = page.getByRole('button', { name: '发送' })
   await expect(send).toBeEnabled()
   await send.click()
-  await expect(console).toContainText('collecting-information')
+  await readControls(page, 'collecting-information')
 })
 
 test('falls back to text when the browser has no speech recognition', async ({ page }) => {
@@ -173,7 +202,7 @@ test('falls back to text when the browser has no speech recognition', async ({ p
 
   await page.getByLabel('任务输入').fill('我现在要去机场接妈妈和豆豆')
   await page.getByRole('button', { name: '发送' }).click()
-  await expect(page.getByRole('region', { name: 'Event console' })).toContainText('collecting-information')
+  await readControls(page, 'collecting-information')
 })
 
 test('applies an out-of-band task update through the durable SSE stream', async ({ page }) => {
@@ -207,12 +236,11 @@ test('applies an out-of-band task update through the durable SSE stream', async 
     idempotencyKey: 'e2e-sse-start',
   })
   expect(started.ok()).toBe(true)
-  await expect(page.getByRole('region', { name: 'Event console' })).toContainText('driving-to-airport')
+  await readControls(page, 'driving-to-airport')
 })
 
 test('rejects the arrival memory proposal through the confirmation API', async ({ page }) => {
   await page.goto('/')
-  const console = page.getByRole('region', { name: 'Event console' })
 
   await page.getByRole('button', { name: '发送' }).click()
   await page.getByLabel('任务输入').fill('MU5102')
@@ -220,10 +248,10 @@ test('rejects the arrival memory proposal through the confirmation API', async (
   await page.getByRole('button', { name: '开始导航' }).click()
 
   for (let step = 0; step < 10; step += 1) await advanceFlow(page)
-  await expect(console).toContainText('completed')
+  await readControls(page, 'completed')
   await page.getByRole('button', { name: '暂不保存' }).click()
 
-  await expect(page.getByLabel('Effect receipts')).toContainText('memory.reject-update:cancelled')
+  await readControls(page, 'memory.reject-update:cancelled')
   await expect(page.getByRole('button', { name: '暂不保存' })).toHaveCount(0)
 })
 
@@ -268,13 +296,12 @@ test('retries a failed landing message through action and confirmation APIs', as
     })
   })
   await page.goto('/')
-  const console = page.getByRole('region', { name: 'Event console' })
 
   await page.getByRole('button', { name: '发送' }).click()
   await page.getByLabel('任务输入').fill('MU5102')
   await page.getByRole('button', { name: '发送' }).click()
   await page.getByRole('button', { name: '开始导航' }).click()
-  await expect(console).toContainText('driving-to-airport')
+  await readControls(page, 'driving-to-airport')
   await advanceFlow(page) // charging.started
   await advanceFlow(page) // flight in-air
   await advanceFlow(page) // charging.completed
@@ -288,7 +315,7 @@ test('retries a failed landing message through action and confirmation APIs', as
       { type: 'message.revoke-authorization', status: 'cancelled' },
     ],
   })
-  await expect(console).toContainText('落地通知失败')
+  await expect(page.getByRole('heading', { level: 1 })).toContainText('落地通知失败')
   await expect(page.getByRole('button', { name: '重试发送' })).toBeVisible()
 
   const prepareResponsePromise = page.waitForResponse((response) => (
@@ -316,7 +343,7 @@ test('retries a failed landing message through action and confirmation APIs', as
     task: { message: { status: 'sent', landingNoticeSent: true } },
     effects: [{ type: 'message.send', status: 'succeeded' }],
   })
-  await expect(page.getByLabel('Effect receipts')).toContainText('message.send:succeeded')
+  await readControls(page, 'message.send:succeeded')
   await expect(page.getByRole('button', { name: '确认发送' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '重试发送' })).toHaveCount(0)
 })
@@ -443,7 +470,7 @@ test('shows a deterministic fallback when the flight provider times out', async 
 
   await expect(page.getByRole('region', { name: 'Generated task interface' })).toContainText('数据暂时不可用')
   await expect(page.getByRole('region', { name: 'Generated task interface' })).toContainText('请稍后重试')
-  await expect(page.getByLabel('Event console')).toContainText('preparing')
+  await readControls(page, 'preparing')
 })
 
 test('returns CONFIRMATION_EXPIRED when a resolved memory confirmation is reused', async ({ page }) => {
