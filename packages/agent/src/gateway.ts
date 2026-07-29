@@ -306,11 +306,15 @@ export class AgentGateway {
       effects = [revocation.effect]
       if (!revocation.succeeded) {
         const reconciled = revocation.ambiguous
-          ? this.#store.save(this.#publish({
-            ...current.task,
-            taskRevision: current.task.taskRevision + 1,
-            pendingConfirmation: undefined,
-            }, current.toolResults, current.requestContext, current.effectReceipts))
+          ? this.#store.save(this.#publish(
+            { ...current.task, taskRevision: current.task.taskRevision + 1, pendingConfirmation: undefined },
+            current.toolResults,
+            current.requestContext,
+            receiptsAfterResetCleanup,
+          ))
+          : receiptsAfterResetCleanup?.activeCabin?.state === 'deferred'
+            // Preserve the public reset-failure snapshot while retaining private recovery state.
+            ? this.#store.save({ ...current, effectReceipts: receiptsAfterResetCleanup })
           : current
         this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: reconciled, effects })
         return this.#response(request.clientRequestId, reconciled, effects, performance.now() - startedAt)
@@ -327,11 +331,19 @@ export class AgentGateway {
       effects = [...effects, revocation.effect]
       if (!revocation.succeeded) {
         const reconciled = revocation.ambiguous
-          ? this.#store.save(this.#publish({
+          ? this.#store.save(this.#publish(
+            {
               ...current.task,
               taskRevision: current.task.taskRevision + 1,
               message: { ...current.task.message, authorizationId: undefined },
-            }, current.toolResults, current.requestContext, current.effectReceipts))
+            },
+            current.toolResults,
+            current.requestContext,
+            receiptsAfterResetCleanup,
+          ))
+          : receiptsAfterResetCleanup?.activeCabin?.state === 'deferred'
+            // Preserve the public reset-failure snapshot while retaining private recovery state.
+            ? this.#store.save({ ...current, effectReceipts: receiptsAfterResetCleanup })
           : current
         this.#store.recordIdempotencyResult(taskId, operation, request.clientRequestId, { stored: reconciled, effects })
         return this.#response(request.clientRequestId, reconciled, effects, performance.now() - startedAt)

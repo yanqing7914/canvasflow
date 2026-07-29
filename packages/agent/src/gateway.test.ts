@@ -1519,6 +1519,70 @@ describe('AgentGateway', () => {
     expect(parked.task.phase).toBe('waiting-for-passengers')
   })
 
+  it('retains deferred cabin cleanup when reset message authorization revocation fails', () => {
+    const runtime = createSideEffectRuntime()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      providers: {
+        ...base,
+        'vehicle.revert-cabin-profile': revertCabin,
+        'message.revoke-authorization': (context) => ({
+          ok: false, data: null,
+          error: { code: 'REVOKE_FAILED', message: 'offline', retryable: true },
+          meta: { requestId: context.requestId!, taskId: context.taskId, tool: 'message.revoke-authorization', provider: 'fixture', durationMs: 1, generatedAt: now },
+        }),
+      },
+    })
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan', idempotencyKey: 'deferred-revoke-start',
+    })
+    const landed = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-landed', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'deferred-revoke-landed', type: 'flight.updated', flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' }, timestamp: '2026-07-22T20:40:00+08:00' },
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-geofence', expectedTaskRevision: landed.task.taskRevision,
+      event: { eventId: 'deferred-revoke-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T20:41:00+08:00' },
+    })
+    const waiting = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-waiting', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'deferred-revoke-waiting', type: 'vehicle.parked', timestamp: '2026-07-22T20:42:00+08:00' },
+    })
+    const returning = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-onboard', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'deferred-revoke-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T20:43:00+08:00' },
+    })
+    expect(returning.task.message.authorizationId).toBeDefined()
+
+    const moving = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-moving', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'deferred-revoke-moving', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T20:44:00+08:00' },
+    })
+    const failedReset = gateway.resetTask(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-reset', expectedTaskRevision: moving.task.taskRevision,
+    })
+
+    expect(failedReset.task).toEqual(moving.task)
+    expect(failedReset.effects).toContainEqual(expect.objectContaining({
+      type: 'message.revoke-authorization', status: 'failed', errorCode: 'REVOKE_FAILED',
+    }))
+
+    const parked = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'deferred-revoke-parked', expectedTaskRevision: failedReset.task.taskRevision,
+      event: { eventId: 'deferred-revoke-parked', type: 'vehicle.parked', timestamp: '2026-07-22T20:45:00+08:00' },
+    })
+
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(parked.effects).toEqual([expect.objectContaining({
+      type: 'vehicle.revert-cabin-profile', status: 'succeeded',
+    })])
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
   it('keeps the original task snapshot when a later return-trip provider fails', () => {
     const runtime = createSideEffectRuntime()
     const base = createProviderRegistry(runtime)
