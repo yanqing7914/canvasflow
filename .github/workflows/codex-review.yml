@@ -99,7 +99,6 @@ jobs:
           fi
           sudo usermod -a -G codex-review runner
           sudo usermod -a -G runner codex-review
-          sudo install -d -o runner -g codex-review -m 2770 "$GITHUB_WORKSPACE/.codex-review-home"
           sudo chown -R runner:codex-review "$GITHUB_WORKSPACE"
           sudo chmod -R g+rwX "$GITHUB_WORKSPACE"
           sudo find "$GITHUB_WORKSPACE" -type d -exec chmod g+s {} +
@@ -110,30 +109,6 @@ jobs:
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           CODEX_REVIEW_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
         run: |
-          mkdir -p "$GITHUB_WORKSPACE/.codex-review-home"
-
-          # Kept in a file so the fallback step can rebuild the same config for
-          # a different model instead of duplicating this logic.
-          cat > "$RUNNER_TEMP/write-codex-config.mjs" <<'NODE'
-          import fs from 'node:fs'
-
-          const model = process.argv[2] ?? ''
-          const lines = []
-          if (process.env.OPENAI_BASE_URL) {
-            lines.push(`openai_base_url = ${JSON.stringify(process.env.OPENAI_BASE_URL)}`)
-          }
-          if (model) {
-            lines.push(`model = ${JSON.stringify(model)}`)
-          }
-
-          fs.writeFileSync(`${process.env.GITHUB_WORKSPACE}/.codex-review-home/config.toml`, `${lines.join('\n')}\n`)
-          NODE
-
-          node "$RUNNER_TEMP/write-codex-config.mjs" "$CODEX_REVIEW_MODEL"
-
-          chgrp -R codex-review "$GITHUB_WORKSPACE/.codex-review-home"
-          chmod -R g+rX "$GITHUB_WORKSPACE/.codex-review-home"
-
           node <<'NODE'
           const fs = require('node:fs')
 
@@ -154,20 +129,12 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           responses-api-endpoint: ${{ steps.codex_provider.outputs.responses-api-endpoint }}
-          codex-home: ${{ github.workspace }}/.codex-review-home
           prompt-file: ${{ github.workspace }}/.codex-review-prompt.md
           output-file: codex-review.md
           sandbox: read-only
           safety-strategy: unprivileged-user
           codex-user: codex-review
           model: ${{ vars.CODEX_REVIEW_MODEL }}
-
-      - name: Switch to the fallback review model
-        if: steps.codex.outcome == 'failure' && vars.CODEX_REVIEW_FALLBACK_MODEL != ''
-        env:
-          OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
-          CODEX_REVIEW_FALLBACK_MODEL: ${{ vars.CODEX_REVIEW_FALLBACK_MODEL }}
-        run: node "$RUNNER_TEMP/write-codex-config.mjs" "$CODEX_REVIEW_FALLBACK_MODEL"
 
       - name: Run Codex review (fallback model)
         id: codex_fallback
@@ -177,7 +144,6 @@ jobs:
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           responses-api-endpoint: ${{ steps.codex_provider.outputs.responses-api-endpoint }}
-          codex-home: ${{ github.workspace }}/.codex-review-home
           prompt-file: ${{ github.workspace }}/.codex-review-prompt.md
           output-file: codex-review.md
           sandbox: read-only
