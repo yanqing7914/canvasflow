@@ -21,6 +21,19 @@ export default defineConfig({
         channel: 'chromium',
       },
     },
+    // DESIGN.md names 1920x720 as the demo resolution and forbids both scroll
+    // axes there. `Desktop Chrome` is 1280x720, so without this project the
+    // layout rules are only ever asserted at a narrower width than the one the
+    // demo actually runs at. Specs that assert layout carry @layout.
+    {
+      name: 'chromium-1920x720',
+      grep: /@layout/,
+      use: {
+        ...devices['Desktop Chrome'],
+        channel: 'chromium',
+        viewport: { width: 1920, height: 720 },
+      },
+    },
   ],
   webServer: {
     command: 'npm run build && npm run preview',
