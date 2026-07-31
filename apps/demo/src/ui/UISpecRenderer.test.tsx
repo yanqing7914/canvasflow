@@ -466,6 +466,42 @@ describe('UISpecRenderer', () => {
     expect(document.querySelector('.ui-detail-row')).not.toBeInTheDocument()
   })
 
+  /**
+   * A failed or scheduled message must keep its send status in `minimal` density,
+   * which is the density the composer picks for exactly those two states. jsdom
+   * does not load the stylesheet, so this pins the structural half of the rule —
+   * the status stays rendered and stays out of `.ui-detail-row`, the row minimal
+   * density hides. The 1920x720 layout E2E covers it with the real CSS applied.
+   */
+  it.each([
+    { status: 'failed', label: '发送失败', cancellable: false, scheduledAt: undefined },
+    { status: 'scheduled', label: '待发送', cancellable: true, scheduledAt: '2026-07-22T20:35:00+08:00' },
+  ] as const)('keeps a $status message send status in minimal density', ({ status, label, cancellable, scheduledAt }) => {
+    const spec = baseSpec({
+      presentation: { mode: 'replace', density: 'minimal', theme: 'dark', priority: 'high' },
+      layout: { type: 'stack', gap: 'md', slots: { main: ['message'] } },
+      components: [{
+        id: 'message',
+        type: 'message-preview',
+        props: {
+          contactLabel: '妈妈',
+          textPreview: '我已到达机场，正在接你们。',
+          status,
+          cancellable,
+          ...(scheduledAt ? { scheduledAt } : {}),
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const renderer = screen.getByRole('region', { name: 'Generated task interface' })
+    expect(renderer).toHaveAttribute('data-density', 'minimal')
+    const statusLabel = screen.getByText(label)
+    expect(statusLabel.closest('.ui-card__status-line')).toBeInTheDocument()
+    expect(statusLabel.closest('.ui-detail-row')).not.toBeInTheDocument()
+  })
+
   it('does not expose actions attached to an invalid component', () => {
     const onAction = vi.fn()
     const invalidComponent = { id: 'future-card', type: 'future-widget', props: {}, actions: ['future-action'] }

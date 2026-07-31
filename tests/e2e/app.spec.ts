@@ -104,9 +104,56 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(Math.max(dimensions.body, dimensions.document)).toBeLessThanOrEqual(dimensions.viewport)
 }
 
-test('renders the UISpec surface responsively and keeps primary controls keyboard accessible', async ({ page }) => {
-  for (const viewport of [{ width: 375, height: 812 }, { width: 1920, height: 720 }]) {
-    await page.setViewportSize(viewport)
+/**
+ * DESIGN.md forbids both scroll axes at the demo resolution, and the brief has to
+ * genuinely fit rather than merely be unscrollable. `.demo-shell` sets
+ * `overflow: hidden`, which clamps `document.scrollHeight` to the viewport: a brief
+ * taller than the fold is silently clipped instead of scrollable, so asserting on
+ * page scroll height alone can never fail. What is checkable is the two ways the
+ * rule can actually break — a clipped scroll container, or the brief's own box
+ * extending past the fold.
+ *
+ * Only asserted above the 680px breakpoint, where DESIGN.md deliberately allows a
+ * phone-width brief to become a scrolling single-column flow.
+ */
+async function expectNoScroll(page: Page) {
+  await expectNoHorizontalOverflow(page)
+  const layout = await page.evaluate(() => {
+    const viewport = document.documentElement.clientHeight
+    const measure = (selector: string) => {
+      const element = document.querySelector(selector)
+      if (!(element instanceof HTMLElement)) return null
+      return {
+        selector,
+        // Hidden overflow turns "too tall" into "clipped" rather than "scrollable".
+        clippedBy: element.scrollHeight - element.clientHeight,
+        // A box that ends below the fold is content the driver cannot reach at all.
+        pastFoldBy: Math.round(element.getBoundingClientRect().bottom) - viewport,
+      }
+    }
+    return {
+      width: document.documentElement.clientWidth,
+      boxes: ['.demo-shell', '.cockpit-stage', '.task-surface', '.trip-brief__content']
+        .map(measure)
+        .filter((box): box is NonNullable<typeof box> => box !== null),
+    }
+  })
+  if (layout.width <= 680) return
+  expect(layout.boxes.length).toBeGreaterThan(0)
+  // One assertion per axis of failure, reported with the measurements so a
+  // regression says which box overflowed and by how much.
+  expect(layout.boxes.filter((box) => box.clippedBy > 1)).toEqual([])
+  expect(layout.boxes.filter((box) => box.pastFoldBy > 1)).toEqual([])
+}
+
+test('renders the UISpec surface responsively and keeps primary controls keyboard accessible @layout', async ({ page }, testInfo) => {
+  // The 1920x720 project supplies the demo resolution through its own viewport, so
+  // resizing here would throw it away; the default project still sweeps both widths.
+  const viewports = testInfo.project.name === 'chromium-1920x720'
+    ? [null]
+    : [{ width: 375, height: 812 }, { width: 1920, height: 720 }]
+  for (const viewport of viewports) {
+    if (viewport) await page.setViewportSize(viewport)
     await page.goto('/')
     const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
     const keyboard = page.getByRole('button', { name: '改用文字输入' })
@@ -144,6 +191,9 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     await expect(surface).toBeVisible()
     await expect(surface).toHaveAttribute('data-layout', 'stack')
     await expect(surface.locator('[data-component-type="status-banner"]')).toBeVisible()
+    // The composer is open-ended content between header and journey, so a phase
+    // holding one is where the fixed frame is most likely to be pushed past the fold.
+    await expectNoScroll(page)
 
     // The keyboard left with its words, so it is out of the tab order too: this
     // phase only asks a question, so the header is the whole of it.
@@ -161,8 +211,49 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     await expect(startNavigation).toBeFocused()
     await page.keyboard.press('Enter')
     await readControls(page, 'driving-to-airport')
-    await expectNoHorizontalOverflow(page)
+    await expectNoScroll(page)
   }
+})
+
+/**
+ * The fixed-frame rule is a claim about every phase, not just the one the surface
+ * happens to open on, so this walks the whole demo timeline and re-checks both
+ * axes after each phase change. It runs at 1280x720 and at 1920x720 — the
+ * resolution DESIGN.md actually names — through the tagged 1920 project.
+ */
+test('keeps the brief inside the fixed frame through every phase @layout', async ({ page }) => {
+  await page.goto('/')
+  await expect(page.getByRole('button', { name: '打开演示控制' })).toBeVisible()
+  await expectNoScroll(page)
+
+  await sendText(page)
+  await expectNoScroll(page)
+  await sendText(page, 'MU5102')
+  await expectNoScroll(page)
+
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expectNoScroll(page)
+
+  // Ten advances cover charging, the landing notice, the geofence, the wait, and
+  // the return trip — every renderer component the demo can put on screen.
+  for (let step = 0; step < 10; step += 1) {
+    await advanceFlow(page)
+    await expectNoScroll(page)
+  }
+  await readControls(page, 'completed')
+
+  // Opening the drawer must not change the brief's width, and the confirmation
+  // adds an action pair to the tallest phase in the flow.
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await expectNoScroll(page)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeHidden()
+  await expectNoScroll(page)
+
+  await page.getByRole('button', { name: '保存本次偏好' }).click()
+  await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
+  await expectNoScroll(page)
 })
 
 test('completes the airport pickup flow through the Agent API', async ({ page }) => {
@@ -310,7 +401,12 @@ test('rejects the arrival memory proposal through the confirmation API', async (
   await expect(page.getByRole('button', { name: '暂不保存' })).toHaveCount(0)
 })
 
-test('retries a failed landing message through action and confirmation APIs', async ({ page }) => {
+/**
+ * Rewrites the demo's landing flight to MU5103, the number the preview server's
+ * E2E provider fails `message.send` for, so the auto notify ends in `failed`
+ * rather than `sent`.
+ */
+async function failAutoLandingNotice(page: Page) {
   await page.route('**/v1/tasks/*/events', async (route) => {
     const request = route.request()
     if (request.method() !== 'POST') {
@@ -350,6 +446,10 @@ test('retries a failed landing message through action and confirmation APIs', as
       }),
     })
   })
+}
+
+test('retries a failed landing message through action and confirmation APIs', async ({ page }) => {
+  await failAutoLandingNotice(page)
   await page.goto('/')
 
   await sendText(page)
@@ -400,6 +500,61 @@ test('retries a failed landing message through action and confirmation APIs', as
   await readControls(page, 'message.send:succeeded')
   await expect(page.getByRole('button', { name: '确认发送' })).toHaveCount(0)
   await expect(page.getByRole('button', { name: '重试发送' })).toHaveCount(0)
+})
+
+/**
+ * A failed message must keep showing its send status in `minimal` density. The
+ * unit test pins the DOM structure; only a real browser applies the stylesheet
+ * that hides `.ui-detail-row` at that density, so this asserts the status is
+ * actually painted rather than merely present.
+ *
+ * Reaching `minimal` in the browser takes a highway speed: `applyRequestPresentation`
+ * recomputes density from `vehicleContext.speedKph` (> 60 -> minimal) and overrides
+ * whatever the composer chose, and the demo's own timeline never exceeds 30 kph.
+ */
+test('keeps a failed message send status visible in minimal density @layout', async ({ page }) => {
+  await failAutoLandingNotice(page)
+  await page.goto('/')
+
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await advanceFlow(page) // charging.started
+  await advanceFlow(page) // flight in-air
+  await advanceFlow(page) // charging.completed
+  await advanceFlow(page) // flight landed
+  const failedSend = await advanceFlow(page) // message.send provider returns SEND_FAILED
+  expect(failedSend).toMatchObject({ task: { message: { status: 'failed' } } })
+  await expect(page.getByText('发送失败')).toBeVisible()
+
+  // A context-only sensor event: it moves the car onto the highway without
+  // advancing the phase, so the same failed message is re-rendered at minimal.
+  const moving = await postApi(page, `/v1/tasks/${failedSend.task.taskId}/events`, {
+    clientRequestId: 'e2e-minimal-density-moving',
+    expectedTaskRevision: failedSend.task.taskRevision,
+    event: {
+      eventId: 'e2e-minimal-density-moving',
+      type: 'vehicle.moving',
+      speedKph: 80,
+      timestamp: futureTimestamp(30),
+    },
+  })
+  expect(moving.ok()).toBe(true)
+  await expect(moving.json()).resolves.toMatchObject({
+    task: { message: { status: 'failed' } },
+    ui: { presentation: { density: 'minimal' } },
+  })
+
+  const surface = page.getByRole('region', { name: 'Generated task interface' })
+  await expect(surface).toHaveAttribute('data-density', 'minimal')
+  // The conclusion and its recovery action both survive the density change.
+  await expect(page.getByText('发送失败')).toBeVisible()
+  await expect(page.getByRole('button', { name: '重试发送' })).toBeVisible()
+  // Belt and braces: visible is not enough if the stylesheet collapsed the row to
+  // zero height, so assert the status actually occupies space.
+  const box = await page.getByText('发送失败').boundingBox()
+  expect(box?.height ?? 0).toBeGreaterThan(0)
+  await expectNoScroll(page)
 })
 
 test('replays a duplicate event without applying it twice', async ({ page }) => {
