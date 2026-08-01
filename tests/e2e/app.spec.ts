@@ -117,6 +117,15 @@ async function expectNoHorizontalOverflow(page: Page) {
  * phone-width brief to become a scrolling single-column flow.
  */
 async function expectNoScroll(page: Page) {
+  // The 1920x720 project selects its specs with `grep: /@layout/`, so a layout
+  // assertion in an untagged spec runs only at 1280x720 and silently never at the
+  // resolution the rule is written for. The tag is a hand-written convention with
+  // nothing enforcing it, which makes forgetting it a coverage hole that looks
+  // exactly like coverage — so an untagged caller fails here instead.
+  expect(
+    test.info().tags,
+    'a spec asserting layout must be tagged @layout, or the chromium-1920x720 project skips it',
+  ).toContain('@layout')
   await expectNoHorizontalOverflow(page)
   const layout = await page.evaluate(() => {
     const viewport = document.documentElement.clientHeight
@@ -216,6 +225,19 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
 })
 
 /**
+ * The Fixed Frame Rule has a width half that `expectNoScroll` does not cover: it
+ * measures each box against the viewport, so it would pass a drawer that squeezed
+ * the brief narrower without overflowing anything. Comparing the brief's own width
+ * across the open/close boundary is what actually pins "the drawer overlays, it
+ * does not reflow".
+ */
+async function briefWidth(page: Page) {
+  const box = await page.locator('.task-surface').boundingBox()
+  expect(box).not.toBeNull()
+  return Math.round(box?.width ?? 0)
+}
+
+/**
  * The fixed-frame rule is a claim about every phase, not just the one the surface
  * happens to open on, so this walks the whole demo timeline and re-checks both
  * axes after each phase change. It runs at 1280x720 and at 1920x720 — the
@@ -245,10 +267,14 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
 
   // Opening the drawer must not change the brief's width, and the confirmation
   // adds an action pair to the tallest phase in the flow.
+  const closedWidth = await briefWidth(page)
   await page.getByRole('button', { name: '打开演示控制' }).click()
+  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeVisible()
+  expect(await briefWidth(page)).toBe(closedWidth)
   await expectNoScroll(page)
   await page.keyboard.press('Escape')
   await expect(page.getByRole('dialog', { name: '演示控制' })).toBeHidden()
+  expect(await briefWidth(page)).toBe(closedWidth)
   await expectNoScroll(page)
 
   await page.getByRole('button', { name: '保存本次偏好' }).click()
