@@ -269,6 +269,20 @@ export class AgentGateway {
   }
 
   resetTask(taskId: string, input: ResetTaskRequest): AgentResponse {
+    // Reset is a demo-replay affordance: it rewinds a task to its initial state and
+    // reverts cabin settings and notification authorizations to get there. Against
+    // live providers that is a write to the real world in service of a rehearsal, so
+    // the operation is refused outright rather than made careful.
+    //
+    // First statement in the method, deliberately: ahead of the schema parse, the task
+    // lookup, the idempotency replay, every compensation branch, and
+    // resetSideEffectRuntimeTask. The refusal depends on nothing but this gateway's own
+    // mode, so nothing needs to happen before it — including reading the store, which
+    // is why the error carries no `latest` snapshot. A forbidden operation should not
+    // answer with task state.
+    if (this.#mode === 'live') {
+      throw new AgentGatewayError('POLICY_DENIED', 'Task reset is not available in live provider mode', false)
+    }
     const startedAt = performance.now()
     const request = resetTaskRequestSchema.parse(input)
     const current = this.#requireTask(taskId)
