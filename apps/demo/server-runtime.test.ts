@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { request } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import { createSideEffectRuntime, issueAutoNotifyAuthorization } from '@canvasflow/tools'
 import {
   createAgentServer,
+  resolveStaticPath,
   createConfiguredAgentRuntime,
   createE2eProviderFactory,
   CANVASFLOW_E2E,
@@ -184,5 +185,32 @@ describe('agent server runtime', () => {
     const response = await fetch(`http://127.0.0.1:${address.port}/`)
     expect(response.status).toBe(200)
     await expect(response.text()).resolves.toContain('CanvasFlow')
+  })
+})
+
+describe('resolveStaticPath', () => {
+  // The containment guard must hold for both path flavors regardless of the
+  // host the suite runs on, so each case injects an explicit implementation.
+  it('maps requests into the static directory on POSIX paths', () => {
+    expect(resolveStaticPath('/srv/site', '/assets/app.js', posix)).toBe('/srv/site/assets/app.js')
+    expect(resolveStaticPath('/srv/site', '/', posix)).toBe('/srv/site/index.html')
+  })
+
+  it('maps requests into the static directory on Windows paths', () => {
+    // Regression: resolve() yields backslash paths on Windows, and the previous
+    // hard-coded '/' prefix comparison rejected every one of them with a 404.
+    expect(resolveStaticPath('C:\\srv\\site', '/assets/app.js', win32)).toBe('C:\\srv\\site\\assets\\app.js')
+    expect(resolveStaticPath('C:\\srv\\site', '/', win32)).toBe('C:\\srv\\site\\index.html')
+  })
+
+  it('rejects paths that escape the static directory on both platforms', () => {
+    expect(resolveStaticPath('/srv/site', '../secret', posix)).toBeNull()
+    expect(resolveStaticPath('C:\\srv\\site', '..\\secret', win32)).toBeNull()
+    expect(resolveStaticPath('C:\\srv\\site', '../secret', win32)).toBeNull()
+  })
+
+  it('keeps sibling directories with a shared prefix out of bounds', () => {
+    expect(resolveStaticPath('/srv/site', '../site-secrets/key', posix)).toBeNull()
+    expect(resolveStaticPath('C:\\srv\\site', '..\\site-secrets\\key', win32)).toBeNull()
   })
 })
