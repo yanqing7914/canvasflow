@@ -79,6 +79,16 @@ export function isRecognitionSupported(): boolean {
   return recognitionCtor() !== undefined
 }
 
+/**
+ * Creates the browser's native recognition engine, or null when unsupported.
+ * Exposed so a caller composing its own `createRecognition` (e.g. swapping in a
+ * fixture engine for one turn) can still fall through to the real one.
+ */
+export function createBrowserRecognition(): SpeechRecognitionLike | null {
+  const Ctor = recognitionCtor()
+  return Ctor ? new Ctor() : null
+}
+
 /** True when this browser exposes speech synthesis. */
 export function isSynthesisSupported(): boolean {
   return typeof window !== 'undefined' && 'speechSynthesis' in window
@@ -127,10 +137,7 @@ function mapRecognitionError(
 export function createSpeechController(deps: SpeechControllerDeps = {}) {
   const lang = deps.lang ?? 'zh-CN'
   const handlers = deps.handlers ?? {}
-  const createRecognition = deps.createRecognition ?? (() => {
-    const Ctor = recognitionCtor()
-    return Ctor ? new Ctor() : null
-  })
+  const createRecognition = deps.createRecognition ?? createBrowserRecognition
   const getSynthesis = deps.getSynthesis ?? (() =>
     (typeof window !== 'undefined' && 'speechSynthesis' in window
       ? (window.speechSynthesis as unknown as SpeechSynthesisLike)

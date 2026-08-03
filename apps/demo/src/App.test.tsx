@@ -1247,4 +1247,183 @@ describe('demo integration', () => {
       expect(speech.engine().onresult).toBeNull()
     })
   })
+
+  describe('voice fixture replay', () => {
+    /** Fixture audio the test finishes by hand, standing in for a played WAV. */
+    function createFakeFixtureAudio() {
+      const instances: Array<{
+        url: string
+        played: number
+        onended: (() => void) | null
+        onerror: (() => void) | null
+        play: () => Promise<void>
+        pause: () => void
+      }> = []
+      const factory = (url: string) => {
+        const instance = {
+          url,
+          played: 0,
+          onended: null as (() => void) | null,
+          onerror: null as (() => void) | null,
+          play() { instance.played += 1; return Promise.resolve() },
+          pause() {},
+        }
+        instances.push(instance)
+        return instance
+      }
+      return {
+        factory,
+        current: () => {
+          const instance = instances.at(-1)
+          if (!instance) throw new Error('no fixture audio has been created yet')
+          return instance
+        },
+      }
+    }
+
+    const emit = (fn: () => void) => act(() => { fn() })
+    const flush = () => act(async () => {})
+
+    it('replays a recorded sample as a normal voice turn, confirmation included', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const audio = createFakeFixtureAudio()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} fixtureAudio={audio.factory} />)
+
+      const drawer = await openControls(user)
+      expect(drawer).toHaveTextContent('语音兜底回放')
+      await user.click(screen.getByRole('button', { name: '补充航班号' }))
+      await flush()
+
+      // The stage is back and the recording is playing into a listening turn.
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+      expect(audio.current().played).toBe(1)
+      expect(screen.getByRole('button', { name: '停止语音输入' })).toBeInTheDocument()
+
+      // The recording ends; its canonical transcript waits in the field like
+      // any other turn's words. Nothing has been submitted.
+      emit(() => audio.current().onended?.())
+      expect(screen.getByLabelText('任务输入')).toHaveValue('航班 MU5102')
+      expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('已转写，确认或编辑后发送。')
+      expect(create).not.toHaveBeenCalled()
+
+      // 发送 confirms it with the sample's recorded source and confidence.
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+      expect(create).toHaveBeenCalledWith('航班 MU5102', {
+        vehicleContext: expect.anything(),
+        source: 'voice',
+        confidence: 0.98,
+      })
+
+      // The armed sample was consumed: the next press listens for real again.
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      expect(speech.engines.length).toBeGreaterThan(0)
+    })
+
+    it('holds the noisy sample at the confirmation step instead of auto-submitting', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const audio = createFakeFixtureAudio()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} fixtureAudio={audio.factory} />)
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: '嘈杂样本（需确认）' }))
+      await flush()
+      emit(() => audio.current().onended?.())
+
+      // fixtures/airport-pickup/voice/transcripts.json marks this sample
+      // `requiresConfirmation`; the turn must stop here until 发送.
+      expect(screen.getByRole('button', { name: '放弃这次语音输入' })).toBeInTheDocument()
+      expect(create).not.toHaveBeenCalled()
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+      expect(create).toHaveBeenCalledWith('我现在要去机场接妈妈和豆豆', {
+        vehicleContext: expect.anything(),
+        source: 'voice',
+        confidence: 0.51,
+      })
+    })
+
+    it('still plays and parks the transcript when there is no speech engine at all', async () => {
+      const user = userEvent.setup()
+      const audio = createFakeFixtureAudio()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      // No `speech` prop: jsdom exposes no Web Speech API, the very situation
+      // the offline fallback exists for.
+      render(<App api={api} fixtureAudio={audio.factory} />)
+      expect(screen.getByRole('button', { name: '语音入口暂不可用' })).toBeDisabled()
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: '补充航班号' }))
+
+      // The recording still plays for the audience; the transcript is parked in
+      // the text field, and only 发送 moves it on.
+      expect(audio.current().played).toBe(1)
+      const input = screen.getByLabelText('任务输入')
+      expect(input).toHaveValue('航班 MU5102')
+      expect(create).not.toHaveBeenCalled()
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+      // Without a recognition turn there is no honest voice meta to claim.
+      expect(create).toHaveBeenCalledWith('航班 MU5102', { vehicleContext: expect.anything() })
+    })
+
+    it('refuses to replay over an unsent draft the driver typed', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const audio = createFakeFixtureAudio()
+      const create = vi.fn()
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} fixtureAudio={audio.factory} />)
+
+      // The driver opens the keyboard and starts writing their own request.
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      await user.clear(screen.getByLabelText('任务输入'))
+      await user.type(screen.getByLabelText('任务输入'), '先去公司拿电脑')
+
+      // Those words are theirs; replay must not silently replace them.
+      let drawer = await openControls(user)
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
+      expect(drawer).toHaveTextContent('输入框里还有未发送的内容')
+      await user.keyboard('{Escape}')
+
+      // Clearing the field by hand releases it, and replay is available again.
+      await user.clear(screen.getByLabelText('任务输入'))
+      drawer = await openControls(user)
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeEnabled()
+      expect(create).not.toHaveBeenCalled()
+    })
+
+    it('will not let a second replay overwrite a parked, unconfirmed transcript', async () => {
+      const user = userEvent.setup()
+      const audio = createFakeFixtureAudio()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      // Degraded path: no speech engine, so the transcript parks in the field.
+      render(<App api={api} fixtureAudio={audio.factory} />)
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: '补充航班号' }))
+      expect(screen.getByLabelText('任务输入')).toHaveValue('航班 MU5102')
+
+      // The parked words are unconfirmed; another sample may not clobber them.
+      await openControls(user)
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
+      await user.keyboard('{Escape}')
+
+      // Sending them releases the field, and replay opens up again.
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+      await openControls(user)
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeEnabled()
+    })
+  })
 })

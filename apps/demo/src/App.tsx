@@ -14,11 +14,19 @@ import type {
   VehicleContext,
 } from '@canvasflow/schema'
 import type { SpeechControllerDeps } from '@canvasflow/voice'
+import { createBrowserRecognition, isRecognitionSupported, isSecureContextOk } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
+import {
+  createFixtureRecognition,
+  playFixtureSampleAudio,
+  voiceFixtureSamples,
+  type FixtureAudioFactory,
+  type VoiceFixtureSample,
+} from './voice/fixtureSpeech'
 
 const defaultClient = new AgentApiClient('/v1')
 type DemoAgentApi = Pick<AgentApiClient, 'create' | 'event' | 'action' | 'confirmation'>
@@ -113,6 +121,7 @@ export default function App({
   initialVehicleContext = defaultDemoVehicleContext,
   voiceEnabled = true,
   speech,
+  fixtureAudio,
 }: {
   api?: DemoAgentApi
   initialTask?: AirportPickupTaskState
@@ -122,6 +131,8 @@ export default function App({
   voiceEnabled?: boolean
   /** Test seam for injecting fake Web Speech engines. */
   speech?: SpeechControllerDeps
+  /** Test seam for the fixture replay's audio element. */
+  fixtureAudio?: FixtureAudioFactory
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
   const [response, setResponse] = useState<AgentResponse>()
@@ -143,6 +154,10 @@ export default function App({
   const [localTask, setLocalTask] = useState<AirportPickupTaskState | undefined>(
     localOnly ? (initialTask ?? mainFlowTimeline.initialTaskState) : undefined,
   )
+  // True while the field holds words someone could lose: the driver's own
+  // typing, or a transcript parked for confirmation/retry. The pristine
+  // placeholder suggestion is not protected — nobody authored it this turn.
+  const [draftProtected, setDraftProtected] = useState(false)
   // Fixture-only injection is used by unit tests; the shipped demo leaves these props unset.
   const task = response?.task ?? localTask
   const localSpec = useMemo(() => task ? composePickupSpec(task, {
@@ -213,6 +228,7 @@ export default function App({
       if (!created) return { sent: false }
       setStepIndex(1)
       setText('')
+      setDraftProtected(false)
       return { sent: true, speak: spokenReply(created) }
     }
     if (!response) {
@@ -223,6 +239,7 @@ export default function App({
         timestamp: new Date().toISOString(),
       }, demoRuntime.preferences) : current)
       setText('')
+      setDraftProtected(false)
       return { sent: true }
     }
     const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
@@ -230,6 +247,7 @@ export default function App({
     if (!next) return { sent: false }
     if (nextTimelineIndex !== undefined) setStepIndex(nextTimelineIndex)
     setText('')
+    setDraftProtected(false)
     return { sent: true, speak: spokenReply(next) }
   }
 
@@ -240,15 +258,42 @@ export default function App({
     // to stay on screen for that, otherwise the words are parked out of sight.
     if (!outcome.sent) {
       setText(transcript)
+      setDraftProtected(true)
       setKeyboardRequested(true)
     }
     return outcome.speak
   }
 
+  // The next voice turn's engine. Arming a fixture sample makes exactly one
+  // turn read from the recording instead of the microphone; the turn after
+  // falls back to the real engine on its own.
+  const armedFixtureRef = useRef<VoiceFixtureSample | null>(null)
+  const fixtureAudioRef = useRef(fixtureAudio)
+  fixtureAudioRef.current = fixtureAudio
+
+  // Voice runs when the browser has a real engine or a test injected one; a
+  // browser with neither keeps today's disabled entry, and fixture replay
+  // degrades to the text path below. The deps object consults the armed ref on
+  // every turn, so replay needs no loop rebuild.
+  const voiceSpeech = useMemo<SpeechControllerDeps | undefined>(() => {
+    const createReal = speech?.createRecognition
+      ?? (isRecognitionSupported() && isSecureContextOk() ? createBrowserRecognition : undefined)
+    if (!createReal) return undefined
+    return {
+      ...speech,
+      createRecognition: () => {
+        const armed = armedFixtureRef.current
+        armedFixtureRef.current = null
+        if (armed) return createFixtureRecognition(armed, fixtureAudioRef.current ?? undefined)
+        return createReal()
+      },
+    }
+  }, [speech])
+
   const voice = useVoice({
     enabled: voiceEnabled,
     onTranscript: submitVoiceTranscript,
-    speech,
+    speech: voiceSpeech,
   })
   const voiceTranscript = voice.state === 'transcribing' ? voice.transcript : undefined
   // The microphone owns the turn while it is capturing or while a confirmed
@@ -260,10 +305,12 @@ export default function App({
   const textPathLocked = voice.state === 'listening' || voice.state === 'submitting'
 
   // A finished transcript lands in the same field the text path uses rather than
-  // in a second input: one place to read, one place to correct, one 发送.
+  // in a second input: one place to read, one place to correct, one 发送. Those
+  // words are the driver's — from here on the field is protected content.
   useEffect(() => {
     if (voiceTranscript === undefined) return
     setText(voiceTranscript)
+    setDraftProtected(true)
   }, [voiceTranscript])
 
   function submitText() {
@@ -289,6 +336,9 @@ export default function App({
 
   function changeText(value: string) {
     setText(value)
+    // Typing makes the words the driver's own; clearing the field by hand
+    // releases them again.
+    setDraftProtected(value.trim() !== '')
     // Editing a transcript is still the same turn; tell the machine so the
     // engine's confidence is dropped along with its guess.
     if (voice.state === 'transcribing') voice.edit(value)
@@ -306,6 +356,37 @@ export default function App({
     // driver may have opened earlier steps back out of the way.
     setKeyboardRequested(false)
     voice.press()
+  }
+
+  // Replay may not steal a turn that is mid-capture or mid-confirm, and it may
+  // not silently replace words someone could still lose — the driver's typing
+  // or a parked transcript stay until they are sent or cleared by hand.
+  const draftBlocksReplay = draftProtected && text.trim() !== ''
+  const voiceFixtureReady = !pending && !draftBlocksReplay
+    && (!voice.available || voice.state === 'idle' || voice.state === 'error' || voice.state === 'speaking')
+
+  /**
+   * The offline voice fallback (see fixtures/airport-pickup/voice): plays the
+   * recorded utterance and delivers its canonical transcript. With a live voice
+   * loop the sample runs as a normal turn — status line, confirmation, submit
+   * meta and TTS all identical to the microphone path. Without one, the audio
+   * still plays and the transcript parks in the text field, so the demo keeps
+   * its determinism even in a browser with no speech engine at all. Either way
+   * nothing auto-submits: every transcript waits for 发送.
+   */
+  function replayVoiceFixture(sample: VoiceFixtureSample) {
+    if (!voiceFixtureReady) return
+    closeControls()
+    if (voice.available) {
+      setKeyboardRequested(false)
+      armedFixtureRef.current = sample
+      voice.press()
+      return
+    }
+    playFixtureSampleAudio(sample, fixtureAudioRef.current ?? undefined)
+    setText(sample.text)
+    setDraftProtected(true)
+    setKeyboardRequested(true)
   }
 
   function advance() {
@@ -724,6 +805,29 @@ export default function App({
               <span>{advanceLabel}</span>
               <ArrowRightIcon size={24} />
             </button>
+
+            <div className="console-voice-fallback" role="group" aria-label="语音兜底回放">
+              <span className="console-voice-fallback__title">语音兜底回放</span>
+              <div className="console-voice-fallback__actions">
+                {voiceFixtureSamples.map((sample) => (
+                  <button
+                    key={sample.id}
+                    className="voice-fallback-button"
+                    type="button"
+                    disabled={!voiceFixtureReady}
+                    onClick={() => replayVoiceFixture(sample)}
+                  >
+                    {sample.label}
+                  </button>
+                ))}
+              </div>
+              <p className="console-hint">
+                {draftBlocksReplay
+                  ? '输入框里还有未发送的内容；先发送或清空它，回放才不会覆盖这些话。'
+                  : '播放预录语音并交付固定转写；转写始终停在输入框，需按「发送」确认后才会提交。'}
+              </p>
+            </div>
+
             <p className="console-hint">此面板仅用于演示，不会改变行程事实或跳过操作确认。</p>
           </aside>
         </>
