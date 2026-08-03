@@ -17,7 +17,9 @@ const commands = webCommand === 'preview'
     ]
 
 const children = commands.map(([name, args, env]) => {
-  const child = spawn(npm, args, { stdio: 'inherit', env })
+  // Windows resolves npm to npm.cmd, and Node refuses to spawn .cmd files
+  // without a shell (EINVAL) since the CVE-2024-27980 hardening.
+  const child = spawn(npm, args, { stdio: 'inherit', env, shell: process.platform === 'win32' })
   child.on('exit', (code, signal) => {
     if (stopping) return
     if (code !== 0 && signal === null) {

@@ -1,6 +1,6 @@
 import { createServer, type ServerResponse } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
-import { extname, join, normalize, resolve } from 'node:path'
+import { extname, join, normalize, resolve, sep } from 'node:path'
 import { AgentGateway } from '@canvasflow/agent'
 import { createAgentHttpHandler, type AgentHttpGateway } from '@canvasflow/agent/http'
 import { ModelGateway, modelAdapterOptionsFromEnvironment } from '@canvasflow/agent'
@@ -108,7 +108,9 @@ async function serveStatic(staticDirectory: string, url: string, response: Serve
   }
   const relative = normalize(pathname).replace(/^([/\\])+/, '')
   const requested = resolve(join(staticDirectory, relative || 'index.html'))
-  if (!requested.startsWith(`${staticDirectory}/`) && requested !== staticDirectory) {
+  // Compare with the platform separator: `resolve` yields backslash paths on
+  // Windows, so a hard-coded '/' prefix would reject every legitimate file.
+  if (!requested.startsWith(staticDirectory + sep) && requested !== staticDirectory) {
     response.writeHead(404).end()
     return
   }
