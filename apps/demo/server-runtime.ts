@@ -98,6 +98,33 @@ export function serverPort(environment: NodeJS.ProcessEnv = process.env): number
   return Number(environment.AGENT_PORT ?? 8787)
 }
 
+/** The slice of `node:path` the static resolver uses, injectable for tests. */
+export type StaticPathModule = {
+  normalize: (value: string) => string
+  join: (...segments: string[]) => string
+  resolve: (...segments: string[]) => string
+  sep: string
+}
+
+/**
+ * Maps a request pathname onto a file inside the static directory, or null when
+ * the path would escape it. The containment check compares with the module's
+ * own separator: `resolve` yields backslash paths on Windows, so a hard-coded
+ * '/' prefix would reject every legitimate file there. The path implementation
+ * is injectable so both the POSIX and the Windows behavior stay covered by
+ * tests regardless of the host the suite runs on.
+ */
+export function resolveStaticPath(
+  staticDirectory: string,
+  pathname: string,
+  pathModule: StaticPathModule = { normalize, join, resolve, sep },
+): string | null {
+  const relative = pathModule.normalize(pathname).replace(/^([/\\])+/, '')
+  const requested = pathModule.resolve(pathModule.join(staticDirectory, relative || 'index.html'))
+  if (!requested.startsWith(staticDirectory + pathModule.sep) && requested !== staticDirectory) return null
+  return requested
+}
+
 async function serveStatic(staticDirectory: string, url: string, response: ServerResponse) {
   let pathname: string
   try {
@@ -106,11 +133,8 @@ async function serveStatic(staticDirectory: string, url: string, response: Serve
     response.writeHead(400).end()
     return
   }
-  const relative = normalize(pathname).replace(/^([/\\])+/, '')
-  const requested = resolve(join(staticDirectory, relative || 'index.html'))
-  // Compare with the platform separator: `resolve` yields backslash paths on
-  // Windows, so a hard-coded '/' prefix would reject every legitimate file.
-  if (!requested.startsWith(staticDirectory + sep) && requested !== staticDirectory) {
+  const requested = resolveStaticPath(staticDirectory, pathname)
+  if (!requested) {
     response.writeHead(404).end()
     return
   }
