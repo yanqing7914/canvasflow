@@ -27,10 +27,11 @@ function createRequest(text = '接妈妈，航班 MU5102', clientRequestId = 'cr
   }
 }
 
-async function startServer(options: { bodyLimitBytes?: number; eventPollIntervalMs?: number; heartbeatIntervalMs?: number } = {}) {
+async function startServer(options: { bodyLimitBytes?: number; eventPollIntervalMs?: number; heartbeatIntervalMs?: number; mode?: 'fixture' | 'mock' | 'live' } = {}) {
   let id = 0
-  const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => `http-${String(++id).padStart(3, '0')}` })
-  const server = createAgentHttpServer(gateway, { ...options, createRequestId: () => 'generated-http-request' })
+  const { mode, ...serverOptions } = options
+  const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => `http-${String(++id).padStart(3, '0')}`, ...(mode ? { mode } : {}) })
+  const server = createAgentHttpServer(gateway, { ...serverOptions, createRequestId: () => 'generated-http-request' })
   servers.push(server)
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const address = server.address() as AddressInfo
@@ -171,6 +172,22 @@ describe('Agent HTTP API', () => {
     expect(createRetry.status).toBe(200)
     expect(createRetry.headers.get('location')).toBeNull()
     expect(await createRetry.json()).toMatchObject({ task: created.task, ui: created.ui })
+  })
+
+  // `/reset` has exactly one route branch (`http.ts`, `operation === 'reset'`) and it calls
+  // `gateway.resetTask` — there is no second reset path to guard separately. This asserts
+  // the Gateway refusal survives the trip out through HTTP, and pins the status it maps to.
+  it('rejects a reset over HTTP in live provider mode', async () => {
+    const { baseUrl } = await startServer({ mode: 'live' })
+
+    const response = await post(baseUrl, '/v1/tasks/any-task/reset', {
+      clientRequestId: 'live-reset-001', expectedTaskRevision: 0,
+    })
+
+    expect(response.status).toBe(403)
+    const body = await response.json() as AgentErrorResponse
+    expect(body).toMatchObject({ requestId: 'live-reset-001', error: { code: 'POLICY_DENIED', retryable: false } })
+    expect(body.latest).toBeUndefined()
   })
 
   it('returns one error shape for invalid requests, missing tasks, and revision conflicts', async () => {

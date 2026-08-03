@@ -1414,6 +1414,102 @@ describe('AgentGateway', () => {
     expect(runtime.cabinCurrent.temperatureC).toBe(22)
   })
 
+  // The live-mode counterpart of the test above: the same armed task, the same reset
+  // call, and the cabin revert that reset would otherwise perform must not happen.
+  //
+  // Live mode fails every fixture provider by design (`enforceGatewayProviderMode`), so a
+  // live gateway cannot drive a task into an armed state by itself. The task is therefore
+  // armed through a fixture gateway and the reset is issued by a live gateway sharing that
+  // store and side-effect runtime — one store, one vehicle, two gateway configurations.
+  it('refuses to reset a task in live provider mode and reverts nothing', () => {
+    const runtime = createSideEffectRuntime()
+    const store = new MemoryTaskStore()
+    const base = createProviderRegistry(runtime)
+    const revertCabin = vi.fn(base['vehicle.revert-cabin-profile'])
+    const providers = { ...base, 'vehicle.revert-cabin-profile': revertCabin }
+    const fixtureGateway = new AgentGateway({
+      store, now: () => now, createId: () => '001', runtime, providers,
+    })
+    const liveGateway = new AgentGateway({
+      store, now: () => now, createId: () => '001', runtime, mode: 'live', providers,
+    })
+    const returning = returningTask(fixtureGateway)
+    const appliedCabinTemperature = runtime.cabinCurrent.temperatureC
+    expect(appliedCabinTemperature).not.toBe(22)
+
+    expect(() => liveGateway.resetTask(returning.task.taskId, {
+      clientRequestId: 'live-reset', expectedTaskRevision: returning.task.taskRevision,
+    })).toThrowError(AgentGatewayError)
+
+    try {
+      liveGateway.resetTask(returning.task.taskId, {
+        clientRequestId: 'live-reset', expectedTaskRevision: returning.task.taskRevision,
+      })
+      expect.unreachable('live mode must refuse a reset')
+    } catch (error) {
+      // No `latest`: a refused operation does not hand back task state.
+      expect(error).toMatchObject({ code: 'POLICY_DENIED', retryable: false, latest: undefined })
+    }
+
+    // Nothing ran. The compensation the fixture-mode reset performs is not attempted, the
+    // cabin the task applied is left exactly as the task left it, and the stored task is
+    // untouched — including its revision, so no write reached the store.
+    expect(revertCabin).not.toHaveBeenCalled()
+    expect(runtime.cabinCurrent.temperatureC).toBe(appliedCabinTemperature)
+    expect(fixtureGateway.getTask(returning.task.taskId).task).toEqual(returning.task)
+
+    // And the same store still resets through a gateway that is allowed to: the refusal is
+    // about the mode, not about this task having become un-resettable.
+    const reset = fixtureGateway.resetTask(returning.task.taskId, {
+      clientRequestId: 'fixture-reset', expectedTaskRevision: returning.task.taskRevision,
+    })
+    expect(revertCabin).toHaveBeenCalledTimes(1)
+    expect(reset.task.phase).toBe('collecting-information')
+    expect(runtime.cabinCurrent.temperatureC).toBe(22)
+  })
+
+  // Ordering, stated as behaviour rather than as a comment: the refusal is reached before
+  // the schema parse and before the task lookup, so neither an unknown task nor an invalid
+  // body can produce anything other than the refusal. Anything that ran ahead of the guard
+  // would surface here as TASK_NOT_FOUND or a ZodError instead.
+  it('refuses a live-mode reset ahead of request validation and task lookup', () => {
+    const runtime = createSideEffectRuntime()
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      mode: 'live', providers: createProviderRegistry(runtime),
+    })
+
+    try {
+      gateway.resetTask('task-that-does-not-exist', { clientRequestId: 'live-reset-unknown', expectedTaskRevision: 0 })
+      expect.unreachable('live mode must refuse a reset')
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'POLICY_DENIED' })
+    }
+
+    try {
+      gateway.resetTask('task-that-does-not-exist', {} as never)
+      expect.unreachable('live mode must refuse a reset')
+    } catch (error) {
+      expect(error).toBeInstanceOf(AgentGatewayError)
+      expect(error).toMatchObject({ code: 'POLICY_DENIED' })
+    }
+  })
+
+  it('still resets a task in mock provider mode', () => {
+    const runtime = createSideEffectRuntime()
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => '001', runtime,
+      mode: 'mock', providers: createProviderRegistry(runtime, 'mock'),
+    })
+    const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
+
+    const reset = gateway.resetTask(created.task.taskId, {
+      clientRequestId: 'mock-reset', expectedTaskRevision: created.task.taskRevision,
+    })
+
+    expect(reset.task.phase).toBe('collecting-information')
+  })
+
   it.each(['cancel', 'arrival', 'flight cancellation'] as const)(
     'accepts %s while moving and finishes the deferred cabin cleanup after parking',
     (operation) => {
