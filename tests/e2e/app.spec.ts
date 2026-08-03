@@ -387,6 +387,68 @@ test('falls back to text when the browser has no speech recognition', async ({ p
   await readControls(page, 'collecting-information')
 })
 
+test('replays the offline voice fixtures through the editable Agent input path', async ({ page }) => {
+  await page.goto('/')
+
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  const drawer = page.getByRole('dialog', { name: '演示控制' })
+  await expect(drawer.getByRole('heading', { name: '语音 Fixture' })).toBeVisible()
+  await expect(drawer.getByLabel('播放标准任务语音样本')).toHaveAttribute(
+    'src',
+    /create-airport-pickup-.*\.wav$/,
+  )
+
+  const createResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/v1/tasks'
+  ))
+  await drawer.getByRole('button', { name: '载入标准任务转写' }).click()
+  await expect(drawer).toBeHidden()
+  await expect(page.getByLabel('任务输入')).toHaveValue('我现在要去机场接妈妈和豆豆')
+  await page.getByRole('button', { name: '发送' }).click()
+  const createResponse = await createResponsePromise
+  const createRequest = createResponse.request().postDataJSON()
+  expect(createRequest.input).toMatchObject({
+    type: 'text',
+    text: '我现在要去机场接妈妈和豆豆',
+    source: 'voice',
+    confidence: 0.96,
+  })
+
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await page.getByRole('button', { name: '载入补充航班号转写' }).click()
+  await expect(page.getByLabel('任务输入')).toHaveValue('航班 MU5102')
+  const flightResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/events$/.test(new URL(response.url()).pathname)
+  ))
+  await page.getByRole('button', { name: '发送' }).click()
+  const flightRequest = (await flightResponsePromise).request().postDataJSON()
+  expect(flightRequest.event).toMatchObject({ type: 'user.input', text: '航班 MU5102' })
+  await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
+
+  await page.reload()
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await page.getByRole('button', { name: '载入车内噪声转写' }).click()
+  const composer = page.getByRole('form', { name: 'Agent input' })
+  await expect(composer).toContainText('噪声样本置信度 51%，请核对转写后再发送。')
+  const noisyInput = page.getByLabel('任务输入')
+  await noisyInput.fill('去机场接妈妈')
+
+  const noisyResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/v1/tasks'
+  ))
+  await page.getByRole('button', { name: '发送' }).click()
+  const noisyRequest = (await noisyResponsePromise).request().postDataJSON()
+  expect(noisyRequest.input).toMatchObject({
+    type: 'text',
+    text: '去机场接妈妈',
+    source: 'voice',
+  })
+  expect(noisyRequest.input).not.toHaveProperty('confidence')
+})
+
 test('applies an out-of-band task update through the durable SSE stream', async ({ page }) => {
   await page.goto('/')
   const createResponsePromise = page.waitForResponse((response) => (

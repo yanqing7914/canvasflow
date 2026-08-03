@@ -13,7 +13,9 @@ This checklist tracks the demo voice path separately from production speech serv
 - [x] Schema-validated fixed transcripts with confidence and confirmation metadata.
 - [x] Demo controls for playing WAV files and loading their fixed transcripts without Web Speech.
 - [x] Low-confidence fixture warning before submission.
-- [ ] Manual acceptance in Chrome: microphone permission, Mandarin recognition, TTS, barge-in, and all three WAV fixtures.
+- [x] Chromium E2E for all three WAV fixtures, voice source/confidence metadata, and confidence removal after editing.
+- [ ] Manual acceptance in Chrome: microphone permission, Mandarin recognition, TTS, and barge-in.
+- [ ] Listen to all three WAV fixtures on the presentation machine and confirm audio routing/volume.
 - [ ] Capture a short voice happy-path recording and a noisy fallback recording for the release PR.
 
 ## Production follow-up
