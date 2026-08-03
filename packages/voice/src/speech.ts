@@ -123,7 +123,10 @@ function mapRecognitionError(
 /**
  * Drives the real browser peripherals for the voice loop.
  *
- * Two generation guards, both carried over from the cockpit-agent controller:
+ * Two generation guards. The recognition one is carried over from the
+ * cockpit-agent hands-free controller, identifiers included; the playback one
+ * applies the same technique, which upstream keeps in its TTS queue rather than
+ * in the controller. See THIRD-PARTY-NOTICES.md for the exact comparison.
  *
  * - `asrGen` — every `startListening()` takes a new generation, and every
  *   recognition callback drops out unless it still owns the current one. A late

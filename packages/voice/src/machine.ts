@@ -44,7 +44,9 @@ const DEFAULT_SUBMIT_MAX_MS = 15_000
  * timers of its own, no task knowledge. Everything observable happens through
  * injected effects, which is what makes the whole loop testable in Node.
  *
- * Modeled on the cockpit-agent voice FSM, reduced to the P0 states.
+ * Modeled on the cockpit-agent voice FSM, reduced to the P0 states. The states
+ * and transitions are this project's own; see THIRD-PARTY-NOTICES.md for what
+ * was and was not taken.
  */
 export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
   const effects = deps.effects ?? {}
