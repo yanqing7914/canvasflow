@@ -992,6 +992,105 @@ a:focus-visible {
   background: var(--blue);
 }
 
+/* ---------------------------------------------------------------------------
+   Offline route sketch
+   A quiet roadbook drawing, not a map: fine lines on the brief's own white, one
+   blue for the active route and the vehicle, no basemap, no tiles, no grid. It
+   stays a supporting band — the ETA above it remains the largest thing in the
+   card — and it sits in the same region the activity stroke used to occupy.
+   --------------------------------------------------------------------------- */
+.ui-navigation-brief__route-rule.ui-route-sketch {
+  display: block;
+  width: min(100%, 480px);
+  min-height: 0;
+}
+
+/* The view box aspect is fixed, so height follows width and the drawing scales
+   uniformly with its column instead of distorting strokes and marker dots. */
+.ui-route-sketch__canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.ui-route-sketch__line {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ui-route-sketch__marker {
+  fill: #ffffff;
+  stroke: var(--blue);
+  stroke-width: 2.5;
+}
+
+/* Start filled, vias small and hollow, destination ringed: the three roles stay
+   distinguishable without colour doing the work, and the stop names below name
+   them in order for anyone the drawing does not reach. */
+.ui-route-sketch__marker[data-role="origin"] { fill: var(--blue); }
+
+.ui-route-sketch__marker[data-role="via"] { stroke-width: 2; }
+
+.ui-route-sketch__marker[data-role="destination"] { stroke-width: 3; }
+
+.ui-route-sketch__vehicle {
+  /* One short move between two authored positions when a new spec arrives.
+     Nothing loops, nothing self-advances; `prefers-reduced-motion: reduce` is
+     handled globally at the end of this file and lands the marker directly. */
+  transition: transform 200ms ease-out;
+}
+
+.ui-route-sketch__vehicle-halo {
+  fill: #ffffff;
+  stroke: var(--blue-pale);
+  stroke-width: 2;
+}
+
+.ui-route-sketch__vehicle-dot { fill: var(--blue); }
+
+/* Stop names on one side, the staged progress figure on the other: one caption
+   row for the drawing instead of a stack of supporting lines, so the band stays
+   shorter than the ETA it sits under. */
+.ui-route-sketch__caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 18px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.ui-route-sketch__stops {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 18px;
+}
+
+/* Spacing alone separates the stops: a generated arrow would be one more thing
+   for a screen reader to read out for no information. */
+.ui-route-sketch__stop[data-role="destination"] { color: var(--ink); }
+
+.ui-route-sketch__progress { font-variant-numeric: tabular-nums; }
+
+/* Sharing the frame with other briefs, the drawing is the first thing to go.
+   The desktop navigation card is a three-column band — header over route region,
+   then ETA, then facts — so the sketch lands in a column whose whole height
+   budget is the ETA beside it, and at 1920x720 the stack has no 45px to spare.
+   Compressing supporting information before breaking the hierarchy means the
+   card keeps every fact and simply stops drawing; the sketch returns as soon as
+   the navigation brief owns the frame. */
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__route-rule.ui-route-sketch {
+  display: none;
+}
+
 .ui-card--navigation-summary .ui-route-facts {
   width: min(100%, 760px);
   margin-top: clamp(28px, 4vh, 46px);
@@ -1000,6 +1099,12 @@ a:focus-visible {
 }
 
 .ui-card--navigation-summary .ui-metric { border-left: 0; }
+
+/* The drawing already separates the ETA from the facts, so the gap below it is
+   smaller than the one a bare stroke needed. */
+.ui-route-sketch + .ui-route-facts {
+  margin-top: clamp(20px, 3vh, 34px);
+}
 
 .ui-card--navigation-summary .ui-metric + .ui-metric { border-left: 1px solid var(--rule); }
 
@@ -1374,6 +1479,15 @@ a:focus-visible {
 .ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary .ui-navigation-brief__route-rule {
   margin-top: 18px;
 }
+
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary
+  .ui-route-sketch + .ui-route-facts {
+  margin-top: clamp(20px, 3vh, 34px);
+}
+
+/* Minimal density is a glance, not a read: the drawing and its stop names go,
+   the same way every other supporting band does. */
+.ui-spec-renderer[data-density="minimal"] .ui-navigation-brief__route-rule.ui-route-sketch { display: none; }
 
 .ui-spec-renderer[data-priority="high"] .ui-card:first-child::before { background: var(--amber); }
 

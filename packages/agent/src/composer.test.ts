@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { AirportPickupTaskState } from '@canvasflow/schema'
 import { memberPreferences } from '@canvasflow/tools'
 import { applyRequestPresentation, composeAgentSpec } from './composer'
 import { applyEvent, createInitialTask } from './index'
@@ -275,5 +276,91 @@ describe('Agent UISpec composer', () => {
       title: '接机任务已取消',
       components: [{ type: 'status-banner', props: { title: '接机任务已取消' } }],
     })
+  })
+})
+
+describe('Agent UISpec composer route sketch', () => {
+  const flight = {
+    flightNumber: 'MU5102',
+    status: 'in-air' as const,
+    scheduledArrival: '2026-07-22T20:30:00+08:00',
+    estimatedArrival: '2026-07-22T20:40:00+08:00',
+    terminal: 'T2',
+  }
+
+  function drivingTask(overrides: Partial<AirportPickupTaskState> = {}): AirportPickupTaskState {
+    return {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight,
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' as const },
+      ...overrides,
+    }
+  }
+
+  function sketchOf(spec: ReturnType<typeof composeAgentSpec>, componentId: string) {
+    const component = spec.components.find((candidate) => candidate.id === componentId)
+    if (component?.type !== 'navigation-summary') throw new Error(`没有导航卡片：${componentId}`)
+    return component.props.routeSketch
+  }
+
+  it('carries the planned route geometry while preparing, with no vehicle position yet', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const sketch = sketchOf(composeAgentSpec(task, reads.toolResults), 'navigation-plan')
+
+    expect(sketch?.waypoints.map((waypoint) => waypoint.name)).toEqual(['出发地', '虹桥机场 T2'])
+    expect(sketch?.polyline).toEqual(reads.route.polyline)
+    // Nothing has departed, so no checkpoint stages a position.
+    expect(sketch?.progress).toBeUndefined()
+  })
+
+  it('places the vehicle at the departure step once navigation is active', () => {
+    const sketch = sketchOf(composeAgentSpec(drivingTask()), 'navigation-summary')
+
+    expect(sketch?.progress).toBe(0.08)
+    expect(sketch?.polyline.length).toBeGreaterThan(1)
+  })
+
+  it('moves the vehicle further along once charging is under way on the supercharger route', () => {
+    const departed = sketchOf(composeAgentSpec(drivingTask()), 'navigation-summary')
+    const charging = sketchOf(composeAgentSpec(drivingTask({
+      navigation: { routeId: 'route-airport-via-charge-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:37:00+08:00', status: 'active' },
+      charging: { recommended: true, accepted: true, status: 'active' },
+    })), 'navigation-summary')
+
+    expect(charging?.waypoints.map((waypoint) => waypoint.name)).toEqual(['出发地', '虹桥枢纽超充站', '虹桥机场 T2'])
+    expect(charging?.progress).toBeGreaterThan(departed!.progress!)
+  })
+
+  it('redraws the sketch on the route the reroute actually selected', () => {
+    const direct = sketchOf(composeAgentSpec(drivingTask()), 'navigation-summary')
+    const bypass = sketchOf(composeAgentSpec(drivingTask({
+      navigation: { routeId: 'route-airport-bypass-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:35:00+08:00', status: 'active' },
+    })), 'navigation-summary')
+
+    expect(bypass?.waypoints.map((waypoint) => waypoint.name)).toContain('外环快速路')
+    expect(bypass?.polyline).not.toEqual(direct?.polyline)
+  })
+
+  it('keeps the navigation card whole when the active route has no sketch to draw', () => {
+    const spec = composeAgentSpec(drivingTask({
+      navigation: { routeId: 'route-does-not-exist', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+    }))
+
+    expect(sketchOf(spec, 'navigation-summary')).toBeUndefined()
+    expect(spec.components).toContainEqual(expect.objectContaining({
+      id: 'navigation-summary',
+      props: expect.objectContaining({ destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00' }),
+    }))
   })
 })

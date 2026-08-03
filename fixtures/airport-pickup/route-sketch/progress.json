@@ -1,0 +1,62 @@
+{
+  "id": "route-progress",
+  "version": "1.0",
+  "description": "Discrete simulated trip progress for the offline route sketch. Every value is authored here: the UI reads one checkpoint per rendered UISpec and never accumulates, animates, or times its own advance. 0 is the start of the sketch polyline, 1 the end. These are staged demo values, not measured positions.",
+  "matching": "Checkpoints are listed in trip order and matched against task state; the last matching entry wins, so a later, more specific stage overrides an earlier one. A task state that matches nothing has no progress at all, which the renderer shows as a route with no vehicle marker.",
+  "checkpoints": [
+    {
+      "id": "outbound-departed",
+      "progress": 0.08,
+      "when": { "phase": "driving-to-airport" },
+      "note": "Navigation just started; the marker sits near the origin."
+    },
+    {
+      "id": "outbound-charging-under-way",
+      "progress": 0.4,
+      "when": { "phase": "driving-to-airport", "chargingStatus": "active" },
+      "note": "Charging accepted while under way. Staged position only: it is not claimed to coincide with the charging stop on the supercharger route variant."
+    },
+    {
+      "id": "outbound-charged",
+      "progress": 0.52,
+      "when": { "phase": "driving-to-airport", "chargingStatus": "completed" },
+      "note": "Charging finished, airport leg resumed."
+    },
+    {
+      "id": "outbound-flight-landed",
+      "progress": 0.72,
+      "when": { "phase": "driving-to-airport", "flightStatus": "landed" },
+      "note": "Flight on the ground while still driving."
+    },
+    {
+      "id": "airport-approach",
+      "progress": 0.92,
+      "when": { "phase": "approaching-airport" },
+      "note": "Inside the airport geofence."
+    },
+    {
+      "id": "airport-parked",
+      "progress": 1,
+      "when": { "phase": "waiting-for-passengers" },
+      "note": "Parked at the pickup point: end of the outbound sketch."
+    },
+    {
+      "id": "return-departed",
+      "progress": 0.08,
+      "when": { "phase": "returning-home" },
+      "note": "Return route selected; the sketch is now the home route, so progress restarts near its origin."
+    },
+    {
+      "id": "return-cabin-ready",
+      "progress": 0.3,
+      "when": { "phase": "returning-home", "returnCabinApplied": true },
+      "note": "Rear cabin preferences applied on the way home."
+    },
+    {
+      "id": "home-arrived",
+      "progress": 1,
+      "when": { "phase": "completed" },
+      "note": "Home: end of the return sketch."
+    }
+  ]
+}

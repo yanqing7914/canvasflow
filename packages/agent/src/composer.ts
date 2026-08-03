@@ -1,5 +1,5 @@
 import { uiSpecSchema, type AirportPickupTaskState, type UISpec } from '@canvasflow/schema'
-import { memberPreferences, type MemberPreferenceRecord } from '@canvasflow/tools'
+import { memberPreferences, routeSketchFor, type MemberPreferenceRecord } from '@canvasflow/tools'
 import { canRetryLandingMessage } from './landing-message-retry'
 import type { ReadToolResults } from './orchestration'
 import type { StoredTask } from './store'
@@ -68,10 +68,11 @@ export function composeAgentSpec(
     const route = toolResults['navigation.plan-route'].data
     const charging = toolResults['charging.recommend'].data
     const vehicle = toolResults['vehicle.get-status'].data
+    const plannedSketch = routeSketchFor(task, route)
     density = 'compact'
     components = [
       { id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } },
-      { id: 'navigation-plan', type: 'navigation-summary', props: { routeId: route.routeId, destination: task.navigation?.destination ?? '虹桥机场 T2', eta: task.navigation?.eta ?? route.arrivalTime, distanceKm: route.distanceKm, estimatedBatteryAtArrival: route.estimatedBatteryAtArrival } },
+      { id: 'navigation-plan', type: 'navigation-summary', props: { routeId: route.routeId, destination: task.navigation?.destination ?? '虹桥机场 T2', eta: task.navigation?.eta ?? route.arrivalTime, distanceKm: route.distanceKm, estimatedBatteryAtArrival: route.estimatedBatteryAtArrival, ...(plannedSketch ? { routeSketch: plannedSketch } : {}) } },
       { id: 'charging-plan', type: 'charging-recommendation', props: { recommended: charging.recommended, reason: charging.reason, currentBatteryPercent: vehicle.batteryPercent, estimatedFinalBatteryPercent: charging.estimatedFinalBatteryPercent, suggestedDurationMinutes: charging.suggestedDurationMinutes, etaImpactMinutes: charging.etaImpactMinutes } },
     ]
   } else if (task.passengers.confirmedOnboard) {
@@ -196,7 +197,8 @@ export function composeAgentSpec(
     components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: true, reason: '完成往返后预计低于安全余量', currentBatteryPercent: 42, estimatedFinalBatteryPercent: 18, suggestedDurationMinutes: 10, etaImpactMinutes: 12 } }]
   } else if (task.navigation) {
     density = 'compact'
-    components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }]
+    const activeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
+    components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27, ...(activeSketch ? { routeSketch: activeSketch } : {}) } }]
   } else if (task.flight && task.flight.trusted === false) {
     components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '航班号已收到', message: '航班信息正在确认中。' } }]
   } else if (task.flight) {

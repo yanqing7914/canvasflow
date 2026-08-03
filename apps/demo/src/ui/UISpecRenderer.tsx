@@ -18,6 +18,7 @@ import {
   NavigationIcon,
   SeatIcon,
 } from './icons'
+import { ROUTE_SKETCH_VIEWBOX, buildRouteSketchDrawing } from './route-sketch'
 
 export type UISpecRendererProps = {
   spec: UISpec
@@ -264,6 +265,44 @@ function NavigationSummaryCard({ component }: { component: Extract<ComponentSpec
         <span className="ui-metric__label">预计到达</span>
         <time className="ui-navigation-eta" dateTime={props.eta}>{formatTime(props.eta)}</time>
       </section>
+      <RouteSketchBand destination={props.destination} sketch={props.routeSketch} />
+      <div className="ui-navigation-brief__facts ui-route-facts">
+        <Metric label="剩余里程" value={formatDistance(props.distanceKm)} />
+        <Metric label="到达电量" value={formatPercent(props.estimatedBatteryAtArrival)} />
+      </div>
+    </ComponentSurface>
+  )
+}
+
+/**
+ * The route region of the navigation card.
+ *
+ * With drawable geometry in the spec it is an offline sketch of the planned
+ * route: a fictional polyline, its named stops, and — only when the spec carries
+ * a progress value — a marker at that staged point along the drawing. Nothing
+ * here is live positioning, so the copy says 模拟行程进度 rather than claiming a
+ * current location, and the marker only ever moves when a new spec arrives with
+ * a different value.
+ *
+ * The stop names and the progress figure share one caption row, and the route
+ * summary in the spec is deliberately not drawn: the destination heading and the
+ * stop names already say where this route goes, and inside a fixed frame the ETA
+ * keeps the room a third line of prose would have taken.
+ *
+ * Without drawable geometry it stays the plain activity stroke the card has
+ * always shown, so a spec with no sketch — or one whose geometry cannot be drawn
+ * — loses the drawing and keeps every fact around it.
+ */
+function RouteSketchBand({
+  destination,
+  sketch,
+}: {
+  destination: string
+  sketch: Extract<ComponentSpec, { type: 'navigation-summary' }>['props']['routeSketch']
+}) {
+  const drawing = buildRouteSketchDrawing(sketch)
+  if (!drawing) {
+    return (
       <div
         className="ui-navigation-brief__route-rule"
         data-route-progress="unavailable"
@@ -273,11 +312,51 @@ function NavigationSummaryCard({ component }: { component: Extract<ComponentSpec
         <span className="ui-navigation-brief__route-line" />
         <span className="ui-navigation-brief__route-end" />
       </div>
-      <div className="ui-navigation-brief__facts ui-route-facts">
-        <Metric label="剩余里程" value={formatDistance(props.distanceKm)} />
-        <Metric label="到达电量" value={formatPercent(props.estimatedBatteryAtArrival)} />
-      </div>
-    </ComponentSurface>
+    )
+  }
+  return (
+    <div
+      className="ui-navigation-brief__route-rule ui-route-sketch"
+      data-route-progress={drawing.vehicle ? 'simulated' : 'route-only'}
+    >
+      <svg
+        className="ui-route-sketch__canvas"
+        viewBox={`0 0 ${ROUTE_SKETCH_VIEWBOX.width} ${ROUTE_SKETCH_VIEWBOX.height}`}
+        role="img"
+        aria-label={`前往${destination}的路线示意`}
+      >
+        <path className="ui-route-sketch__line" d={drawing.path} />
+        {drawing.markers.map((marker) => (
+          <circle
+            key={marker.key}
+            className="ui-route-sketch__marker"
+            data-role={marker.role}
+            cx={marker.x}
+            cy={marker.y}
+            r={marker.role === 'via' ? 4 : 5.5}
+          />
+        ))}
+        {drawing.vehicle && (
+          <g
+            className="ui-route-sketch__vehicle"
+            transform={`translate(${drawing.vehicle.x} ${drawing.vehicle.y})`}
+          >
+            <circle className="ui-route-sketch__vehicle-halo" r={9} />
+            <circle className="ui-route-sketch__vehicle-dot" r={4.5} />
+          </g>
+        )}
+      </svg>
+      <p className="ui-route-sketch__caption">
+        <span className="ui-route-sketch__stops">
+          {drawing.markers.map((marker) => (
+            <span key={marker.key} className="ui-route-sketch__stop" data-role={marker.role}>{marker.name}</span>
+          ))}
+        </span>
+        {drawing.progressPercent !== undefined && (
+          <span className="ui-route-sketch__progress">模拟行程进度 {drawing.progressPercent}%</span>
+        )}
+      </p>
+    </div>
   )
 }
 

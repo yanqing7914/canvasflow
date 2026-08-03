@@ -700,3 +700,158 @@ describe('UISpecRenderer', () => {
     expect(renderer.textContent).not.toContain('minimal')
   })
 })
+
+describe('UISpecRenderer offline route sketch', () => {
+  const viaCharge = {
+    summary: '经虹桥枢纽超充站前往机场',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', latitude: 31.23, longitude: 121.47 },
+      { id: 'station-hongqiao-01', name: '虹桥枢纽超充站', latitude: 31.21, longitude: 121.38 },
+      { id: 'destination-hongqiao-t2', name: '虹桥机场 T2', latitude: 31.198, longitude: 121.336 },
+    ],
+    polyline: [
+      { latitude: 31.23, longitude: 121.47 },
+      { latitude: 31.22, longitude: 121.43 },
+      { latitude: 31.21, longitude: 121.38 },
+      { latitude: 31.204, longitude: 121.355 },
+      { latitude: 31.198, longitude: 121.336 },
+    ],
+  }
+
+  const bypass = {
+    summary: '经外环快速路改线前往机场',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', latitude: 31.23, longitude: 121.47 },
+      { id: 'via-ring-road-01', name: '外环快速路', latitude: 31.215, longitude: 121.41 },
+      { id: 'destination-hongqiao-t2', name: '虹桥机场 T2', latitude: 31.198, longitude: 121.336 },
+    ],
+    polyline: [
+      { latitude: 31.23, longitude: 121.47 },
+      { latitude: 31.226, longitude: 121.455 },
+      { latitude: 31.215, longitude: 121.41 },
+      { latitude: 31.205, longitude: 121.36 },
+      { latitude: 31.198, longitude: 121.336 },
+    ],
+  }
+
+  function navigationSpec(routeSketch?: unknown): UISpec {
+    return baseSpec({
+      presentation: { mode: 'replace', density: 'compact', theme: 'dark', priority: 'normal' },
+      layout: { type: 'stack', gap: 'md', slots: { main: ['navigation'] } },
+      components: [{
+        id: 'navigation',
+        type: 'navigation-summary',
+        props: {
+          routeId: 'route-airport-via-charge-001',
+          destination: '虹桥机场 T2',
+          eta: '2026-07-22T20:37:00+08:00',
+          distanceKm: 38,
+          estimatedBatteryAtArrival: 55,
+          ...(routeSketch !== undefined ? { routeSketch } : {}),
+        },
+      } as ComponentSpec],
+    })
+  }
+
+  function renderer() {
+    return screen.getByRole('region', { name: 'Generated task interface' })
+  }
+
+  it('draws the route with its stops and names the sketch for what it is', () => {
+    render(<UISpecRenderer spec={navigationSpec(viaCharge)} onAction={vi.fn()} pending={false} />)
+
+    const svg = screen.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })
+    expect(svg.querySelector('.ui-route-sketch__line')).toHaveAttribute('d', expect.stringContaining('M'))
+    expect(svg.querySelectorAll('.ui-route-sketch__marker')).toHaveLength(3)
+    expect(svg.querySelector('.ui-route-sketch__marker[data-role="origin"]')).toBeInTheDocument()
+    expect(svg.querySelector('.ui-route-sketch__marker[data-role="via"]')).toBeInTheDocument()
+    expect(svg.querySelector('.ui-route-sketch__marker[data-role="destination"]')).toBeInTheDocument()
+    // The stops are named in text as well, so the drawing is never the only carrier.
+    expect(renderer().querySelector('.ui-route-sketch__stops')).toHaveTextContent('出发地虹桥枢纽超充站虹桥机场 T2')
+    // The route prose stays out of the card: the destination heading and the stop
+    // names already carry it, and the ETA keeps the room.
+    expect(renderer().textContent).not.toContain('经虹桥枢纽超充站前往机场')
+  })
+
+  it('shows the staged marker as simulated progress, never as a live position', () => {
+    render(<UISpecRenderer spec={navigationSpec({ ...viaCharge, progress: 0.4 })} onAction={vi.fn()} pending={false} />)
+
+    const band = renderer().querySelector('.ui-route-sketch')
+    expect(band).toHaveAttribute('data-route-progress', 'simulated')
+    expect(band!.querySelector('.ui-route-sketch__vehicle')).toBeInTheDocument()
+    expect(band!.querySelector('.ui-route-sketch__progress')).toHaveTextContent('模拟行程进度 40%')
+    expect(renderer().textContent).not.toContain('实时位置')
+    expect(renderer().textContent).not.toContain('正在此处')
+    expect(renderer().textContent).not.toContain('当前位置')
+  })
+
+  it('draws the route without a marker when no progress was authored', () => {
+    render(<UISpecRenderer spec={navigationSpec(viaCharge)} onAction={vi.fn()} pending={false} />)
+
+    const band = renderer().querySelector('.ui-route-sketch')
+    expect(band).toHaveAttribute('data-route-progress', 'route-only')
+    expect(band!.querySelector('.ui-route-sketch__vehicle')).not.toBeInTheDocument()
+    expect(band!.querySelector('.ui-route-sketch__progress')).not.toBeInTheDocument()
+  })
+
+  it('redraws the line and the stops when the route changes', () => {
+    const { rerender } = render(<UISpecRenderer spec={navigationSpec({ ...viaCharge, progress: 0.4 })} onAction={vi.fn()} pending={false} />)
+    const before = {
+      path: renderer().querySelector('.ui-route-sketch__line')!.getAttribute('d'),
+      vehicle: renderer().querySelector('.ui-route-sketch__vehicle')!.getAttribute('transform'),
+    }
+
+    rerender(<UISpecRenderer spec={navigationSpec({ ...bypass, progress: 0.52 })} onAction={vi.fn()} pending={false} />)
+
+    expect(renderer().querySelector('.ui-route-sketch__line')!.getAttribute('d')).not.toBe(before.path)
+    expect(renderer().querySelector('.ui-route-sketch__vehicle')!.getAttribute('transform')).not.toBe(before.vehicle)
+    expect(renderer().querySelector('.ui-route-sketch__stops')).toHaveTextContent('外环快速路')
+    expect(renderer().querySelector('.ui-route-sketch__progress')).toHaveTextContent('模拟行程进度 52%')
+  })
+
+  it('keeps every navigation fact when there is no geometry to draw', () => {
+    render(<UISpecRenderer spec={navigationSpec()} onAction={vi.fn()} pending={false} />)
+
+    expect(renderer().querySelector('.ui-route-sketch')).not.toBeInTheDocument()
+    expect(renderer().querySelector('.ui-navigation-brief__route-rule')).toHaveAttribute('data-route-progress', 'unavailable')
+    expect(renderer().querySelector('.ui-navigation-brief__destination')).toHaveTextContent('虹桥机场 T2')
+    expect(renderer().querySelector('.ui-navigation-eta')).toHaveTextContent('20:37')
+    expect(renderer().querySelector('.ui-route-facts')).toHaveTextContent('38')
+    expect(renderer().querySelector('.ui-route-facts')).toHaveTextContent('55')
+  })
+
+  it('survives unusable geometry with the card intact', () => {
+    const unusable: unknown[] = [
+      { ...viaCharge, polyline: [] },
+      { ...viaCharge, polyline: [{ latitude: 31.23, longitude: 121.47 }] },
+      { ...viaCharge, polyline: [{ latitude: 'north', longitude: 121.47 }, { latitude: 31.2, longitude: 121.4 }] },
+      { ...viaCharge, waypoints: [] },
+      { ...viaCharge, waypoints: [{ name: '', latitude: 31.23, longitude: 121.47 }] },
+      { ...viaCharge, progress: Number.NaN },
+      { ...viaCharge, progress: -1 },
+      { ...viaCharge, progress: 2 },
+      { ...viaCharge, progress: 'half' },
+      'not-a-sketch',
+      null,
+    ]
+
+    for (const routeSketch of unusable) {
+      const { unmount } = render(<UISpecRenderer spec={navigationSpec(routeSketch)} onAction={vi.fn()} pending={false} />)
+
+      // The drawing is what degrades; the destination and the ETA never do.
+      expect(renderer().querySelector('.ui-navigation-brief__destination')).toHaveTextContent('虹桥机场 T2')
+      expect(renderer().querySelector('.ui-navigation-eta')).toHaveTextContent('20:37')
+      expect(renderer().querySelector('.ui-route-sketch__vehicle')).not.toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('keeps route ids, fixture names, and prop names out of the sketch', () => {
+    render(<UISpecRenderer spec={navigationSpec({ ...viaCharge, progress: 0.4 })} onAction={vi.fn()} pending={false} />)
+
+    for (const internal of ['route-airport-via-charge-001', 'navigation-summary', 'routeSketch', 'route-progress', 'polyline', 'origin-demo', 'station-hongqiao-01', 'latitude']) {
+      expect(renderer().textContent).not.toContain(internal)
+    }
+    expect(renderer().querySelector('.ui-route-sketch')!.textContent).not.toContain('undefined')
+  })
+})
