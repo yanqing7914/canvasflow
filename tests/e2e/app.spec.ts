@@ -387,6 +387,33 @@ test('falls back to text when the browser has no speech recognition', async ({ p
   await readControls(page, 'collecting-information')
 })
 
+test('replays a fixture utterance deterministically from the demo drawer', async ({ page }) => {
+  await page.goto('/')
+
+  // The offline fallback must not depend on a speech service or on the audio
+  // actually playing: the drawer replay delivers the canonical transcript from
+  // fixtures/airport-pickup/voice either way, parked for confirmation.
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  const drawer = page.getByRole('dialog', { name: '演示控制' })
+  await expect(drawer).toContainText('语音兜底回放')
+  await page.getByRole('button', { name: '接机指令' }).click()
+  await expect(drawer).toBeHidden()
+
+  // Nothing auto-submits: the words wait in the field until 发送 confirms them.
+  // The recording may genuinely play first, so allow it time to finish.
+  const input = page.getByLabel('任务输入')
+  await expect(input).toHaveValue('我现在要去机场接妈妈和豆豆', { timeout: 15_000 })
+
+  const createResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/v1/tasks'
+  ))
+  await page.getByRole('button', { name: '发送' }).click()
+  const created = await (await createResponsePromise).json()
+  expect(created.task.phase).toBe('collecting-information')
+  await readControls(page, 'collecting-information')
+})
+
 test('applies an out-of-band task update through the durable SSE stream', async ({ page }) => {
   await page.goto('/')
   const createResponsePromise = page.waitForResponse((response) => (

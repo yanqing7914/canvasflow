@@ -1807,6 +1807,44 @@ a:focus-visible {
   line-height: 1.55;
 }
 
+.console-voice-fallback {
+  margin-top: 22px;
+  border-top: 1px solid var(--rule);
+  padding-top: 22px;
+}
+
+.console-voice-fallback__title {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.console-voice-fallback__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.voice-fallback-button {
+  min-height: 56px;
+  border: 1px solid #bac6d4;
+  border-radius: 12px;
+  padding: 0 16px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 600;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.voice-fallback-button:hover:not(:disabled) { background: #f5f8fb; }
+
+.voice-fallback-button:disabled {
+  border-color: var(--rule);
+  background: #f2f4f6;
+  color: var(--muted);
+}
+
 @keyframes phase-settle {
   from { opacity: 0.65; transform: translateY(7px); }
   to { opacity: 1; transform: translateY(0); }
