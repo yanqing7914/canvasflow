@@ -276,7 +276,6 @@ function NavigationSummaryCard({ component }: { component: Extract<ComponentSpec
       <div className="ui-navigation-brief__facts ui-route-facts">
         <Metric label="剩余里程" value={formatDistance(props.distanceKm)} />
         <Metric label="到达电量" value={formatPercent(props.estimatedBatteryAtArrival)} />
-        <Metric label="路线" value={props.routeId} className="ui-metric--route" />
       </div>
     </ComponentSurface>
   )
@@ -329,7 +328,9 @@ function MessagePreviewCard({ component }: { component: Extract<ComponentSpec, {
       {(props.scheduledAt || props.cancellable) && (
         <div className="ui-message-brief__detail ui-detail-row">
           {props.scheduledAt && <span>计划 {formatTime(props.scheduledAt)} 发送</span>}
-          {props.cancellable && <span>发送前可取消</span>}
+          {/* `cancellable` says the message is not committed yet — it does not say this screen
+              can take it back, and nothing here can. State the fact, promise nothing. */}
+          {props.cancellable && <span>尚未发出</span>}
         </div>
       )}
     </ComponentSurface>

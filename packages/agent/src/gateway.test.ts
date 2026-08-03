@@ -310,7 +310,9 @@ describe('AgentGateway', () => {
     })
 
     expect(created.task.charging.recommended).toBe(false)
-    expect(created.ui.presentation).toMatchObject({ density: 'full', theme: 'light' })
+    // Parked, so the vehicle context asks for nothing stricter than `full`; the composer has
+    // already declared `preparing` a `compact` brief, and density takes the stricter of the two.
+    expect(created.ui.presentation).toMatchObject({ density: 'compact', theme: 'light' })
     const moving = gateway.submitEvent(created.task.taskId, {
       clientRequestId: 'vehicle-moving', expectedTaskRevision: created.task.taskRevision,
       event: { eventId: 'vehicle-moving', type: 'vehicle.moving', speedKph: 80, timestamp: '2026-07-22T12:01:00+08:00' },
@@ -328,7 +330,9 @@ describe('AgentGateway', () => {
       clientRequestId: 'vehicle-parked', expectedTaskRevision: moving.task.taskRevision,
       event: { eventId: 'vehicle-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:02:00+08:00' },
     })
-    expect(parked.ui.presentation).toMatchObject({ density: 'full', theme: 'light' })
+    // Parking relaxes the speed-derived density back to `full`, but it cannot undo the
+    // composer's own `compact` judgement about how much this phase puts on the brief.
+    expect(parked.ui.presentation).toMatchObject({ density: 'compact', theme: 'light' })
     const started = gateway.submitAction(created.task.taskId, {
       clientRequestId: 'parked-navigation', expectedTaskRevision: parked.task.taskRevision,
       expectedUiRevision: parked.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',

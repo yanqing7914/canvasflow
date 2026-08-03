@@ -113,6 +113,11 @@ async function expectNoHorizontalOverflow(page: Page) {
  * rule can actually break — a clipped scroll container, or the brief's own box
  * extending past the fold.
  *
+ * The cards are measured alongside the containers because that is where clipping
+ * actually lands: `.ui-card` hides its own overflow, so a card starved of height by
+ * the stack's row allocation loses content while `.task-surface` and every other
+ * container still report zero.
+ *
  * Only asserted above the 680px breakpoint, where DESIGN.md deliberately allows a
  * phone-width brief to become a scrolling single-column flow.
  */
@@ -129,22 +134,26 @@ async function expectNoScroll(page: Page) {
   await expectNoHorizontalOverflow(page)
   const layout = await page.evaluate(() => {
     const viewport = document.documentElement.clientHeight
-    const measure = (selector: string) => {
-      const element = document.querySelector(selector)
-      if (!(element instanceof HTMLElement)) return null
-      return {
-        selector,
-        // Hidden overflow turns "too tall" into "clipped" rather than "scrollable".
-        clippedBy: element.scrollHeight - element.clientHeight,
-        // A box that ends below the fold is content the driver cannot reach at all.
-        pastFoldBy: Math.round(element.getBoundingClientRect().bottom) - viewport,
-      }
-    }
+    const measure = (selector: string) => [...document.querySelectorAll(selector)]
+      .map((element, index) => {
+        if (!(element instanceof HTMLElement)) return null
+        return {
+          selector: `${selector}[${index}]`,
+          // Hidden overflow turns "too tall" into "clipped" rather than "scrollable".
+          clippedBy: element.scrollHeight - element.clientHeight,
+          // A box that ends below the fold is content the driver cannot reach at all.
+          pastFoldBy: Math.round(element.getBoundingClientRect().bottom) - viewport,
+        }
+      })
+      .filter((box): box is NonNullable<typeof box> => box !== null)
     return {
       width: document.documentElement.clientWidth,
-      boxes: ['.demo-shell', '.cockpit-stage', '.task-surface', '.trip-brief__content']
-        .map(measure)
-        .filter((box): box is NonNullable<typeof box> => box !== null),
+      // The frame containers, and then the brief's own cards. `.ui-card` sets
+      // `overflow: hidden`, so a card squeezed by its neighbours loses its content
+      // mid-sentence while every container above it still measures as clean — the
+      // outer boxes alone cannot see that failure.
+      boxes: ['.demo-shell', '.cockpit-stage', '.task-surface', '.trip-brief__content', '.ui-slot', '.ui-component', '.ui-card']
+        .flatMap(measure),
     }
   })
   if (layout.width <= 680) return

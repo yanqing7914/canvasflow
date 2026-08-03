@@ -395,16 +395,31 @@ a:focus-visible {
   gap: 16px;
 }
 
+/* Each stacked card sits in its own content-floored row, and `align-content: stretch` shares
+   any leftover space between them. The slot used to declare a single `minmax(0, 1fr)` track:
+   rows 2..N fell into implicit `auto` tracks, took their natural height first, and the one
+   explicit track absorbed the entire remainder — so the first card was trimmed mid-sentence
+   for no reason other than its position. An even split only moves that trim onto whichever
+   card is tallest. A `min-content` floor instead keeps every card's content intact; when the
+   stack genuinely exceeds the slot the overflow is a single visible failure at the bottom of
+   the frame, which the layout tests catch. */
 .ui-layout--stack .ui-slot,
-.ui-layout--focus .ui-slot,
-.ui-spec-renderer[data-single-component="true"] .ui-slot {
-  grid-template-rows: minmax(0, 1fr);
+.ui-layout--focus .ui-slot {
+  grid-auto-rows: minmax(min-content, auto);
 }
 
 .ui-layout--stack .ui-component,
 .ui-layout--focus .ui-component,
 .ui-spec-renderer[data-single-component="true"] .ui-component {
   height: 100%;
+}
+
+/* `.ui-card` is a scroll container, so its automatic minimum size is zero and an `auto` row
+   would happily crush it. `min-content` asks the card what it actually needs. */
+.ui-layout--stack .ui-component,
+.ui-layout--focus .ui-component {
+  min-height: auto;
+  grid-template-rows: minmax(min-content, 1fr) auto;
 }
 
 .ui-spec-renderer[data-single-component="true"] .ui-slot {
@@ -1318,8 +1333,6 @@ a:focus-visible {
 
 .ui-spec-renderer[data-density="compact"] .ui-metric__value { font-size: clamp(25px, 2vw, 39px); }
 
-.ui-spec-renderer[data-density="compact"] .ui-metric--route { display: none; }
-
 /* A compact flight card still leads with its supplied arrival time. */
 .ui-spec-renderer[data-density="compact"] .ui-flight-brief__time {
   font-size: clamp(64px, 5.8vw, 94px) !important;
@@ -1336,7 +1349,6 @@ a:focus-visible {
 .ui-spec-renderer[data-density="minimal"] .ui-detail-row,
 .ui-spec-renderer[data-density="minimal"] .ui-card__summary,
 .ui-spec-renderer[data-density="minimal"] .ui-card__muted,
-.ui-spec-renderer[data-density="minimal"] .ui-metric--route,
 .ui-spec-renderer[data-density="minimal"] .ui-metric--comparison { display: none; }
 
 .ui-spec-renderer[data-density="minimal"] .ui-card__lead { margin-top: 16px; }
@@ -1366,6 +1378,295 @@ a:focus-visible {
 .ui-spec-renderer[data-priority="high"] .ui-card:first-child::before { background: var(--amber); }
 
 .ui-spec-renderer[data-priority="critical"] .ui-card:first-child::before { background: var(--red); }
+
+/* ---------------------------------------------------------------------------
+   Stacked briefs
+   Every card above is scaled for a brief that owns the whole frame: vh-based
+   band margins, a 108-146px ETA, a 60-108px arrival time. Two or three of them
+   in one 505px slot cannot all keep that spread, and the frame is fixed, so the
+   only honest lever is the editorial scale. Supporting facts compress first and
+   each card keeps its conclusion as the largest thing in its band, per DESIGN
+   "At 1024px and above, compress supporting facts before reducing the primary
+   conclusion". Nothing is dropped: every supplied fact still renders.
+   --------------------------------------------------------------------------- */
+.ui-spec-renderer[data-single-component="false"] .ui-card__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__source,
+.ui-spec-renderer[data-single-component="false"] .ui-charge-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-message-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-progress-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-pickup-brief__phase {
+  margin-bottom: 3px;
+  font-size: 15px;
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__title,
+.ui-spec-renderer[data-single-component="false"] .ui-charge-brief__title,
+.ui-spec-renderer[data-single-component="false"] .ui-message-brief__contact,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__title,
+.ui-spec-renderer[data-single-component="false"] .ui-progress-brief__title,
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__destination {
+  font-size: clamp(24px, 1.55vw, 31px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card--flight-status .ui-card__title,
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__number {
+  font-size: clamp(29px, 1.95vw, 38px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-metric__value,
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-eta,
+.ui-spec-renderer[data-single-component="false"] .ui-card--flight-status .ui-metric--hero .ui-metric__value {
+  font-size: clamp(23px, 1.55vw, 31px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-metric__label { font-size: 15px; }
+
+/* The one number each band is built around stays clearly ahead of its facts. */
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__time,
+.ui-spec-renderer[data-single-component="false"][data-density="compact"] .ui-flight-brief__time {
+  font-size: clamp(44px, 3.1vw, 60px) !important;
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-eta {
+  margin-top: 6px;
+  font-size: clamp(46px, 3.3vw, 64px);
+  line-height: 0.9;
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__lead--recommendation {
+  font-size: clamp(32px, 2.3vw, 44px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__lead {
+  font-size: clamp(34px, 2.6vw, 50px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-message-preview {
+  margin-top: clamp(14px, 2vh, 22px);
+  font-size: clamp(22px, 1.7vw, 32px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__lead {
+  margin-top: clamp(12px, 1.6vh, 20px);
+  font-size: clamp(28px, 2.2vw, 40px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__summary,
+.ui-spec-renderer[data-single-component="false"] .ui-card__body > p {
+  margin-top: 10px;
+  font-size: 17px;
+}
+
+/* Inter-band spacing was tuned for one card breathing into the whole slot. */
+.ui-spec-renderer[data-single-component="false"] .ui-route-facts,
+.ui-spec-renderer[data-single-component="false"] .ui-hero-metrics,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-grid,
+.ui-spec-renderer[data-single-component="false"] .ui-card--flight-status .ui-hero-metrics,
+.ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary .ui-route-facts,
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__facts,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__facts,
+.ui-spec-renderer[data-single-component="false"] .ui-battery-journey,
+.ui-spec-renderer[data-single-component="false"] .ui-callout,
+.ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__meeting-point {
+  margin-top: clamp(14px, 2vh, 22px);
+  padding-top: clamp(10px, 1.4vh, 16px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__arrival,
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-hero,
+.ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__status,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__state,
+.ui-spec-renderer[data-single-component="false"] .ui-card__lead--recommendation {
+  margin-top: clamp(12px, 1.8vh, 20px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__state {
+  padding-top: clamp(10px, 1.4vh, 16px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card--attention::before,
+.ui-spec-renderer[data-single-component="false"] .ui-card--settled::before {
+  margin-bottom: clamp(8px, 1.2vh, 14px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__status-line,
+.ui-spec-renderer[data-single-component="false"] .ui-detail-row,
+.ui-spec-renderer[data-single-component="false"] .ui-charge-brief__reason,
+.ui-spec-renderer[data-single-component="false"] .ui-message-brief__status,
+.ui-spec-renderer[data-single-component="false"] .ui-card--message-preview .ui-card__status-line {
+  margin-top: 10px;
+}
+
+/* At desktop widths a shared frame reads better as a row of bands than as a
+   column of tall cards. `flight-status` already resolves this way; the other
+   stackable briefs follow the same header / conclusion / facts anatomy. */
+@media (min-width: 1180px) {
+  .ui-spec-renderer[data-single-component="false"] .ui-card--flight-status {
+    grid-template-columns: minmax(180px, 0.7fr) auto minmax(320px, 1.25fr);
+    column-gap: clamp(26px, 2.6vw, 50px);
+    padding-block: clamp(4px, 0.8vh, 10px);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__arrival {
+    padding-inline: clamp(24px, 2.6vw, 48px);
+  }
+
+  /* The flight facts read as a band of parallel facts, not a tall side column. */
+  .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__facts {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-template-columns: none;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__facts .ui-metric + .ui-metric {
+    margin-top: 0;
+    padding-top: 0;
+    padding-left: clamp(12px, 1.3vw, 24px);
+    border-top: 0;
+    border-left: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(200px, 0.85fr) auto minmax(300px, 1.1fr);
+    grid-template-rows: auto auto;
+    column-gap: clamp(26px, 2.6vw, 50px);
+    row-gap: 8px;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__header {
+    grid-row: 1;
+    grid-column: 1;
+    align-self: end;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__route-rule {
+    grid-row: 2;
+    grid-column: 1;
+    align-self: start;
+    margin-top: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__eta {
+    grid-row: 1 / -1;
+    grid-column: 2;
+    margin-top: 0;
+    padding-inline: clamp(24px, 2.6vw, 48px);
+    border-inline: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__facts {
+    width: auto;
+    grid-row: 1 / -1;
+    grid-column: 3;
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--charging-recommendation {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(200px, 0.85fr) auto minmax(280px, 1fr);
+    grid-template-rows: auto auto auto;
+    column-gap: clamp(26px, 2.6vw, 50px);
+    row-gap: 8px;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--charging-recommendation::before {
+    grid-row: 1;
+    grid-column: 1;
+    align-self: start;
+    margin-bottom: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__header {
+    grid-row: 2;
+    grid-column: 1;
+    align-self: end;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__reason {
+    grid-row: 3;
+    grid-column: 1;
+    align-self: start;
+    max-width: 30ch;
+    margin-top: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__recommendation {
+    grid-row: 2 / -1;
+    grid-column: 2;
+    margin-top: 0;
+    padding-inline: clamp(24px, 2.6vw, 48px);
+    border-inline: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__battery {
+    grid-row: 2;
+    grid-column: 3;
+    align-self: end;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__detail {
+    grid-row: 3;
+    grid-column: 3;
+    align-self: start;
+    margin-top: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--passenger-status {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(200px, 1fr) auto auto;
+    column-gap: clamp(26px, 2.6vw, 50px);
+    padding-block: clamp(4px, 0.8vh, 10px);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__header { grid-column: 1; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__status,
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__meeting-point {
+    margin-top: 0;
+    padding-top: 0;
+    padding-inline-start: clamp(24px, 2.6vw, 48px);
+    border-top: 0;
+    border-inline-start: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__status { grid-column: 2; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__meeting-point { grid-column: 3; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--cabin-profile {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(200px, 0.9fr) minmax(0, 1.1fr) auto;
+    column-gap: clamp(26px, 2.6vw, 50px);
+    padding-block: clamp(4px, 0.8vh, 10px);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__header { grid-column: 1; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__facts,
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__state {
+    margin-top: 0;
+    padding-top: 0;
+    padding-inline-start: clamp(24px, 2.6vw, 48px);
+    border-top: 0;
+    border-inline-start: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__facts { grid-column: 2; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__state { grid-column: 3; }
+}
 
 .drawer-scrim {
   position: fixed;

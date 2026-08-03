@@ -217,13 +217,21 @@ export function composeAgentSpec(
   })
 }
 
+const densityRank: Record<UISpec['presentation']['density'], number> = { full: 0, compact: 1, minimal: 2 }
+
 export function applyRequestPresentation(ui: UISpec, context: StoredTask['requestContext']): UISpec {
   if (!context) return ui
-  const density: UISpec['presentation']['density'] = context.vehicle.speedKph > 60
+  const fromSpeed: UISpec['presentation']['density'] = context.vehicle.speedKph > 60
     ? 'minimal'
     : context.vehicle.speedKph > 0
       ? 'compact'
       : 'full'
+  // Two independent claims about how much reading this screen can carry: the composer
+  // knows how much content the phase puts on the brief, the vehicle context knows what
+  // the cabin can afford. Neither is allowed to loosen the other, so the stricter one
+  // wins. Letting speed replace the composer's answer meant a parked car re-expanded a
+  // brief the composer had already declared too full for `full` density.
+  const density = densityRank[fromSpeed] >= densityRank[ui.presentation.density] ? fromSpeed : ui.presentation.density
   const maxComponents = density === 'minimal' ? 2 : density === 'compact' ? 4 : 6
   const components = ui.components.slice(0, maxComponents).map((component) => (
     component.type === 'charging-recommendation'
