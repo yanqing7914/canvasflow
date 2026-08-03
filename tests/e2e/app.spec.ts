@@ -183,7 +183,7 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     // Tab order follows the brief's reading order: brand, then the header
     // utilities. The keyboard is not in it yet because it is not on screen.
     await page.keyboard.press('Tab')
-    await expect(page.getByRole('link', { name: /carHer/ })).toBeFocused()
+    await expect(page.getByRole('link', { name: /pilotflow/ })).toBeFocused()
     await page.keyboard.press('Tab')
     // A disabled voice entry drops out of the tab order rather than trapping it.
     if (await mic.isEnabled()) {
