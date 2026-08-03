@@ -7,6 +7,33 @@ driver understand the current situation and choose the next safe action at a
 glance. It is a fixture player for the competition demo, not a production
 vehicle service.
 
+## Brand
+
+The product name is **pilotflow** — one word, all lowercase. It is not
+`PilotFlow`, `Pilotflow`, or `PILOTFLOW`, and it takes no subtitle or tagline.
+The previous name was `carHer`, camel-cased; the owner renamed it on 2026-08-03
+and chose the all-lowercase form deliberately, so the case change is not a typo
+to be corrected.
+
+The name is also the hands-free wake phrase planned for P1: the team handbook's
+`你好 carHer` now reads `你好 pilotflow`. Wake-word detection is not implemented
+in this round (there is no KWS code in the repository), so nothing enforces the
+phrase today — it is recorded here so a later P1 implementation does not
+resurrect the old name from an out-of-date document.
+
+The name appears in exactly four places:
+
+| Site | What it is |
+| --- | --- |
+| `apps/demo/src/App.tsx` `.brand-wordmark` | The visible header wordmark |
+| `apps/demo/src/App.tsx` brand lockup `aria-label` | Accessible name of the header link |
+| `apps/demo/index.html` `<title>` | Browser tab and window title |
+| `tests/e2e/app.spec.ts` focus-order assertion | Guards the header tab order, and now the name |
+
+A rename must touch all four. Before this record existed the string lived only
+in the code and one e2e assertion, with no written source for where it came
+from — which is how it entered the repository without review in the first place.
+
 ## Product facts
 
 - The only business source of truth is the legal `UISpec` produced by the

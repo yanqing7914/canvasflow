@@ -542,8 +542,8 @@ export default function App({
           data-phase-label={phaseIdentity}
         >
           <header className="trip-brief__header">
-            <a className="brand-lockup" href="#trip-brief-title" aria-label={`carHer ${phaseIdentity}`}>
-              <span className="brand-wordmark">carHer</span>
+            <a className="brand-lockup" href="#trip-brief-title" aria-label={`pilotflow ${phaseIdentity}`}>
+              <span className="brand-wordmark">pilotflow</span>
               <span className="brand-separator" aria-hidden="true">·</span>
               <span className="trip-brief__phase" data-phase-identity>{phaseIdentity}</span>
             </a>
