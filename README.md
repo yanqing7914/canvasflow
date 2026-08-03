@@ -163,6 +163,21 @@ The demo accepts spoken task input through the browser's own Web Speech API, wit
 - Fixture geometry and task facts are fictional competition data, not production navigation or aviation data.
 - Speech recognition availability and accuracy depend on the browser and its speech service. Headless Chromium exposes the API without a service behind it, so the E2E suite asserts that a voice attempt never blocks the task rather than replaying a real recognition turn.
 
+## Third-Party Notices
+
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) records the three third-party
+packages in the browser runtime (`react`, `react-dom`, `zod`, all MIT), what
+`packages/voice` owes to [cockpit-agent](https://github.com/SuperdeMan/cockpit-agent)
+(Apache-2.0) and how much of it is borrowed architecture versus borrowed code, and
+which evaluated projects were not adopted. Every license there was verified against
+the upstream repository rather than taken from the design notes.
+
+CanvasFlow itself carries no license: there is no `LICENSE` file and every
+`package.json` is `"private": true` with no `license` field. Under default
+copyright that means third parties have no permission to use or modify this code,
+public readability notwithstanding. Choosing a license is the owner's call and is
+listed as unresolved at the end of that file.
+
 ## Contribution Flow
 
 Normal changes branch from `origin/dev`, pass all required checks, and open a pull request into `dev`. Once CI is green and the latest Codex review reports `CODEX-REVIEW-VERDICT: PASS`, the repository workflow squash-merges the PR automatically. Only the owner promotes `dev` to `main` for a release.
