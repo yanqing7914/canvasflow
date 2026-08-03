@@ -857,6 +857,56 @@ describe('demo integration', () => {
       return { ...apiResponse(task), assistant: { text, shouldSpeak: true } }
     }
 
+    it('loads an offline WAV fixture into the shared editable voice path', async () => {
+      const user = userEvent.setup()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} />)
+
+      const drawer = await openControls(user)
+      expect(drawer).toHaveTextContent('语音 Fixture')
+      expect(screen.getByLabelText('播放标准任务语音样本')).toHaveAttribute(
+        'src',
+        expect.stringContaining('create-airport-pickup.wav'),
+      )
+      await user.click(screen.getByRole('button', { name: '载入标准任务转写' }))
+
+      expect(screen.queryByRole('dialog', { name: '演示控制' })).not.toBeInTheDocument()
+      expect(screen.getByLabelText('任务输入')).toHaveValue('我现在要去机场接妈妈和豆豆')
+      expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('已转写')
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+      expect(create).toHaveBeenCalledWith('我现在要去机场接妈妈和豆豆', {
+        vehicleContext: expect.anything(),
+        source: 'voice',
+        confidence: 0.96,
+      })
+    })
+
+    it('requires review for the noisy fixture and drops confidence after correction', async () => {
+      const user = userEvent.setup()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} />)
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: '载入车内噪声转写' }))
+
+      const composer = screen.getByRole('form', { name: 'Agent input' })
+      expect(composer).toHaveTextContent('噪声样本置信度 51%，请核对转写后再发送。')
+      const input = screen.getByLabelText('任务输入')
+      await user.clear(input)
+      await user.type(input, '去机场接妈妈')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+
+      expect(create).toHaveBeenCalledWith('去机场接妈妈', {
+        vehicleContext: expect.anything(),
+        source: 'voice',
+      })
+    })
+
     it('sends a confirmed transcript through the Agent API and speaks the reply', async () => {
       const user = userEvent.setup()
       const speech = createFakeSpeech()

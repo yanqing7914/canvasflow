@@ -107,6 +107,35 @@ describe('voice machine — happy path', () => {
 })
 
 describe('voice machine — transcript editing', () => {
+  it('loads a deterministic fixture transcript directly into review', () => {
+    const h = harness()
+    h.machine.loadTranscript('  去机场接妈妈和豆豆  ', 0.51)
+
+    expect(h.machine.snapshot()).toMatchObject({
+      state: 'transcribing',
+      transcript: '去机场接妈妈和豆豆',
+      confidence: 0.51,
+    })
+    expect(h.countOf('openAsr')).toBe(0)
+
+    h.machine.submit()
+    expect(h.lastArgs('submit')).toEqual([
+      '去机场接妈妈和豆豆',
+      { source: 'voice', confidence: 0.51 },
+    ])
+  })
+
+  it('replaces a listening turn when a fixture transcript is loaded', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.loadTranscript('航班 MU5102', 0.98)
+
+    expect(h.machine.snapshot().state).toBe('transcribing')
+    expect(h.machine.snapshot().transcript).toBe('航班 MU5102')
+    expect(h.countOf('closeAsr')).toBe(1)
+    expect(h.pendingTimerCount()).toBe(0)
+  })
+
   it('submits the edited text and drops the engine confidence', () => {
     const h = harness()
     h.machine.press()

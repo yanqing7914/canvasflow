@@ -18,6 +18,7 @@ import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
+import { demoVoiceFixtures, type DemoVoiceFixture } from './voice/fixtures'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 
 const defaultClient = new AgentApiClient('/v1')
@@ -65,6 +66,7 @@ const focusableControlSelector = [
   'input:not([disabled])',
   'select:not([disabled])',
   'textarea:not([disabled])',
+  'audio[controls]',
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ')
 
@@ -132,6 +134,7 @@ export default function App({
   const [vehicleContext, setVehicleContext] = useState(initialVehicleContext)
   const [controlsOpen, setControlsOpen] = useState(false)
   const [keyboardRequested, setKeyboardRequested] = useState(false)
+  const [activeVoiceFixtureId, setActiveVoiceFixtureId] = useState<string>()
   const pendingRef = useRef(false)
   const streamCursorRef = useRef(0)
   const controlsTriggerRef = useRef<HTMLButtonElement>(null)
@@ -241,12 +244,15 @@ export default function App({
     if (!outcome.sent) {
       setText(transcript)
       setKeyboardRequested(true)
+    } else {
+      setActiveVoiceFixtureId(undefined)
     }
     return outcome.speak
   }
 
   const voice = useVoice({
     enabled: voiceEnabled,
+    fixtureEnabled: voiceEnabled,
     onTranscript: submitVoiceTranscript,
     speech,
   })
@@ -291,10 +297,14 @@ export default function App({
     setText(value)
     // Editing a transcript is still the same turn; tell the machine so the
     // engine's confidence is dropped along with its guess.
-    if (voice.state === 'transcribing') voice.edit(value)
+    if (voice.state === 'transcribing') {
+      voice.edit(value)
+      setActiveVoiceFixtureId(undefined)
+    }
   }
 
   function pressMicrophone() {
+    setActiveVoiceFixtureId(undefined)
     // Confirming is 发送's job, so here the button only leaves the voice turn.
     // The transcript stays in the text field on purpose, so the field stays too.
     if (voice.state === 'transcribing') {
@@ -306,6 +316,13 @@ export default function App({
     // driver may have opened earlier steps back out of the way.
     setKeyboardRequested(false)
     voice.press()
+  }
+
+  function loadVoiceFixture(sample: DemoVoiceFixture) {
+    if (pendingRef.current || voice.state === 'submitting') return
+    setActiveVoiceFixtureId(sample.id)
+    voice.loadTranscript(sample.text, sample.confidence)
+    closeControls()
   }
 
   function advance() {
@@ -479,6 +496,7 @@ export default function App({
           : voice.state === 'speaking'
             ? voice.speaking ?? '正在播报'
             : '')
+  const activeVoiceFixture = demoVoiceFixtures.find((sample) => sample.id === activeVoiceFixtureId)
 
   // The keyboard is not a permanent fixture of the cabin. It appears when the
   // turn genuinely needs it and steps back out when it does not, so the journey
@@ -498,9 +516,11 @@ export default function App({
   // A voice failure already states itself in the live region above the field;
   // repeating it inside the composer would say the same thing twice. Only the
   // absolute case needs its own line, because there is no turn to have failed.
-  const composerNotice = composerReason === 'unavailable'
-    ? voice.error?.message ?? '语音入口不可用，请用文字告诉我。'
-    : undefined
+  const composerNotice = activeVoiceFixture?.requiresConfirmation
+    ? `噪声样本置信度 ${Math.round(activeVoiceFixture.confidence * 100)}%，请核对转写后再发送。`
+    : composerReason === 'unavailable'
+      ? voice.error?.message ?? '语音入口不可用，请用文字告诉我。'
+      : undefined
   // Closing the field is only offered when nothing depends on it staying: the
   // other reasons mean the turn cannot be finished without it.
   const composerDismissible = composerReason === 'text'
@@ -708,6 +728,35 @@ export default function App({
                 <span style={{ width: `${progressPercent}%` }} />
               </div>
             </div>
+
+            <section className="voice-fixtures" aria-labelledby="voice-fixtures-title">
+              <div className="voice-fixtures__heading">
+                <span>离线兜底</span>
+                <h3 id="voice-fixtures-title">语音 Fixture</h3>
+              </div>
+              <p className="voice-fixtures__intro">
+                播放预录 WAV，并将对应固定转写载入同一个可编辑输入框。
+              </p>
+              <div className="voice-fixtures__list">
+                {demoVoiceFixtures.map((sample) => (
+                  <article className="voice-fixture" key={sample.id}>
+                    <div className="voice-fixture__meta">
+                      <strong>{sample.label}</strong>
+                      <span>{Math.round(sample.confidence * 100)}% · {sample.requiresConfirmation ? '低置信度' : '固定转写'}</span>
+                    </div>
+                    <audio controls preload="none" aria-label={`播放${sample.label}语音样本`} src={sample.url} />
+                    <button
+                      className="voice-fixture__load"
+                      type="button"
+                      disabled={pending || voice.state === 'submitting'}
+                      onClick={() => loadVoiceFixture(sample)}
+                    >
+                      载入{sample.label}转写
+                    </button>
+                  </article>
+                ))}
+              </div>
+            </section>
 
             {effects.length > 0 && (
               <p className="console-effects" aria-label="Effect receipts">

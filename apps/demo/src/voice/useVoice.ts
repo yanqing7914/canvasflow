@@ -25,6 +25,8 @@ export type UseVoiceOptions = {
   onTranscript?: (text: string, meta: VoiceSubmitMeta) => TranscriptReply | Promise<TranscriptReply>
   /** Test hook: swaps in fake Web Speech engines. */
   speech?: SpeechControllerDeps
+  /** Keeps the voice machine available for deterministic offline fixtures. */
+  fixtureEnabled?: boolean
 }
 
 const INITIAL_SNAPSHOT: VoiceMachineSnapshot = {
@@ -40,7 +42,7 @@ const INITIAL_SNAPSHOT: VoiceMachineSnapshot = {
  * `onTranscript`; this hook only moves text.
  */
 export function useVoice(options: UseVoiceOptions = {}) {
-  const { enabled = true, onTranscript, speech } = options
+  const { enabled = true, fixtureEnabled = false, onTranscript, speech } = options
   const [snapshot, setSnapshot] = useState<VoiceMachineSnapshot>(INITIAL_SNAPSHOT)
 
   // Keep the seam and the engine factories in refs so a new object identity on
@@ -54,6 +56,7 @@ export function useVoice(options: UseVoiceOptions = {}) {
   const supported = useMemo(() => injected || isRecognitionSupported(), [injected])
   const secure = useMemo(() => injected || isSecureContextOk(), [injected])
   const available = enabled && supported && secure
+  const loopEnabled = available || fixtureEnabled
 
   const loopRef = useRef<{
     machine: ReturnType<typeof createVoiceMachine>
@@ -61,7 +64,7 @@ export function useVoice(options: UseVoiceOptions = {}) {
   } | null>(null)
 
   useEffect(() => {
-    if (!available) {
+    if (!loopEnabled) {
       loopRef.current = null
       setSnapshot(INITIAL_SNAPSHOT)
       return undefined
@@ -139,7 +142,7 @@ export function useVoice(options: UseVoiceOptions = {}) {
       machine.dispose()
       controller.dispose()
     }
-  }, [available])
+  }, [loopEnabled])
 
   const act = useCallback((run: (machine: ReturnType<typeof createVoiceMachine>) => void) => {
     const loop = loopRef.current
@@ -153,6 +156,9 @@ export function useVoice(options: UseVoiceOptions = {}) {
   const reset = useCallback(() => { act((machine) => machine.reset()) }, [act])
   const edit = useCallback((text: string) => { act((machine) => machine.edit(text)) }, [act])
   const submit = useCallback((text?: string) => { act((machine) => machine.submit(text)) }, [act])
+  const loadTranscript = useCallback((text: string, confidence?: number) => {
+    act((machine) => machine.loadTranscript(text, confidence))
+  }, [act])
 
   /**
    * The error shown when voice is unavailable. Derived rather than stored so the
@@ -167,17 +173,18 @@ export function useVoice(options: UseVoiceOptions = {}) {
 
   return {
     available,
-    state: available ? snapshot.state : 'idle',
+    state: snapshot.state,
     transcript: snapshot.transcript,
     interim: snapshot.interim,
     display: snapshot.display,
     confidence: snapshot.confidence,
     speaking: snapshot.speaking,
-    error: available ? snapshot.error : unavailableError,
+    error: snapshot.error ?? (!available && snapshot.state === 'idle' ? unavailableError : undefined),
     press,
     cancel,
     reset,
     edit,
     submit,
+    loadTranscript,
   } as const
 }

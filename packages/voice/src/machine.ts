@@ -113,6 +113,23 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     transition('idle')
   }
 
+  function reviewTranscript(text: string, rawConfidence?: unknown) {
+    clearAllTimers()
+    if (state === 'listening') effects.closeAsr?.()
+    if (state === 'speaking') effects.stopSpeak?.()
+    const normalized = normalizeTranscript(text)
+    interim = ''
+    speaking = undefined
+    error = undefined
+    confidence = normalizeConfidence(rawConfidence)
+    if (isBlankTranscript(normalized)) {
+      fail('no-speech')
+      return
+    }
+    transcript = normalized
+    transition('transcribing')
+  }
+
   return {
     snapshot(): VoiceMachineSnapshot {
       return {
@@ -166,17 +183,12 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     /** Engine reported a stable segment. Ends the listening turn. */
     asrFinal(text: string, rawConfidence?: unknown) {
       if (state !== 'listening') return
-      clearNamedTimer('listen')
-      const merged = normalizeTranscript(mergeInterim(transcript, text))
-      interim = ''
-      confidence = normalizeConfidence(rawConfidence)
-      effects.closeAsr?.()
-      if (isBlankTranscript(merged)) {
-        fail('no-speech')
-        return
-      }
-      transcript = merged
-      transition('transcribing')
+      reviewTranscript(mergeInterim(transcript, text), rawConfidence)
+    },
+
+    /** Loads a deterministic fallback transcript for review without an ASR engine. */
+    loadTranscript(text: string, rawConfidence?: unknown) {
+      reviewTranscript(text, rawConfidence)
     },
 
     asrError(kind: Extract<VoiceErrorKind, 'permission' | 'no-speech' | 'recognition'>) {

@@ -23,6 +23,9 @@ vehicle service.
 - The demo uses fictional fixture data. It does not connect to live flight,
   map, or vehicle services, and it does not use a wake word. Speech recognition
   and playback use the browser's own Web Speech API, with no server of ours.
+- The demo controls drawer also exposes deterministic prerecorded WAV files and
+  fixed transcripts. This offline fixture path is presentation/test evidence,
+  not a claim that the browser transcribed the recording.
 - A renderer action emits only the declared `action.id`. Agent or tool code
   owns authorization, confirmation, side effects, and parameter construction.
 - Missing, unknown, malformed, or offline UI data must produce a useful

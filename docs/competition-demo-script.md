@@ -13,11 +13,14 @@ HTTP API. Do not call reducers or tool providers from browser developer tools.
 
 ## 0:00 - 0:45: Goal To Structured Task
 
-1. Enter `接妈妈和豆豆，航班 MU 5102` and submit it.
-2. Point out that passenger and flight slots become a normalized, reviewable
+1. Open `演示控制`, play `标准任务`, and select `载入标准任务转写`.
+2. Confirm the editable transcript and submit it. If browser recognition is
+   being demonstrated live, use the microphone instead and keep this Fixture as
+   the offline fallback.
+3. Point out that passenger and flight slots become a normalized, reviewable
    task state (`MU5102`), rather than opaque model output.
-3. If the UI asks for a missing slot, provide it in the same text input and
-   show the task moving to the prepared navigation state.
+4. Use the `补充航班号` voice Fixture for the missing slot, then show the task
+   moving to the prepared navigation state.
 
 ## 0:45 - 1:45: Policy-Gated Departure
 
@@ -54,11 +57,13 @@ HTTP API. Do not call reducers or tool providers from browser developer tools.
 
 ## 4:20 - 5:00: Resilience And Boundaries
 
-1. Start a fresh task with fixture flight `MU0000` to demonstrate the
+1. On a fresh task, load the `车内噪声` voice Fixture and point out the 51%
+   confidence warning and required transcript review.
+2. Start another fresh task with fixture flight `MU0000` to demonstrate the
    deterministic fallback UI.
-2. Explain that previous task facts remain visible while the Agent reports the
+3. Explain that previous task facts remain visible while the Agent reports the
    Provider failure; a false success is never shown.
-3. Close with the boundaries: Fixture data is fictional; live Providers require
+4. Close with the boundaries: Fixture data is fictional; live Providers require
    injected credentials, durable external idempotency, and operational review.
 
 ## Recording Notes
