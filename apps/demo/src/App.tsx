@@ -154,6 +154,10 @@ export default function App({
   const [localTask, setLocalTask] = useState<AirportPickupTaskState | undefined>(
     localOnly ? (initialTask ?? mainFlowTimeline.initialTaskState) : undefined,
   )
+  // True while the field holds words someone could lose: the driver's own
+  // typing, or a transcript parked for confirmation/retry. The pristine
+  // placeholder suggestion is not protected — nobody authored it this turn.
+  const [draftProtected, setDraftProtected] = useState(false)
   // Fixture-only injection is used by unit tests; the shipped demo leaves these props unset.
   const task = response?.task ?? localTask
   const localSpec = useMemo(() => task ? composePickupSpec(task, {
@@ -224,6 +228,7 @@ export default function App({
       if (!created) return { sent: false }
       setStepIndex(1)
       setText('')
+      setDraftProtected(false)
       return { sent: true, speak: spokenReply(created) }
     }
     if (!response) {
@@ -234,6 +239,7 @@ export default function App({
         timestamp: new Date().toISOString(),
       }, demoRuntime.preferences) : current)
       setText('')
+      setDraftProtected(false)
       return { sent: true }
     }
     const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
@@ -241,6 +247,7 @@ export default function App({
     if (!next) return { sent: false }
     if (nextTimelineIndex !== undefined) setStepIndex(nextTimelineIndex)
     setText('')
+    setDraftProtected(false)
     return { sent: true, speak: spokenReply(next) }
   }
 
@@ -251,6 +258,7 @@ export default function App({
     // to stay on screen for that, otherwise the words are parked out of sight.
     if (!outcome.sent) {
       setText(transcript)
+      setDraftProtected(true)
       setKeyboardRequested(true)
     }
     return outcome.speak
@@ -297,10 +305,12 @@ export default function App({
   const textPathLocked = voice.state === 'listening' || voice.state === 'submitting'
 
   // A finished transcript lands in the same field the text path uses rather than
-  // in a second input: one place to read, one place to correct, one 发送.
+  // in a second input: one place to read, one place to correct, one 发送. Those
+  // words are the driver's — from here on the field is protected content.
   useEffect(() => {
     if (voiceTranscript === undefined) return
     setText(voiceTranscript)
+    setDraftProtected(true)
   }, [voiceTranscript])
 
   function submitText() {
@@ -326,6 +336,9 @@ export default function App({
 
   function changeText(value: string) {
     setText(value)
+    // Typing makes the words the driver's own; clearing the field by hand
+    // releases them again.
+    setDraftProtected(value.trim() !== '')
     // Editing a transcript is still the same turn; tell the machine so the
     // engine's confidence is dropped along with its guess.
     if (voice.state === 'transcribing') voice.edit(value)
@@ -345,9 +358,11 @@ export default function App({
     voice.press()
   }
 
-  // Replay may not steal a turn that is mid-capture or mid-confirm; those
-  // states already hold words the driver has not finished dealing with.
-  const voiceFixtureReady = !pending
+  // Replay may not steal a turn that is mid-capture or mid-confirm, and it may
+  // not silently replace words someone could still lose — the driver's typing
+  // or a parked transcript stay until they are sent or cleared by hand.
+  const draftBlocksReplay = draftProtected && text.trim() !== ''
+  const voiceFixtureReady = !pending && !draftBlocksReplay
     && (!voice.available || voice.state === 'idle' || voice.state === 'error' || voice.state === 'speaking')
 
   /**
@@ -370,6 +385,7 @@ export default function App({
     }
     playFixtureSampleAudio(sample, fixtureAudioRef.current ?? undefined)
     setText(sample.text)
+    setDraftProtected(true)
     setKeyboardRequested(true)
   }
 
@@ -805,7 +821,11 @@ export default function App({
                   </button>
                 ))}
               </div>
-              <p className="console-hint">播放预录语音并交付固定转写；转写始终停在输入框，需按「发送」确认后才会提交。</p>
+              <p className="console-hint">
+                {draftBlocksReplay
+                  ? '输入框里还有未发送的内容；先发送或清空它，回放才不会覆盖这些话。'
+                  : '播放预录语音并交付固定转写；转写始终停在输入框，需按「发送」确认后才会提交。'}
+              </p>
             </div>
 
             <p className="console-hint">此面板仅用于演示，不会改变行程事实或跳过操作确认。</p>

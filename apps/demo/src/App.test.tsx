@@ -1375,5 +1375,55 @@ describe('demo integration', () => {
       // Without a recognition turn there is no honest voice meta to claim.
       expect(create).toHaveBeenCalledWith('航班 MU5102', { vehicleContext: expect.anything() })
     })
+
+    it('refuses to replay over an unsent draft the driver typed', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const audio = createFakeFixtureAudio()
+      const create = vi.fn()
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} speech={speech.deps} fixtureAudio={audio.factory} />)
+
+      // The driver opens the keyboard and starts writing their own request.
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      await user.clear(screen.getByLabelText('任务输入'))
+      await user.type(screen.getByLabelText('任务输入'), '先去公司拿电脑')
+
+      // Those words are theirs; replay must not silently replace them.
+      let drawer = await openControls(user)
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
+      expect(drawer).toHaveTextContent('输入框里还有未发送的内容')
+      await user.keyboard('{Escape}')
+
+      // Clearing the field by hand releases it, and replay is available again.
+      await user.clear(screen.getByLabelText('任务输入'))
+      drawer = await openControls(user)
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeEnabled()
+      expect(create).not.toHaveBeenCalled()
+    })
+
+    it('will not let a second replay overwrite a parked, unconfirmed transcript', async () => {
+      const user = userEvent.setup()
+      const audio = createFakeFixtureAudio()
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      // Degraded path: no speech engine, so the transcript parks in the field.
+      render(<App api={api} fixtureAudio={audio.factory} />)
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: '补充航班号' }))
+      expect(screen.getByLabelText('任务输入')).toHaveValue('航班 MU5102')
+
+      // The parked words are unconfirmed; another sample may not clobber them.
+      await openControls(user)
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
+      await user.keyboard('{Escape}')
+
+      // Sending them releases the field, and replay opens up again.
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+      await openControls(user)
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeEnabled()
+    })
   })
 })
