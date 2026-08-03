@@ -8,6 +8,12 @@ The files are intentionally explicit so Agent, tools, and UI tests can consume t
 
 Exception fixtures (`flight-delayed`, `flight-cancelled`, `provider-timeout`, `invalid-ui-spec`) cover delay/cancel/terminal-change and degradation paths. Deterministic timeout triggers: flight `MU0000`, destination id `destination-timeout`. Congestion alternates live in `packages/tools` route data (`route-airport-avoid-hw-001`, `route-airport-bypass-001`).
 
+`route-sketch/progress.json` stages the discrete trip progress the offline route
+sketch draws: one authored value per matching task state, listed in trip order,
+last match winning. It is not a scenario fixture, so it lives outside the
+catalog at the directory root; the UI never accumulates or animates a value of
+its own. Coordinates for the sketch itself stay in `packages/tools` route data.
+
 `voice/` contains offline speech-input fallback assets. `timelines/` also
 contains short replay scenarios for timeout, delay, cancellation, congestion
 rerouting, message failure, and charging completion; these are intended for the

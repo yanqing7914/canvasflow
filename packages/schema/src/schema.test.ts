@@ -8,7 +8,7 @@ import {
   memoryPreferenceChangeSchema,
   routePlanOutputSchema,
 } from './tool'
-import { componentSpecSchema, uiSpecSchema } from './ui'
+import { componentSpecSchema, routeSketchSchema, uiSpecSchema } from './ui'
 
 describe('UISpec', () => {
   it('rejects stale source revisions', () => {
@@ -97,6 +97,93 @@ describe('routePlanOutputSchema sketch geometry', () => {
         ],
       }).success,
     ).toBe(false)
+  })
+})
+
+describe('routeSketchSchema', () => {
+  const sketch = {
+    summary: '直达虹桥机场 T2',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', latitude: 31.23, longitude: 121.47 },
+      { id: 'destination-hongqiao-t2', name: '虹桥机场 T2', latitude: 31.198, longitude: 121.336 },
+    ],
+    polyline: [
+      { latitude: 31.23, longitude: 121.47 },
+      { latitude: 31.222, longitude: 121.44 },
+      { latitude: 31.198, longitude: 121.336 },
+    ],
+  }
+
+  it('accepts sketch geometry with and without progress', () => {
+    expect(routeSketchSchema.safeParse(sketch).success).toBe(true)
+    for (const progress of [0, 0.5, 1]) {
+      expect(routeSketchSchema.safeParse({ ...sketch, progress }).success).toBe(true)
+    }
+  })
+
+  it('rejects progress outside the 0-1 sketch range', () => {
+    for (const progress of [-0.1, 1.2, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(routeSketchSchema.safeParse({ ...sketch, progress }).success).toBe(false)
+    }
+  })
+
+  it('rejects unplottable coordinates and drawing-free geometry', () => {
+    expect(
+      routeSketchSchema.safeParse({
+        ...sketch,
+        polyline: [{ latitude: 31.23, longitude: 121.47 }, { latitude: 200, longitude: 121.336 }],
+      }).success,
+    ).toBe(false)
+    expect(
+      routeSketchSchema.safeParse({
+        ...sketch,
+        waypoints: [{ name: '出发地', latitude: Number.NaN, longitude: 121.47 }],
+      }).success,
+    ).toBe(false)
+    // One point is a dot, not a route.
+    expect(routeSketchSchema.safeParse({ ...sketch, polyline: sketch.polyline.slice(0, 1) }).success).toBe(false)
+    expect(routeSketchSchema.safeParse({ ...sketch, waypoints: [] }).success).toBe(false)
+    expect(
+      routeSketchSchema.safeParse({ ...sketch, waypoints: [{ name: '', latitude: 31.23, longitude: 121.47 }] }).success,
+    ).toBe(false)
+  })
+
+  it('keeps the sketch optional on navigation cards, and drops an illegal one instead of losing the card', () => {
+    const props = {
+      routeId: 'route-airport-001',
+      destination: '虹桥机场 T2',
+      eta: '2026-07-22T20:25:00+08:00',
+      distanceKm: 32,
+      estimatedBatteryAtArrival: 27,
+    }
+    const legacy = componentSpecSchema.safeParse({ id: 'nav', type: 'navigation-summary', props })
+    expect(legacy.success).toBe(true)
+    if (legacy.success && legacy.data.type === 'navigation-summary') {
+      expect(legacy.data.props.routeSketch).toBeUndefined()
+    }
+
+    const drawn = componentSpecSchema.safeParse({
+      id: 'nav',
+      type: 'navigation-summary',
+      props: { ...props, routeSketch: { ...sketch, progress: 0.4 } },
+    })
+    expect(drawn.success).toBe(true)
+    if (drawn.success && drawn.data.type === 'navigation-summary') {
+      expect(drawn.data.props.routeSketch?.progress).toBe(0.4)
+      expect(drawn.data.props.routeSketch?.waypoints).toHaveLength(2)
+    }
+
+    // Degradation, not rejection: the driver loses the drawing, never the ETA.
+    const broken = componentSpecSchema.safeParse({
+      id: 'nav',
+      type: 'navigation-summary',
+      props: { ...props, routeSketch: { ...sketch, progress: 4 } },
+    })
+    expect(broken.success).toBe(true)
+    if (broken.success && broken.data.type === 'navigation-summary') {
+      expect(broken.data.props.routeSketch).toBeUndefined()
+      expect(broken.data.props.eta).toBe(props.eta)
+    }
   })
 })
 

@@ -5,6 +5,7 @@ import {
   chargingStationsForDensity,
   estimateFinalBatteryPercent,
   recommendedMeetingPoints,
+  routeSketchFor,
   vehicleSnapshots,
   type ChargingPresentationDensity,
 } from '@canvasflow/tools'
@@ -185,7 +186,22 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
       },
     }]
   }
-  else if (task.navigation) { density = 'compact'; components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }] }
+  else if (task.navigation) {
+    density = 'compact'
+    const routeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
+    components = [{
+      id: 'navigation-summary',
+      type: 'navigation-summary',
+      props: {
+        routeId: task.navigation.routeId,
+        destination: task.navigation.destination,
+        eta: task.navigation.eta,
+        distanceKm: 32,
+        estimatedBatteryAtArrival: 27,
+        ...(routeSketch ? { routeSketch } : {}),
+      },
+    }]
+  }
   else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: flightStatusProps(task.flight) }] }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,

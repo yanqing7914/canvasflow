@@ -291,6 +291,68 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
   await expectNoScroll(page)
 })
 
+/**
+ * The route sketch is a drawing of the UISpec the Agent sent, and its marker moves
+ * only because a newer spec carried a newer authored progress value — nothing on
+ * the page animates or advances a position of its own. The renderer unit tests pin
+ * the geometry maths; only a real browser shows the drawing is actually painted,
+ * given height, and still inside the fixed frame at the demo resolution.
+ */
+test('draws the offline route sketch and steps its marker on authored progress @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+
+  const sketch = page.locator('.ui-route-sketch')
+  const vehicle = sketch.locator('.ui-route-sketch__vehicle')
+  const line = sketch.locator('.ui-route-sketch__line')
+  const progress = sketch.locator('.ui-route-sketch__progress')
+
+  // 准备出发 shares the fixed frame with the flight and charging briefs, and a
+  // shared frame has no height for a drawing: the navigation card keeps its
+  // facts and draws nothing until it owns the frame.
+  await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
+  await expect(sketch).toBeHidden()
+  await expectNoScroll(page)
+
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(sketch).toBeVisible()
+  await expect(sketch).toHaveAttribute('data-route-progress', 'simulated')
+  await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
+  await expect(progress).toHaveText('模拟行程进度 8%')
+  // Visible is not enough for an SVG: a canvas collapsed to zero height would
+  // still report visible while drawing nothing the driver can see.
+  const canvas = await sketch.locator('.ui-route-sketch__canvas').boundingBox()
+  expect(canvas?.height ?? 0).toBeGreaterThan(20)
+  const departedLine = await line.getAttribute('d')
+  const departedAt = await vehicle.getAttribute('transform')
+  await expectNoScroll(page)
+
+  // One advance of the shared timeline, one newer authored value: the marker steps
+  // along the same drawn route instead of drifting forward on a timer.
+  await advanceFlow(page) // charging.started
+  await expect(progress).toHaveText('模拟行程进度 40%')
+  expect(await vehicle.getAttribute('transform')).not.toBe(departedAt)
+  expect(await line.getAttribute('d')).toBe(departedLine)
+  await expectNoScroll(page)
+
+  // A simulated sketch says so: no copy claims a live position, and no internal
+  // route identifier reaches the brief.
+  for (const claim of ['实时位置', '正在此处', '当前位置']) {
+    await expect(sketch).not.toContainText(claim)
+  }
+  await expect(page.locator('.task-surface')).not.toContainText('route-airport')
+
+  // Later phases put other cards on the brief; losing the drawing costs the
+  // drawing alone and the frame still holds.
+  await advanceFlow(page) // flight in-air
+  await advanceFlow(page) // charging.completed
+  await expect(page.getByText(/补能完成/)).toBeVisible()
+  await expect(sketch).toHaveCount(0)
+  await expectNoScroll(page)
+})
+
 test('completes the airport pickup flow through the Agent API', async ({ page }) => {
   await page.goto('/')
 

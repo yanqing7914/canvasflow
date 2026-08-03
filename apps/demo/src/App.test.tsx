@@ -702,6 +702,106 @@ describe('demo integration', () => {
     expect(screen.getByText('没有已授权的落地通知联系人')).toBeInTheDocument()
   })
 
+  /**
+   * The offline route sketch through the whole demo shell: task state → composer →
+   * UISpec → renderer, on the same App the browser mounts. The shipped timeline
+   * leads the charging-completed and return-leg briefs with other cards, so the
+   * detour, the reroute and the way home are driven from injected task state here
+   * rather than left unrendered until a phase happens to show a navigation card.
+   */
+  describe('offline route sketch', () => {
+    const returnTrip: NonNullable<AirportPickupTaskState['returnTrip']> = {
+      workflowId: 'pickup-001:return',
+      route: { status: 'succeeded', routeId: 'route-home-001', eta: '2026-07-22T21:35:00+08:00' },
+      cabin: { status: 'pending' },
+      media: { status: 'pending' },
+    }
+
+    function tripTask(overrides: Partial<AirportPickupTaskState> = {}): AirportPickupTaskState {
+      return {
+        ...createInitialTask(),
+        phase: 'driving-to-airport',
+        passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+        flight: { flightNumber: 'MU5102', status: 'in-air', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+        charging: { recommended: false, accepted: false, status: 'none' },
+        updatedAt: '2026-07-22T20:35:00+08:00',
+        ...overrides,
+      }
+    }
+
+    const drawnLine = () => document.querySelector('.ui-route-sketch__line')?.getAttribute('d')
+    const stops = () => [...document.querySelectorAll('.ui-route-sketch__stop')].map((stop) => stop.textContent)
+
+    it('draws the active route and marks the staged progress on it', () => {
+      render(<App initialTask={tripTask()} />)
+
+      expect(screen.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeInTheDocument()
+      expect(stops()).toEqual(['出发地', '虹桥机场 T2'])
+      expect(screen.getByText('模拟行程进度 8%')).toBeInTheDocument()
+      expect(document.querySelector('.ui-route-sketch')).toHaveAttribute('data-route-progress', 'simulated')
+      expect(document.querySelector('.ui-route-sketch__vehicle')).toBeInTheDocument()
+    })
+
+    it('draws the charging detour and the ring-road reroute instead of the direct line', () => {
+      const direct = render(<App initialTask={tripTask()} />)
+      const directLine = drawnLine()
+      direct.unmount()
+
+      const detour = render(<App initialTask={tripTask({
+        navigation: { routeId: 'route-airport-via-charge-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:37:00+08:00', status: 'active' },
+        charging: { recommended: true, accepted: true, status: 'active' },
+      })} />)
+      expect(stops()).toEqual(['出发地', '虹桥枢纽超充站', '虹桥机场 T2'])
+      expect(drawnLine()).not.toBe(directLine)
+      // The detour is under way, so the marker sits further along than departure.
+      expect(screen.getByText('模拟行程进度 40%')).toBeInTheDocument()
+      detour.unmount()
+
+      render(<App initialTask={tripTask({
+        navigation: { routeId: 'route-airport-bypass-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:35:00+08:00', status: 'active' },
+      })} />)
+      expect(stops()).toEqual(['出发地', '外环快速路', '虹桥机场 T2'])
+      expect(drawnLine()).not.toBe(directLine)
+    })
+
+    it('draws the way home on the return leg rather than the airport route again', () => {
+      const outbound = render(<App initialTask={tripTask()} />)
+      const outboundLine = drawnLine()
+      outbound.unmount()
+
+      render(<App initialTask={tripTask({
+        phase: 'returning-home',
+        navigation: { routeId: 'route-home-001', destination: '家', eta: '2026-07-22T21:35:00+08:00', status: 'active' },
+        returnTrip,
+      })} />)
+
+      expect(screen.getByRole('img', { name: '前往家的路线示意' })).toBeInTheDocument()
+      expect(stops()).toEqual(['出发地', '家'])
+      expect(drawnLine()).not.toBe(outboundLine)
+      // A new leg restarts near its own origin instead of continuing the outbound value.
+      expect(screen.getByText('模拟行程进度 8%')).toBeInTheDocument()
+    })
+
+    it('keeps the whole navigation brief when the route has no sketch geometry', () => {
+      render(<App initialTask={tripTask({
+        navigation: { routeId: 'route-not-in-fixtures', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+      })} />)
+
+      expect(document.querySelector('.ui-route-sketch')).toBeNull()
+      expect(document.querySelector('[data-route-progress="unavailable"]')).toBeInTheDocument()
+      // Losing the drawing costs the drawing alone: the conclusion and its
+      // supporting facts are all still on the brief, and no error takes its place.
+      expect(screen.getByRole('heading', { name: '虹桥机场 T2' })).toBeInTheDocument()
+      expect(screen.getByLabelText('预计到达')).toBeInTheDocument()
+      expect(screen.getByText('32.0 km')).toBeInTheDocument()
+      expect(screen.getByText('27%')).toBeInTheDocument()
+      expect(screen.queryByText('这项信息暂时无法显示')).not.toBeInTheDocument()
+      // Nothing names the route the sketch could not draw.
+      expect(document.querySelector('.task-surface')?.textContent).not.toContain('route-')
+    })
+  })
+
   describe('trip brief shell', () => {
     const phaseLabels: Array<[AirportPickupTaskState['phase'], string]> = [
       ['collecting-information', '准备接机'],

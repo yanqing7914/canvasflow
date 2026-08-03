@@ -24,6 +24,39 @@ const componentBase = z.object({
   visibility: z.enum(['always', 'parked-only', 'driving-only']).optional(),
 })
 
+/**
+ * Offline route sketch attached to `navigation-summary`.
+ *
+ * Every point is fictional fixture data for a static sketch: the renderer
+ * normalizes the set into its own view box, so the bounds below exist only to
+ * keep an unplottable coordinate out of the drawing, not to claim geographic
+ * accuracy. Nothing here is live navigation, GIS, or positioning data.
+ */
+const routeSketchPointSchema = z.object({
+  latitude: z.number().min(-90).max(90),
+  longitude: z.number().min(-180).max(180),
+})
+
+const routeSketchWaypointSchema = routeSketchPointSchema.extend({
+  id: z.string().min(1).optional(),
+  name: z.string().min(1),
+})
+
+export const routeSketchSchema = z.object({
+  /** One-line human summary of the route variant, e.g. 经超充站前往机场. */
+  summary: z.string().min(1).optional(),
+  /** Ordered named markers: first is the origin, last the destination, rest vias. */
+  waypoints: z.array(routeSketchWaypointSchema).min(1),
+  /** Ordered sketch line; two points is the minimum that can be drawn. */
+  polyline: z.array(routeSketchPointSchema).min(2),
+  /**
+   * Discrete simulated trip progress along the sketch: 0 is the start, 1 the end.
+   * Authored per task state by fixtures — the UI never advances it on its own, and
+   * an absent value means "no vehicle marker" rather than "at the start".
+   */
+  progress: z.number().min(0).max(1).optional(),
+})
+
 export const componentSpecSchema = z.discriminatedUnion('type', [
   componentBase.extend({
     type: z.literal('pickup-overview'),
@@ -43,6 +76,13 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
     type: z.literal('navigation-summary'),
     props: z.object({
       routeId: z.string(), destination: z.string(), eta: z.string(), distanceKm: z.number(), estimatedBatteryAtArrival: z.number(),
+      /**
+       * Optional offline sketch geometry. Dropped rather than rejected so a bad
+       * sketch costs the driver the drawing, not the destination and ETA that the
+       * rest of the card carries — {@link routeSketchSchema} stays strict for
+       * producers and contract tests.
+       */
+      routeSketch: routeSketchSchema.optional().catch(undefined),
     }),
   }),
   componentBase.extend({
@@ -150,4 +190,5 @@ export const uiSpecSchema = z
 
 export type ComponentSpec = z.infer<typeof componentSpecSchema>
 export type ActionSpec = z.infer<typeof actionSpecSchema>
+export type RouteSketch = z.infer<typeof routeSketchSchema>
 export type UISpec = z.infer<typeof uiSpecSchema>
