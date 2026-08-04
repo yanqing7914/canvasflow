@@ -1,0 +1,195 @@
+{
+  "version": "1.0",
+  "generatedAt": "2026-07-22T12:00:00+08:00",
+  "fixtures": [
+    {
+      "fixtureId": "clear-airport-pickup",
+      "file": "clear-airport-pickup.wav",
+      "sha256": "02518acd0cdefa5289d2558312ddf5ac5fa5eeadbee014c4a3f44360abb63b13",
+      "mimeType": "audio/wav",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "durationMs": 3302,
+      "model": "fixture-manifest-v1",
+      "outcome": {
+        "kind": "success",
+        "transcript": "接妈妈和豆豆，航班 MU5102",
+        "confidence": 0.96,
+        "language": "zh-CN",
+        "warnings": [],
+        "partials": [
+          "接妈妈",
+          "接妈妈和豆豆",
+          "接妈妈和豆豆，航班",
+          "接妈妈和豆豆，航班 MU5102"
+        ]
+      }
+    },
+    {
+      "fixtureId": "missing-flight-number",
+      "file": "missing-flight-number.wav",
+      "sha256": "99ac7e202844d1bf6fb5498f952b2122c36c4d3f5fbf27f01fd617d737fb7e61",
+      "mimeType": "audio/wav",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "durationMs": 2918,
+      "model": "fixture-manifest-v1",
+      "outcome": {
+        "kind": "success",
+        "transcript": "我现在要去机场接妈妈和豆豆",
+        "confidence": 0.95,
+        "language": "zh-CN",
+        "warnings": [],
+        "partials": [
+          "我现在要去机场",
+          "我现在要去机场接妈妈",
+          "我现在要去机场接妈妈和豆豆"
+        ]
+      }
+    },
+    {
+      "fixtureId": "noisy-airport-pickup",
+      "file": "noisy-airport-pickup.wav",
+      "sha256": "cc8e24fa1812e8bf5f025ae795b7432b588800c72ddd99f7d474b127bd2eb723",
+      "mimeType": "audio/wav",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "durationMs": 3302,
+      "model": "fixture-manifest-v1",
+      "outcome": {
+        "kind": "success",
+        "transcript": "接妈妈和豆豆，航班 MU5102",
+        "confidence": 0.52,
+        "language": "zh-CN",
+        "warnings": [
+          "BACKGROUND_NOISE",
+          "LOW_CONFIDENCE"
+        ],
+        "partials": [
+          "接妈妈",
+          "接妈妈和豆豆",
+          "接妈妈和豆豆，航班 MU5102"
+        ]
+      }
+    },
+    {
+      "fixtureId": "no-speech",
+      "file": "no-speech.wav",
+      "sha256": "9c56740c736ff3368d8bac323e436becb312edfd1a6b86d9d76dce610fc2da92",
+      "mimeType": "audio/wav",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "durationMs": 1800,
+      "model": "fixture-manifest-v1",
+      "outcome": {
+        "kind": "error",
+        "code": "NO_SPEECH_DETECTED",
+        "message": "没有检测到可识别的人声",
+        "retryable": true
+      }
+    },
+    {
+      "fixtureId": "misunderstood-flight",
+      "file": "misunderstood-flight.wav",
+      "sha256": "029faa0cc3cc4434fb0b92049db8c9201a893d9ac5764c27107a95bb73454f3d",
+      "mimeType": "audio/wav",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "durationMs": 3384,
+      "model": "fixture-manifest-v1",
+      "outcome": {
+        "kind": "success",
+        "transcript": "接妈妈和豆豆，航班 MU5101",
+        "confidence": 0.64,
+        "language": "zh-CN",
+        "warnings": [
+          "LOW_CONFIDENCE"
+        ],
+        "partials": [
+          "接妈妈和豆豆",
+          "接妈妈和豆豆，航班 MU5101"
+        ]
+      }
+    },
+    {
+      "fixtureId": "timeout",
+      "file": "timeout.wav",
+      "sha256": "059f5a64ef349516a0a8ab76d6da599e57affdfacaef66676b0ff6d5bd7bc67f",
+      "mimeType": "audio/wav",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "durationMs": 5389,
+      "model": "fixture-manifest-v1",
+      "outcome": {
+        "kind": "error",
+        "code": "TRANSCRIPTION_TIMEOUT",
+        "message": "语音转写服务超时，请重试或使用文本输入",
+        "retryable": true
+      }
+    },
+    {
+      "fixtureId": "short-noise",
+      "file": "short-noise.wav",
+      "sha256": "de6a5dd7944a37441b53f506ed9dcb858992065be03feb1769a358fd57112fc8",
+      "mimeType": "audio/wav",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "durationMs": 180,
+      "model": "fixture-manifest-v1",
+      "outcome": {
+        "kind": "error",
+        "code": "NO_SPEECH_DETECTED",
+        "message": "录音过短，未检测到有效人声",
+        "retryable": true
+      }
+    },
+    {
+      "fixtureId": "truncated-utterance",
+      "file": "truncated-utterance.wav",
+      "sha256": "7555a3911013ecb73bfc2cec999852d826251fb5c5642d56da459efbceb5d99c",
+      "mimeType": "audio/wav",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "durationMs": 2130,
+      "model": "fixture-manifest-v1",
+      "outcome": {
+        "kind": "success",
+        "transcript": "接妈妈和豆豆，航班",
+        "confidence": 0.78,
+        "language": "zh-CN",
+        "warnings": [
+          "POSSIBLE_TRUNCATION"
+        ],
+        "partials": [
+          "接妈妈",
+          "接妈妈和豆豆",
+          "接妈妈和豆豆，航班"
+        ]
+      }
+    },
+    {
+      "fixtureId": "flight-number-spoken-digits",
+      "file": "flight-number-spoken-digits.wav",
+      "sha256": "74017d9b971dacd2993572da657eaf1d20a711ce5ba3b5aea9f96359f39f7573",
+      "mimeType": "audio/wav",
+      "sampleRateHz": 16000,
+      "channels": 1,
+      "durationMs": 3548,
+      "model": "fixture-manifest-v1",
+      "outcome": {
+        "kind": "success",
+        "transcript": "接妈妈和豆豆，航班 MU5102",
+        "confidence": 0.91,
+        "language": "zh-CN",
+        "warnings": [
+          "NORMALIZED_FLIGHT_NUMBER"
+        ],
+        "partials": [
+          "接妈妈和豆豆",
+          "接妈妈和豆豆，航班 MU 五一零二",
+          "接妈妈和豆豆，航班 MU5102"
+        ]
+      }
+    }
+  ]
+}

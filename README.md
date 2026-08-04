@@ -84,8 +84,17 @@ The demo uses these task routes:
 - `POST /v1/tasks/:taskId/cancel`
 - `POST /v1/tasks/:taskId/reset`
 - `GET /v1/tasks/:taskId/events` with `Accept: text/event-stream`
+- `POST /v1/voice/transcriptions` for deterministic batch transcription in
+  Fixture or Mock mode
 
 Mutation requests use client or operation idempotency keys. SSE clients receive `task.updated` snapshots and can resume with the last emitted event ID.
+
+The batch voice route accepts either JSON such as
+`{"fixtureId":"clear-airport-pickup"}` or a `multipart/form-data` request with
+one `audio` file plus optional `fixtureId` and `language` fields. Fixture audio
+is matched by its reviewed SHA-256 and is never persisted. This route is an
+ASR-provider boundary for future recording clients; the shipped microphone UI
+continues to use browser Web Speech directly.
 
 ## Environment
 
@@ -95,6 +104,7 @@ Mutation requests use client or operation idempotency keys. SSE clients receive 
 | `AGENT_PORT` | `8787` | Agent API port. The preview launcher defaults it to `4173`. |
 | `AGENT_DATABASE_PATH` | `.canvasflow/agent.sqlite` | SQLite task, receipt, confirmation, and update-stream storage. Use `:memory:` for an ephemeral run. |
 | `AGENT_PROVIDER_MODE` | `fixture` | Tool Provider mode: `fixture`, `mock`, or `live`. |
+| `AGENT_VOICE_MODE` | `AGENT_PROVIDER_MODE` | Batch voice Provider mode: `fixture` or `mock`. `live` requires an explicitly injected `VoiceProvider`. |
 | `AGENT_MODEL_MODE` | unset | Model planning mode. Leave unset or set `disabled` for rules-only planning; `openai-compatible` enables the validated OpenAI-compatible adapter. |
 | `AGENT_MODEL_ENDPOINT` | unset | HTTPS OpenAI-compatible `/chat/completions` endpoint; required only when `AGENT_MODEL_MODE=openai-compatible`. |
 | `AGENT_MODEL_ALLOWED_HOSTS` | unset | Comma-separated allowlist for the model endpoint host; required only when model planning is enabled. |
@@ -152,6 +162,12 @@ The demo accepts spoken task input through the browser's own Web Speech API, wit
 - Every failure — no speech API, an insecure origin, a denied microphone, silence, a timeout — states what happened in the voice status line and leaves the text field usable, so a voice failure never blocks the task.
 - Voice failures never mutate `TaskState`, and a rejected submission keeps the transcript in the field for a text retry.
 - Wake word and local voice activity detection are out of scope for the POC.
+
+The demo drawer also exposes three prerecorded Fixture replays. Their WAV audio
+is presentation evidence while the canonical transcript runs through the same
+editable confirmation and Agent input path. The batch transcription API has a
+larger provider-only fixture catalog for success, low-confidence, no-speech,
+misrecognition, truncation, and timeout contract tests.
 
 ## Known Limitations
 

@@ -1,9 +1,12 @@
+// @vitest-environment node
+
 import { afterEach, describe, expect, it } from 'vitest'
 import { request } from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, posix, win32 } from 'node:path'
 import { createSideEffectRuntime, issueAutoNotifyAuthorization } from '@canvasflow/tools'
+import type { VoiceTranscriptionHttpResponse } from '@canvasflow/schema'
 import {
   createAgentServer,
   resolveStaticPath,
@@ -152,6 +155,117 @@ describe('agent server runtime', () => {
     const response = await fetch(`http://127.0.0.1:${address.port}/health`)
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toEqual({ ok: true })
+  })
+
+  it('transcribes a reviewed fixture through the JSON voice API', async () => {
+    server = createAgentServer()
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/voice/transcriptions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-request-id': 'voice-json-001' },
+      body: JSON.stringify({ fixtureId: 'clear-airport-pickup' }),
+    })
+    const body = await response.json() as VoiceTranscriptionHttpResponse
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('x-request-id')).toBe('voice-json-001')
+    expect(body).toMatchObject({
+      requestId: 'voice-json-001',
+      ok: true,
+      result: {
+        transcript: '接妈妈和豆豆，航班 MU5102',
+        confidence: 0.96,
+        provider: 'fixture',
+      },
+    })
+  })
+
+  it('accepts a reviewed WAV through multipart upload', async () => {
+    server = createAgentServer()
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
+    const wav = await readFile('fixtures/airport-pickup/voice/missing-flight-number.wav')
+    const form = new FormData()
+    form.set('audio', new File([wav], 'renamed.wav', { type: 'audio/wav' }))
+    form.set('language', 'zh-CN')
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/voice/transcriptions`, {
+      method: 'POST',
+      headers: { 'x-request-id': 'voice-upload-001' },
+      body: form,
+    })
+    expect(response.status).toBe(200)
+    await expect(response.json()).resolves.toMatchObject({
+      requestId: 'voice-upload-001',
+      ok: true,
+      result: {
+        fixtureId: 'missing-flight-number',
+        transcript: '我现在要去机场接妈妈和豆豆',
+      },
+    })
+  })
+
+  it.each([
+    ['noisy-airport-pickup', 200, true, undefined],
+    ['no-speech', 422, false, 'NO_SPEECH_DETECTED'],
+    ['timeout', 504, false, 'TRANSCRIPTION_TIMEOUT'],
+  ] as const)('maps voice fixture %s to HTTP status %s', async (fixtureId, status, ok, code) => {
+    server = createAgentServer()
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
+
+    const response = await fetch(`http://127.0.0.1:${address.port}/v1/voice/transcriptions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fixtureId }),
+    })
+    const body = await response.json() as VoiceTranscriptionHttpResponse
+    expect(response.status).toBe(status)
+    expect(body.ok).toBe(ok)
+    if (code) expect(body).toMatchObject({ error: { code } })
+    if (fixtureId === 'noisy-airport-pickup') {
+      expect(body).toMatchObject({ result: { confidence: 0.52, warnings: ['BACKGROUND_NOISE', 'LOW_CONFIDENCE'] } })
+    }
+  })
+
+  it('rejects unknown fixtures, invalid MIME, empty uploads, and oversized requests', async () => {
+    server = createAgentServer()
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
+    const baseUrl = `http://127.0.0.1:${address.port}/v1/voice/transcriptions`
+
+    const unknown = await fetch(baseUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fixtureId: 'missing-fixture' }),
+    })
+    expect(unknown.status).toBe(404)
+
+    const invalidMime = new FormData()
+    invalidMime.set('audio', new File(['not audio'], 'voice.txt', { type: 'text/plain' }))
+    const invalidMimeResponse = await fetch(baseUrl, { method: 'POST', body: invalidMime })
+    expect(invalidMimeResponse.status).toBe(415)
+    await expect(invalidMimeResponse.json()).resolves.toMatchObject({ error: { code: 'UNSUPPORTED_AUDIO_FORMAT' } })
+
+    const empty = new FormData()
+    empty.set('audio', new File([], 'empty.wav', { type: 'audio/wav' }))
+    const emptyResponse = await fetch(baseUrl, { method: 'POST', body: empty })
+    expect(emptyResponse.status).toBe(400)
+    await expect(emptyResponse.json()).resolves.toMatchObject({ error: { code: 'AUDIO_TOO_SHORT' } })
+
+    const oversizedResponse = await fetch(baseUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ fixtureId: 'x'.repeat(20_000) }),
+    })
+    expect(oversizedResponse.status).toBe(413)
+    await expect(oversizedResponse.json()).resolves.toMatchObject({ error: { code: 'AUDIO_TOO_LONG' } })
   })
 
   it('rejects malformed static URLs without terminating the server', async () => {
