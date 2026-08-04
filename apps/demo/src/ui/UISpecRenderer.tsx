@@ -10,6 +10,7 @@ import {
   AlertIcon,
   ArrowRightIcon,
   ChargingIcon,
+  ClockIcon,
   CompleteIcon,
   InfoIcon,
   LocationIcon,
@@ -537,6 +538,51 @@ function TaskProgressCard({
   )
 }
 
+const scheduleMilestoneStatusLabels: Record<
+  Extract<ComponentSpec, { type: 'schedule-strip' }>['props']['milestones'][number]['status'],
+  string
+> = {
+  done: '已完成',
+  next: '下一个',
+  upcoming: '随后',
+  'at-risk': '可能赶不上',
+}
+
+/**
+ * One compact band that lays the task's projected milestones alongside the
+ * family calendar. Task points render solid, calendar points hollow, so the
+ * driver reads "the trip runs in the gaps of the day" at a glance; `at-risk`
+ * is the only state allowed to raise its voice.
+ */
+function ScheduleStripCard({ component }: { component: Extract<ComponentSpec, { type: 'schedule-strip' }> }) {
+  const { milestones } = component.props
+  return (
+    <ComponentSurface component={component} className="ui-schedule-strip">
+      <header className="ui-schedule-strip__header">
+        <span className="ui-schedule-strip__glyph" aria-hidden="true"><ClockIcon size={18} /></span>
+        <p className="ui-schedule-strip__eyebrow">今日安排</p>
+      </header>
+      <ol className="ui-schedule-strip__track" aria-label="任务与日程时间带">
+        {milestones.map((milestone) => (
+          <li
+            key={`${milestone.label}-${milestone.time}`}
+            className="ui-schedule-strip__milestone"
+            data-kind={milestone.kind}
+            data-status={milestone.status}
+          >
+            <span className="ui-schedule-strip__dot" aria-hidden="true" />
+            <span className="ui-schedule-strip__label">{milestone.label}</span>
+            <time className="ui-schedule-strip__time" dateTime={milestone.time}>{formatTime(milestone.time)}</time>
+            {milestone.status === 'at-risk' && (
+              <span className="ui-schedule-strip__risk">{scheduleMilestoneStatusLabels['at-risk']}</span>
+            )}
+          </li>
+        ))}
+      </ol>
+    </ComponentSurface>
+  )
+}
+
 function AlertCard({ component }: { component: Extract<ComponentSpec, { type: 'alert' }> }) {
   return (
     <ComponentSurface
@@ -627,6 +673,7 @@ function ComponentCard({
     case 'passenger-status': return <PassengerStatusCard component={result.data} />
     case 'cabin-profile': return <CabinProfileCard component={result.data} />
     case 'task-progress': return <TaskProgressCard component={result.data} phase={phase} />
+    case 'schedule-strip': return <ScheduleStripCard component={result.data} />
     case 'alert': return <AlertCard component={result.data} />
     case 'status-banner': return <StatusBannerCard component={result.data} />
   }

@@ -21,6 +21,7 @@ const readOnlyTools = [
   'navigation.plan-route',
   'vehicle.get-status',
   'charging.recommend',
+  'calendar.list-upcoming',
 ] as const satisfies readonly ToolName[]
 
 const canonicalInputs: Record<(typeof readOnlyTools)[number], unknown> = {
@@ -39,6 +40,7 @@ const canonicalInputs: Record<(typeof readOnlyTools)[number], unknown> = {
     returnDistanceKm: 32,
     safetyReservePercent: 20,
   },
+  'calendar.list-upcoming': { date: '2026-07-22' },
 }
 
 describe('provider registry (ctx, input)', () => {

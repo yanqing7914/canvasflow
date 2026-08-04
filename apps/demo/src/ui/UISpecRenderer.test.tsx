@@ -288,6 +288,86 @@ describe('UISpecRenderer', () => {
     expect(screen.getByText('暂时没有可显示的进度')).toHaveClass('ui-progress__empty')
   })
 
+  it('lays schedule milestones on one labelled band, keeping task and calendar provenance apart', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['schedule'] } },
+      components: [{
+        id: 'schedule',
+        type: 'schedule-strip',
+        props: {
+          milestones: [
+            { label: 'MU5102 落地', time: '2026-07-22T20:40:00+08:00', kind: 'task', status: 'next' },
+            { label: '预计到家', time: '2026-07-22T21:27:00+08:00', kind: 'task', status: 'upcoming' },
+            { label: '豆豆的睡前故事', time: '2026-07-22T21:30:00+08:00', kind: 'calendar', status: 'upcoming' },
+          ],
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const track = screen.getByRole('list', { name: '任务与日程时间带' })
+    const milestones = track.querySelectorAll('.ui-schedule-strip__milestone')
+    expect(milestones).toHaveLength(3)
+    // Provenance is a data hook, not just a colour: assistive tooling and the
+    // stylesheet must agree on which points belong to the task.
+    expect(milestones[0]).toHaveAttribute('data-kind', 'task')
+    expect(milestones[1]).toHaveAttribute('data-kind', 'task')
+    expect(milestones[2]).toHaveAttribute('data-kind', 'calendar')
+    // Spec order is display order — the band would lie about the evening if
+    // the renderer resorted it.
+    expect(track.textContent).toMatch(/MU5102 落地.*预计到家.*豆豆的睡前故事/u)
+    expect(screen.getByText('20:40')).toHaveAttribute('dateTime', '2026-07-22T20:40:00+08:00')
+    // A quiet calendar entry must not raise the at-risk voice.
+    expect(track.textContent).not.toContain('可能赶不上')
+  })
+
+  it('raises the at-risk voice only on the milestone that carries it', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['schedule'] } },
+      components: [{
+        id: 'schedule',
+        type: 'schedule-strip',
+        props: {
+          milestones: [
+            { label: 'MU5103 落地', time: '2026-07-22T21:10:00+08:00', kind: 'task', status: 'next' },
+            { label: '豆豆的睡前故事', time: '2026-07-22T21:30:00+08:00', kind: 'calendar', status: 'at-risk' },
+          ],
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const milestones = document.querySelectorAll('.ui-schedule-strip__milestone')
+    expect(milestones[1]).toHaveAttribute('data-status', 'at-risk')
+    const risk = screen.getByText('可能赶不上')
+    expect(milestones[1]!.contains(risk)).toBe(true)
+    expect(milestones[0]!.textContent).not.toContain('可能赶不上')
+  })
+
+  it('rejects a schedule strip below the two-point contract as a safe placeholder', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['schedule'] } },
+      components: [{
+        id: 'schedule',
+        type: 'schedule-strip',
+        props: {
+          milestones: [
+            { label: '预计到家', time: '2026-07-22T21:27:00+08:00', kind: 'task', status: 'next' },
+          ],
+        },
+      } as unknown as ComponentSpec],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    // One point is not a band. The schema floor (min 2) must hold at render
+    // time too, falling back to the standard unrenderable-component card.
+    expect(screen.queryByRole('list', { name: '任务与日程时间带' })).not.toBeInTheDocument()
+    expect(screen.getByText('这项信息暂时无法显示')).toBeInTheDocument()
+  })
+
   it('leads the charging card with the suggested duration when one is supplied', () => {
     const spec = baseSpec({
       layout: { type: 'stack', gap: 'md', slots: { main: ['charging'] } },

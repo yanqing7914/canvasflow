@@ -1,5 +1,6 @@
 import type { ProviderMode, ToolDefinition, ToolResult } from '@canvasflow/schema'
 import { createCabinProfileTools } from './cabin'
+import { listUpcomingEvents } from './calendar'
 import { getFixtureChargingRecommendation, getFixtureFlightStatus } from './compat'
 import { recommendCharging } from './charging'
 import { resolveMembers } from './family'
@@ -106,6 +107,13 @@ export const toolDefinitions = {
     riskLevel: 'read',
     timeoutMs: 1000,
   },
+  'calendar.list-upcoming': {
+    name: 'calendar.list-upcoming',
+    version: '1.0',
+    description: '读取家庭日历当天的剩余日程',
+    riskLevel: 'read',
+    timeoutMs: 1000,
+  },
   'media.play': {
     name: 'media.play',
     version: '1.0',
@@ -177,6 +185,7 @@ export function createProviderRegistry(
     'vehicle.apply-cabin-profile': cabin.applyCabinProfile,
     'vehicle.revert-cabin-profile': cabin.revertCabinProfile,
     'charging.recommend': recommendCharging,
+    'calendar.list-upcoming': listUpcomingEvents,
     'media.play': playMedia,
     'message.prepare': prepareMessage,
     'message.send': sendMessage,

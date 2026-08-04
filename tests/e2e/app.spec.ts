@@ -260,6 +260,14 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
   await sendText(page)
   await expectNoScroll(page)
   await sendText(page, 'MU5102')
+  // The calendar strip is the fourth brief sharing the preparing frame: it must
+  // actually appear, carry the family calendar fact, stay quiet on the happy
+  // path, and fit inside the fixed frame with the three briefs above it.
+  const scheduleStrip = page.locator('.ui-card--schedule-strip')
+  await expect(scheduleStrip).toBeVisible()
+  await expect(scheduleStrip).toContainText('豆豆的睡前故事')
+  await expect(scheduleStrip).toContainText('21:30')
+  await expect(scheduleStrip.locator('.ui-schedule-strip__risk')).toHaveCount(0)
   await expectNoScroll(page)
 
   await page.getByRole('button', { name: '开始导航' }).click()

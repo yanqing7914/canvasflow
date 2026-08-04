@@ -132,6 +132,24 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
     }),
   }),
   componentBase.extend({
+    type: z.literal('schedule-strip'),
+    props: z.object({
+      /**
+       * Task milestones and calendar events on one ordered band. `kind` keeps
+       * their provenance apart (solid vs hollow markers); `at-risk` marks a
+       * calendar entry the task's projected timing may miss. Deliberately no
+       * "now" marker: the fixture timeline and the wall clock disagree, and a
+       * clock the brief cannot honor is worse than none.
+       */
+      milestones: z.array(z.object({
+        label: z.string().min(1),
+        time: z.string(),
+        kind: z.enum(['task', 'calendar']),
+        status: z.enum(['done', 'next', 'upcoming', 'at-risk']),
+      })).min(2).max(5),
+    }),
+  }),
+  componentBase.extend({
     type: z.literal('alert'),
     props: z.object({ level: z.enum(['info', 'warning', 'critical']), title: z.string(), message: z.string().optional() }),
   }),
