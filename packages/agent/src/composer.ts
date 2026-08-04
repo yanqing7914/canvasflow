@@ -1,4 +1,4 @@
-import { uiSpecSchema, type AirportPickupTaskState, type UISpec } from '@canvasflow/schema'
+import { uiSpecSchema, type AirportPickupTaskState, type CalendarEvent, type UISpec } from '@canvasflow/schema'
 import {
   chargingStation,
   chargingStationsForDensity,
@@ -87,6 +87,11 @@ export function composeAgentSpec(
       { id: 'navigation-plan', type: 'navigation-summary', props: { routeId: route.routeId, destination: task.navigation?.destination ?? '虹桥机场 T2', eta: task.navigation?.eta ?? route.arrivalTime, distanceKm: route.distanceKm, estimatedBatteryAtArrival: route.estimatedBatteryAtArrival, ...(plannedSketch ? { routeSketch: plannedSketch } : {}) } },
       { id: 'charging-plan', type: 'charging-recommendation', props: { recommended: charging.recommended, reason: charging.reason, currentBatteryPercent: vehicle.batteryPercent, estimatedFinalBatteryPercent: charging.estimatedFinalBatteryPercent, suggestedDurationMinutes: charging.suggestedDurationMinutes, etaImpactMinutes: charging.etaImpactMinutes } },
     ]
+    const calendar = toolResults['calendar.list-upcoming']
+    if (calendar && calendar.data.events.length > 0) {
+      const strip = preparingScheduleStrip(task.flight, route, charging, calendar.data.events)
+      if (strip) components.push(strip)
+    }
   } else if (task.passengers.confirmedOnboard) {
     title = '返程回家'
     density = 'compact'
@@ -155,6 +160,11 @@ export function composeAgentSpec(
         ...actions,
         { id: 'retry-return-trip', label: '重试返程设置', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-return-trip` } },
       ]
+    }
+    const returnCalendar = toolResults['calendar.list-upcoming']
+    if (task.phase === 'returning-home' && task.navigation && returnCalendar && returnCalendar.data.events.length > 0) {
+      const strip = returningScheduleStrip(task.navigation.eta, returnCalendar.data.events)
+      if (strip) components.push(strip)
     }
   } else if (task.message.status === 'scheduled') {
     title = '落地通知'
@@ -432,6 +442,66 @@ function progressComponent(task: AirportPickupTaskState): UISpec['components'][n
         label: phaseLabels[phase],
         status: phase === task.phase ? 'active' : phases.indexOf(phase) < currentIndex ? 'completed' : 'pending',
       })),
+    },
+  }
+}
+
+/** Every fixture timestamp carries +08:00, so computed instants render in that offset too. */
+const FIXTURE_UTC_OFFSET_MS = 8 * 60 * 60 * 1000
+/** Curbside meeting, luggage, and leaving the parking structure. */
+const PICKUP_HANDOFF_MINUTES = 15
+const MAX_CALENDAR_MILESTONES = 2
+
+function fixtureIso(epochMs: number): string {
+  return new Date(epochMs + FIXTURE_UTC_OFFSET_MS).toISOString().replace(/\.\d{3}Z$/u, '+08:00')
+}
+
+function calendarMilestones(events: CalendarEvent[], projectedHomeMs: number) {
+  return events.slice(0, MAX_CALENDAR_MILESTONES).map((event) => ({
+    label: event.title,
+    time: event.startAt,
+    kind: 'calendar' as const,
+    status: Date.parse(event.startAt) < projectedHomeMs ? 'at-risk' as const : 'upcoming' as const,
+  }))
+}
+
+function preparingScheduleStrip(
+  flight: NonNullable<AirportPickupTaskState['flight']>,
+  route: { durationMinutes: number },
+  charging: { recommended: boolean; etaImpactMinutes?: number },
+  events: CalendarEvent[],
+): UISpec['components'][number] | undefined {
+  const landingMs = Date.parse(flight.estimatedArrival)
+  if (Number.isNaN(landingMs)) return undefined
+  const chargingMinutes = charging.recommended ? charging.etaImpactMinutes ?? 0 : 0
+  const projectedHomeMs = landingMs + (PICKUP_HANDOFF_MINUTES + route.durationMinutes + chargingMinutes) * 60_000
+  return {
+    id: 'schedule-strip',
+    type: 'schedule-strip',
+    props: {
+      milestones: [
+        { label: `${flight.flightNumber} 落地`, time: flight.estimatedArrival, kind: 'task', status: 'next' },
+        { label: '预计到家', time: fixtureIso(projectedHomeMs), kind: 'task', status: 'upcoming' },
+        ...calendarMilestones(events, projectedHomeMs),
+      ],
+    },
+  }
+}
+
+function returningScheduleStrip(
+  homeEta: string,
+  events: CalendarEvent[],
+): UISpec['components'][number] | undefined {
+  const homeMs = Date.parse(homeEta)
+  if (Number.isNaN(homeMs)) return undefined
+  return {
+    id: 'schedule-strip',
+    type: 'schedule-strip',
+    props: {
+      milestones: [
+        { label: '到家', time: homeEta, kind: 'task', status: 'next' },
+        ...calendarMilestones(events, homeMs),
+      ],
     },
   }
 }

@@ -5,6 +5,7 @@ import type { z } from 'zod'
 import {
   applyCabinProfileOutputSchema,
   chargingRecommendationOutputSchema,
+  listUpcomingEventsOutputSchema,
   confirmMemoryUpdateOutputSchema,
   flightStatusOutputSchema,
   getPreferencesOutputSchema,
@@ -58,6 +59,7 @@ const outputSchemas: Record<ToolName, z.ZodType> = {
   'vehicle.apply-cabin-profile': applyCabinProfileOutputSchema,
   'vehicle.revert-cabin-profile': revertCabinProfileOutputSchema,
   'charging.recommend': chargingRecommendationOutputSchema,
+  'calendar.list-upcoming': listUpcomingEventsOutputSchema,
   'media.play': mediaPlayOutputSchema,
   'message.prepare': messagePrepareOutputSchema,
   'message.send': messageSendOutputSchema,

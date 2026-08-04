@@ -2,6 +2,7 @@ import {
   chargingRecommendationOutputSchema,
   flightStatusOutputSchema,
   getPreferencesOutputSchema,
+  listUpcomingEventsOutputSchema,
   resolveMembersOutputSchema,
   routePlanOutputSchema,
   toolResultSchema,
@@ -9,6 +10,7 @@ import {
   type ChargingRecommendationOutput,
   type FlightStatusOutput,
   type GetPreferencesOutput,
+  type ListUpcomingEventsOutput,
   type ResolveMembersOutput,
   type RoutePlanOutput,
   type ToolResult,
@@ -26,6 +28,7 @@ export type ReadToolResults = Partial<{
   'navigation.plan-route': SuccessfulToolResult<RoutePlanOutput>
   'vehicle.get-status': SuccessfulToolResult<VehicleStatusOutput>
   'charging.recommend': SuccessfulToolResult<ChargingRecommendationOutput>
+  'calendar.list-upcoming': SuccessfulToolResult<ListUpcomingEventsOutput>
 }>
 
 export class ReadToolOrchestrationError extends Error {
@@ -167,6 +170,22 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       toolResultSchema(chargingRecommendationOutputSchema),
     )
 
+    // The calendar only feeds the schedule strip. Losing it costs the driver
+    // one auxiliary band, so a provider failure here must never take down the
+    // trip preparation the way a flight or route failure does.
+    let calendar: SuccessfulToolResult<ListUpcomingEventsOutput> | undefined
+    try {
+      calendar = this.#call(
+        'calendar.list-upcoming',
+        taskId,
+        requestId,
+        { date: this.#fixtureDate },
+        toolResultSchema(listUpcomingEventsOutputSchema),
+      )
+    } catch {
+      calendar = undefined
+    }
+
     return {
       flight: flight.data,
       route: route.data,
@@ -177,6 +196,7 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
         'navigation.plan-route': route,
         'vehicle.get-status': vehicle,
         'charging.recommend': charging,
+        ...(calendar ? { 'calendar.list-upcoming': calendar } : {}),
       },
     }
   }

@@ -1431,6 +1431,131 @@ a:focus-visible {
   color: var(--muted);
 }
 
+/* Schedule strip: one low band that lays task milestones alongside the family
+   calendar. It shares a fixed frame with three taller briefs, so everything —
+   header, dots, labels, times — sits on a single baseline row and never wraps
+   into a second line the frame has no room for. */
+.ui-card--schedule-strip {
+  flex-direction: row;
+  align-items: center;
+  gap: clamp(14px, 1.6vw, 28px);
+  border-top: 1px solid var(--quiet-rule);
+}
+
+.ui-schedule-strip__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.ui-schedule-strip__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.ui-schedule-strip__track {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: clamp(14px, 1.8vw, 32px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+
+.ui-schedule-strip__milestone {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The connecting stroke between neighbouring points. */
+.ui-schedule-strip__milestone + .ui-schedule-strip__milestone::before {
+  content: '';
+  width: clamp(12px, 1.4vw, 26px);
+  height: 1px;
+  background: var(--rule);
+  margin-right: clamp(6px, 0.8vw, 12px);
+}
+
+/* Solid = the task's own milestones; hollow = the family calendar's. */
+.ui-schedule-strip__dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.ui-schedule-strip__milestone[data-kind="task"] .ui-schedule-strip__dot { background: var(--blue); }
+
+.ui-schedule-strip__milestone[data-kind="calendar"] .ui-schedule-strip__dot {
+  background: transparent;
+  border: 2px solid var(--muted);
+}
+
+.ui-schedule-strip__milestone[data-status="at-risk"] .ui-schedule-strip__dot {
+  background: transparent;
+  border-color: var(--amber);
+}
+
+.ui-schedule-strip__label {
+  font-size: 16px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-schedule-strip__time {
+  font-size: 17px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.ui-schedule-strip__milestone[data-kind="calendar"] .ui-schedule-strip__label,
+.ui-schedule-strip__milestone[data-kind="calendar"] .ui-schedule-strip__time { color: var(--muted); }
+
+.ui-schedule-strip__milestone[data-status="at-risk"] .ui-schedule-strip__label,
+.ui-schedule-strip__milestone[data-status="at-risk"] .ui-schedule-strip__time { color: var(--amber); }
+
+.ui-schedule-strip__risk {
+  flex: none;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--amber-pale);
+  color: var(--amber);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Four briefs only ever share the frame when the schedule strip joins the three
+   preparing cards. The heroes each give back a notch of size and the stack a
+   notch of air, so the band fits the fixed frame without anyone scrolling —
+   and three-card layouts keep their exact metrics. */
+.ui-spec-renderer[data-component-count="4"] .ui-slot { gap: clamp(8px, 1.2vh, 14px); }
+/* The component grid always reserves its action row's gap, actions or not; with
+   four briefs those empty 16px seams are exactly the height the strip needs. */
+.ui-spec-renderer[data-component-count="4"] .ui-component { gap: 8px; }
+.ui-spec-renderer[data-component-count="4"] .ui-card { padding-block: 2px; }
+.ui-spec-renderer[data-component-count="4"] .ui-navigation-eta { font-size: clamp(88px, 6.2vw, 104px); }
+.ui-spec-renderer[data-component-count="4"] .ui-flight-brief__time { font-size: clamp(52px, 5.5vw, 80px); }
+.ui-spec-renderer[data-component-count="4"] .ui-card__lead--recommendation { font-size: clamp(36px, 3.4vw, 50px); }
+.ui-spec-renderer[data-component-count="4"] .ui-flight-brief__arrival { margin-top: clamp(16px, 2.5vh, 34px); }
+.ui-spec-renderer[data-component-count="4"] .ui-flight-brief__facts { margin-top: clamp(14px, 2vh, 24px); }
+.ui-spec-renderer[data-component-count="4"] .ui-navigation-hero { margin-top: clamp(10px, 1.5vh, 20px); }
+.ui-spec-renderer[data-component-count="4"] .ui-battery-journey { margin-top: clamp(12px, 2vh, 25px); }
+.ui-spec-renderer[data-component-count="4"] .ui-card__lead--recommendation { margin-top: clamp(10px, 1.5vh, 18px); }
+
 .ui-spec-renderer[data-density="compact"] .ui-card__eyebrow { font-size: 14px; }
 
 .ui-spec-renderer[data-density="compact"] .ui-card__summary,
@@ -1454,6 +1579,7 @@ a:focus-visible {
 .ui-spec-renderer[data-density="minimal"] .ui-detail-row,
 .ui-spec-renderer[data-density="minimal"] .ui-card__summary,
 .ui-spec-renderer[data-density="minimal"] .ui-card__muted,
+.ui-spec-renderer[data-density="minimal"] .ui-card--schedule-strip,
 .ui-spec-renderer[data-density="minimal"] .ui-metric--comparison { display: none; }
 
 .ui-spec-renderer[data-density="minimal"] .ui-card__lead { margin-top: 16px; }

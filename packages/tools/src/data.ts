@@ -1,4 +1,4 @@
-import type { FlightStatusOutput, RoutePlanOutput, VehicleStatusOutput } from '@canvasflow/schema'
+import type { CalendarEvent, FlightStatusOutput, RoutePlanOutput, VehicleStatusOutput } from '@canvasflow/schema'
 import { FIXTURE_GENERATED_AT } from './result'
 
 /**
@@ -45,6 +45,33 @@ export const memberPreferences: Record<string, MemberPreferenceRecord> = {
 
 /** Requesting this flight number deterministically simulates PROVIDER_TIMEOUT. */
 export const TIMEOUT_FLIGHT_NUMBER = 'MU0000'
+
+export type CalendarEventRecord = CalendarEvent & { date: string }
+
+/**
+ * Family calendar fixtures keyed by day. MU5102 lands 20:40 and the return
+ * drive takes ~20 minutes, so 豆豆's 21:30 story is reachable on the happy
+ * path and missed when the MU5103 delay fixture pushes landing to 21:10 —
+ * both demo branches read from this single entry. The next-day breakfast
+ * exists only to prove the date filter drops it.
+ */
+export const calendarEvents: CalendarEventRecord[] = [
+  {
+    eventId: 'event-bedtime-story',
+    date: '2026-07-22',
+    title: '豆豆的睡前故事',
+    startAt: '2026-07-22T21:30:00+08:00',
+    endAt: '2026-07-22T22:00:00+08:00',
+    location: '家',
+  },
+  {
+    eventId: 'event-family-breakfast',
+    date: '2026-07-23',
+    title: '家庭早餐',
+    startAt: '2026-07-23T08:00:00+08:00',
+    location: '家',
+  },
+]
 
 /**
  * Requesting a route to this destination id deterministically simulates

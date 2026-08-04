@@ -29,12 +29,81 @@ describe('Agent UISpec composer', () => {
     const spec = composeAgentSpec(task, reads.toolResults)
 
     expect(spec.components.map((component) => component.type)).toEqual([
-      'flight-status', 'navigation-summary', 'charging-recommendation',
+      'flight-status', 'navigation-summary', 'charging-recommendation', 'schedule-strip',
     ])
     expect(spec.components).toContainEqual(expect.objectContaining({
       id: 'flight-status',
       props: expect.objectContaining({ scheduledArrival: reads.flight.scheduledArrival }),
     }))
+  })
+
+  it('lays calendar events alongside task milestones on the preparing schedule strip', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const spec = composeAgentSpec(task, reads.toolResults)
+    const strip = spec.components.find((component) => component.type === 'schedule-strip')
+
+    expect(strip).toBeDefined()
+    if (strip?.type !== 'schedule-strip') throw new Error('expected a schedule-strip component')
+    // MU5102 lands 20:40; handoff (15) + return drive (20) + charging impact land
+    // the projected home arrival before 豆豆's 21:30 story, so the calendar entry
+    // must stay quiet rather than cry wolf.
+    expect(strip.props.milestones).toEqual([
+      expect.objectContaining({ label: 'MU5102 落地', time: reads.flight.estimatedArrival, kind: 'task', status: 'next' }),
+      expect.objectContaining({ label: '预计到家', kind: 'task', status: 'upcoming' }),
+      expect.objectContaining({ label: '豆豆的睡前故事', time: '2026-07-22T21:30:00+08:00', kind: 'calendar', status: 'upcoming' }),
+    ])
+    // Next-day fixtures must never leak onto today's band.
+    expect(strip.props.milestones.map((milestone) => milestone.label)).not.toContain('家庭早餐')
+  })
+
+  it('marks a calendar entry at risk when the delayed flight pushes homecoming past it', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5103')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const spec = composeAgentSpec(task, reads.toolResults)
+    const strip = spec.components.find((component) => component.type === 'schedule-strip')
+
+    if (strip?.type !== 'schedule-strip') throw new Error('expected a schedule-strip component')
+    // MU5103's 21:10 landing cannot reach home before the 21:30 story.
+    expect(strip.props.milestones).toContainEqual(
+      expect.objectContaining({ label: '豆豆的睡前故事', kind: 'calendar', status: 'at-risk' }),
+    )
+  })
+
+  it('composes without a schedule strip when the calendar read is absent', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const withoutCalendar = { ...reads.toolResults }
+    delete withoutCalendar['calendar.list-upcoming']
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const spec = composeAgentSpec(task, withoutCalendar)
+
+    expect(spec.components.map((component) => component.type)).toEqual([
+      'flight-status', 'navigation-summary', 'charging-recommendation',
+    ])
   })
 
   it('projects a scheduled landing notification into a cancellable message preview', () => {

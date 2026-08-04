@@ -132,6 +132,23 @@ export const chargingRecommendationOutputSchema = z.object({
   etaImpactMinutes: z.number().nonnegative().optional(),
 })
 
+export const calendarEventSchema = z.object({
+  eventId: z.string().min(1),
+  title: z.string().min(1),
+  startAt: z.iso.datetime({ offset: true }),
+  endAt: z.iso.datetime({ offset: true }).optional(),
+  location: z.string().min(1).optional(),
+})
+
+export const listUpcomingEventsInputSchema = z.object({
+  date: z.iso.date(),
+})
+
+export const listUpcomingEventsOutputSchema = z.object({
+  /** The requested day's remaining events, ordered by start time. */
+  events: z.array(calendarEventSchema),
+})
+
 export const vehicleStatusOutputSchema = z.object({
   speedKph: z.number().nonnegative(),
   batteryPercent: z.number().min(0).max(100),
@@ -326,6 +343,9 @@ export type RoutePlanInput = z.infer<typeof routePlanInputSchema>
 export type RoutePlanOutput = z.infer<typeof routePlanOutputSchema>
 export type ChargingRecommendationInput = z.infer<typeof chargingRecommendationInputSchema>
 export type ChargingRecommendationOutput = z.infer<typeof chargingRecommendationOutputSchema>
+export type CalendarEvent = z.infer<typeof calendarEventSchema>
+export type ListUpcomingEventsInput = z.infer<typeof listUpcomingEventsInputSchema>
+export type ListUpcomingEventsOutput = z.infer<typeof listUpcomingEventsOutputSchema>
 export type VehicleStatusOutput = z.infer<typeof vehicleStatusOutputSchema>
 export type NavigationStartInput = z.infer<typeof navigationStartInputSchema>
 export type NavigationStartOutput = z.infer<typeof navigationStartOutputSchema>
