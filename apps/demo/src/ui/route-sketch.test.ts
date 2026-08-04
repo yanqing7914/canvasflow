@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { RouteSketch } from '@canvasflow/schema'
-import { ROUTE_SKETCH_VIEWBOX, buildRouteSketchDrawing } from './route-sketch'
+import {
+  ROUTE_MAP_DRAWING_OPTIONS,
+  ROUTE_MAP_VIEWBOX,
+  ROUTE_SKETCH_VIEWBOX,
+  buildRouteSketchDrawing,
+} from './route-sketch'
 
 /** An L-shaped line: right along the top, then straight down. */
 const elbow: RouteSketch = {
@@ -206,6 +211,104 @@ describe('buildRouteSketchDrawing', () => {
   })
 })
 
+/**
+ * The standalone `route-map` panel draws the same fixture points as the in-card
+ * band, but reads as a picture of a place rather than a strip beside a list of
+ * stop names. Two things change with it: the drawing keeps the proportions the
+ * points have, and west stays on the left.
+ */
+describe('buildRouteSketchDrawing in panel mode', () => {
+  it('keeps the drawing inside the panel box', () => {
+    const drawing = buildRouteSketchDrawing({ ...elbow, progress: 0.5 }, ROUTE_MAP_DRAWING_OPTIONS)!
+
+    for (const point of [...drawing.markers, drawing.vehicle!]) {
+      expect(point.x).toBeGreaterThanOrEqual(0)
+      expect(point.x).toBeLessThanOrEqual(ROUTE_MAP_VIEWBOX.width)
+      expect(point.y).toBeGreaterThanOrEqual(0)
+      expect(point.y).toBeLessThanOrEqual(ROUTE_MAP_VIEWBOX.height)
+    }
+  })
+
+  it('scales both axes by the same factor instead of stretching them apart', () => {
+    // A square in the data: equal spans of latitude and longitude. Stretched into
+    // a wide box it becomes a rectangle; contained it stays square.
+    const square: RouteSketch = {
+      waypoints: [
+        { name: '出发地', latitude: 31.2, longitude: 121.4 },
+        { name: '虹桥机场 T2', latitude: 31.3, longitude: 121.5 },
+      ],
+      polyline: [
+        { latitude: 31.2, longitude: 121.4 },
+        { latitude: 31.2, longitude: 121.5 },
+        { latitude: 31.3, longitude: 121.5 },
+      ],
+    }
+    const panel = vertices(buildRouteSketchDrawing(square, ROUTE_MAP_DRAWING_OPTIONS)!.path)
+    const [start, corner, end] = panel
+
+    expect(Math.abs(corner!.x - start!.x)).toBeCloseTo(Math.abs(corner!.y - end!.y), 5)
+
+    // The band stretches the same square into the wide strip, on purpose.
+    const band = vertices(buildRouteSketchDrawing(square)!.path)
+    expect(Math.abs(band[1]!.x - band[0]!.x)).toBeGreaterThan(Math.abs(band[1]!.y - band[2]!.y) * 2)
+  })
+
+  it('leaves a westbound leg pointing west', () => {
+    // The demo's airport route runs west. The band mirrors it to read left to
+    // right; a panel must not, or the airport lands on the wrong side of the frame.
+    const westbound: RouteSketch = {
+      waypoints: [
+        { name: '出发地', latitude: 31.23, longitude: 121.47 },
+        { name: '虹桥机场 T2', latitude: 31.198, longitude: 121.336 },
+      ],
+      polyline: [
+        { latitude: 31.23, longitude: 121.47 },
+        { latitude: 31.21, longitude: 121.39 },
+        { latitude: 31.198, longitude: 121.336 },
+      ],
+      progress: 0.08,
+    }
+    const panel = buildRouteSketchDrawing(westbound, ROUTE_MAP_DRAWING_OPTIONS)!
+    const [origin, destination] = panel.markers
+
+    expect(origin!.x).toBeGreaterThan(destination!.x)
+    // North is still up, and just-departed is still next to the origin.
+    expect(origin!.y).toBeLessThan(destination!.y)
+    expect(Math.abs(panel.vehicle!.x - origin!.x)).toBeLessThan(Math.abs(destination!.x - origin!.x) / 2)
+
+    // The band is unaffected by the panel's options.
+    expect(buildRouteSketchDrawing(westbound)!.markers[0]!.x)
+      .toBeLessThan(buildRouteSketchDrawing(westbound)!.markers[1]!.x)
+  })
+
+  it('centres a line that has no span on one axis', () => {
+    const drawing = buildRouteSketchDrawing({
+      waypoints: [
+        { name: '出发地', latitude: 31.23, longitude: 121.4 },
+        { name: '虹桥机场 T2', latitude: 31.23, longitude: 121.5 },
+      ],
+      polyline: [
+        { latitude: 31.23, longitude: 121.4 },
+        { latitude: 31.23, longitude: 121.5 },
+      ],
+      progress: 1,
+    }, ROUTE_MAP_DRAWING_OPTIONS)!
+
+    for (const marker of drawing.markers) expect(Number.isFinite(marker.y)).toBe(true)
+    // The keep-clear strip at the bottom carries the caption, so the line sits
+    // above the middle of the box rather than on it.
+    expect(drawing.markers[0]!.y).toBeLessThan(ROUTE_MAP_VIEWBOX.height / 2)
+  })
+
+  it('refuses undrawable geometry exactly as the band does', () => {
+    expect(buildRouteSketchDrawing(undefined, ROUTE_MAP_DRAWING_OPTIONS)).toBeUndefined()
+    expect(buildRouteSketchDrawing(
+      { ...elbow, polyline: elbow.polyline.slice(0, 1) } as RouteSketch,
+      ROUTE_MAP_DRAWING_OPTIONS,
+    )).toBeUndefined()
+  })
+})
+
 function straightLine(): RouteSketch['polyline'] {
   return [
     { latitude: 31.23, longitude: 121.4 },
@@ -216,12 +319,8 @@ function straightLine(): RouteSketch['polyline'] {
 
 /** Shortest distance from a point to the drawn path, in view-box units. */
 function distanceToPath(point: { x: number; y: number }, path: string): number {
-  const vertices = path.split(/[ML]/).filter((command) => command.trim().length > 0).map((command) => {
-    const [x, y] = command.trim().split(' ').map(Number)
-    return { x: x!, y: y! }
-  })
-  return Math.min(...vertices.slice(1).map((to, index) => {
-    const from = vertices[index]!
+  return Math.min(...vertices(path).slice(1).map((to, index) => {
+    const from = vertices(path)[index]!
     const spanX = to.x - from.x
     const spanY = to.y - from.y
     const lengthSquared = spanX * spanX + spanY * spanY
@@ -230,4 +329,12 @@ function distanceToPath(point: { x: number; y: number }, path: string): number {
       : Math.min(1, Math.max(0, ((point.x - from.x) * spanX + (point.y - from.y) * spanY) / lengthSquared))
     return Math.hypot(point.x - (from.x + spanX * ratio), point.y - (from.y + spanY * ratio))
   }))
+}
+
+/** The path's vertices in draw order. */
+function vertices(path: string): Array<{ x: number; y: number }> {
+  return path.split(/[ML]/).filter((command) => command.trim().length > 0).map((command) => {
+    const [x, y] = command.trim().split(' ').map(Number)
+    return { x: x!, y: y! }
+  })
 }

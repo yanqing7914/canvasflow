@@ -1,4 +1,4 @@
-import { uiSpecSchema, type AirportPickupTaskState, type UISpec } from '@canvasflow/schema'
+import { uiSpecSchema, type AirportPickupTaskState, type RouteSketch, type UISpec } from '@canvasflow/schema'
 import {
   chargingDensityForSpeed,
   chargingStation,
@@ -55,6 +55,7 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     { id: 'task-progress', type: 'task-progress' as const, props: { currentPhase: task.phase, steps: progressPhases.map((phase) => ({ phase, label: phaseLabels[phase], status: progressStatus(phase) })) } },
   ]
   let title = task.passengers.names.length > 0 ? `去${airport}接${task.passengers.names.join('和')}` : '机场接人任务'
+  let layout: UISpec['layout'] | undefined
   let density: UISpec['presentation']['density'] = 'full'
   let priority: UISpec['presentation']['priority'] = 'normal'
   let requiresConfirm = false
@@ -194,7 +195,7 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   else if (task.navigation) {
     density = 'compact'
     const routeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
-    components = [{
+    const underway = withRouteMap([{
       id: 'navigation-summary',
       type: 'navigation-summary',
       props: {
@@ -203,17 +204,57 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
         eta: task.navigation.eta,
         distanceKm: 32,
         estimatedBatteryAtArrival: 27,
-        ...(routeSketch ? { routeSketch } : {}),
       },
-    }]
+    }], routeSketch, task.navigation.destination)
+    components = underway.components
+    layout = underway.layout
   }
   else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: flightStatusProps(task.flight) }] }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,
     phase: task.phase, title, presentation: { mode: 'replace', density, theme: 'dark', priority },
-    layout: { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } }, components, actions,
+    layout: layout ?? { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } }, components, actions,
     meta: { generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm, generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${nextUiRevision}` },
   })
+}
+
+/**
+ * Give the route its own column: the map on the left, the cards that describe
+ * the same trip on the right.
+ *
+ * The geometry used to ride inside `navigation-summary` as a thin band, which a
+ * multi-card brief has no height to draw. A `route-map` component gets a slot of
+ * its own instead, so the same fixture points read as a picture of the trip
+ * rather than a rule between two lines of text. The cards keep their own
+ * `routeSketch` off: one route, drawn once.
+ *
+ * Without usable geometry there is nothing to put in the left column, so the
+ * cards stay exactly as they were and the caller falls back to a stack.
+ */
+function withRouteMap(
+  cards: UISpec['components'],
+  sketch: RouteSketch | undefined,
+  destination: string,
+): { components: UISpec['components']; layout?: UISpec['layout'] } {
+  if (!sketch) return { components: cards }
+  const routeMap: UISpec['components'][number] = {
+    id: 'route-map',
+    type: 'route-map',
+    props: {
+      destination,
+      // Underway, the driver is reading the part of the trip they are on; before
+      // departure, the whole thing. Neither is a camera setting — the renderer
+      // decides what zoom or bearing that means.
+      mode: sketch.progress !== undefined && sketch.progress > 0 ? 'follow' : 'overview',
+      routeSketch: sketch,
+    },
+  }
+  return {
+    // First, so a density trim drops cards off the end of the brief rather than
+    // the map out of its own column.
+    components: [routeMap, ...cards],
+    layout: { type: 'split', ratio: [1.75, 1], slots: { primary: [routeMap.id], secondary: cards.map((card) => card.id) } },
+  }
 }
 
 function flightStatusProps(flight: NonNullable<AirportPickupTaskState['flight']>) {
