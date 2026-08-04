@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import type { AirportPickupTaskState } from '@canvasflow/schema'
-import { memberPreferences } from '@canvasflow/tools'
+import {
+  chargingStationsForDensity,
+  estimateFinalBatteryPercent,
+  memberPreferences,
+  recommendedMeetingPoints,
+  vehicleSnapshots,
+} from '@canvasflow/tools'
 import { applyRequestPresentation, composeAgentSpec } from './composer'
 import { applyEvent, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
+import type { StoredTask } from './store'
 
 const timestamp = '2026-07-22T20:00:00+08:00'
 
@@ -275,6 +282,169 @@ describe('Agent UISpec composer', () => {
     expect(composeAgentSpec(cancelled)).toMatchObject({
       title: '接机任务已取消',
       components: [{ type: 'status-banner', props: { title: '接机任务已取消' } }],
+    })
+  })
+})
+
+describe('Agent UISpec composer arrival and battery consistency', () => {
+  const flight = {
+    flightNumber: 'MU5102',
+    status: 'landed' as const,
+    scheduledArrival: '2026-07-22T20:30:00+08:00',
+    estimatedArrival: '2026-07-22T20:40:00+08:00',
+    terminal: 'T2',
+  }
+
+  function arrivedTask(phase: 'approaching-airport' | 'waiting-for-passengers'): AirportPickupTaskState {
+    return {
+      ...createInitialTask('pickup-001', timestamp),
+      phase,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight,
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+      // A completed charge stays `completed` for the rest of the trip. It must not
+      // keep owning the brief once the car is at the airport.
+      charging: { recommended: true, accepted: true, status: 'completed' },
+    }
+  }
+
+  function drivingContext(batteryPercent: number, remainingRangeKm: number): StoredTask['requestContext'] {
+    return {
+      vehicle: { speedKph: 30, batteryPercent, remainingRangeKm, gear: 'D', isNight: true },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: true },
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+    }
+  }
+
+  it('shows the recommended meeting point once the car reaches the airport', () => {
+    for (const [phase, label, status] of [
+      ['approaching-airport', '接近接机点', 'landed'],
+      ['waiting-for-passengers', '已停稳，等待家人', 'waiting'],
+    ] as const) {
+      const spec = composeAgentSpec(arrivedTask(phase))
+
+      expect(spec.components, phase).toEqual([expect.objectContaining({
+        type: 'passenger-status',
+        props: { label, status, meetingPoint: recommendedMeetingPoints[flight.terminal]!.name },
+      })])
+      // The stale post-charge card is what used to occupy this screen.
+      expect(spec.components.map((component) => component.type), phase).not.toContain('charging-recommendation')
+    }
+  })
+
+  it('omits the meeting point rather than guessing one for an unknown terminal', () => {
+    const spec = composeAgentSpec({
+      ...arrivedTask('waiting-for-passengers'),
+      flight: { ...flight, terminal: 'T9' },
+    })
+
+    expect(spec.components).toEqual([expect.objectContaining({
+      type: 'passenger-status',
+      props: { label: '已停稳，等待家人', status: 'waiting' },
+    })])
+  })
+
+  it('reports the post-charge battery pair as one snapshot the estimator agrees with', () => {
+    const spec = composeAgentSpec({
+      ...arrivedTask('waiting-for-passengers'),
+      phase: 'driving-to-airport',
+    })
+    const card = spec.components[0]
+    if (card?.type !== 'charging-recommendation') throw new Error('缺少补能卡片')
+
+    const { batteryPercent, remainingRangeKm } = vehicleSnapshots['post-charge']
+    expect(card.props).toMatchObject({
+      recommended: false,
+      // Nothing was "restored": the charging stop is on the airport route itself.
+      reason: '补能完成，机场路线上下文保持',
+      currentBatteryPercent: batteryPercent,
+      estimatedFinalBatteryPercent: estimateFinalBatteryPercent(batteryPercent, remainingRangeKm, 32, 32),
+    })
+    expect(card.props.estimatedFinalBatteryPercent).toBeLessThan(card.props.currentBatteryPercent)
+  })
+
+  it('re-derives the arrival estimate whenever it overrides the live battery reading', () => {
+    const task = { ...arrivedTask('waiting-for-passengers'), phase: 'driving-to-airport' as const }
+
+    // A full battery cannot arrive with less charge than a nearly empty one. Replacing
+    // only `currentBatteryPercent` used to leave every reading claiming the same canned
+    // arrival figure, so the card contradicted itself at both ends of the range.
+    const readings = [[90, 240], [55, 146], [20, 53]] as const
+    const cards = readings.map(([batteryPercent, remainingRangeKm]) => {
+      const spec = applyRequestPresentation(composeAgentSpec(task), drivingContext(batteryPercent, remainingRangeKm))
+      const card = spec.components.find((component) => component.type === 'charging-recommendation')
+      if (card?.type !== 'charging-recommendation') throw new Error(`缺少补能卡片：${batteryPercent}`)
+      return card.props
+    })
+
+    expect(cards.map((props) => props.currentBatteryPercent)).toEqual([90, 55, 20])
+    expect(cards.map((props) => props.estimatedFinalBatteryPercent)).toEqual(
+      readings.map(([batteryPercent, remainingRangeKm]) => estimateFinalBatteryPercent(batteryPercent, remainingRangeKm, 32, 32)),
+    )
+    for (const props of cards) {
+      expect(props.estimatedFinalBatteryPercent).toBeLessThanOrEqual(props.currentBatteryPercent)
+    }
+    const [full, half] = cards
+    expect(full!.estimatedFinalBatteryPercent).toBeGreaterThan(half!.estimatedFinalBatteryPercent)
+  })
+
+  it('leaves a provider-computed battery pair untouched when it already matches the live reading', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const vehicle = reads.toolResults['vehicle.get-status']!.data!
+    const recommend = reads.toolResults['charging.recommend']!
+    // The demo provider plans exactly the 32+32 km round trip the presentation
+    // fallback assumes, so its answer and the fallback coincide and the guard
+    // would be invisible. Stand in a provider that planned a longer trip: its
+    // arrival estimate is lower than the fallback's and must survive intact,
+    // because the provider knows the route and this layer only knows the demo legs.
+    const providerEstimate = recommend.data!.estimatedFinalBatteryPercent - 7
+    expect(providerEstimate).not.toBe(
+      estimateFinalBatteryPercent(vehicle.batteryPercent, vehicle.remainingRangeKm, 32, 32),
+    )
+    const toolResults = {
+      ...reads.toolResults,
+      'charging.recommend': { ...recommend, data: { ...recommend.data!, estimatedFinalBatteryPercent: providerEstimate } },
+    }
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const spec = applyRequestPresentation(
+      composeAgentSpec(task, toolResults),
+      drivingContext(vehicle.batteryPercent, vehicle.remainingRangeKm),
+    )
+    const card = spec.components.find((component) => component.id === 'charging-plan')
+    if (card?.type !== 'charging-recommendation') throw new Error('缺少补能卡片')
+
+    expect(card.props).toMatchObject({
+      currentBatteryPercent: vehicle.batteryPercent,
+      estimatedFinalBatteryPercent: providerEstimate,
+    })
+  })
+
+  it('counts the charging alternatives the same density tier actually surfaces', () => {
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const spec = composeAgentSpec(task)
+    const card = spec.components[0]
+    if (card?.type !== 'charging-recommendation') throw new Error('缺少补能卡片')
+
+    const { batteryPercent, remainingRangeKm } = vehicleSnapshots.parked
+    expect(spec.presentation.density).toBe('full')
+    expect(card.props).toMatchObject({
+      reason: `完成往返后预计低于安全余量（对比 ${chargingStationsForDensity('full').length} 站）`,
+      currentBatteryPercent: batteryPercent,
+      estimatedFinalBatteryPercent: estimateFinalBatteryPercent(batteryPercent, remainingRangeKm, 32, 32),
     })
   })
 })
