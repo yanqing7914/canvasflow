@@ -713,13 +713,13 @@ describe('demo integration', () => {
   })
 
   /**
-   * The offline route sketch through the whole demo shell: task state → composer →
+   * The offline route panel through the whole demo shell: task state → composer →
    * UISpec → renderer, on the same App the browser mounts. The shipped timeline
    * leads the charging-completed and return-leg briefs with other cards, so the
    * detour, the reroute and the way home are driven from injected task state here
    * rather than left unrendered until a phase happens to show a navigation card.
    */
-  describe('offline route sketch', () => {
+  describe('offline route panel', () => {
     const returnTrip: NonNullable<AirportPickupTaskState['returnTrip']> = {
       workflowId: 'pickup-001:return',
       route: { status: 'succeeded', routeId: 'route-home-001', eta: '2026-07-22T21:35:00+08:00' },
@@ -740,8 +740,8 @@ describe('demo integration', () => {
       }
     }
 
-    const drawnLine = () => document.querySelector('.ui-route-sketch__line')?.getAttribute('d')
-    const stops = () => [...document.querySelectorAll('.ui-route-sketch__stop')].map((stop) => stop.textContent)
+    const drawnLine = () => document.querySelector('.ui-route-map__line')?.getAttribute('d')
+    const stops = () => [...document.querySelectorAll('.ui-route-map__stop')].map((stop) => stop.textContent)
 
     it('draws the active route and marks the staged progress on it', () => {
       render(<App initialTask={tripTask()} />)
@@ -749,8 +749,11 @@ describe('demo integration', () => {
       expect(screen.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeInTheDocument()
       expect(stops()).toEqual(['出发地', '虹桥机场 T2'])
       expect(screen.getByText('模拟行程进度 8%')).toBeInTheDocument()
-      expect(document.querySelector('.ui-route-sketch')).toHaveAttribute('data-route-progress', 'simulated')
-      expect(document.querySelector('.ui-route-sketch__vehicle')).toBeInTheDocument()
+      expect(document.querySelector('.ui-card--route-map')).toHaveAttribute('data-route-progress', 'simulated')
+      expect(document.querySelector('.ui-route-map__vehicle')).toBeInTheDocument()
+      // One route, drawn once: the panel has the line, so the card beside it has
+      // no band of its own to draw a second copy in.
+      expect(document.querySelector('.ui-route-sketch')).toBeNull()
     })
 
     it('draws the charging detour and the ring-road reroute instead of the direct line', () => {
@@ -799,6 +802,10 @@ describe('demo integration', () => {
       })} />)
 
       expect(document.querySelector('.ui-route-sketch')).toBeNull()
+      // Nothing to draw means no panel and no second column to put it in: the
+      // card owns the frame alone rather than sharing it with an empty box.
+      expect(document.querySelector('.ui-card--route-map')).toBeNull()
+      expect(document.querySelector('.ui-layout--split')).toBeNull()
       expect(document.querySelector('[data-route-progress="unavailable"]')).toBeInTheDocument()
       // Losing the drawing costs the drawing alone: the conclusion and its
       // supporting facts are all still on the brief, and no error takes its place.

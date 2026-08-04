@@ -1080,16 +1080,113 @@ a:focus-visible {
 
 .ui-route-sketch__progress { font-variant-numeric: tabular-nums; }
 
-/* Sharing the frame with other briefs, the drawing is the first thing to go.
-   The desktop navigation card is a three-column band — header over route region,
-   then ETA, then facts — so the sketch lands in a column whose whole height
-   budget is the ETA beside it, and at 1920x720 the stack has no 45px to spare.
-   Compressing supporting information before breaking the hierarchy means the
-   card keeps every fact and simply stops drawing; the sketch returns as soon as
-   the navigation brief owns the frame. */
+/* The in-card band is the drawing for a spec that has no map of its own. When a
+   brief carries geometry worth showing, the composer sends a `route-map`
+   component and the drawing gets its own column, so the band would be the same
+   route drawn a second time in a card that has no height for it: the desktop
+   navigation card is a three-column band — header over route region, then ETA,
+   then facts — and at 1920x720 that stack has no 45px to spare. Dropping the band
+   keeps every fact in the card and costs nothing the panel beside it is not
+   already showing; it returns as soon as the navigation brief owns the frame. */
 .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__route-rule.ui-route-sketch {
   display: none;
 }
+
+/* ---------------------------------------------------------------------------
+   Route map panel
+   The same fixture geometry as the band, given a column of its own: the drawing
+   fills the slot instead of squeezing between two lines of a card, so it reads as
+   a picture of the trip rather than a rule under a heading. Still no basemap, no
+   tiles, and no colour beyond the one blue — a quiet roadbook at panel size.
+   --------------------------------------------------------------------------- */
+.ui-card--route-map {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 18px;
+  background: var(--cabin);
+}
+
+.ui-route-map__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.ui-route-map__line {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ui-route-map__marker {
+  fill: #ffffff;
+  stroke: var(--blue);
+  stroke-width: 3;
+}
+
+/* Same three roles the band distinguishes, at panel weight: origin filled, vias
+   small and hollow, destination ringed. */
+.ui-route-map__stop[data-role="origin"] .ui-route-map__marker { fill: var(--blue); }
+
+.ui-route-map__stop[data-role="via"] .ui-route-map__marker { stroke-width: 2.5; }
+
+.ui-route-map__stop[data-role="destination"] .ui-route-map__marker { stroke-width: 4; }
+
+/* Names sit on the drawing here rather than in a caption row: a panel has the
+   room, and a stop reads better beside its own dot than in a list underneath. */
+.ui-route-map__label {
+  fill: var(--muted);
+  font-size: 17px;
+  paint-order: stroke;
+  stroke: var(--cabin);
+  stroke-width: 5;
+  stroke-linejoin: round;
+}
+
+.ui-route-map__stop[data-role="destination"] .ui-route-map__label { fill: var(--ink); }
+
+.ui-route-map__vehicle {
+  /* One short move between two authored positions when a new spec arrives.
+     Nothing loops, nothing self-advances; `prefers-reduced-motion: reduce` is
+     handled globally at the end of this file and lands the marker directly. */
+  transition: transform 200ms ease-out;
+}
+
+.ui-route-map__vehicle-halo {
+  fill: #ffffff;
+  stroke: var(--blue-pale);
+  stroke-width: 3;
+}
+
+.ui-route-map__vehicle-dot { fill: var(--blue); }
+
+/* Over the bottom of the canvas rather than below it, so the drawing keeps the
+   whole slot. The projection reserves this strip, so no stop lands underneath. */
+.ui-route-map__caption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 18px;
+  padding: 14px 20px;
+  background: linear-gradient(to top, rgba(237, 240, 244, 0.94), rgba(237, 240, 244, 0));
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.ui-route-map__destination { color: var(--ink); }
+
+.ui-route-map__progress { font-variant-numeric: tabular-nums; }
 
 .ui-card--navigation-summary .ui-route-facts {
   width: min(100%, 760px);
@@ -2215,6 +2312,16 @@ a:focus-visible {
   .ui-spec-renderer[data-single-component="true"] .ui-component { height: auto; }
 
   .ui-card { height: auto; min-height: 0; }
+
+  /* Once the split has collapsed to one column, the map is stacked above the
+     cards instead of beside them. It gets a band of the fold rather than the
+     `display: none` the in-card sketch takes: a route panel that vanishes on a
+     narrow screen leaves the driver with no picture of the trip at all, and the
+     cards below it still have to fit, so it is compressed, not dropped. */
+  .ui-card--route-map {
+    height: clamp(160px, 26vh, 240px);
+    max-height: 34vh;
+  }
 
   .ui-spec-renderer[data-single-component="true"] .ui-card {
     min-height: 0;

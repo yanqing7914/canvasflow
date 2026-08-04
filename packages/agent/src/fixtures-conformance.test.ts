@@ -78,14 +78,16 @@ describe('composeAgentSpec fixture conformance', () => {
     const { parsed, spec } = load('route-airport')
     // The user has just started driving to the airport (navigation active, no
     // flight fact yet), so the salient card is the route. The fixture / UI
-    // composer show navigation-summary. composeAgentSpec instead fires its
-    // `task.charging.recommended && !task.flight` branch and shows a charging
-    // card — the same class of over-eager charging fixed for the arrival phases
-    // in PR #81 ①. Fixing it is a Composer phase-decision change (PRODUCT.md
-    // Non-goal) and reorders branches that gateway.test.ts relies on, so it is
-    // deferred to a dedicated follow-up. This pins the current shipped output so
-    // that follow-up is a deliberate, reviewed change rather than silent drift.
-    expect(componentTypes(parsed.expectedUISpec)).toEqual(['navigation-summary'])
+    // composer (composePickupSpec) now give the route its own column: a
+    // route-map split beside navigation-summary. composeAgentSpec instead fires
+    // its `task.charging.recommended && !task.flight` branch — which sits ahead
+    // of the `task.navigation` branch — and shows a charging card, the same
+    // class of over-eager charging fixed for the arrival phases in PR #81 ①.
+    // Fixing it is a Composer phase-decision change (PRODUCT.md Non-goal) and
+    // reorders branches that gateway.test.ts relies on, so it is deferred to a
+    // dedicated follow-up. This pins the current shipped output so that follow-up
+    // is a deliberate, reviewed change rather than silent drift.
+    expect(componentTypes(parsed.expectedUISpec)).toEqual(['route-map', 'navigation-summary'])
     expect(componentTypes(spec)).toEqual(['charging-recommendation'])
   })
 

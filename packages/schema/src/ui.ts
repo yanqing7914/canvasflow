@@ -25,7 +25,8 @@ const componentBase = z.object({
 })
 
 /**
- * Offline route sketch attached to `navigation-summary`.
+ * Offline route sketch, carried by the `route-map` panel and — for specs that
+ * have no panel — by `navigation-summary`.
  *
  * Every point is fictional fixture data for a static sketch: the renderer
  * normalizes the set into its own view box, so the bounds below exist only to
@@ -83,6 +84,27 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
        * producers and contract tests.
        */
       routeSketch: routeSketchSchema.optional().catch(undefined),
+    }),
+  }),
+  componentBase.extend({
+    type: z.literal('route-map'),
+    props: z.object({
+      /** Human destination label. Never an internal route identifier. */
+      destination: z.string().min(1),
+      /**
+       * View intent, not camera state. The composer says whether the driver
+       * needs the whole trip or the part they are on; how that becomes a zoom,
+       * a pitch, or a bearing is the renderer's business alone.
+       */
+      mode: z.enum(['overview', 'follow']),
+      /**
+       * Geometry the composer attached from the fixture routes. Required and
+       * deliberately not `.catch(undefined)`: a navigation card without a sketch
+       * still carries the destination and the ETA, but a map without geometry is
+       * an empty box, so an unusable one drops the whole component and lets the
+       * renderer's per-component fallback take the slot.
+       */
+      routeSketch: routeSketchSchema,
     }),
   }),
   componentBase.extend({

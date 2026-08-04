@@ -300,39 +300,49 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
 })
 
 /**
- * The route sketch is a drawing of the UISpec the Agent sent, and its marker moves
+ * The route panel is a drawing of the UISpec the Agent sent, and its marker moves
  * only because a newer spec carried a newer authored progress value — nothing on
  * the page animates or advances a position of its own. The renderer unit tests pin
  * the geometry maths; only a real browser shows the drawing is actually painted,
- * given height, and still inside the fixed frame at the demo resolution.
+ * given a column of its own with height in it, and still inside the fixed frame at
+ * the demo resolution.
  */
-test('draws the offline route sketch and steps its marker on authored progress @layout', async ({ page }) => {
+test('draws the offline route panel and steps its marker on authored progress @layout', async ({ page }) => {
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
 
-  const sketch = page.locator('.ui-route-sketch')
-  const vehicle = sketch.locator('.ui-route-sketch__vehicle')
-  const line = sketch.locator('.ui-route-sketch__line')
-  const progress = sketch.locator('.ui-route-sketch__progress')
+  const panel = page.locator('.ui-card--route-map')
+  const vehicle = panel.locator('.ui-route-map__vehicle')
+  const line = panel.locator('.ui-route-map__line')
+  const progress = panel.locator('.ui-route-map__progress')
 
-  // 准备出发 shares the fixed frame with the flight and charging briefs, and a
-  // shared frame has no height for a drawing: the navigation card keeps its
-  // facts and draws nothing until it owns the frame.
+  // 准备出发 is a full-width brief of three detail cards: a 64%-width map beside
+  // three wide cards would break the fixed frame, so the map waits for its own
+  // screen. The planned route rides inside the navigation card until then.
   await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
-  await expect(sketch).toBeHidden()
+  await expect(panel).toHaveCount(0)
+  await expect(page.locator('.ui-layout--split')).toHaveCount(0)
   await expectNoScroll(page)
 
   await page.getByRole('button', { name: '开始导航' }).click()
   await readControls(page, 'driving-to-airport')
-  await expect(sketch).toBeVisible()
-  await expect(sketch).toHaveAttribute('data-route-progress', 'simulated')
+  // 前往机场 gives the route its own column: the map appears, following the part
+  // of the trip the driver is on.
+  await expect(panel).toBeVisible()
+  await expect(panel).toHaveAttribute('data-route-progress', 'simulated')
+  await expect(panel).toHaveAttribute('data-route-map-mode', 'follow')
+  // The panel is drawn offline from fixture points, never from a map SDK.
+  await expect(panel).toHaveAttribute('data-route-map-source', 'sketch')
   await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
   await expect(progress).toHaveText('模拟行程进度 8%')
+  // The map has a column to itself, so the split really did survive to the DOM.
+  await expect(page.locator('.ui-layout--split')).toBeVisible()
   // Visible is not enough for an SVG: a canvas collapsed to zero height would
-  // still report visible while drawing nothing the driver can see.
-  const canvas = await sketch.locator('.ui-route-sketch__canvas').boundingBox()
-  expect(canvas?.height ?? 0).toBeGreaterThan(20)
+  // still report visible while drawing nothing the driver can see. A panel has
+  // to be taller than the 72px band it replaced to be worth its column.
+  const canvas = await panel.locator('.ui-route-map__canvas').boundingBox()
+  expect(canvas?.height ?? 0).toBeGreaterThan(120)
   const departedLine = await line.getAttribute('d')
   const departedAt = await vehicle.getAttribute('transform')
   await expectNoScroll(page)
@@ -345,19 +355,33 @@ test('draws the offline route sketch and steps its marker on authored progress @
   expect(await line.getAttribute('d')).toBe(departedLine)
   await expectNoScroll(page)
 
-  // A simulated sketch says so: no copy claims a live position, and no internal
+  // No spec, no movement: waiting on a still page leaves the marker exactly where
+  // the last spec put it.
+  const steppedAt = await vehicle.getAttribute('transform')
+  await page.waitForTimeout(1200)
+  expect(await vehicle.getAttribute('transform')).toBe(steppedAt)
+
+  // A simulated drawing says so: no copy claims a live position, and no internal
   // route identifier reaches the brief.
-  for (const claim of ['实时位置', '正在此处', '当前位置']) {
-    await expect(sketch).not.toContainText(claim)
+  for (const claim of ['实时位置', '正在此处', '当前位置', '实时路况']) {
+    await expect(panel).not.toContainText(claim)
   }
   await expect(page.locator('.task-surface')).not.toContainText('route-airport')
+
+  // Narrower than the split's breakpoint the map keeps a band of the fold rather
+  // than disappearing, and the frame still holds with one column.
+  await page.setViewportSize({ width: 1024, height: 720 })
+  await expect(panel).toBeVisible()
+  expect((await panel.boundingBox())?.height ?? 0).toBeGreaterThan(80)
+  await expectNoScroll(page)
+  await page.setViewportSize({ width: 1920, height: 720 })
 
   // Later phases put other cards on the brief; losing the drawing costs the
   // drawing alone and the frame still holds.
   await advanceFlow(page) // flight in-air
   await advanceFlow(page) // charging.completed
   await expect(page.getByText(/补能完成/)).toBeVisible()
-  await expect(sketch).toHaveCount(0)
+  await expect(panel).toHaveCount(0)
   await expectNoScroll(page)
 })
 

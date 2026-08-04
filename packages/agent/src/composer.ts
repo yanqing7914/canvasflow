@@ -1,4 +1,4 @@
-import { uiSpecSchema, type AirportPickupTaskState, type CalendarEvent, type UISpec } from '@canvasflow/schema'
+import { uiSpecSchema, type AirportPickupTaskState, type CalendarEvent, type RouteSketch, type UISpec } from '@canvasflow/schema'
 import {
   chargingStation,
   chargingStationsForDensity,
@@ -52,6 +52,7 @@ export function composeAgentSpec(
     : context as Record<string, MemberPreferenceRecord>
   const progress = progressComponent(task)
   let components: UISpec['components'] = [overviewComponent(task), progress]
+  let layout: UISpec['layout'] | undefined
   let title = task.passengers.names.length > 0
     ? `去虹桥机场接${task.passengers.names.join('和')}`
     : '机场接人任务'
@@ -82,6 +83,12 @@ export function composeAgentSpec(
     const vehicle = toolResults['vehicle.get-status'].data
     const plannedSketch = routeSketchFor(task, route)
     density = 'compact'
+    // The pre-departure brief stays a full-width stack: it carries three detail
+    // cards, and a map would need a column of its own, which — beside three cards
+    // designed as wide bands — cannot fit the fixed frame. The map gets its own
+    // slot once driving begins (see the `task.navigation` branch below), the
+    // screen this route sketch is actually the hero of. The planned sketch still
+    // rides inside `navigation-plan`; the multi-card guard keeps its band hidden.
     components = [
       { id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } },
       { id: 'navigation-plan', type: 'navigation-summary', props: { routeId: route.routeId, destination: task.navigation?.destination ?? '虹桥机场 T2', eta: task.navigation?.eta ?? route.arrivalTime, distanceKm: route.distanceKm, estimatedBatteryAtArrival: route.estimatedBatteryAtArrival, ...(plannedSketch ? { routeSketch: plannedSketch } : {}) } },
@@ -269,7 +276,13 @@ export function composeAgentSpec(
   } else if (task.navigation) {
     density = 'compact'
     const activeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
-    components = [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27, ...(activeSketch ? { routeSketch: activeSketch } : {}) } }]
+    const underway = withRouteMap(
+      [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }],
+      activeSketch,
+      task.navigation.destination,
+    )
+    components = underway.components
+    layout = underway.layout
   } else if (task.flight && task.flight.trusted === false) {
     components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '航班号已收到', message: '航班信息正在确认中。' } }]
   } else if (task.flight) {
@@ -281,13 +294,52 @@ export function composeAgentSpec(
     taskRevision: task.taskRevision, uiRevision: Math.max(task.uiRevision, task.taskRevision) + 1,
     phase: task.phase, title,
     presentation: { mode: 'replace', density, theme: 'dark', priority },
-    layout: { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } },
+    layout: layout ?? { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } },
     components, actions,
     meta: {
       generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm,
       generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${task.taskRevision}`,
     },
   })
+}
+
+/**
+ * Give the route its own column: the map on the left, the cards that describe
+ * the same trip on the right.
+ *
+ * The geometry used to ride inside `navigation-summary` as a thin band, which a
+ * multi-card brief has no height to draw. A `route-map` component gets a slot of
+ * its own instead, so the same fixture points read as a picture of the trip
+ * rather than a rule between two lines of text. The cards keep their own
+ * `routeSketch` off: one route, drawn once.
+ *
+ * Without usable geometry there is nothing to put in the left column, so the
+ * cards stay exactly as they were and the caller falls back to a stack.
+ */
+function withRouteMap(
+  cards: UISpec['components'],
+  sketch: RouteSketch | undefined,
+  destination: string,
+): { components: UISpec['components']; layout?: UISpec['layout'] } {
+  if (!sketch) return { components: cards }
+  const routeMap: UISpec['components'][number] = {
+    id: 'route-map',
+    type: 'route-map',
+    props: {
+      destination,
+      // Underway, the driver is reading the part of the trip they are on; before
+      // departure, the whole thing. Neither is a camera setting — the renderer
+      // decides what zoom or bearing that means.
+      mode: sketch.progress !== undefined && sketch.progress > 0 ? 'follow' : 'overview',
+      routeSketch: sketch,
+    },
+  }
+  return {
+    // First, so the density trim in `applyRequestPresentation` drops cards off
+    // the end of the brief rather than the map out of its own column.
+    components: [routeMap, ...cards],
+    layout: { type: 'split', ratio: [1.75, 1], slots: { primary: [routeMap.id], secondary: cards.map((card) => card.id) } },
+  }
 }
 
 const densityRank: Record<UISpec['presentation']['density'], number> = { full: 0, compact: 1, minimal: 2 }
@@ -306,7 +358,18 @@ export function applyRequestPresentation(ui: UISpec, context: StoredTask['reques
   // brief the composer had already declared too full for `full` density.
   const density = densityRank[fromSpeed] >= densityRank[ui.presentation.density] ? fromSpeed : ui.presentation.density
   const maxComponents = density === 'minimal' ? 2 : density === 'compact' ? 4 : 6
-  const components = ui.components.slice(0, maxComponents).map((component) => (
+  // The budget counts cards, not the map. It is a claim about how much reading one
+  // column can carry, and a `route-map` is neither reading nor in that column — it
+  // has a column of its own. Counting it spent a slot the cards needed and dropped
+  // the last card off the brief, which at `minimal` took the action the driver was
+  // being offered along with it.
+  let remaining = maxComponents
+  const components = ui.components.filter((component) => {
+    if (component.type === 'route-map') return true
+    if (remaining === 0) return false
+    remaining -= 1
+    return true
+  }).map((component) => (
     component.type === 'charging-recommendation'
       && component.props.currentBatteryPercent !== context.vehicle.batteryPercent
       ? {
@@ -339,11 +402,7 @@ export function applyRequestPresentation(ui: UISpec, context: StoredTask['reques
   const componentsWithActions = components.map((component) => component.actions
     ? { ...component, actions: component.actions.filter((actionId) => registeredActionIds.has(actionId)) }
     : component)
-  const layout = {
-    type: 'stack' as const,
-    gap: ui.layout.type === 'stack' ? ui.layout.gap : 'md' as const,
-    slots: { main: componentsWithActions.map((component) => component.id) },
-  }
+  const layout = reslot(ui.layout, componentsWithActions.map((component) => component.id))
   return uiSpecSchema.parse({
     ...ui,
     presentation: {
@@ -355,6 +414,28 @@ export function applyRequestPresentation(ui: UISpec, context: StoredTask['reques
     components: componentsWithActions,
     actions,
   })
+}
+
+/**
+ * Rebuild the layout's slots around the components that survived the density
+ * trim, keeping the shape the composer chose.
+ *
+ * The schema requires slots to reference every component exactly once, so
+ * dropping a component has to drop its slot entry too. What this must not do is
+ * flatten the shape: a `split` says the composer put the map in one column and
+ * the cards in the other, and a parked car re-reading the same brief should not
+ * turn that into a single stack. A two-column layout with an empty column is a
+ * worse frame than a stack, though, so a trim that empties one collapses to a
+ * stack rather than leaving a blank half.
+ */
+function reslot(layout: UISpec['layout'], retainedIds: string[]): UISpec['layout'] {
+  const stack = { type: 'stack' as const, gap: layout.type === 'stack' ? layout.gap : ('md' as const), slots: { main: retainedIds } }
+  if (layout.type !== 'split' && layout.type !== 'focus') return stack
+  const retained = new Set(retainedIds)
+  const primary = layout.slots.primary.filter((id) => retained.has(id))
+  const secondary = layout.slots.secondary.filter((id) => retained.has(id))
+  if (primary.length === 0 || secondary.length === 0) return stack
+  return { ...layout, slots: { primary, secondary } }
 }
 
 /**

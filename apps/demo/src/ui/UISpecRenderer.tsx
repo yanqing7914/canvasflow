@@ -19,7 +19,9 @@ import {
   NavigationIcon,
   SeatIcon,
 } from './icons'
-import { ROUTE_SKETCH_VIEWBOX, buildRouteSketchDrawing } from './route-sketch'
+import { ComponentSurface } from './ComponentSurface'
+import { RouteMapCard } from './RouteMapCard'
+import { ROUTE_MAP_DRAWING_OPTIONS, ROUTE_SKETCH_VIEWBOX, buildRouteSketchDrawing } from './route-sketch'
 
 export type UISpecRendererProps = {
   spec: UISpec
@@ -142,32 +144,6 @@ function themeTokens(theme: UISpec['presentation']['theme']): CSSProperties {
       backgroundColor: '#ffffff',
       color: '#102033',
     } as CSSProperties)
-}
-
-function ComponentSurface({
-  component,
-  children,
-  className = '',
-  role,
-}: {
-  component: ComponentSpec
-  children: ReactNode
-  className?: string
-  role?: 'alert' | 'status'
-}) {
-  const level = component.type === 'alert' || component.type === 'status-banner' ? component.props.level : undefined
-  return (
-    <article
-      className={`ui-card ui-card--${component.type}${className ? ` ${className}` : ''}`}
-      data-component-id={component.id}
-      data-component-type={component.type}
-      data-visibility={component.visibility ?? 'always'}
-      data-level={level}
-      role={role}
-    >
-      {children}
-    </article>
-  )
 }
 
 // A safety or degradation state has to reach a driver who is not looking at the screen.
@@ -668,6 +644,15 @@ function ComponentCard({
     case 'pickup-overview': return <PickupOverviewCard component={result.data} />
     case 'flight-status': return <FlightStatusCard component={result.data} />
     case 'navigation-summary': return <NavigationSummaryCard component={result.data} />
+    case 'route-map': {
+      // Geometry that survived the schema can still be undrawable — every point on
+      // one spot, say. A map with no line in it is an empty frame, so the slot goes
+      // to the same fallback a malformed component would get.
+      const drawing = buildRouteSketchDrawing(result.data.props.routeSketch, ROUTE_MAP_DRAWING_OPTIONS)
+      return drawing
+        ? <RouteMapCard component={result.data} drawing={drawing} />
+        : <ComponentFallback component={component} slotId={slotId} />
+    }
     case 'charging-recommendation': return <ChargingRecommendationCard component={result.data} />
     case 'message-preview': return <MessagePreviewCard component={result.data} />
     case 'passenger-status': return <PassengerStatusCard component={result.data} />

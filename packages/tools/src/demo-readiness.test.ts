@@ -362,7 +362,14 @@ describe('replayable exception timelines', () => {
           const spec = expected.generatedBy === 'fallback'
             ? composeFallbackSpec(state, expected.fallback!.title, expected.fallback!.message, expected.fallback!.level)
             : composePickupSpec(state)
-          expect(spec.components[0]?.type, `${timeline.id}:${step.event.eventId}:ui`).toBe(expected.primaryComponent)
+          // A route panel takes the first slot of the split so the density trim
+          // eats cards off the end of the brief rather than the map out of its
+          // own column. The component the timeline names is the card the brief
+          // leads with, which is the one after it.
+          const [first, ...rest] = spec.components
+          const leadingCard = first?.type === 'route-map' ? rest[0] : first
+          expect(rest.some((component) => component.type === 'route-map'), `${timeline.id}:${step.event.eventId}:ui`).toBe(false)
+          expect(leadingCard?.type, `${timeline.id}:${step.event.eventId}:ui`).toBe(expected.primaryComponent)
           expect(spec.presentation.priority, `${timeline.id}:${step.event.eventId}:ui`).toBe(expected.priority)
           expect(spec.meta.generatedBy, `${timeline.id}:${step.event.eventId}:ui`).toBe(expected.generatedBy)
         }

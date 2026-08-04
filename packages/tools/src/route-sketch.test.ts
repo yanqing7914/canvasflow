@@ -33,6 +33,13 @@ function navigationProps(spec: UISpec) {
   return component.props
 }
 
+/** The route panel's own props. The geometry lives here, not on the card beside it. */
+function routeMapProps(spec: UISpec) {
+  const component = spec.components.find((candidate) => candidate.type === 'route-map')
+  if (component?.type !== 'route-map') throw new Error('没有路线面板')
+  return component.props
+}
+
 const returnTrip: NonNullable<AirportPickupTaskState['returnTrip']> = {
   workflowId: 'pickup-001:return',
   route: { status: 'succeeded', routeId: 'route-home-001', eta: '2026-07-22T21:35:00+08:00' },
@@ -142,43 +149,52 @@ describe('routeSketchFor', () => {
 })
 
 describe('composePickupSpec route sketch projection', () => {
-  it('carries the active route and its staged progress into the navigation card', () => {
-    const props = navigationProps(composePickupSpec(taskState()))
+  it('carries the active route and its staged progress into the route panel', () => {
+    const spec = composePickupSpec(taskState())
+    const map = routeMapProps(spec)
 
-    expect(props.routeSketch?.waypoints.map((waypoint) => waypoint.name)).toEqual(['出发地', '虹桥机场 T2'])
-    expect(props.routeSketch?.polyline.length).toBeGreaterThan(1)
-    expect(props.routeSketch?.progress).toBe(authored('outbound-departed'))
-    expect(props.destination).toBe('虹桥机场 T2')
+    expect(map.routeSketch.waypoints.map((waypoint) => waypoint.name)).toEqual(['出发地', '虹桥机场 T2'])
+    expect(map.routeSketch.polyline.length).toBeGreaterThan(1)
+    expect(map.routeSketch.progress).toBe(authored('outbound-departed'))
+    expect(map.destination).toBe('虹桥机场 T2')
+    // One route, drawn once: the card beside the panel keeps the facts and no geometry.
+    expect(navigationProps(spec).routeSketch).toBeUndefined()
+    expect(navigationProps(spec).destination).toBe('虹桥机场 T2')
   })
 
   it('follows a mid-trip reroute instead of keeping the original geometry', () => {
-    const before = navigationProps(composePickupSpec(taskState()))
-    const after = navigationProps(composePickupSpec(taskState({
+    const before = routeMapProps(composePickupSpec(taskState()))
+    const after = routeMapProps(composePickupSpec(taskState({
       navigation: { routeId: 'route-airport-bypass-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:35:00+08:00', status: 'active' },
     })))
 
-    expect(after.routeSketch?.waypoints.map((waypoint) => waypoint.name)).toContain('外环快速路')
-    expect(after.routeSketch?.polyline).not.toEqual(before.routeSketch?.polyline)
+    expect(after.routeSketch.waypoints.map((waypoint) => waypoint.name)).toContain('外环快速路')
+    expect(after.routeSketch.polyline).not.toEqual(before.routeSketch.polyline)
   })
 
   it('draws the home route on the way back, not the airport route again', () => {
-    const outbound = navigationProps(composePickupSpec(taskState()))
-    const returning = navigationProps(composePickupSpec(taskState({
+    const outbound = routeMapProps(composePickupSpec(taskState()))
+    const returning = routeMapProps(composePickupSpec(taskState({
       phase: 'returning-home',
       navigation: { routeId: 'route-home-001', destination: '家', eta: '2026-07-22T21:35:00+08:00', status: 'active' },
       returnTrip,
     })))
 
-    expect(returning.routeSketch?.waypoints.map((waypoint) => waypoint.name)).toEqual(['出发地', '家'])
-    expect(returning.routeSketch?.polyline).not.toEqual(outbound.routeSketch?.polyline)
-    expect(returning.routeSketch?.progress).toBe(authored('return-departed'))
+    expect(returning.routeSketch.waypoints.map((waypoint) => waypoint.name)).toEqual(['出发地', '家'])
+    expect(returning.routeSketch.polyline).not.toEqual(outbound.routeSketch.polyline)
+    expect(returning.routeSketch.progress).toBe(authored('return-departed'))
+    expect(returning.destination).toBe('家')
   })
 
   it('keeps the navigation card without geometry when the route has no sketch', () => {
-    const props = navigationProps(composePickupSpec(taskState({
+    const spec = composePickupSpec(taskState({
       navigation: { routeId: 'route-does-not-exist', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
-    })))
+    }))
+    const props = navigationProps(spec)
 
+    // Nothing to draw means no panel to draw it in, so the card owns the frame alone.
+    expect(spec.components.some((component) => component.type === 'route-map')).toBe(false)
+    expect(spec.layout.type).toBe('stack')
     expect(props.routeSketch).toBeUndefined()
     expect(props.destination).toBe('虹桥机场 T2')
     expect(props.eta).toBe('2026-07-22T20:25:00+08:00')

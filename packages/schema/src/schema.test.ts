@@ -185,6 +185,86 @@ describe('routeSketchSchema', () => {
       expect(broken.data.props.eta).toBe(props.eta)
     }
   })
+  it('requires drawable geometry on a route panel rather than degrading it away', () => {
+    const props = { destination: '虹桥机场 T2', mode: 'follow' as const }
+
+    const drawn = componentSpecSchema.safeParse({
+      id: 'route-map',
+      type: 'route-map',
+      props: { ...props, routeSketch: { ...sketch, progress: 0.4 } },
+    })
+    expect(drawn.success).toBe(true)
+    if (drawn.success && drawn.data.type === 'route-map') {
+      expect(drawn.data.props.routeSketch.progress).toBe(0.4)
+      expect(drawn.data.props.mode).toBe('follow')
+    }
+
+    // A navigation card without a drawing still has an ETA to give; a panel
+    // without one is an empty frame, so it is rejected outright and the slot
+    // goes to the renderer's per-component fallback instead.
+    expect(componentSpecSchema.safeParse({ id: 'route-map', type: 'route-map', props }).success).toBe(false)
+    expect(componentSpecSchema.safeParse({
+      id: 'route-map', type: 'route-map', props: { ...props, routeSketch: { ...sketch, progress: 4 } },
+    }).success).toBe(false)
+    // The destination is what the driver reads, so it cannot be blank — and
+    // `mode` is an intent from a closed set, not a free-form camera setting.
+    expect(componentSpecSchema.safeParse({
+      id: 'route-map', type: 'route-map', props: { ...props, destination: '', routeSketch: sketch },
+    }).success).toBe(false)
+    expect(componentSpecSchema.safeParse({
+      id: 'route-map', type: 'route-map', props: { ...props, mode: 'zoom-14', routeSketch: sketch },
+    }).success).toBe(false)
+  })
+})
+
+describe('uiSpecSchema split layout slots', () => {
+  const base = {
+    version: '1.0', taskId: 'task', surfaceId: 'surface', taskRevision: 2, uiRevision: 2,
+    phase: 'driving-to-airport', title: '去虹桥机场',
+    presentation: { mode: 'replace', density: 'compact', theme: 'dark', priority: 'normal' },
+    components: [
+      { id: 'route-map', type: 'route-map', props: {
+        destination: '虹桥机场 T2',
+        mode: 'follow',
+        routeSketch: {
+          summary: '直达虹桥机场 T2',
+          waypoints: [
+            { id: 'origin-demo', name: '出发地', latitude: 31.23, longitude: 121.47 },
+            { id: 'destination-hongqiao-t2', name: '虹桥机场 T2', latitude: 31.198, longitude: 121.336 },
+          ],
+          polyline: [
+            { latitude: 31.23, longitude: 121.47 },
+            { latitude: 31.222, longitude: 121.44 },
+            { latitude: 31.198, longitude: 121.336 },
+          ],
+        },
+      } },
+      { id: 'navigation-summary', type: 'navigation-summary', props: {
+        routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00',
+        distanceKm: 32, estimatedBatteryAtArrival: 27,
+      } },
+    ],
+    actions: [],
+    meta: { generatedBy: 'composer', sourceTaskRevision: 2, requiresConfirm: false, generatedAt: '2026-07-22T20:05:00+08:00', traceId: 'trace' },
+  }
+
+  function withSlots(slots: { primary: string[]; secondary: string[] }) {
+    return uiSpecSchema.safeParse({ ...base, layout: { type: 'split', ratio: [1.75, 1], slots } })
+  }
+
+  it('accepts a split that places every component in exactly one column', () => {
+    expect(withSlots({ primary: ['route-map'], secondary: ['navigation-summary'] }).success).toBe(true)
+  })
+
+  it('rejects a split that drops a component out of the frame or draws one twice', () => {
+    // Unreferenced: the component exists but no column claims it, so nothing
+    // would render it.
+    expect(withSlots({ primary: ['route-map'], secondary: [] }).success).toBe(false)
+    // Referenced twice: the same map in both columns.
+    expect(withSlots({ primary: ['route-map'], secondary: ['route-map', 'navigation-summary'] }).success).toBe(false)
+    // Referenced but absent: a slot naming a component the spec never carried.
+    expect(withSlots({ primary: ['route-map'], secondary: ['navigation-summary', 'flight-status'] }).success).toBe(false)
+  })
 })
 
 describe('Agent API', () => {

@@ -935,3 +935,162 @@ describe('UISpecRenderer offline route sketch', () => {
     expect(renderer().querySelector('.ui-route-sketch')!.textContent).not.toContain('undefined')
   })
 })
+
+/**
+ * The route as a panel in its own column, which is the shape the composer emits
+ * whenever it has geometry. The band above is what a spec without a panel falls
+ * back to.
+ */
+describe('UISpecRenderer route map panel', () => {
+  const viaCharge = {
+    summary: '经虹桥枢纽超充站前往机场',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', latitude: 31.23, longitude: 121.47 },
+      { id: 'station-hongqiao-01', name: '虹桥枢纽超充站', latitude: 31.21, longitude: 121.38 },
+      { id: 'destination-hongqiao-t2', name: '虹桥机场 T2', latitude: 31.198, longitude: 121.336 },
+    ],
+    polyline: [
+      { latitude: 31.23, longitude: 121.47 },
+      { latitude: 31.22, longitude: 121.43 },
+      { latitude: 31.21, longitude: 121.38 },
+      { latitude: 31.204, longitude: 121.355 },
+      { latitude: 31.198, longitude: 121.336 },
+    ],
+  }
+
+  /** The split the composer emits: map on the left, the trip's cards on the right. */
+  function splitSpec(props: Record<string, unknown>): UISpec {
+    return baseSpec({
+      phase: 'driving-to-airport',
+      presentation: { mode: 'replace', density: 'compact', theme: 'dark', priority: 'normal' },
+      layout: { type: 'split', ratio: [1.75, 1], slots: { primary: ['route-map'], secondary: ['navigation'] } },
+      components: [
+        { id: 'route-map', type: 'route-map', props } as ComponentSpec,
+        {
+          id: 'navigation',
+          type: 'navigation-summary',
+          props: {
+            routeId: 'route-airport-via-charge-001',
+            destination: '虹桥机场 T2',
+            eta: '2026-07-22T20:37:00+08:00',
+            distanceKm: 38,
+            estimatedBatteryAtArrival: 55,
+          },
+        } as ComponentSpec,
+      ],
+    })
+  }
+
+  const followProps = { destination: '虹桥机场 T2', mode: 'follow', routeSketch: { ...viaCharge, progress: 0.4 } }
+
+  function renderer() {
+    return screen.getByRole('region', { name: 'Generated task interface' })
+  }
+
+  function panel() {
+    return renderer().querySelector('.ui-card--route-map')
+  }
+
+  it('draws the route in a column of its own, beside the card that describes it', () => {
+    render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+    expect(renderer().querySelector('.ui-layout--split')).toBeInTheDocument()
+    const svg = screen.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })
+    expect(svg.querySelector('.ui-route-map__line')).toHaveAttribute('d', expect.stringContaining('M'))
+    expect(svg.querySelectorAll('.ui-route-map__marker')).toHaveLength(3)
+    expect(svg.querySelector('.ui-route-map__stop[data-role="origin"]')).toHaveTextContent('出发地')
+    expect(svg.querySelector('.ui-route-map__stop[data-role="via"]')).toHaveTextContent('虹桥枢纽超充站')
+    expect(svg.querySelector('.ui-route-map__stop[data-role="destination"]')).toHaveTextContent('虹桥机场 T2')
+    expect(panel()).toHaveAttribute('data-route-map-source', 'sketch')
+    expect(panel()).toHaveAttribute('data-route-map-mode', 'follow')
+    // The card in the other column keeps its facts and never redraws the line.
+    expect(renderer().querySelector('.ui-navigation-eta')).toHaveTextContent('20:37')
+    expect(renderer().querySelector('.ui-route-sketch')).not.toBeInTheDocument()
+  })
+
+  it('marks the staged point as simulated progress, never as a live position', () => {
+    render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+    expect(panel()).toHaveAttribute('data-route-progress', 'simulated')
+    expect(panel()!.querySelector('.ui-route-map__vehicle')).toBeInTheDocument()
+    expect(panel()!.querySelector('.ui-route-map__progress')).toHaveTextContent('模拟行程进度 40%')
+    for (const claim of ['实时位置', '正在此处', '当前位置', '实时路况']) {
+      expect(renderer().textContent).not.toContain(claim)
+    }
+  })
+
+  it('draws the route without a marker when the spec authored no progress', () => {
+    render(<UISpecRenderer spec={splitSpec({ destination: '虹桥机场 T2', mode: 'overview', routeSketch: viaCharge })} onAction={vi.fn()} pending={false} />)
+
+    expect(panel()).toHaveAttribute('data-route-progress', 'route-only')
+    expect(panel()).toHaveAttribute('data-route-map-mode', 'overview')
+    expect(panel()!.querySelector('.ui-route-map__vehicle')).not.toBeInTheDocument()
+    expect(panel()!.querySelector('.ui-route-map__progress')).not.toBeInTheDocument()
+  })
+
+  it('moves the marker only when a new spec carries a different authored value', () => {
+    const { rerender } = render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+    const before = {
+      path: panel()!.querySelector('.ui-route-map__line')!.getAttribute('d'),
+      vehicle: panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform'),
+    }
+
+    // Same geometry, same progress, new render: nothing in this component
+    // advances on its own, so the marker has not budged.
+    rerender(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+    expect(panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform')).toBe(before.vehicle)
+
+    rerender(<UISpecRenderer
+      spec={splitSpec({ ...followProps, routeSketch: { ...viaCharge, progress: 0.72 } })}
+      onAction={vi.fn()}
+      pending={false}
+    />)
+
+    // A new authored value moves the marker along the same unchanged line.
+    expect(panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform')).not.toBe(before.vehicle)
+    expect(panel()!.querySelector('.ui-route-map__line')!.getAttribute('d')).toBe(before.path)
+    expect(panel()!.querySelector('.ui-route-map__progress')).toHaveTextContent('模拟行程进度 72%')
+  })
+
+  it('costs the panel its own slot when the geometry is unusable, and nothing else', () => {
+    const unusable: unknown[] = [
+      { ...viaCharge, polyline: [] },
+      { ...viaCharge, polyline: [{ latitude: 31.23, longitude: 121.47 }] },
+      { ...viaCharge, polyline: [{ latitude: 'north', longitude: 121.47 }, { latitude: 31.2, longitude: 121.4 }] },
+      // Plottable and schema-valid, but every point is the same spot: a dot, not a route.
+      { ...viaCharge, polyline: [{ latitude: 31.23, longitude: 121.47 }, { latitude: 31.23, longitude: 121.47 }, { latitude: 31.23, longitude: 121.47 }] },
+      { ...viaCharge, waypoints: [] },
+      { ...viaCharge, progress: 2 },
+      { ...viaCharge, progress: 'half' },
+      'not-a-sketch',
+      undefined,
+      null,
+    ]
+
+    for (const routeSketch of unusable) {
+      const { unmount } = render(<UISpecRenderer
+        spec={splitSpec({ destination: '虹桥机场 T2', mode: 'follow', routeSketch })}
+        onAction={vi.fn()}
+        pending={false}
+      />)
+
+      // Per-component degradation: the map's slot takes the fallback and the
+      // card in the other column is untouched.
+      expect(panel()).toBeNull()
+      expect(renderer().querySelector('.ui-card--fallback')).toBeInTheDocument()
+      expect(renderer().querySelector('.ui-navigation-brief__destination')).toHaveTextContent('虹桥机场 T2')
+      expect(renderer().querySelector('.ui-navigation-eta')).toHaveTextContent('20:37')
+      expect(renderer().querySelector('.ui-route-facts')).toHaveTextContent('38')
+      unmount()
+    }
+  })
+
+  it('keeps route ids, fixture names, and prop names out of the panel', () => {
+    render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+    for (const internal of ['route-airport-via-charge-001', 'route-map', 'routeSketch', 'overview', 'follow', 'polyline', 'origin-demo', 'station-hongqiao-01', 'latitude']) {
+      expect(renderer().textContent).not.toContain(internal)
+    }
+    expect(panel()!.textContent).not.toContain('undefined')
+  })
+})

@@ -28,9 +28,18 @@ describe('Agent UISpec composer', () => {
 
     const spec = composeAgentSpec(task, reads.toolResults)
 
+    // The pre-departure brief is a full-width stack of the three detail cards
+    // plus the schedule strip. The route sketch rides inside `navigation-plan`;
+    // the map earns its own column only once driving starts, where the frame has
+    // room for it beside a single card. (See the split assertions in `route
+    // panel` below.)
     expect(spec.components.map((component) => component.type)).toEqual([
       'flight-status', 'navigation-summary', 'charging-recommendation', 'schedule-strip',
     ])
+    expect(spec.layout).toMatchObject({
+      type: 'stack',
+      slots: { main: ['flight-status', 'navigation-plan', 'charging-plan', 'schedule-strip'] },
+    })
     expect(spec.components).toContainEqual(expect.objectContaining({
       id: 'flight-status',
       props: expect.objectContaining({ scheduledArrival: reads.flight.scheduledArrival }),
@@ -290,6 +299,67 @@ describe('Agent UISpec composer', () => {
 
     expect(spec.presentation).toMatchObject({ density: 'minimal', theme: 'light' })
     expect(spec.actions).toHaveLength(2)
+  })
+
+  it('keeps the map in its own column when driving policy trims the brief', () => {
+    // A driving spec has a real map column; pad its rail with extra cards so the
+    // minimal-density budget has something to trim.
+    const base = composeAgentSpec({
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: { flightNumber: 'MU5102', status: 'in-air' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' as const },
+    })
+    // Guard: the driving brief really produced a two-column map layout to trim.
+    expect(base.layout.type).toBe('split')
+
+    const spec = applyRequestPresentation({
+      ...base,
+      components: [
+        ...base.components,
+        { id: 'extra-1', type: 'status-banner', props: { level: 'info', title: '附加一' } },
+        { id: 'extra-2', type: 'status-banner', props: { level: 'info', title: '附加二' } },
+      ],
+      layout: { type: 'split', ratio: [1.75, 1], slots: { primary: ['route-map'], secondary: ['navigation-summary', 'extra-1', 'extra-2'] } },
+    }, {
+      vehicle: { speedKph: 80, batteryPercent: 42, remainingRangeKm: 210, gear: 'D', isNight: false },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: true },
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+    })
+
+    // Two columns survive the trim: minimal keeps two cards, and the map is exempt
+    // from that budget because it has a column of its own — so the trim takes the
+    // last card off the rail rather than the map out of its slot.
+    expect(spec.presentation.density).toBe('minimal')
+    expect(spec.layout).toEqual({
+      type: 'split',
+      ratio: [1.75, 1],
+      slots: { primary: ['route-map'], secondary: ['navigation-summary', 'extra-1'] },
+    })
+    expect(spec.components.map((component) => component.id)).toEqual(['route-map', 'navigation-summary', 'extra-1'])
+  })
+
+  it('collapses a split back to a stack when the trim empties one of its columns', () => {
+    const base = composeAgentSpec(createInitialTask('pickup-001', timestamp))
+    const spec = applyRequestPresentation({
+      ...base,
+      components: [
+        { id: 'lead', type: 'status-banner', props: { level: 'info', title: '主要状态' } },
+        { id: 'second', type: 'status-banner', props: { level: 'info', title: '次要状态' } },
+        { id: 'aside', type: 'status-banner', props: { level: 'info', title: '边栏状态' } },
+      ],
+      actions: [],
+      layout: { type: 'split', ratio: [1.75, 1], slots: { primary: ['lead', 'second'], secondary: ['aside'] } },
+    }, {
+      vehicle: { speedKph: 80, batteryPercent: 42, remainingRangeKm: 210, gear: 'D', isNight: false },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: true },
+      destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+    })
+
+    // `minimal` keeps two cards, and both of them were in the left column. Two
+    // columns with nothing in one of them is a worse frame than one column.
+    expect(spec.layout).toEqual({ type: 'stack', gap: 'md', slots: { main: ['lead', 'second'] } })
   })
 
   it('removes actions owned only by components truncated by driving policy', () => {
@@ -594,13 +664,14 @@ describe('Agent UISpec composer route sketch', () => {
     }
   }
 
-  function sketchOf(spec: ReturnType<typeof composeAgentSpec>, componentId: string) {
-    const component = spec.components.find((candidate) => candidate.id === componentId)
-    if (component?.type !== 'navigation-summary') throw new Error(`没有导航卡片：${componentId}`)
+  /** The geometry the route panel carries, wherever the brief put the panel. */
+  function sketchOf(spec: ReturnType<typeof composeAgentSpec>) {
+    const component = spec.components.find((candidate) => candidate.type === 'route-map')
+    if (component?.type !== 'route-map') throw new Error('没有路线面板')
     return component.props.routeSketch
   }
 
-  it('carries the planned route geometry while preparing, with no vehicle position yet', () => {
+  it('carries the planned route geometry inside the pre-departure brief, with no vehicle position yet', () => {
     const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
     const task = {
       ...createInitialTask('pickup-001', timestamp),
@@ -611,8 +682,15 @@ describe('Agent UISpec composer route sketch', () => {
       charging: { recommended: true, accepted: false, status: 'planned' as const },
     }
 
-    const sketch = sketchOf(composeAgentSpec(task, reads.toolResults), 'navigation-plan')
+    const spec = composeAgentSpec(task, reads.toolResults)
+    const sketch = navigationProps(spec, 'navigation-plan').routeSketch
 
+    // Before departure the map has no column of its own — three wide detail cards
+    // beside a 64%-width map would break the fixed frame. The planned geometry
+    // rides inside the navigation card instead, and the multi-card brief keeps its
+    // band hidden until the map earns its own slot once driving starts.
+    expect(spec.components.some((component) => component.type === 'route-map')).toBe(false)
+    expect(spec.layout.type).toBe('stack')
     expect(sketch?.waypoints.map((waypoint) => waypoint.name)).toEqual(['出发地', '虹桥机场 T2'])
     expect(sketch?.polyline).toEqual(reads.route.polyline)
     // Nothing has departed, so no checkpoint stages a position.
@@ -620,31 +698,36 @@ describe('Agent UISpec composer route sketch', () => {
   })
 
   it('places the vehicle at the departure step once navigation is active', () => {
-    const sketch = sketchOf(composeAgentSpec(drivingTask()), 'navigation-summary')
+    const spec = composeAgentSpec(drivingTask())
 
-    expect(sketch?.progress).toBe(0.08)
-    expect(sketch?.polyline.length).toBeGreaterThan(1)
+    expect(sketchOf(spec).progress).toBe(0.08)
+    expect(sketchOf(spec).polyline.length).toBeGreaterThan(1)
+    // Underway, the panel follows the part of the trip the driver is on.
+    expect(spec.components).toContainEqual(expect.objectContaining({
+      type: 'route-map', props: expect.objectContaining({ mode: 'follow', destination: '虹桥机场 T2' }),
+    }))
+    expect(navigationProps(spec, 'navigation-summary').routeSketch).toBeUndefined()
   })
 
   it('moves the vehicle further along once charging is under way on the supercharger route', () => {
-    const departed = sketchOf(composeAgentSpec(drivingTask()), 'navigation-summary')
+    const departed = sketchOf(composeAgentSpec(drivingTask()))
     const charging = sketchOf(composeAgentSpec(drivingTask({
       navigation: { routeId: 'route-airport-via-charge-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:37:00+08:00', status: 'active' },
       charging: { recommended: true, accepted: true, status: 'active' },
-    })), 'navigation-summary')
+    })))
 
-    expect(charging?.waypoints.map((waypoint) => waypoint.name)).toEqual(['出发地', '虹桥枢纽超充站', '虹桥机场 T2'])
-    expect(charging?.progress).toBeGreaterThan(departed!.progress!)
+    expect(charging.waypoints.map((waypoint) => waypoint.name)).toEqual(['出发地', '虹桥枢纽超充站', '虹桥机场 T2'])
+    expect(charging.progress).toBeGreaterThan(departed.progress!)
   })
 
   it('redraws the sketch on the route the reroute actually selected', () => {
-    const direct = sketchOf(composeAgentSpec(drivingTask()), 'navigation-summary')
+    const direct = sketchOf(composeAgentSpec(drivingTask()))
     const bypass = sketchOf(composeAgentSpec(drivingTask({
       navigation: { routeId: 'route-airport-bypass-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:35:00+08:00', status: 'active' },
-    })), 'navigation-summary')
+    })))
 
-    expect(bypass?.waypoints.map((waypoint) => waypoint.name)).toContain('外环快速路')
-    expect(bypass?.polyline).not.toEqual(direct?.polyline)
+    expect(bypass.waypoints.map((waypoint) => waypoint.name)).toContain('外环快速路')
+    expect(bypass.polyline).not.toEqual(direct.polyline)
   })
 
   it('keeps the navigation card whole when the active route has no sketch to draw', () => {
@@ -652,10 +735,20 @@ describe('Agent UISpec composer route sketch', () => {
       navigation: { routeId: 'route-does-not-exist', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
     }))
 
-    expect(sketchOf(spec, 'navigation-summary')).toBeUndefined()
+    // Nothing to draw means no panel and no column to put it in: the card owns
+    // the frame alone rather than sharing it with an empty box.
+    expect(spec.components.some((component) => component.type === 'route-map')).toBe(false)
+    expect(spec.layout.type).toBe('stack')
+    expect(navigationProps(spec, 'navigation-summary').routeSketch).toBeUndefined()
     expect(spec.components).toContainEqual(expect.objectContaining({
       id: 'navigation-summary',
       props: expect.objectContaining({ destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00' }),
     }))
   })
 })
+
+function navigationProps(spec: ReturnType<typeof composeAgentSpec>, componentId: string) {
+  const component = spec.components.find((candidate) => candidate.id === componentId)
+  if (component?.type !== 'navigation-summary') throw new Error(`没有导航卡片：${componentId}`)
+  return component.props
+}
