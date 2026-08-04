@@ -108,7 +108,7 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   }
   else if (
     task.charging.status === 'completed' &&
-    (task.phase === 'driving-to-airport' || task.phase === 'approaching-airport')
+    task.phase === 'driving-to-airport'
   ) {
     density = 'compact'
     const battery = resolveChargingBatteryProps(context, vehicleSnapshots['post-charge'])
