@@ -609,6 +609,16 @@ describe('demo integration', () => {
     expect(screen.queryByRole('button', { name: '保存本次偏好' })).not.toBeInTheDocument()
   })
 
+  it('offers declining the completion confirmation and clears it too', async () => {
+    const user = userEvent.setup()
+    render(<App initialTask={{ ...createInitialTask(), phase: 'completed', pendingConfirmation: { confirmationId: 'pickup-001:save-memory', action: 'save-memory' } }} />)
+    // A confirmation the driver can only accept is not a confirmation. Declining
+    // has to clear the pending state as well, or the prompt never goes away.
+    await user.click(screen.getByRole('button', { name: '暂不保存' }))
+    expect(screen.queryByRole('button', { name: '暂不保存' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '保存本次偏好' })).not.toBeInTheDocument()
+  })
+
   it('skips timeline events that are invalid for an injected phase', async () => {
     const user = userEvent.setup()
     render(<App initialTask={{ ...createInitialTask(), phase: 'driving-to-airport', updatedAt: '2026-07-22T20:30:00+08:00' }} />)

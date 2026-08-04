@@ -64,7 +64,12 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     title = '接机任务已完成'
     components = [components[1]]
     requiresConfirm = task.pendingConfirmation?.action === 'save-memory'
-    actions = requiresConfirm ? [{ id: 'save-trip-preferences', label: '保存本次偏好', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } }] : []
+    actions = requiresConfirm
+      ? [
+          { id: 'save-trip-preferences', label: '保存本次偏好', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } },
+          { id: 'reject-trip-preferences', label: '暂不保存', style: 'secondary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'reject' } },
+        ]
+      : []
   }
   else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
   else if (task.message.status === 'failed') {

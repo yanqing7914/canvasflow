@@ -546,7 +546,7 @@ describe('provider.timeout（MU0000）：Agent / UI 降级路径', () => {
     expect(timedOut.processedEventIds).toContain('flight-timeout')
     expect(timedOut.flight).toEqual(state.flight)
 
-    // 生产入口是 composePickupSpec + fallback context，不是直接调用 composeFallbackSpec
+    // composeFallbackSpec 经 fallback context 间接调用，走的是 composePickupSpec 的入口分支
     const spec = composePickupSpec(timedOut, {
       fallback: { title: '航班数据暂时不可用', message: '正在使用最近缓存，可稍后重试。', level: 'warning' },
     })

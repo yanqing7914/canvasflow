@@ -438,6 +438,8 @@ export default function App({
       setLocalTask((current) => {
         if (!current) return current
         if (actionId === 'save-trip-preferences') return resolveConfirmation(current, `${current.taskId}:save-memory`)
+        // Declining still resolves the confirmation; only the Agent records which way it went.
+        if (actionId === 'reject-trip-preferences') return resolveConfirmation(current, `${current.taskId}:save-memory`)
         // Provider-backed retries are only executable through the Agent API.
         if (actionId === 'retry-landing-message' || actionId === 'confirm-retry-landing-message') return current
         return current

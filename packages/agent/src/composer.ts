@@ -1,8 +1,20 @@
 import { uiSpecSchema, type AirportPickupTaskState, type UISpec } from '@canvasflow/schema'
-import { memberPreferences, routeSketchFor, type MemberPreferenceRecord } from '@canvasflow/tools'
+import {
+  chargingStation,
+  chargingStationsForDensity,
+  estimateFinalBatteryPercent,
+  memberPreferences,
+  recommendedMeetingPoints,
+  routeSketchFor,
+  vehicleSnapshots,
+  type MemberPreferenceRecord,
+} from '@canvasflow/tools'
 import { canRetryLandingMessage } from './landing-message-retry'
 import type { ReadToolResults } from './orchestration'
 import type { StoredTask } from './store'
+
+/** Canonical demo round-trip legs, used when no charging.recommend output is available. */
+const DEMO_LEG_KM = 32
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息',
@@ -186,15 +198,64 @@ export function composeAgentSpec(
           ? [{ id: 'confirm-retry-landing-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation.confirmationId, decision: 'accept' } }]
           : [{ id: 'retry-landing-message', label: '重试发送', style: 'primary', event: { type: 'tool-request', actionToken: `${task.taskId}:retry-landing-message` } }]
     }
-  } else if (task.charging.status === 'completed') {
+  } else if (task.charging.status === 'completed' && task.phase === 'driving-to-airport') {
+    // The charging stop is on the airport route, so nothing is "restored" when it
+    // finishes — the route, ETA and every other context value carry over unchanged
+    // (`degradation.test.ts` asserts exactly that). The phase guard matters too: a
+    // completed charge stays `completed` for the rest of the trip, and without it
+    // this branch kept the card on screen through the airport approach and after
+    // the car had parked, hiding the meeting point the driver needs at that
+    // moment. Post-charge battery is news on the leg it happened on; at the
+    // airport the arrival screen outranks it.
+    const postCharge = vehicleSnapshots['post-charge']
     density = 'compact'
-    components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: false, reason: '补能完成，已恢复机场路线', currentBatteryPercent: 78, estimatedFinalBatteryPercent: 42 } }]
+    components = [{
+      id: 'charging-plan',
+      type: 'charging-recommendation',
+      props: {
+        recommended: false,
+        reason: '补能完成，机场路线上下文保持',
+        currentBatteryPercent: postCharge.batteryPercent,
+        estimatedFinalBatteryPercent: estimateFinalBatteryPercent(
+          postCharge.batteryPercent, postCharge.remainingRangeKm, DEMO_LEG_KM, DEMO_LEG_KM,
+        ),
+      },
+    }]
+  } else if (task.phase === 'approaching-airport' || task.phase === 'waiting-for-passengers') {
+    const waiting = task.phase === 'waiting-for-passengers'
+    const meetingPoint = task.flight?.terminal ? recommendedMeetingPoints[task.flight.terminal] : undefined
+    density = 'compact'
+    components = [{
+      id: 'passenger-status',
+      type: 'passenger-status',
+      props: {
+        label: waiting ? '已停稳，等待家人' : '接近接机点',
+        status: waiting ? 'waiting' : 'landed',
+        ...(meetingPoint ? { meetingPoint: meetingPoint.name } : {}),
+      },
+    }]
   } else if (task.flight && (task.flight.status === 'cancelled' || task.flight.status === 'delayed')) {
     // Exception flight states outrank active navigation and pending charging.
     density = 'compact'
     components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival ?? task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }]
   } else if (task.charging.recommended && !task.flight) {
-    components = [{ id: 'charging-plan', type: 'charging-recommendation', props: { recommended: true, reason: '完成往返后预计低于安全余量', currentBatteryPercent: 42, estimatedFinalBatteryPercent: 18, suggestedDurationMinutes: 10, etaImpactMinutes: 12 } }]
+    // Both battery numbers come from one snapshot so the card cannot contradict
+    // itself, and the station count matches what the same density tier surfaces.
+    const parked = vehicleSnapshots.parked
+    components = [{
+      id: 'charging-plan',
+      type: 'charging-recommendation',
+      props: {
+        recommended: true,
+        reason: `完成往返后预计低于安全余量（对比 ${chargingStationsForDensity(density).length} 站）`,
+        currentBatteryPercent: parked.batteryPercent,
+        estimatedFinalBatteryPercent: estimateFinalBatteryPercent(
+          parked.batteryPercent, parked.remainingRangeKm, DEMO_LEG_KM, DEMO_LEG_KM,
+        ),
+        suggestedDurationMinutes: chargingStation.suggestedDurationMinutes,
+        etaImpactMinutes: chargingStation.etaImpactMinutes,
+      },
+    }]
   } else if (task.navigation) {
     density = 'compact'
     const activeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
@@ -237,9 +298,25 @@ export function applyRequestPresentation(ui: UISpec, context: StoredTask['reques
   const maxComponents = density === 'minimal' ? 2 : density === 'compact' ? 4 : 6
   const components = ui.components.slice(0, maxComponents).map((component) => (
     component.type === 'charging-recommendation'
+      && component.props.currentBatteryPercent !== context.vehicle.batteryPercent
       ? {
           ...component,
-          props: { ...component.props, currentBatteryPercent: context.vehicle.batteryPercent },
+          // The card states two numbers about one battery: what it holds now and
+          // what the round trip leaves. Replacing only the first one produced a
+          // card that contradicted itself — a 90% battery still claimed it would
+          // arrive with the canned 42%, i.e. a 48-point trip on a 64 km round
+          // trip. When the composed reading already equals the live one the pair
+          // came from this request (a provider computed it), so it is left alone;
+          // a mismatch means the composer used a canned snapshot and both numbers
+          // have to be re-derived from the live reading with the same estimator
+          // `charging.recommend` itself uses.
+          props: {
+            ...component.props,
+            currentBatteryPercent: context.vehicle.batteryPercent,
+            estimatedFinalBatteryPercent: estimateFinalBatteryPercent(
+              context.vehicle.batteryPercent, context.vehicle.remainingRangeKm, DEMO_LEG_KM, DEMO_LEG_KM,
+            ),
+          },
         }
       : component
   ))
