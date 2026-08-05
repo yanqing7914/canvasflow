@@ -165,18 +165,11 @@ async function expectNoScroll(page: Page) {
       // can still hold a figure reading 到达电… — the truncation happens inside the
       // leaf, where the card's scrollWidth cannot see it.
       //
-      // Scoped to the floating navigation panel, whose width this suite's own
-      // stylesheet sets. Widening it to every metric on every screen surfaces a
-      // separate, older truncation that belongs with its own fix rather than here.
-      //
       // Height is deliberately not asserted on these: they set `line-height` equal
       // to `font-size`, so the line box is a couple of pixels shorter than the
       // font's natural ascent plus descent, and every one of them reports a
       // standing 2px `clippedBy` that has nothing to do with the layout fitting.
-      textBoxes: [
-        '.ui-layout--split:has(.ui-card--route-map) .ui-metric__label',
-        '.ui-layout--split:has(.ui-card--route-map) .ui-metric__value',
-      ].flatMap(measure),
+      textBoxes: ['.ui-metric__label', '.ui-metric__value'].flatMap(measure),
     }
   })
   if (layout.width <= 680) return
