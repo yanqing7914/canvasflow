@@ -605,6 +605,10 @@ export default function App({
   const phaseIdentity = task ? phaseIdentityLabels[task.phase] : '等待创建任务'
   const tripTitleIsContextual = spec ? hasContextualTripTitle(spec) : false
   const tripTitle = spec?.title || '机场接人'
+  // Model provenance comes straight from the Agent's response envelope: it is only
+  // present when a validated model plan was actually applied, so showing it never
+  // overstates what the model did. Rules-only turns render nothing.
+  const modelUsed = response?.meta.modelUsed
 
   return (
     <main
@@ -676,6 +680,16 @@ export default function App({
 
           {/* Rendered unconditionally so the region exists before the first announcement. */}
           <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
+
+          {/* Provenance is a task-level fact: the Agent persists the model ID with
+              the task snapshot once a validated model plan is applied, so this line
+              states participation, not per-turn authorship. Rules-only tasks leave
+              meta.modelUsed unset and this line off screen. */}
+          {modelUsed && (
+            <p className="model-provenance" data-model-used={modelUsed} aria-label="模型参与说明">
+              模型 <strong>{modelUsed}</strong> 参与了本任务的输入规范化
+            </p>
+          )}
 
           {composerReason ? (
             <form
@@ -776,6 +790,7 @@ export default function App({
               <div><dt>界面版本</dt><dd>{spec ? `uiRevision ${spec.uiRevision}` : '—'}</dd></div>
               <div><dt>信息密度</dt><dd>{spec?.presentation.density ?? '—'}</dd></div>
               <div><dt>优先级</dt><dd>{spec?.presentation.priority ?? '—'}</dd></div>
+              <div><dt>规划来源</dt><dd>{response ? (modelUsed ?? '规则') : '—'}</dd></div>
             </dl>
 
             <div
