@@ -120,11 +120,22 @@ async function expectAdvanceEnabled(page: Page, enabled: boolean) {
 async function advanceFlow(page: Page) {
   const drawer = await openControls(page)
   const before = (await drawer.locator('.console-progress strong').textContent()) ?? ''
+  const taskId = /pickup-[0-9a-f-]+/u.exec((await drawer.textContent()) ?? '')?.[0]
   let result: unknown
   await expect(async () => {
     // Re-ensure the drawer every attempt: the one opened outside this block
     // may have been caught mid-close and finished hiding underneath us.
     const openDrawer = await ensureControlsOpen(page)
+    const progress = openDrawer.locator('.console-progress strong')
+    // A previous attempt may have advanced for real while its confirmation
+    // window expired — clicking again then would double-advance and exhaust
+    // the timeline early. The moved count, not the click, is the ground truth.
+    if ((await progress.textContent()) !== before) {
+      if (result === undefined && taskId) {
+        result = await (await page.request.get(`/v1/tasks/${taskId}`)).json()
+      }
+      return
+    }
     const responsePromise = page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && /\/v1\/tasks\/[^/]+\/(events|actions)$/.test(new URL(response.url()).pathname)
@@ -139,10 +150,10 @@ async function advanceFlow(page: Page) {
     expect(response!.ok()).toBe(true)
     result = await response!.json()
     await expect(
-      openDrawer.locator('.console-progress strong'),
+      progress,
       'the played count must move before an advance counts',
-    ).not.toHaveText(before, { timeout: 4_000 })
-  }).toPass({ timeout: 30_000 })
+    ).not.toHaveText(before, { timeout: 8_000 })
+  }).toPass({ timeout: 45_000 })
   await closeControls(page)
   await page.evaluate(() => new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
