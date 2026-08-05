@@ -1323,6 +1323,24 @@ a:focus-visible {
     pointer-events: auto;
   }
 
+  /* The card renders two facts, and `.ui-route-facts` lays out three tracks — off
+     the panel that is only an empty third of a wide row, but inside the rail the
+     two figures are squeezed into 2/3 of an already narrow card and 剩余里程's
+     figure ellipsizes. Match the track count to the fact count here.
+
+     Sized against the widest face the figure can resolve to, not the one this
+     machine happens to have: `.ui-metric__value` asks for Bahnschrift, then DIN
+     Alternate, then Cascadia Code, and a Linux CI runner has none of the three,
+     so it falls to generic monospace and every figure measures ~15% wider than
+     it does on macOS. At two tracks `32.0 km` needs 114px of a 163px box, which
+     holds either way; at three it had 99px and lost 15px to the ellipsis on CI
+     while passing locally. Widening `--glass-rail` is not the alternative fix:
+     at this width its 32% middle term governs, so raising the 510px cap does
+     nothing. */
+  .ui-layout--split:has(.ui-card--route-map) .ui-card--navigation-summary .ui-route-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   /* The small labels ride on the glass, where `--muted` no longer clears AA — see
      the token block for why it cannot be made to. */
   .ui-layout--split:has(.ui-card--route-map) .ui-navigation-brief__eyebrow,
