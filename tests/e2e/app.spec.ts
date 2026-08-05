@@ -38,9 +38,9 @@ async function postApi(page: Page, path: string, body: unknown) {
 async function ensureControlsOpen(page: Page) {
   const drawer = page.getByRole('dialog', { name: '演示控制' })
   if (!(await drawer.isVisible())) {
-    await page.getByRole('button', { name: '打开演示控制' }).click({ timeout: 2_000 })
+    await page.getByRole('button', { name: '打开演示控制' }).click({ timeout: 5_000 })
   }
-  await expect(drawer).toBeVisible({ timeout: 1_500 })
+  await expect(drawer).toBeVisible({ timeout: 2_500 })
   return drawer
 }
 
@@ -139,8 +139,12 @@ async function advanceFlow(page: Page) {
     const responsePromise = page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && /\/v1\/tasks\/[^/]+\/(events|actions)$/.test(new URL(response.url()).pathname)
-    ), { timeout: 4_000 }).catch(() => undefined)
-    await openDrawer.getByRole('button', { name: /推进下一事件/ }).click({ timeout: 2_000 })
+    ), { timeout: 12_000 }).catch(() => undefined)
+    // No click timeout: on a slow runner the button legitimately spends
+    // seconds disabled while the previous write settles, and dev's original
+    // helper waited it out — the retry loop only needs to own what happens
+    // after the click, not how long actionability takes.
+    await openDrawer.getByRole('button', { name: /推进下一事件/ }).click()
     const response = await responsePromise
     // No write means the click never reached a live handler; a write that
     // leaves the played count where it was is the idempotent replay of an
@@ -152,7 +156,7 @@ async function advanceFlow(page: Page) {
     await expect(
       progress,
       'the played count must move before an advance counts',
-    ).not.toHaveText(before, { timeout: 8_000 })
+    ).not.toHaveText(before, { timeout: 10_000 })
   }).toPass({ timeout: 45_000 })
   await closeControls(page)
   await page.evaluate(() => new Promise<void>((resolve) => {
