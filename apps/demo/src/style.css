@@ -1920,6 +1920,33 @@ a:focus-visible {
     padding-top: 0;
   }
 
+  /* The three-column band above assumes the card spans the task surface: its
+     200px + auto + 300px tracks need ~817px, so in the split layout's narrow
+     rail the facts overflowed the card and 到达电量 fell outside it entirely.
+     Beside a map the card is a tall rail, so stack the same regions instead of
+     banding them — no track floor, nothing to clip. */
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-card--navigation-summary {
+    align-content: center;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+    row-gap: clamp(12px, 2vh, 22px);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__header,
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__route-rule,
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__eta,
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__facts {
+    grid-row: auto;
+    grid-column: 1;
+    align-self: start;
+  }
+
+  /* The rules that separated the banded columns would now cut across the stack. */
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__eta {
+    padding-inline: 0;
+    border-inline: 0;
+  }
+
   .ui-spec-renderer[data-single-component="false"] .ui-card--charging-recommendation {
     display: grid;
     align-items: center;
