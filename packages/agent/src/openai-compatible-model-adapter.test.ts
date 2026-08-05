@@ -117,6 +117,48 @@ describe('OpenAICompatibleModelAdapter transport', () => {
     })).resolves.toMatchObject({ source: 'model', modelUsed: modelId })
   })
 
+  it('instructs the model in the exact dialect the rule planner accepts', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => jsonResponse(completion()))
+    await adapterWithFetch(fetch as typeof globalThis.fetch).plan(request, { signal: new AbortController().signal })
+
+    const body = JSON.parse(String(fetch.mock.calls[0]![1]?.body)) as { messages: Array<{ role: string; content: string }> }
+    const system = body.messages.find((message) => message.role === 'system')?.content ?? ''
+    // The gateway re-plans canonicalInput with the deterministic rules and
+    // grounds evidence in the original text. Losing any of these instructions
+    // silently turns every model turn into a rules fallback, so each canonical
+    // form the prompt teaches must itself parse to the intent it is taught for.
+    expect(system).toContain('我现在要去机场接妈妈和豆豆')
+    expect(system).toContain('航班号是MU5102')
+    expect(system).toMatch(/妈妈, 爸爸, and 豆豆/u)
+    expect(system).toContain('verbatim substring')
+    expect(planAirportPickup({ text: '我现在要去机场接妈妈和豆豆' }).intent).toBe('create-airport-pickup')
+    expect(planAirportPickup({ text: '航班号是MU5102' }).intent).toBe('provide-flight-number')
+  })
+
+  it('turns a rules-dialect answer into a model plan and discards an off-dialect answer', async () => {
+    // The regression this prompt exists to prevent: a model that canonicalizes
+    // into anything the rules cannot parse (observed live: English) must fall
+    // back, while the taught dialect must survive every gateway guard.
+    const offDialect = {
+      confidence: 0.95,
+      canonicalInput: 'Pick up mom from the airport',
+      intentHint: 'create-airport-pickup',
+      evidence: { passengers: ['妈妈'] },
+    }
+    const gatewayInput = { text: request.text, eventId: 'dialect-event', timestamp: '2026-07-25T20:00:00+08:00' }
+
+    const taught = vi.fn(async () => jsonResponse(completion()))
+    await expect(new ModelGateway({ adapter: adapterWithFetch(taught as typeof globalThis.fetch) }).plan(gatewayInput))
+      .resolves.toMatchObject({
+        source: 'model',
+        plan: { intent: 'create-airport-pickup', slotUpdates: { passengers: { names: ['妈妈'] } } },
+      })
+
+    const strayed = vi.fn(async () => jsonResponse(completion(JSON.stringify(offDialect))))
+    await expect(new ModelGateway({ adapter: adapterWithFetch(strayed as typeof globalThis.fetch) }).plan(gatewayInput))
+      .resolves.toMatchObject({ source: 'fallback', plan: { intent: 'unknown' } })
+  })
+
   it.each([301, 302, 307, 308, 400, 401, 403, 429, 500])('rejects HTTP %s without retrying or reading its body', async (status) => {
     const cancel = vi.fn(async () => undefined)
     const response = {
