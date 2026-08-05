@@ -792,11 +792,13 @@ export default function App({
               </div>
             </div>
 
-            {effects.length > 0 && (
-              <p className="console-effects" aria-label="Effect receipts">
-                {effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ')}
-              </p>
-            )}
+            {/* Always mounted with a fixed height: receipts stream in over SSE while
+                the drawer is open, and a conditionally inserted line here used to
+                shove the advance button mid-click — the demo player (and any human
+                aiming at it) then pressed empty space. */}
+            <p className="console-effects" aria-label="Effect receipts" data-empty={effects.length === 0 || undefined}>
+              {effects.length > 0 ? effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ') : '暂无回执'}
+            </p>
 
             <button
               className="advance-button"

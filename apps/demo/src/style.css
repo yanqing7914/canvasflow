@@ -2491,7 +2491,14 @@ a:focus-visible {
   font-size: 15px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+  /* Exactly two lines, always. Receipts arrive over SSE while the drawer is
+     open; a line that grows or appears would move the advance button under
+     the user's pointer. Longer logs scroll inside the box instead. */
+  height: calc(2 * 1.6em);
+  overflow-y: auto;
 }
+
+.console-effects[data-empty] { color: var(--rule); }
 
 /*
  * A failed request is not a trip fact. It sits between the input and the journey

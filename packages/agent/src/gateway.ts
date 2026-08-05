@@ -249,7 +249,9 @@ export class AgentGateway {
     if (this.#store.getEventResult(taskId, request.event.eventId)) return undefined
     if (request.expectedTaskRevision !== current.task.taskRevision) return undefined
     if (current.task.phase === 'completed' || current.task.phase === 'cancelled') return undefined
-    if (Date.parse(request.event.timestamp) < Date.parse(current.task.updatedAt)) return undefined
+    // No timestamp staleness check here: submitEvent clamps user input forward
+    // (occupant intent is never stale), so gating planning on the raw client
+    // stamp would skip the model for exactly the inputs that will still apply.
     return current.task
   }
 
@@ -439,6 +441,22 @@ export class AgentGateway {
         false,
         current,
       )
+    }
+
+    // Occupant intent is never stale relative to the task's own bookkeeping.
+    // Async effect receipts stamp `updatedAt` with a wall clock fresher than the
+    // one the cabin stamped this event with, and the reducer's freshness guard
+    // would then swallow real input behind an OK response — under load the demo
+    // player loses its final timeline steps exactly this way. Clamp forward,
+    // the same way cancelTask stamps its synthesized cancel. Vehicle and
+    // provider events keep their source timestamps: their ordering semantics
+    // (a stale parked signal must lose to a newer moving one) are load-bearing.
+    if (
+      request.event.type === 'user.input'
+      || request.event.type === 'user.confirmed-passengers-onboard'
+      || request.event.type === 'destination.arrived'
+    ) {
+      request.event = { ...request.event, timestamp: this.#eventTimestamp(current.task.updatedAt) }
     }
 
     const deferredReceipt = current.effectReceipts?.activeCabin
