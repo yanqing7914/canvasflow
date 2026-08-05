@@ -20,51 +20,13 @@ async function postApi(page: Page, path: string, body: unknown) {
  * Engineering metadata and the demo player live in a modal controls drawer, never on
  * the driver-facing brief. The drawer overlays the brief with a scrim, so it is opened
  * to read, then closed again before the next interaction with the trip surface.
- *
- * Drawer interactions are click-then-verify-then-retry. Under parallel-worker
- * CPU contention React commits lag behind the pointer: a click can land on a
- * stale render whose handler reads an outdated step index, re-posting an event
- * the Gateway then replays idempotently — an HTTP 200 that advanced nothing.
- * Only an observable outcome (drawer visible, the played count moving) proves
- * a click did what it looked like it did; retrying is safe because opening is
- * idempotent and event submission dedupes by eventId server-side.
  */
-/**
- * Single open attempt for use inside retry blocks. `isVisible` can catch the
- * drawer mid-close and report true, in which case this attempt returns while
- * the drawer finishes hiding — callers must keep re-ensuring inside their own
- * retry loop rather than trusting one successful open.
- */
-async function ensureControlsOpen(page: Page) {
-  const drawer = page.getByRole('dialog', { name: '演示控制' })
-  if (!(await drawer.isVisible())) {
-    await page.getByRole('button', { name: '打开演示控制' }).click({ timeout: 5_000 })
-  }
-  await expect(drawer).toBeVisible({ timeout: 2_500 })
-  return drawer
-}
-
-async function openControls(page: Page) {
-  await expect(async () => {
-    await ensureControlsOpen(page)
-  }).toPass({ timeout: 15_000 })
-  return page.getByRole('dialog', { name: '演示控制' })
-}
-
-async function closeControls(page: Page) {
-  const drawer = page.getByRole('dialog', { name: '演示控制' })
-  await expect(async () => {
-    if (await drawer.isVisible()) await page.keyboard.press('Escape')
-    await expect(drawer).toBeHidden({ timeout: 1_500 })
-  }).toPass({ timeout: 10_000 })
-}
-
 async function readControls(page: Page, expected: string | RegExp) {
-  await expect(async () => {
-    const drawer = await ensureControlsOpen(page)
-    await expect(drawer).toContainText(expected, { timeout: 2_500 })
-  }).toPass({ timeout: 15_000 })
-  await closeControls(page)
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  const drawer = page.getByRole('dialog', { name: '演示控制' })
+  await expect(drawer).toContainText(expected)
+  await page.keyboard.press('Escape')
+  await expect(drawer).toBeHidden()
 }
 
 /**
@@ -108,57 +70,25 @@ async function sendText(page: Page, value?: string) {
 }
 
 async function expectAdvanceEnabled(page: Page, enabled: boolean) {
-  await expect(async () => {
-    const drawer = await ensureControlsOpen(page)
-    const advance = drawer.getByRole('button', { name: /推进下一事件|行程已完成|行程已取消/ })
-    if (enabled) await expect(advance).toBeEnabled({ timeout: 2_000 })
-    else await expect(advance).toBeDisabled({ timeout: 2_000 })
-  }).toPass({ timeout: 15_000 })
-  await closeControls(page)
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  const advance = page.getByRole('button', { name: /推进下一事件|行程已完成|行程已取消/ })
+  if (enabled) await expect(advance).toBeEnabled()
+  else await expect(advance).toBeDisabled()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeHidden()
 }
 
 async function advanceFlow(page: Page) {
-  const drawer = await openControls(page)
-  const before = (await drawer.locator('.console-progress strong').textContent()) ?? ''
-  const taskId = /pickup-[0-9a-f-]+/u.exec((await drawer.textContent()) ?? '')?.[0]
-  let result: unknown
-  await expect(async () => {
-    // Re-ensure the drawer every attempt: the one opened outside this block
-    // may have been caught mid-close and finished hiding underneath us.
-    const openDrawer = await ensureControlsOpen(page)
-    const progress = openDrawer.locator('.console-progress strong')
-    // A previous attempt may have advanced for real while its confirmation
-    // window expired — clicking again then would double-advance and exhaust
-    // the timeline early. The moved count, not the click, is the ground truth.
-    if ((await progress.textContent()) !== before) {
-      if (result === undefined && taskId) {
-        result = await (await page.request.get(`/v1/tasks/${taskId}`)).json()
-      }
-      return
-    }
-    const responsePromise = page.waitForResponse((response) => (
-      response.request().method() === 'POST'
-      && /\/v1\/tasks\/[^/]+\/(events|actions)$/.test(new URL(response.url()).pathname)
-    ), { timeout: 12_000 }).catch(() => undefined)
-    // No click timeout: on a slow runner the button legitimately spends
-    // seconds disabled while the previous write settles, and dev's original
-    // helper waited it out — the retry loop only needs to own what happens
-    // after the click, not how long actionability takes.
-    await openDrawer.getByRole('button', { name: /推进下一事件/ }).click()
-    const response = await responsePromise
-    // No write means the click never reached a live handler; a write that
-    // leaves the played count where it was is the idempotent replay of an
-    // already-processed event from a stale render. Neither advanced the
-    // timeline, and clicking again is safe for exactly the same reason.
-    expect(response, 'advance click produced no task write').toBeTruthy()
-    expect(response!.ok()).toBe(true)
-    result = await response!.json()
-    await expect(
-      progress,
-      'the played count must move before an advance counts',
-    ).not.toHaveText(before, { timeout: 10_000 })
-  }).toPass({ timeout: 45_000 })
-  await closeControls(page)
+  const responsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/(events|actions)$/.test(new URL(response.url()).pathname)
+  ))
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await page.getByRole('button', { name: /推进下一事件/ }).click()
+  await page.keyboard.press('Escape')
+  const response = await responsePromise
+  expect(response.ok()).toBe(true)
+  const result = await response.json()
   await page.evaluate(() => new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
   }))
@@ -361,10 +291,12 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
   // Opening the drawer must not change the brief's width, and the confirmation
   // adds an action pair to the tallest phase in the flow.
   const closedWidth = await briefWidth(page)
-  await openControls(page)
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeVisible()
   expect(await briefWidth(page)).toBe(closedWidth)
   await expectNoScroll(page)
-  await closeControls(page)
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeHidden()
   expect(await briefWidth(page)).toBe(closedWidth)
   await expectNoScroll(page)
 
@@ -561,7 +493,8 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   // The offline fallback must not depend on a speech service or on the audio
   // actually playing: the drawer replay delivers the canonical transcript from
   // fixtures/airport-pickup/voice either way, parked for confirmation.
-  const drawer = await openControls(page)
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  const drawer = page.getByRole('dialog', { name: '演示控制' })
   await expect(drawer).toContainText('语音兜底回放')
   await page.getByRole('button', { name: '接机指令' }).click()
   await expect(drawer).toBeHidden()
