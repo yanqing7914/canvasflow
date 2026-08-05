@@ -128,11 +128,19 @@ describe('OpenAICompatibleModelAdapter transport', () => {
     // silently turns every model turn into a rules fallback, so each canonical
     // form the prompt teaches must itself parse to the intent it is taught for.
     expect(system).toContain('我现在要去机场接妈妈和豆豆')
+    expect(system).toContain('，航班号是MU5102')
     expect(system).toContain('航班号是MU5102')
     expect(system).toMatch(/妈妈, 爸爸, and 豆豆/u)
     expect(system).toContain('verbatim substring')
     expect(planAirportPickup({ text: '我现在要去机场接妈妈和豆豆' }).intent).toBe('create-airport-pickup')
     expect(planAirportPickup({ text: '航班号是MU5102' }).intent).toBe('provide-flight-number')
+    // The taught mixed form must keep both slots in one plan, so a canonicalized
+    // pickup that also carries a flight number never degrades into a follow-up
+    // question asking for the number again.
+    expect(planAirportPickup({ text: '我现在要去机场接妈妈和豆豆，航班号是MU5102' })).toMatchObject({
+      intent: 'create-airport-pickup',
+      slotUpdates: { passengers: { names: ['妈妈', '豆豆'] }, flightNumber: 'MU5102' },
+    })
   })
 
   it('turns a rules-dialect answer into a model plan and discards an off-dialect answer', async () => {
