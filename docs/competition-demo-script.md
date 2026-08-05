@@ -61,6 +61,50 @@ HTTP API. Do not call reducers or tool providers from browser developer tools.
 3. Close with the boundaries: Fixture data is fictional; live Providers require
    injected credentials, durable external idempotency, and operational review.
 
+## Optional: Model Canonicalization Segment
+
+This segment proves that model planning is a bounded, verifiable assist on top
+of the rules — not the other way around. Run it only after rehearsing on the
+venue network; the whole demo works rules-only if the model is unavailable.
+
+### Setup
+
+Start the preview with the model environment configured. Supply the key from
+the deployment environment; never write it into a file or show it on screen:
+
+```bash
+AGENT_MODEL_MODE=openai-compatible \
+AGENT_MODEL_ENDPOINT=https://cc.auto-link.com.cn/pro/v1/chat/completions \
+AGENT_MODEL_ALLOWED_HOSTS=cc.auto-link.com.cn \
+AGENT_MODEL_API_KEY=... \
+AGENT_MODEL_ID=anthropic.claude-haiku-4-5 \
+AGENT_DATABASE_PATH=:memory: npm run preview
+```
+
+### Verified Lines
+
+The rules planner resolves most phrasings by itself; only input it reports as
+unknown ever reaches the model. These lines were verified end to end against
+the endpoint above (about 3 seconds per turn):
+
+| Line | Path |
+| --- | --- |
+| `我现在要去机场接妈妈和豆豆` | Rules. The drawer's 规划来源 row shows `规则`. |
+| `麻烦你去机场把妈妈和豆豆接回来` | Model. The brief shows the 模型参与 disclosure and 规划来源 names the model ID. |
+| `能不能去机场把妈妈接回来` | Model, single passenger. |
+
+### Script
+
+1. Create a task with the rules line and point at 规划来源 `规则`: the
+   deterministic path handles known phrasing with no model call at all.
+2. Reset, then create a task with a model line. Point at the on-brief
+   disclosure and the model ID in the drawer.
+3. State the boundary: the model only canonicalizes unknown slot input. Its
+   output is re-planned by the same rules, checked against verbatim evidence
+   from the original words, and discarded on any failure, timeout, or low
+   confidence — the turn then falls back to deterministic behavior, so the
+   demo cannot be stranded by the model.
+
 ## Recording Notes
 
 - Capture one uninterrupted happy-path recording and a short fallback clip.
