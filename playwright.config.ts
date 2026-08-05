@@ -5,6 +5,13 @@ const baseURL = `http://127.0.0.1:${port}`
 
 export default defineConfig({
   testDir: './tests/e2e',
+  // Several specs walk the entire demo flow (create -> ten advances -> memory
+  // confirmation) with layout assertions between steps. With both projects
+  // sharing one preview server and one CPU, each advance costs 2-3s and the
+  // walk overruns the 30s default — the test then dies mid-loop looking like a
+  // lost click or a stalled server. Real hangs still fail fast through the 5s
+  // expect timeout; only the honest end-to-end walking time gets this budget.
+  timeout: 60_000,
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
