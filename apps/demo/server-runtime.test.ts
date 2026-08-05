@@ -4,9 +4,12 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, posix, win32 } from 'node:path'
 import { createSideEffectRuntime, issueAutoNotifyAuthorization } from '@canvasflow/tools'
+import { ServerResponse } from 'node:http'
 import {
   createAgentServer,
   resolveStaticPath,
+  resolveAMapServiceUrl,
+  proxyAMapService,
   createConfiguredAgentRuntime,
   createE2eProviderFactory,
   CANVASFLOW_E2E,
@@ -212,5 +215,130 @@ describe('resolveStaticPath', () => {
   it('keeps sibling directories with a shared prefix out of bounds', () => {
     expect(resolveStaticPath('/srv/site', '../site-secrets/key', posix)).toBeNull()
     expect(resolveStaticPath('C:\\srv\\site', '..\\site-secrets\\key', win32)).toBeNull()
+  })
+})
+
+describe('resolveAMapServiceUrl', () => {
+  it('forwards a service path onto restapi.amap.com untouched when no jscode is set', () => {
+    expect(resolveAMapServiceUrl('/_AMapService/v3/direction/driving?origin=1,2&destination=3,4', {})).toBe(
+      'https://restapi.amap.com/v3/direction/driving?origin=1,2&destination=3,4',
+    )
+  })
+
+  it('appends the server-only jscode as the last query parameter', () => {
+    const url = resolveAMapServiceUrl('/_AMapService/v3/direction/driving?origin=1,2', {
+      AMAP_SECURITY_JS_CODE: 'secret-code',
+    })
+    expect(url).not.toBeNull()
+    const parsed = new URL(url!)
+    expect(parsed.host).toBe('restapi.amap.com')
+    expect(parsed.searchParams.get('jscode')).toBe('secret-code')
+  })
+
+  it('rejects requests outside the service prefix', () => {
+    expect(resolveAMapServiceUrl('/v3/direction/driving', {})).toBeNull()
+    expect(resolveAMapServiceUrl('/_AMapServiceX/foo', {})).toBeNull()
+  })
+
+  it('refuses a traversal segment rather than forwarding it', () => {
+    expect(resolveAMapServiceUrl('/_AMapService/../evil', {})).toBeNull()
+    expect(resolveAMapServiceUrl('/_AMapService/v3/../../evil', {})).toBeNull()
+    expect(resolveAMapServiceUrl('/_AMapService/v3/%2e%2e/evil', {})).toBeNull()
+  })
+
+  it('cannot be redirected off restapi.amap.com by a protocol-relative path', () => {
+    // A `//evil.com/...` request becomes part of restapi.amap.com's path, not a
+    // new authority — the pinned origin makes the host un-overridable.
+    const url = resolveAMapServiceUrl('/_AMapService//evil.com/steal', {})
+    expect(url).not.toBeNull()
+    expect(new URL(url!).host).toBe('restapi.amap.com')
+  })
+})
+
+describe('proxyAMapService', () => {
+  type Capture = { status?: number; headers?: Record<string, string>; body: string }
+
+  function fakeResponse(): { response: ServerResponse; capture: Capture } {
+    const capture: Capture = { body: '' }
+    const response = {
+      headersSent: false,
+      writableEnded: false,
+      writeHead(status: number, headers?: Record<string, string>) {
+        capture.status = status
+        capture.headers = headers
+        this.headersSent = true
+        return this
+      },
+      end(chunk?: Buffer | string) {
+        if (chunk) capture.body += chunk.toString()
+        this.writableEnded = true
+        return this
+      },
+    }
+    return { response: response as unknown as ServerResponse, capture }
+  }
+
+  it('streams the upstream body back and never echoes the jscode into the response', async () => {
+    let requestedUrl = ''
+    const fetchImpl = (async (url: string | URL) => {
+      requestedUrl = url.toString()
+      return new Response('{"route":"ok"}', {
+        status: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      })
+    }) as unknown as typeof fetch
+    const { response, capture } = fakeResponse()
+
+    await proxyAMapService('/_AMapService/v3/direction/driving?origin=1,2', response, {
+      AMAP_SECURITY_JS_CODE: 'secret-code',
+    }, fetchImpl)
+
+    expect(capture.status).toBe(200)
+    expect(capture.body).toBe('{"route":"ok"}')
+    // The code rides on the upstream URL only; the client never sees it.
+    expect(requestedUrl).toContain('jscode=secret-code')
+    expect(capture.body).not.toContain('secret-code')
+  })
+
+  it('passes through unchanged when no jscode is configured', async () => {
+    let requestedUrl = ''
+    const fetchImpl = (async (url: string | URL) => {
+      requestedUrl = url.toString()
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch
+    const { response } = fakeResponse()
+
+    await proxyAMapService('/_AMapService/v3/geocode?address=x', response, {}, fetchImpl)
+
+    expect(requestedUrl).toContain('restapi.amap.com/v3/geocode')
+    expect(requestedUrl).not.toContain('jscode')
+  })
+
+  it('answers a rejected target with 400 and does not call upstream', async () => {
+    let called = false
+    const fetchImpl = (async () => {
+      called = true
+      return new Response('', { status: 200 })
+    }) as unknown as typeof fetch
+    const { response, capture } = fakeResponse()
+
+    await proxyAMapService('/_AMapService/../evil', response, {}, fetchImpl)
+
+    expect(called).toBe(false)
+    expect(capture.status).toBe(400)
+  })
+
+  it('answers 502 without leaking anything when the upstream fetch throws', async () => {
+    const fetchImpl = (async () => {
+      throw new Error('network down')
+    }) as unknown as typeof fetch
+    const { response, capture } = fakeResponse()
+
+    await proxyAMapService('/_AMapService/v3/direction/driving', response, {
+      AMAP_SECURITY_JS_CODE: 'secret-code',
+    }, fetchImpl)
+
+    expect(capture.status).toBe(502)
+    expect(capture.body).not.toContain('secret-code')
   })
 })
