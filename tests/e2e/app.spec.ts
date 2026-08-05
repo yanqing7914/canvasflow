@@ -109,9 +109,10 @@ async function expectNoHorizontalOverflow(page: Page) {
  * genuinely fit rather than merely be unscrollable. `.demo-shell` sets
  * `overflow: hidden`, which clamps `document.scrollHeight` to the viewport: a brief
  * taller than the fold is silently clipped instead of scrollable, so asserting on
- * page scroll height alone can never fail. What is checkable is the three ways the
+ * page scroll height alone can never fail. What is checkable is the four ways the
  * rule can actually break — a clipped scroll container, a box clipped across its
- * own width, or the brief's own box extending past the fold.
+ * own width, a line of text ellipsized inside a box that itself fits, or the
+ * brief's own box extending past the fold.
  *
  * The cards are measured alongside the containers because that is where clipping
  * actually lands: `.ui-card` hides its own overflow, so a card starved of height by
@@ -159,6 +160,23 @@ async function expectNoScroll(page: Page) {
       // outer boxes alone cannot see that failure.
       boxes: ['.demo-shell', '.cockpit-stage', '.task-surface', '.trip-brief__content', '.ui-slot', '.ui-component', '.ui-card']
         .flatMap(measure),
+      // One level below the card, and on the width axis only. The metric label and
+      // figure are `nowrap` with an ellipsis, so a card that fits its own column
+      // can still hold a figure reading 到达电… — the truncation happens inside the
+      // leaf, where the card's scrollWidth cannot see it.
+      //
+      // Scoped to the floating navigation panel, whose width this suite's own
+      // stylesheet sets. Widening it to every metric on every screen surfaces a
+      // separate, older truncation that belongs with its own fix rather than here.
+      //
+      // Height is deliberately not asserted on these: they set `line-height` equal
+      // to `font-size`, so the line box is a couple of pixels shorter than the
+      // font's natural ascent plus descent, and every one of them reports a
+      // standing 2px `clippedBy` that has nothing to do with the layout fitting.
+      textBoxes: [
+        '.ui-layout--split:has(.ui-card--route-map) .ui-metric__label',
+        '.ui-layout--split:has(.ui-card--route-map) .ui-metric__value',
+      ].flatMap(measure),
     }
   })
   if (layout.width <= 680) return
@@ -168,6 +186,7 @@ async function expectNoScroll(page: Page) {
   expect(layout.boxes.filter((box) => box.clippedBy > 1)).toEqual([])
   expect(layout.boxes.filter((box) => box.clippedWidthBy > 1)).toEqual([])
   expect(layout.boxes.filter((box) => box.pastFoldBy > 1)).toEqual([])
+  expect(layout.textBoxes.filter((box) => box.clippedWidthBy > 1)).toEqual([])
 }
 
 test('renders the UISpec surface responsively and keeps primary controls keyboard accessible @layout', async ({ page }, testInfo) => {

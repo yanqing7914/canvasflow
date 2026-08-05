@@ -57,6 +57,28 @@ a:focus-visible {
   --amber-pale: #fff7e9;
   --red: #c74646;
   --red-pale: #fff0f0;
+  /* Glassmorphism tokens for the floating navigation panel.
+
+     `--glass-fill` is the alpha of the panel's white layer, and it is a contrast
+     floor rather than a taste setting. Composited over the worst backdrop the map
+     can put behind it — black — the panel resolves to a grey of exactly this
+     alpha, so the alpha alone decides whether text on the panel is readable, and
+     the blur contributes nothing to that guarantee. Both text colours below are
+     chosen to clear WCAG AA 4.5:1 against that worst case.
+
+     `--glass-label` exists because `--muted` cannot: at #667384 it needs a
+     backdrop lighter than #f7f7f7 to reach 4.5:1, which no panel that shows the
+     map through it can offer. glass-contrast.test.ts recomputes all of this from
+     these three declarations, so weakening any of them fails the suite instead of
+     quietly making the panel unreadable over dark map features. */
+  --glass-fill: 0.62;
+  --glass-ink: #102033;
+  --glass-label: #2a3444;
+  /* Wide enough that 到达电量 and its figure never hit the ellipsis the metric
+     labels fall back to, narrow enough that the route still has most of the map
+     to itself. The lower bound is the content's, not the layout's: a percentage
+     alone squeezes the panel on the smaller screens this effect still runs on. */
+  --glass-rail: clamp(430px, 32%, 510px);
   min-height: 100dvh;
   overflow: hidden;
   background: var(--cabin);
@@ -1203,6 +1225,102 @@ a:focus-visible {
 .ui-route-map__destination { color: var(--ink); }
 
 .ui-route-map__progress { font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------------------
+   Floating navigation panel (glassmorphism)
+
+   Only where there is a map to float over. Frosted glass needs colour and detail
+   behind it; on this demo's white cards over light grey it would read as a plain
+   grey box, so the treatment is scoped to the one screen that has a real basemap
+   underneath — `:has(.ui-card--route-map)` is the whole guard. Everywhere else
+   keeps the existing visual language untouched.
+
+   The two split slots collapse into one grid cell: the map takes the full task
+   surface and the navigation panel floats over its right side, inset from the
+   edges. The blue route keeps running underneath and comes through the panel
+   blurred — visible but not readable, which is the point of the effect.
+
+   Depth here is one layer, not a stack: a single panel lifted off a single
+   basemap. No gradient wash behind the glass, because the map already is the
+   coloured layer and anything painted over it would hide the thing the driver is
+   looking at.
+
+   Held to the breakpoint where the split is actually side by side. Below it the
+   map stacks above the cards, so there is nothing behind the panel to see and the
+   layout stays exactly as it was.
+   --------------------------------------------------------------------------- */
+@media (min-width: 1180px) {
+  .ui-layout--split:has(.ui-card--route-map) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ui-layout--split:has(.ui-card--route-map) > .ui-slot {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map) > .ui-slot--secondary {
+    width: var(--glass-rail);
+    /* Above the basemap and its caption, and inset so the panel reads as floating
+       over the map rather than as a column beside it. The gutter it leaves stays
+       transparent to the pointer, so the map underneath is still draggable. */
+    z-index: 3;
+    align-content: center;
+    justify-self: end;
+    padding: clamp(16px, 2.4vh, 30px) clamp(16px, 1.5vw, 30px);
+    pointer-events: none;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map) .ui-card--navigation-summary {
+    height: auto;
+    padding: clamp(20px, 2.6vh, 32px) clamp(20px, 1.8vw, 32px);
+    /* A hairline of the panel's own light rather than a drawn outline: it catches
+       the edge where glass meets map, so the panel has a defined boundary without
+       a border reading as a frame. */
+    border: 1px solid rgba(255, 255, 255, 0.55);
+    border-radius: 20px;
+    background: rgb(255 255 255 / var(--glass-fill));
+    /* Saturation lifts the map's own blues and greens as they pass through, so
+       the panel looks like glass rather than like translucent white. */
+    -webkit-backdrop-filter: blur(28px) saturate(1.6);
+    backdrop-filter: blur(28px) saturate(1.6);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.9),
+      0 18px 44px rgba(16, 32, 51, 0.18);
+    color: var(--glass-ink);
+    pointer-events: auto;
+  }
+
+  /* The small labels ride on the glass, where `--muted` no longer clears AA — see
+     the token block for why it cannot be made to. */
+  .ui-layout--split:has(.ui-card--route-map) .ui-navigation-brief__eyebrow,
+  .ui-layout--split:has(.ui-card--route-map) .ui-metric__label {
+    color: var(--glass-label);
+  }
+
+  /* 模拟行程进度 sits at the right end of the caption, which the panel now covers.
+     Stop the caption where the panel starts so the progress figure stays read. */
+  .ui-layout--split:has(.ui-card--route-map) .ui-route-map__caption {
+    right: var(--glass-rail);
+  }
+
+  /* Without `backdrop-filter` the panel would be flat translucent white with the
+     map legible straight through it — worse to read than no effect at all. Go
+     nearly opaque instead: the layering survives, the transparency does not. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .ui-layout--split:has(.ui-card--route-map) .ui-card--navigation-summary {
+      background: rgb(255 255 255 / 0.95);
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .ui-layout--split:has(.ui-card--route-map) .ui-card--navigation-summary {
+      background: var(--surface);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}
 
 .ui-card--navigation-summary .ui-route-facts {
   width: min(100%, 760px);
