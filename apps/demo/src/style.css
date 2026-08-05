@@ -1,7 +1,8 @@
 :root {
+  --font-body: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", sans-serif;
   color: #102033;
   background: #edf0f4;
-  font-family: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", sans-serif;
+  font-family: var(--font-body);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -585,6 +586,20 @@ a:focus-visible {
   line-height: 1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* A metric whose value is prose, not a figure: the display face above is a tabular
+   numeral face at a numeral size, and four CJK glyphs at that size overrun the third
+   of `.ui-cabin-grid` the metric gets and ellipsise. Sizing in `em` off the figure
+   keeps this in step with every density and breakpoint override of the value size
+   without restating any of them, and the reciprocal line height holds the row at the
+   figure's own 1em so a text value and a numeric one in the same grid stay level. */
+.ui-metric__value-text {
+  --metric-text-scale: 0.62;
+  font-family: var(--font-body);
+  font-size: calc(1em * var(--metric-text-scale));
+  letter-spacing: -0.01em;
+  line-height: calc(1 / var(--metric-text-scale));
 }
 
 .ui-metric__detail {
