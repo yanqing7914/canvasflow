@@ -1008,6 +1008,16 @@ describe('UISpecRenderer route map panel', () => {
     expect(renderer().querySelector('.ui-route-sketch')).not.toBeInTheDocument()
   })
 
+  it('injects no map script and stays on the sketch when no AMap key is configured', () => {
+    // CI and the default local build carry no VITE_AMAP_JS_KEY, so the panel
+    // must render entirely from the offline sketch with the network untouched.
+    render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+    expect(panel()).toHaveAttribute('data-route-map-source', 'sketch')
+    expect(document.getElementById('amap-js-api')).toBeNull()
+    expect(panel()!.querySelector('.ui-route-map__basemap')).toHaveAttribute('data-active', 'false')
+  })
+
   it('marks the staged point as simulated progress, never as a live position', () => {
     render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
 

@@ -1115,6 +1115,20 @@ a:focus-visible {
   flex: 1 1 auto;
 }
 
+/* The real basemap fills the whole panel and sits above the sketch once AMap has
+   drawn the route; until then it is empty and hidden, so the sketch shows. The
+   caption keeps its own z-index above both. */
+.ui-route-map__basemap {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  /* Keep a measurable box while AMap initializes. `display: none` gives the
+     imperative map a zero-sized container, so use visibility for the fallback. */
+  visibility: hidden;
+}
+
+.ui-route-map__basemap[data-active="true"] { visibility: visible; }
+
 .ui-route-map__line {
   fill: none;
   stroke: var(--blue);
@@ -1172,6 +1186,8 @@ a:focus-visible {
   right: 0;
   bottom: 0;
   left: 0;
+  /* Above the basemap (z-index 1) so 模拟行程进度 stays legible over real tiles. */
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;

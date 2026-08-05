@@ -187,8 +187,11 @@ function roleFor(index: number, total: number): RouteSketchMarker['role'] {
  * straight line between the endpoints, so a detour reads as distance covered.
  * Zero-length segments (duplicate points) contribute nothing and are stepped
  * over instead of being interpolated inside.
+ *
+ * Exported so a live-basemap renderer can place the vehicle the same way, on the
+ * road geometry the map returns rather than the fixture polyline.
  */
-function pointAtProgress(
+export function pointAtProgress(
   points: Array<{ x: number; y: number }>,
   lengths: number[],
   progress: number,
@@ -208,7 +211,7 @@ function pointAtProgress(
   return points[points.length - 1]!
 }
 
-function segmentLengths(points: Array<{ x: number; y: number }>): number[] {
+export function segmentLengths(points: Array<{ x: number; y: number }>): number[] {
   return points.slice(1).map((point, index) => {
     const previous = points[index]!
     return Math.hypot(point.x - previous.x, point.y - previous.y)
