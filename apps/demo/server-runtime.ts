@@ -1,5 +1,6 @@
 import { createServer, type ServerResponse } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { AgentGateway } from '@canvasflow/agent'
 import { createAgentHttpHandler, type AgentHttpGateway } from '@canvasflow/agent/http'
@@ -87,6 +88,43 @@ export function e2eClockFromEnvironment(
     // Preserve the authored offset for fixtures and user-facing local dates.
     now: () => configured,
     nowMs: () => timestamp,
+  }
+}
+
+/**
+ * Read `KEY=value` lines from a local env file into the process environment.
+ *
+ * Vite loads `.env.local` for the browser build, but only for `VITE_`-prefixed
+ * vars — the server-only ones (the AMap security code) would otherwise never
+ * reach this process, leaving the proxy silently unconfigured. Values already
+ * present in the environment win, so a real deployment's variables are never
+ * overwritten by a developer's file.
+ *
+ * Values are never logged. A missing or unreadable file is not an error: the
+ * keyless path is the supported default.
+ */
+export function loadLocalEnvironment(
+  filePath: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): void {
+  let contents: string
+  try {
+    contents = readFileSync(filePath, 'utf8')
+  } catch {
+    return
+  }
+  for (const line of contents.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const separator = trimmed.indexOf('=')
+    if (separator <= 0) continue
+    const key = trimmed.slice(0, separator).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+    // Set once: an explicit environment variable outranks the file.
+    if (environment[key] !== undefined && environment[key] !== '') continue
+    const value = trimmed.slice(separator + 1).trim()
+    if (!value) continue
+    environment[key] = value.replace(/^(['"])(.*)\1$/, '$2')
   }
 }
 

@@ -10,6 +10,7 @@ import {
   resolveStaticPath,
   resolveAMapServiceUrl,
   proxyAMapService,
+  loadLocalEnvironment,
   createConfiguredAgentRuntime,
   createE2eProviderFactory,
   CANVASFLOW_E2E,
@@ -246,8 +247,90 @@ describe('resolveStaticPath', () => {
   })
 })
 
-describe('resolveAMapServiceUrl', () => {
-  it('forwards a service path onto restapi.amap.com untouched when no jscode is set', () => {
+describe('loadLocalEnvironment', () => {
+  let directory: string | undefined
+
+  afterEach(async () => {
+    if (directory) await rm(directory, { recursive: true, force: true })
+    directory = undefined
+  })
+
+  async function envFile(contents: string): Promise<string> {
+    directory = await mkdtemp(join(tmpdir(), 'canvasflow-env-'))
+    const filePath = join(directory, '.env.local')
+    await writeFile(filePath, contents)
+    return filePath
+  }
+
+  it('loads server-only keys the client bundle never receives', async () => {
+    // The whole point: AMAP_SECURITY_JS_CODE has no VITE_ prefix, so Vite never
+    // hands it to the browser and only this loader can reach the proxy with it.
+    const filePath = await envFile('VITE_AMAP_JS_KEY=client-key\nAMAP_SECURITY_JS_CODE=server-code\n')
+    const environment: NodeJS.ProcessEnv = {}
+
+    loadLocalEnvironment(filePath, environment)
+
+    expect(environment.AMAP_SECURITY_JS_CODE).toBe('server-code')
+    expect(environment.VITE_AMAP_JS_KEY).toBe('client-key')
+  })
+
+  it('never overwrites a value the environment already provides', async () => {
+    // A deployed environment outranks a developer's file, so a stale local copy
+    // cannot quietly replace the real credential.
+    const filePath = await envFile('AMAP_SECURITY_JS_CODE=from-file\n')
+    const environment: NodeJS.ProcessEnv = { AMAP_SECURITY_JS_CODE: 'from-deployment' }
+
+    loadLocalEnvironment(filePath, environment)
+
+    expect(environment.AMAP_SECURITY_JS_CODE).toBe('from-deployment')
+  })
+
+  it('treats a blank assignment as absent so the keyless default survives', async () => {
+    // env.example ships with empty values; reading it must not define the key.
+    const filePath = await envFile('VITE_AMAP_JS_KEY=\nAMAP_SECURITY_JS_CODE=\n')
+    const environment: NodeJS.ProcessEnv = {}
+
+    loadLocalEnvironment(filePath, environment)
+
+    expect(environment.VITE_AMAP_JS_KEY).toBeUndefined()
+    expect(environment.AMAP_SECURITY_JS_CODE).toBeUndefined()
+  })
+
+  it('skips comments, blank lines, and malformed entries', async () => {
+    const filePath = await envFile([
+      '# a comment',
+      '',
+      'no-separator-here',
+      '=leading-separator',
+      '9INVALID=nope',
+      'GOOD_KEY=kept',
+    ].join('\n'))
+    const environment: NodeJS.ProcessEnv = {}
+
+    loadLocalEnvironment(filePath, environment)
+
+    expect(environment).toEqual({ GOOD_KEY: 'kept' })
+  })
+
+  it('strips a single layer of matching quotes', async () => {
+    const filePath = await envFile('QUOTED="value with spaces"\nSINGLE=\'other\'\n')
+    const environment: NodeJS.ProcessEnv = {}
+
+    loadLocalEnvironment(filePath, environment)
+
+    expect(environment.QUOTED).toBe('value with spaces')
+    expect(environment.SINGLE).toBe('other')
+  })
+
+  it('is a no-op when the file does not exist, keeping the keyless path default', () => {
+    const environment: NodeJS.ProcessEnv = {}
+
+    expect(() => loadLocalEnvironment('/nonexistent/canvasflow/.env.local', environment)).not.toThrow()
+    expect(environment).toEqual({})
+  })
+})
+
+describe('resolveAMapServiceUrl', () => {  it('forwards a service path onto restapi.amap.com untouched when no jscode is set', () => {
     expect(resolveAMapServiceUrl('/_AMapService/v3/direction/driving?origin=1,2&destination=3,4', {})).toBe(
       'https://restapi.amap.com/v3/direction/driving?origin=1,2&destination=3,4',
     )
