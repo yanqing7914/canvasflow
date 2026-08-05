@@ -29,15 +29,26 @@ async function postApi(page: Page, path: string, body: unknown) {
  * a click did what it looked like it did; retrying is safe because opening is
  * idempotent and event submission dedupes by eventId server-side.
  */
-async function openControls(page: Page) {
+/**
+ * Single open attempt for use inside retry blocks. `isVisible` can catch the
+ * drawer mid-close and report true, in which case this attempt returns while
+ * the drawer finishes hiding — callers must keep re-ensuring inside their own
+ * retry loop rather than trusting one successful open.
+ */
+async function ensureControlsOpen(page: Page) {
   const drawer = page.getByRole('dialog', { name: '演示控制' })
-  await expect(async () => {
-    if (!(await drawer.isVisible())) {
-      await page.getByRole('button', { name: '打开演示控制' }).click({ timeout: 2_000 })
-    }
-    await expect(drawer).toBeVisible({ timeout: 1_500 })
-  }).toPass({ timeout: 15_000 })
+  if (!(await drawer.isVisible())) {
+    await page.getByRole('button', { name: '打开演示控制' }).click({ timeout: 2_000 })
+  }
+  await expect(drawer).toBeVisible({ timeout: 1_500 })
   return drawer
+}
+
+async function openControls(page: Page) {
+  await expect(async () => {
+    await ensureControlsOpen(page)
+  }).toPass({ timeout: 15_000 })
+  return page.getByRole('dialog', { name: '演示控制' })
 }
 
 async function closeControls(page: Page) {
@@ -49,8 +60,10 @@ async function closeControls(page: Page) {
 }
 
 async function readControls(page: Page, expected: string | RegExp) {
-  const drawer = await openControls(page)
-  await expect(drawer).toContainText(expected)
+  await expect(async () => {
+    const drawer = await ensureControlsOpen(page)
+    await expect(drawer).toContainText(expected, { timeout: 2_500 })
+  }).toPass({ timeout: 15_000 })
   await closeControls(page)
 }
 
@@ -95,25 +108,28 @@ async function sendText(page: Page, value?: string) {
 }
 
 async function expectAdvanceEnabled(page: Page, enabled: boolean) {
-  const drawer = await openControls(page)
-  const advance = drawer.getByRole('button', { name: /推进下一事件|行程已完成|行程已取消/ })
-  if (enabled) await expect(advance).toBeEnabled()
-  else await expect(advance).toBeDisabled()
+  await expect(async () => {
+    const drawer = await ensureControlsOpen(page)
+    const advance = drawer.getByRole('button', { name: /推进下一事件|行程已完成|行程已取消/ })
+    if (enabled) await expect(advance).toBeEnabled({ timeout: 2_000 })
+    else await expect(advance).toBeDisabled({ timeout: 2_000 })
+  }).toPass({ timeout: 15_000 })
   await closeControls(page)
 }
 
 async function advanceFlow(page: Page) {
   const drawer = await openControls(page)
-  const advance = drawer.getByRole('button', { name: /推进下一事件/ })
-  const progress = drawer.locator('.console-progress strong')
-  const before = (await progress.textContent()) ?? ''
+  const before = (await drawer.locator('.console-progress strong').textContent()) ?? ''
   let result: unknown
   await expect(async () => {
+    // Re-ensure the drawer every attempt: the one opened outside this block
+    // may have been caught mid-close and finished hiding underneath us.
+    const openDrawer = await ensureControlsOpen(page)
     const responsePromise = page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && /\/v1\/tasks\/[^/]+\/(events|actions)$/.test(new URL(response.url()).pathname)
     ), { timeout: 4_000 }).catch(() => undefined)
-    await advance.click({ timeout: 2_000 })
+    await openDrawer.getByRole('button', { name: /推进下一事件/ }).click({ timeout: 2_000 })
     const response = await responsePromise
     // No write means the click never reached a live handler; a write that
     // leaves the played count where it was is the idempotent replay of an
@@ -122,7 +138,10 @@ async function advanceFlow(page: Page) {
     expect(response, 'advance click produced no task write').toBeTruthy()
     expect(response!.ok()).toBe(true)
     result = await response!.json()
-    await expect(progress, 'the played count must move before an advance counts').not.toHaveText(before, { timeout: 4_000 })
+    await expect(
+      openDrawer.locator('.console-progress strong'),
+      'the played count must move before an advance counts',
+    ).not.toHaveText(before, { timeout: 4_000 })
   }).toPass({ timeout: 30_000 })
   await closeControls(page)
   await page.evaluate(() => new Promise<void>((resolve) => {
