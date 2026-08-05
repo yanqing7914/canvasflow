@@ -1282,16 +1282,26 @@ a:focus-visible {
    layout stays exactly as it was.
    --------------------------------------------------------------------------- */
 @media (min-width: 1180px) {
-  .ui-layout--split:has(.ui-card--route-map) {
+  /* Held to a rail carrying exactly one card, which the layout does not otherwise
+     guarantee: `withRouteMap` puts every non-map card into `secondary`, and the
+     density trim keeps states like `['navigation-summary', 'extra-1']` legal. Only
+     a card is painted as a panel below, so a second one would land in the same
+     narrow overlaid rail with none of that — transparent and square-cornered,
+     reading straight off the map. Where the rail carries more than one, leave the
+     ordinary side-by-side split alone: it already renders that state, and one
+     panel over one basemap is the whole idea. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .ui-layout--split:has(.ui-card--route-map) > .ui-slot {
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    > .ui-slot {
     grid-row: 1;
     grid-column: 1;
   }
 
-  .ui-layout--split:has(.ui-card--route-map) > .ui-slot--secondary {
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    > .ui-slot--secondary {
     width: var(--glass-rail);
     /* Above the basemap and its caption, and inset so the panel reads as floating
        over the map rather than as a column beside it. The gutter it leaves stays
@@ -1303,7 +1313,18 @@ a:focus-visible {
     pointer-events: none;
   }
 
-  .ui-layout--split:has(.ui-card--route-map) .ui-card--navigation-summary {
+  /* The pointer comes back at the component, not at the card: the renderer puts a
+     card's buttons in a `.ui-card__actions` that is the card's sibling, so `auto`
+     on the card alone would leave every button beside it dead while looking live.
+     The component box is the card plus those buttons and nothing else, so the
+     rail's padding stays transparent either way. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    > .ui-slot--secondary > .ui-component {
+    pointer-events: auto;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary {
     height: auto;
     padding: clamp(20px, 2.6vh, 32px) clamp(20px, 1.8vw, 32px);
     /* A hairline of the panel's own light rather than a drawn outline: it catches
@@ -1320,7 +1341,6 @@ a:focus-visible {
       inset 0 1px 0 rgba(255, 255, 255, 0.9),
       0 18px 44px rgba(16, 32, 51, 0.18);
     color: var(--glass-ink);
-    pointer-events: auto;
   }
 
   /* The card renders two facts, and `.ui-route-facts` lays out three tracks — off
@@ -1337,20 +1357,28 @@ a:focus-visible {
      while passing locally. Widening `--glass-rail` is not the alternative fix:
      at this width its 32% middle term governs, so raising the 510px cap does
      nothing. */
-  .ui-layout--split:has(.ui-card--route-map) .ui-card--navigation-summary .ui-route-facts {
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary .ui-route-facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   /* The small labels ride on the glass, where `--muted` no longer clears AA — see
      the token block for why it cannot be made to. */
-  .ui-layout--split:has(.ui-card--route-map) .ui-navigation-brief__eyebrow,
-  .ui-layout--split:has(.ui-card--route-map) .ui-metric__label {
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-navigation-brief__eyebrow,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-metric__label {
     color: var(--glass-label);
   }
 
   /* 模拟行程进度 sits at the right end of the caption, which the panel now covers.
-     Stop the caption where the panel starts so the progress figure stays read. */
-  .ui-layout--split:has(.ui-card--route-map) .ui-route-map__caption {
+     Stop the caption where the panel starts so the progress figure stays read.
+     `--glass-rail` is the whole reservation and not a track plus a gutter: every
+     box here is `border-box`, so the rail's own padding is already inside that
+     width. Measured at 1920 the caption ends exactly on the rail's edge and 29px
+     short of the painted panel. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-route-map__caption {
     right: var(--glass-rail);
   }
 
@@ -1358,13 +1386,15 @@ a:focus-visible {
      map legible straight through it — worse to read than no effect at all. Go
      nearly opaque instead: the layering survives, the transparency does not. */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-    .ui-layout--split:has(.ui-card--route-map) .ui-card--navigation-summary {
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--navigation-summary {
       background: rgb(255 255 255 / 0.95);
     }
   }
 
   @media (prefers-reduced-transparency: reduce) {
-    .ui-layout--split:has(.ui-card--route-map) .ui-card--navigation-summary {
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--navigation-summary {
       background: var(--surface);
       -webkit-backdrop-filter: none;
       backdrop-filter: none;
