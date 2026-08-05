@@ -859,6 +859,47 @@ describe('demo integration', () => {
       expect(drawer).toHaveTextContent('pickup-001')
     })
 
+    it('discloses model participation only when the Agent reports it', async () => {
+      const user = userEvent.setup()
+      const created = apiResponse(createInitialTask())
+      const withModel: AgentResponse = {
+        ...created,
+        meta: { ...created.meta, modelUsed: 'qwen-plus' },
+      }
+      const api = { create: vi.fn().mockResolvedValue(withModel), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+
+      // The disclosure names the exact model the Agent persisted with the task.
+      const provenance = screen.getByLabelText('模型参与说明')
+      expect(provenance).toHaveTextContent('qwen-plus')
+      expect(provenance).toHaveAttribute('data-model-used', 'qwen-plus')
+
+      // The drawer states the planning source for an engineer.
+      const drawer = await openControls(user)
+      expect(drawer).toHaveTextContent('规划来源')
+      expect(drawer).toHaveTextContent('qwen-plus')
+    })
+
+    it('stays silent about the model on rules-only turns', async () => {
+      const user = userEvent.setup()
+      const api = { create: vi.fn().mockResolvedValue(apiResponse(createInitialTask())), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+
+      // No meta.modelUsed means the rules planned this turn; claiming otherwise
+      // would overstate the model's role, so the disclosure never renders.
+      expect(screen.queryByLabelText('模型参与说明')).not.toBeInTheDocument()
+
+      const drawer = await openControls(user)
+      expect(drawer).toHaveTextContent('规划来源')
+      expect(drawer).toHaveTextContent('规则')
+    })
+
     it('traps focus in the drawer, closes on Escape, and restores focus to its trigger', async () => {
       const user = userEvent.setup()
       render(<App initialTask={createInitialTask()} />)
