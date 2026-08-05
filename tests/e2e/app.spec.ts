@@ -109,9 +109,9 @@ async function expectNoHorizontalOverflow(page: Page) {
  * genuinely fit rather than merely be unscrollable. `.demo-shell` sets
  * `overflow: hidden`, which clamps `document.scrollHeight` to the viewport: a brief
  * taller than the fold is silently clipped instead of scrollable, so asserting on
- * page scroll height alone can never fail. What is checkable is the two ways the
- * rule can actually break — a clipped scroll container, or the brief's own box
- * extending past the fold.
+ * page scroll height alone can never fail. What is checkable is the three ways the
+ * rule can actually break — a clipped scroll container, a box clipped across its
+ * own width, or the brief's own box extending past the fold.
  *
  * The cards are measured alongside the containers because that is where clipping
  * actually lands: `.ui-card` hides its own overflow, so a card starved of height by
@@ -141,6 +141,11 @@ async function expectNoScroll(page: Page) {
           selector: `${selector}[${index}]`,
           // Hidden overflow turns "too tall" into "clipped" rather than "scrollable".
           clippedBy: element.scrollHeight - element.clientHeight,
+          // The same trap on the width axis: `.ui-card` hides its overflow, so a
+          // card whose grid tracks demand more than its column loses content off
+          // its right edge while the document's own scrollWidth stays clean and
+          // `expectNoHorizontalOverflow` above sees nothing.
+          clippedWidthBy: element.scrollWidth - element.clientWidth,
           // A box that ends below the fold is content the driver cannot reach at all.
           pastFoldBy: Math.round(element.getBoundingClientRect().bottom) - viewport,
         }
@@ -161,6 +166,7 @@ async function expectNoScroll(page: Page) {
   // One assertion per axis of failure, reported with the measurements so a
   // regression says which box overflowed and by how much.
   expect(layout.boxes.filter((box) => box.clippedBy > 1)).toEqual([])
+  expect(layout.boxes.filter((box) => box.clippedWidthBy > 1)).toEqual([])
   expect(layout.boxes.filter((box) => box.pastFoldBy > 1)).toEqual([])
 }
 
