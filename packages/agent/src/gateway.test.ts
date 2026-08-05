@@ -440,6 +440,58 @@ describe('AgentGateway', () => {
     expect(denied.effects).toEqual([expect.objectContaining({ status: 'failed', errorCode: 'VEHICLE_MOVING' })])
   })
 
+  it('applies occupant input stamped behind the task clock instead of swallowing it', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈'))
+
+    // A cabin clock behind `updatedAt` used to hit the reducer's freshness
+    // guard and vanish behind an OK response. Occupant intent is clamped
+    // forward now, so the typed flight number must land.
+    const behindClock = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'behind-clock-input', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'behind-clock-input', type: 'user.input', text: 'MU5102', timestamp: '2026-07-22T11:00:00+08:00' },
+    })
+
+    expect(behindClock.task.flight?.flightNumber).toBe('MU5102')
+    expect(behindClock.task.processedEventIds).toContain('behind-clock-input')
+  })
+
+  it('completes the trip on an arrival signal stamped behind the task clock', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+    const started = gateway.submitAction(created.task.taskId, {
+      clientRequestId: 'behind-clock-start', expectedTaskRevision: created.task.taskRevision,
+      expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'behind-clock-start',
+    })
+    const approaching = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'behind-clock-geofence', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'behind-clock-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:02:00+08:00' },
+    })
+    const waiting = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'behind-clock-parked', expectedTaskRevision: approaching.task.taskRevision,
+      event: { eventId: 'behind-clock-parked', type: 'vehicle.parked', timestamp: '2026-07-22T12:03:00+08:00' },
+    })
+    // The onboard confirmation is occupant intent too: stamped behind the
+    // parked signal above, it still has to open the return trip.
+    const returning = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'behind-clock-onboard', expectedTaskRevision: waiting.task.taskRevision,
+      event: { eventId: 'behind-clock-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T11:30:00+08:00' },
+    })
+    expect(returning.task.phase).toBe('returning-home')
+
+    // Async return-trip receipts advance `updatedAt` past the cabin clock in
+    // the real runtime; the fixed timestamps here model the same skew. The
+    // arrival must close the task, not disappear behind an OK response.
+    const arrived = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'behind-clock-arrived', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'behind-clock-arrived', type: 'destination.arrived', destination: '家', timestamp: '2026-07-22T11:00:00+08:00' },
+    })
+
+    expect(arrived.task.phase).toBe('completed')
+    expect(arrived.task.processedEventIds).toContain('behind-clock-arrived')
+  })
+
   it('advances event ordering for a context-only charging completion', () => {
     const gateway = createGateway()
     const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))

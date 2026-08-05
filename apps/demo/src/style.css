@@ -210,6 +210,23 @@ a:focus-visible {
 
 .voice-status:empty { display: none; }
 
+/* Model provenance is a quiet, factual line: present only when the Agent reports
+   a validated model plan, and visually subordinate to the voice status above. */
+.model-provenance {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 clamp(24px, 3vw, 52px);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.model-provenance strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
 .voice-composer {
   display: flex;
   flex: 0 0 auto;
@@ -2506,7 +2523,14 @@ a:focus-visible {
   font-size: 15px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+  /* Exactly two lines, always. Receipts arrive over SSE while the drawer is
+     open; a line that grows or appears would move the advance button under
+     the user's pointer. Longer logs scroll inside the box instead. */
+  height: calc(2 * 1.6em);
+  overflow-y: auto;
 }
+
+.console-effects[data-empty] { color: var(--rule); }
 
 /*
  * A failed request is not a trip fact. It sits between the input and the journey

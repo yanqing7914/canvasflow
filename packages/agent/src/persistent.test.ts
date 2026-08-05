@@ -196,7 +196,7 @@ describe('PersistentAgentRuntime', () => {
     expect(plan).not.toHaveBeenCalled()
   })
 
-  it('does not plan terminal or stale-timestamp user input with the model', async () => {
+  it('does not plan terminal user input with the model', async () => {
     const path = await databasePath()
     const plan = vi.fn()
     const agent = runtime(path, { modelGateway: { plan } })
@@ -218,23 +218,37 @@ describe('PersistentAgentRuntime', () => {
       },
     })
     expect(terminal.task).toEqual(cancelled.task)
+    expect(plan).not.toHaveBeenCalled()
+  })
 
-    const reset = agent.resetTask(created.task.taskId, {
-      clientRequestId: 'reset-stale-timestamp-task',
-      expectedTaskRevision: cancelled.task.taskRevision,
-    })
-    const stale = await agent.submitEventAsync(created.task.taskId, {
-      clientRequestId: 'stale-timestamp-input',
-      expectedTaskRevision: reset.task.taskRevision,
+  it('plans behind-clock user input with the model, matching the clamp that will apply it', async () => {
+    const path = await databasePath()
+    const fallbackPlan: Plan = {
+      intent: 'unknown', confidence: 0.2, slotUpdates: {}, missingSlots: ['passengers', 'flightNumber'], proposedEvents: [], assistantText: 'fallback',
+    }
+    const plan = vi.fn(async () => ({
+      source: 'fallback' as const,
+      plan: fallbackPlan,
+    }))
+    const agent = runtime(path, { modelGateway: { plan } })
+    const created = agent.createTask(createRequest('behind-clock-planning-task'))
+
+    // The gateway clamps occupant input forward instead of dropping it as
+    // stale, so an input stamped behind `updatedAt` is going to be applied —
+    // withholding it from the planner would leave it applied but unplanned.
+    const behindClock = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'behind-clock-planned-input',
+      expectedTaskRevision: created.task.taskRevision,
       event: {
-        eventId: 'stale-timestamp-input',
+        eventId: 'behind-clock-planned-input',
         type: 'user.input',
-        text: '把这段旧输入发给模型',
+        text: '完全未知的表达',
         timestamp: '2026-07-22T11:59:00+08:00',
       },
     })
-    expect(stale.task).toEqual(reset.task)
-    expect(plan).not.toHaveBeenCalled()
+
+    expect(plan).toHaveBeenCalledOnce()
+    expect(behindClock.task.phase).toBe(created.task.phase)
   })
 
   it('falls back unchanged when the model planner rejects an unknown event', async () => {
