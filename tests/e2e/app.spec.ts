@@ -159,6 +159,16 @@ async function expectNoScroll(page: Page) {
       // outer boxes alone cannot see that failure.
       boxes: ['.demo-shell', '.cockpit-stage', '.task-surface', '.trip-brief__content', '.ui-slot', '.ui-component', '.ui-card']
         .flatMap(measure),
+      // One level below the card, and on the width axis only. The metric label and
+      // figure are `nowrap` with an ellipsis, so a card that fits its own column
+      // can still hold a figure reading 到达电… — the truncation happens inside the
+      // leaf, where the card's scrollWidth cannot see it.
+      //
+      // Height is deliberately not asserted on these: they set `line-height` equal
+      // to `font-size`, so the line box is a couple of pixels shorter than the
+      // font's natural ascent plus descent, and every one of them reports a
+      // standing 2px `clippedBy` that has nothing to do with the layout fitting.
+      textBoxes: ['.ui-metric__label', '.ui-metric__value'].flatMap(measure),
     }
   })
   if (layout.width <= 680) return
@@ -168,6 +178,7 @@ async function expectNoScroll(page: Page) {
   expect(layout.boxes.filter((box) => box.clippedBy > 1)).toEqual([])
   expect(layout.boxes.filter((box) => box.clippedWidthBy > 1)).toEqual([])
   expect(layout.boxes.filter((box) => box.pastFoldBy > 1)).toEqual([])
+  expect(layout.textBoxes.filter((box) => box.clippedWidthBy > 1)).toEqual([])
 }
 
 test('renders the UISpec surface responsively and keeps primary controls keyboard accessible @layout', async ({ page }, testInfo) => {

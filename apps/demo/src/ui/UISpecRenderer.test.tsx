@@ -506,6 +506,39 @@ describe('UISpecRenderer', () => {
     expect(renderer.querySelector('.ui-cabin-brief__facts')).not.toHaveTextContent('媒体')
   })
 
+  // `.ui-metric__value` is a tabular numeral face at a numeral size. The media title
+  // is the one metric value that is prose, and at the figure's size four CJK glyphs
+  // overrun the third of `.ui-cabin-grid` the metric gets and hit the ellipsis. The
+  // browser-side proof that it now fits lives in the e2e layout spec; this pins the
+  // structure that proof depends on — the text face reaches the media title and only
+  // the media title.
+  it('renders a prose metric value in the text face and leaves the figures on the numeral face', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['cabin'] } },
+      components: [{
+        id: 'cabin',
+        type: 'cabin-profile',
+        props: { zone: 'rear', temperatureC: 25, fanLevel: 2, mediaTitle: '豆豆故事', appliedFromMemory: true, reversible: true },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const renderer = screen.getByRole('region', { name: 'Generated task interface' })
+    const textValues = [...renderer.querySelectorAll('.ui-metric__value-text')]
+    expect(textValues.map((element) => element.textContent)).toEqual(['豆豆故事'])
+    // The figures stay bare inside their own leaf, so the numeral face still applies
+    // to them directly.
+    const metricValue = (label: string) => [...renderer.querySelectorAll('.ui-metric')]
+      .find((metric) => metric.querySelector('.ui-metric__label')?.textContent === label)
+      ?.querySelector('.ui-metric__value')
+    expect(metricValue('温度')).toHaveTextContent('25°C')
+    expect(metricValue('温度')?.querySelector('.ui-metric__value-text')).toBeNull()
+    expect(metricValue('风量')).toHaveTextContent('2 档')
+    expect(metricValue('风量')?.querySelector('.ui-metric__value-text')).toBeNull()
+    expect(metricValue('媒体')).toHaveTextContent('豆豆故事')
+  })
+
   it('keeps a component action with its matching summary rather than the global action bar', () => {
     const spec = baseSpec({
       layout: { type: 'stack', gap: 'md', slots: { main: ['message'] } },

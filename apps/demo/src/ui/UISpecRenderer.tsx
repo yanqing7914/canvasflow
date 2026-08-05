@@ -157,16 +157,23 @@ function Metric({
   value,
   detail,
   className = '',
+  valueKind = 'figure',
 }: {
   label: string
   value: ReactNode
   detail?: ReactNode
   className?: string
+  // `.ui-metric__value` is a tabular numeral face at a numeral size. A value that is
+  // prose rather than a figure asks for the body face at a reading size instead, or
+  // it runs out of its grid column and ellipsises.
+  valueKind?: 'figure' | 'text'
 }) {
   return (
     <div className={`ui-metric${className ? ` ${className}` : ''}`}>
       <span className="ui-metric__label">{label}</span>
-      <strong className="ui-metric__value">{value}</strong>
+      <strong className="ui-metric__value">
+        {valueKind === 'text' ? <span className="ui-metric__value-text">{value}</span> : value}
+      </strong>
       {detail !== undefined && <small className="ui-metric__detail">{detail}</small>}
     </div>
   )
@@ -432,7 +439,9 @@ function CabinProfileCard({ component }: { component: Extract<ComponentSpec, { t
       <div className="ui-cabin-brief__facts ui-cabin-grid">
         {props.temperatureC !== undefined && <Metric label="温度" value={`${props.temperatureC}°C`} />}
         {props.fanLevel !== undefined && <Metric label="风量" value={`${props.fanLevel} 档`} />}
-        {props.mediaTitle && <Metric label="媒体" value={props.mediaTitle} detail={<MediaIcon size={16} />} />}
+        {props.mediaTitle && (
+          <Metric label="媒体" value={props.mediaTitle} valueKind="text" detail={<MediaIcon size={16} />} />
+        )}
       </div>
       <div className="ui-cabin-brief__state ui-detail-row">
         <span>已应用</span>
