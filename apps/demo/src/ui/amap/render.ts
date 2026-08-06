@@ -14,12 +14,36 @@ import type { AMapApi, AMapDriving, AMapMap, AMapOverlay } from './loader'
  * position, not a GPS fix, and it moves only when a new spec arrives. There is no
  * timer and no animation.
  *
+ * The basemap style follows the theme the Agent sent. A daylight basemap under a
+ * dark cabin would be the one surface still lit at night, and it is also the one
+ * the glass has to stay readable over.
+ *
  * Any failure — no plottable endpoints, a Driving error, a quota or jscode
  * rejection surfacing as a non-complete status — resolves null. The caller then
  * shows the sketch, so the map never half-renders.
  */
 
 export type AMapRouteHandle = { destroy: () => void }
+
+export type AMapRouteOptions = {
+  sketch: RouteSketch
+  mode: 'overview' | 'follow'
+  theme: 'light' | 'dark'
+}
+
+/**
+ * Basemap and route colours for one theme.
+ *
+ * `amap://styles/dark` is one of AMap's built-in styles, so it needs no console
+ * configuration — only custom GeoHUB style IDs do. The route colours change with
+ * it because the daylight blue and the traversed grey were both picked against
+ * light tiles; on the dark basemap the blue sinks into the road fill and the grey
+ * stops reading as "already covered".
+ */
+const THEMES = {
+  light: { mapStyle: undefined, route: '#246bfd', traversed: '#9aa7b8' },
+  dark: { mapStyle: 'amap://styles/dark', route: '#5b93ff', traversed: '#55637a' },
+} as const
 
 type LngLatPoint = { lng: number; lat: number }
 
@@ -60,15 +84,18 @@ function extractPath(result: unknown): LngLatPoint[] {
 export function renderAMapRoute(
   amap: AMapApi,
   container: HTMLElement,
-  options: { sketch: RouteSketch; mode: 'overview' | 'follow' },
+  options: AMapRouteOptions,
 ): Promise<AMapRouteHandle | null> {
   const stops = options.sketch.waypoints.filter(plottable)
   if (stops.length < 2) return Promise.resolve(null)
 
+  const palette = THEMES[options.theme]
   let map: AMapMap | undefined
   try {
-    // No custom mapStyle: the default basemap is the point of the real-map path.
-    map = new amap.Map(container, { zoom: 12 })
+    map = new amap.Map(container, {
+      zoom: 12,
+      ...(palette.mapStyle ? { mapStyle: palette.mapStyle } : {}),
+    })
   } catch {
     return Promise.resolve(null)
   }
@@ -113,15 +140,16 @@ function drawRoute(
   amap: AMapApi,
   map: AMapMap,
   result: unknown,
-  options: { sketch: RouteSketch; mode: 'overview' | 'follow' },
+  options: AMapRouteOptions,
 ): AMapRouteHandle {
   const path = extractPath(result)
   if (path.length < 2) throw new Error('empty route path')
 
+  const palette = THEMES[options.theme]
   const overlays: AMapOverlay[] = []
   const route = new amap.Polyline({
     path: path.map((point) => [point.lng, point.lat]),
-    strokeColor: '#246bfd',
+    strokeColor: palette.route,
     strokeWeight: 6,
     strokeOpacity: 0.9,
     lineJoin: 'round',
@@ -142,7 +170,7 @@ function drawRoute(
       if (traversed.length >= 2) {
         const tail = new amap.Polyline({
           path: traversed.map((point) => [point.x, point.y]),
-          strokeColor: '#9aa7b8',
+          strokeColor: palette.traversed,
           strokeWeight: 6,
           strokeOpacity: 0.9,
           zIndex: 60,

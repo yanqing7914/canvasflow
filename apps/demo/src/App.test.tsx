@@ -94,6 +94,61 @@ describe('demo integration', () => {
     expect(screen.getByRole('button', { name: /推进下一事件/ })).toBeDisabled()
   })
 
+  it('uses the selected light condition for task creation and locks it afterwards', async () => {
+    const user = userEvent.setup()
+    const created = apiResponse(createInitialTask())
+    const api = {
+      create: vi.fn().mockResolvedValue(created),
+      event: vi.fn(),
+      action: vi.fn(),
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    let drawer = await openControls(user)
+    const night = screen.getByRole('button', { name: '夜间' })
+    await user.click(night)
+    expect(night).toHaveAttribute('aria-pressed', 'true')
+    expect(drawer).toHaveTextContent('选择创建任务时车辆上报的光线')
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(api.create).toHaveBeenCalledWith(
+      '我现在要去机场接妈妈和豆豆',
+      { vehicleContext: expect.objectContaining({ isNight: true }) },
+    ))
+
+    drawer = await openControls(user)
+    expect(screen.getByRole('button', { name: '跟随时间' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '白天' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '夜间' })).toBeDisabled()
+    expect(drawer).toHaveTextContent('光线条件已随任务固定')
+  })
+
+  it('locks the selected light condition while task creation is pending', async () => {
+    const user = userEvent.setup()
+    let resolveCreate: ((value: AgentResponse) => void) | undefined
+    const create = vi.fn().mockImplementation(() => new Promise<AgentResponse>((resolve) => {
+      resolveCreate = resolve
+    }))
+    const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<App api={api} />)
+
+    await openControls(user)
+    await user.click(screen.getByRole('button', { name: '夜间' }))
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    await openControls(user)
+    expect(screen.getByRole('button', { name: '跟随时间' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '白天' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '夜间' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '夜间' })).toHaveAttribute('aria-pressed', 'true')
+
+    resolveCreate!(apiResponse(createInitialTask()))
+    await waitFor(() => expect(screen.getByText('准备接机')).toBeInTheDocument())
+  })
+
   it('applies newer validated task snapshots received over SSE and closes the stream on unmount', async () => {
     const initial = apiResponse(createInitialTask('pickup-sse', '2026-07-22T12:00:00+08:00'))
     const updatedTask = {
@@ -141,7 +196,7 @@ describe('demo integration', () => {
   it.each([
     {
       name: 'parked',
-      vehicle: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false } satisfies VehicleContext,
+      vehicle: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: true } satisfies VehicleContext,
       visibleTitle: '停车提示',
       hiddenTitle: '驾驶提示',
     },

@@ -5,7 +5,14 @@ import {
   type AgentResponse,
 } from '@canvasflow/schema'
 import taskCreatedFixture from '../../../fixtures/airport-pickup/task-created.json'
-import { AgentApiClient, AgentApiError, AgentApiProtocolError, type TaskUpdateSource } from './agent-client'
+import {
+  AgentApiClient,
+  AgentApiError,
+  AgentApiProtocolError,
+  demoVehicleContext,
+  isNightAt,
+  type TaskUpdateSource,
+} from './agent-client'
 
 const fixture = taskCreatedFixture as unknown as {
   expectedTaskState: AgentResponse['task']
@@ -176,5 +183,34 @@ describe('AgentApiClient', () => {
     subscription.close()
     expect(source.close).toHaveBeenCalledOnce()
     expect(listeners).toEqual(new Map())
+  })
+})
+
+describe('demo light conditions', () => {
+  it('calls the hours before 06:00 and from 18:00 onward night, in local time', () => {
+    // The boundaries are the whole point of the function, so they are what the
+    // test pins: one minute either side of each, plus a midday control.
+    expect(isNightAt(new Date(2026, 6, 24, 5, 59))).toBe(true)
+    expect(isNightAt(new Date(2026, 6, 24, 6, 0))).toBe(false)
+    expect(isNightAt(new Date(2026, 6, 24, 12, 0))).toBe(false)
+    expect(isNightAt(new Date(2026, 6, 24, 17, 59))).toBe(false)
+    expect(isNightAt(new Date(2026, 6, 24, 18, 0))).toBe(true)
+    expect(isNightAt(new Date(2026, 6, 24, 23, 59))).toBe(true)
+  })
+
+  it('follows the clock on auto and ignores it when a light condition is pinned', () => {
+    const noon = new Date(2026, 6, 24, 12, 0)
+    const evening = new Date(2026, 6, 24, 20, 25)
+
+    expect(demoVehicleContext('auto', noon).isNight).toBe(false)
+    expect(demoVehicleContext('auto', evening).isNight).toBe(true)
+    expect(demoVehicleContext('night', noon).isNight).toBe(true)
+    expect(demoVehicleContext('day', evening).isNight).toBe(false)
+  })
+
+  it('changes nothing about the reading except the light condition', () => {
+    const { isNight, ...rest } = demoVehicleContext('night', new Date(2026, 6, 24, 12, 0))
+    expect(isNight).toBe(true)
+    expect(rest).toEqual({ speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P' })
   })
 })
