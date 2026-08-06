@@ -112,6 +112,14 @@ export function CompleteIcon(props: IconProps) {
   )
 }
 
+export function WeatherIcon(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <path d="M17.5 18.5h-11a4 4 0 0 1-.6-7.95 5.5 5.5 0 0 1 10.7-1.4 3.75 3.75 0 0 1 .9 9.35Z" />
+    </LineIcon>
+  )
+}
+
 export function MessageIcon(props: IconProps) {
   return (
     <LineIcon {...props}>

@@ -1,4 +1,4 @@
-import { uiSpecSchema, type AirportPickupTaskState, type RouteSketch, type UISpec } from '@canvasflow/schema'
+import { uiSpecSchema, weatherOutputSchema, type AirportPickupTaskState, type RouteSketch, type UISpec, type WeatherOutput } from '@canvasflow/schema'
 import {
   chargingDensityForSpeed,
   chargingStation,
@@ -210,6 +210,21 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     layout = underway.layout
   }
   else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: flightStatusProps(task.flight) }] }
+  const weather = successfulWeather(context.toolResults?.['weather.get-current'])
+  if (weather && task.phase !== 'collecting-information' && task.phase !== 'cancelled' && task.phase !== 'completed') {
+    const card = weatherCard(task, weather)
+    const stripIndex = components.findIndex((component) => component.id === 'schedule-strip')
+    if (stripIndex >= 0) {
+      // The query turn borrows the auxiliary band's slot on a brief already at
+      // its card budget; the reading is transient, so the strip returns next event.
+      components = components.map((component, index) => index === stripIndex ? card : component)
+    } else {
+      components = [...components, card]
+      if (layout?.type === 'split') {
+        layout = { ...layout, slots: { ...layout.slots, secondary: [...layout.slots.secondary, card.id] } }
+      }
+    }
+  }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,
     phase: task.phase, title, presentation: { mode: 'replace', density, theme: 'dark', priority },
@@ -336,6 +351,48 @@ function finitePercent(value: unknown): number | undefined {
 
 function finiteNonNegative(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : undefined
+}
+
+const weatherConditionLabels: Record<WeatherOutput['condition'], string> = {
+  sunny: '晴',
+  cloudy: '多云',
+  overcast: '阴',
+  'light-rain': '小雨',
+  'heavy-rain': '大雨',
+  fog: '有雾',
+}
+
+/** Validated weather.get-current data, or undefined for anything unusable. */
+function successfulWeather(value: unknown): WeatherOutput | undefined {
+  if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return undefined
+  const parsed = weatherOutputSchema.safeParse((value as { data?: unknown }).data)
+  return parsed.success ? parsed.data : undefined
+}
+
+/** Mirrors composeAgentSpec's weatherCardComponent; fixtures-conformance locks the two together. */
+function weatherCard(task: AirportPickupTaskState, data: WeatherOutput): UISpec['components'][number] {
+  const arrivalAhead = !task.passengers.confirmedOnboard
+    && task.flight !== undefined
+    && task.flight.status !== 'landed'
+    && task.flight.status !== 'cancelled'
+  const arrivalClock = arrivalAhead ? task.flight!.estimatedArrival.match(/T(\d{2}:\d{2})/)?.[1] : undefined
+  const raining = data.condition === 'light-rain' || data.condition === 'heavy-rain'
+  const advising = raining && !task.passengers.confirmedOnboard
+  return {
+    id: 'weather-card',
+    type: 'weather-card',
+    props: {
+      location: data.locationName,
+      timeLabel: arrivalClock ? `${arrivalClock} 到达时` : '现在',
+      temperatureC: data.temperatureC,
+      condition: data.condition,
+      conditionLabel: weatherConditionLabels[data.condition],
+      ...(data.windLevel !== undefined ? { windLevel: data.windLevel } : {}),
+      ...(data.precipitationChance !== undefined ? { precipitationChance: data.precipitationChance } : {}),
+      ...(advising ? { advisory: '到达时段有雨，建议家人在到达层室内等候。' } : {}),
+      freshness: 'fixture',
+    },
+  }
 }
 
 /** Matches the memory.get-preferences output contract: any applicable cabin/media preference counts. */

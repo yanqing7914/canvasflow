@@ -7,6 +7,7 @@ import {
   routePlanOutputSchema,
   toolResultSchema,
   vehicleStatusOutputSchema,
+  weatherOutputSchema,
   type ChargingRecommendationOutput,
   type FlightStatusOutput,
   type GetPreferencesOutput,
@@ -16,6 +17,7 @@ import {
   type ToolResult,
   type VehicleContext,
   type VehicleStatusOutput,
+  type WeatherOutput,
 } from '@canvasflow/schema'
 import { createProviderRegistry, DEMO_ORIGIN, type ProviderRegistry, type ToolName } from '@canvasflow/tools'
 
@@ -29,6 +31,7 @@ export type ReadToolResults = Partial<{
   'vehicle.get-status': SuccessfulToolResult<VehicleStatusOutput>
   'charging.recommend': SuccessfulToolResult<ChargingRecommendationOutput>
   'calendar.list-upcoming': SuccessfulToolResult<ListUpcomingEventsOutput>
+  'weather.get-current': SuccessfulToolResult<WeatherOutput>
 }>
 
 export class ReadToolOrchestrationError extends Error {
@@ -72,6 +75,12 @@ export interface ReadToolOrchestration {
     destination?: { id: string; name: string }
   }): TripPreparationReads
   resolveReturnTripPreferences(taskId: string, requestId: string, memberIds: string[]): ReturnTripPreferenceReads
+  /**
+   * On-demand weather read for the check-weather query intent. Optional so
+   * test doubles built for the trip flow keep compiling; a gateway facing an
+   * orchestration without it degrades to the weather-unavailable reply.
+   */
+  resolveWeather?(taskId: string, requestId: string, input: { locationId: string; at?: string }): SuccessfulToolResult<WeatherOutput>
 }
 
 export class ReadToolOrchestrator implements ReadToolOrchestration {
@@ -208,6 +217,16 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       requestId,
       { memberIds, scopes: ['cabin', 'media', 'address'] },
       toolResultSchema(getPreferencesOutputSchema),
+    )
+  }
+
+  resolveWeather(taskId: string, requestId: string, input: { locationId: string; at?: string }): SuccessfulToolResult<WeatherOutput> {
+    return this.#call(
+      'weather.get-current',
+      taskId,
+      requestId,
+      input,
+      toolResultSchema(weatherOutputSchema),
     )
   }
 

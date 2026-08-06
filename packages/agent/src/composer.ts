@@ -1,4 +1,4 @@
-import { uiSpecSchema, type AirportPickupTaskState, type CalendarEvent, type RouteSketch, type UISpec } from '@canvasflow/schema'
+import { uiSpecSchema, type AirportPickupTaskState, type CalendarEvent, type RouteSketch, type UISpec, type WeatherOutput } from '@canvasflow/schema'
 import {
   chargingStation,
   chargingStationsForDensity,
@@ -288,6 +288,22 @@ export function composeAgentSpec(
   } else if (task.flight) {
     density = 'compact'
     components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival ?? task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }]
+  }
+  const weather = toolResults['weather.get-current']
+  if (weather && task.phase !== 'collecting-information' && task.phase !== 'cancelled' && task.phase !== 'completed') {
+    const card = weatherCardComponent(task, weather.data)
+    const stripIndex = components.findIndex((component) => component.id === 'schedule-strip')
+    if (stripIndex >= 0) {
+      // The brief already runs at its card budget when the strip is on it, and
+      // the strip is the auxiliary band of the two. The query turn borrows its
+      // slot; the reading is not persisted, so the strip returns next event.
+      components = components.map((component, index) => index === stripIndex ? card : component)
+    } else {
+      components = [...components, card]
+      if (layout?.type === 'split') {
+        layout = { ...layout, slots: { ...layout.slots, secondary: [...layout.slots.secondary, card.id] } }
+      }
+    }
   }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId,
@@ -583,6 +599,51 @@ function returningScheduleStrip(
         { label: '到家', time: homeEta, kind: 'task', status: 'next' },
         ...calendarMilestones(events, homeMs),
       ],
+    },
+  }
+}
+
+export const weatherConditionLabels: Record<WeatherOutput['condition'], string> = {
+  sunny: '晴',
+  cloudy: '多云',
+  overcast: '阴',
+  'light-rain': '小雨',
+  'heavy-rain': '大雨',
+  fog: '有雾',
+}
+
+/**
+ * The on-demand weather answer as one card. Which moment it describes follows
+ * the trip: an arrival still ahead pins the reading to it, while a landed or
+ * cancelled flight — or a return trip already underway — reads as now. Rain
+ * earns the one advisory line the pickup actually needs.
+ */
+export function weatherCardComponent(
+  task: AirportPickupTaskState,
+  data: WeatherOutput,
+): UISpec['components'][number] {
+  const arrivalAhead = !task.passengers.confirmedOnboard
+    && task.flight !== undefined
+    && task.flight.status !== 'landed'
+    && task.flight.status !== 'cancelled'
+  const arrivalClock = arrivalAhead ? task.flight!.estimatedArrival.match(/T(\d{2}:\d{2})/)?.[1] : undefined
+  // The advisory tells the family where to wait, which stops being advice the
+  // moment they are in the car.
+  const raining = data.condition === 'light-rain' || data.condition === 'heavy-rain'
+  const advising = raining && !task.passengers.confirmedOnboard
+  return {
+    id: 'weather-card',
+    type: 'weather-card',
+    props: {
+      location: data.locationName,
+      timeLabel: arrivalClock ? `${arrivalClock} 到达时` : '现在',
+      temperatureC: data.temperatureC,
+      condition: data.condition,
+      conditionLabel: weatherConditionLabels[data.condition],
+      ...(data.windLevel !== undefined ? { windLevel: data.windLevel } : {}),
+      ...(data.precipitationChance !== undefined ? { precipitationChance: data.precipitationChance } : {}),
+      ...(advising ? { advisory: '到达时段有雨，建议家人在到达层室内等候。' } : {}),
+      freshness: 'fixture',
     },
   }
 }

@@ -115,6 +115,91 @@ describe('Agent UISpec composer', () => {
     ])
   })
 
+  it('lets a weather reading borrow the schedule strip slot on the four-card preparing brief', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const reads = orchestrator.prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const weather = orchestrator.resolveWeather('pickup-001', 'request-001', { locationId: 'destination-hongqiao-t2' })
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const without = composeAgentSpec(task, reads.toolResults)
+    const spec = composeAgentSpec(task, { ...reads.toolResults, 'weather.get-current': weather })
+
+    // Same card count: the query borrows the auxiliary band's slot, it does not
+    // grow a brief that already runs at the four-card budget.
+    expect(spec.components).toHaveLength(without.components.length)
+    expect(spec.components.some((component) => component.type === 'schedule-strip')).toBe(false)
+    const card = spec.components.find((component) => component.type === 'weather-card')
+    if (card?.type !== 'weather-card') throw new Error('expected a weather-card component')
+    expect(card.props).toMatchObject({
+      location: '虹桥机场 T2',
+      timeLabel: '20:40 到达时',
+      condition: 'light-rain',
+      conditionLabel: '小雨',
+      advisory: expect.stringContaining('室内等候'),
+      freshness: 'fixture',
+    })
+  })
+
+  it('appends the weather card and extends the split layout while driving', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const weather = orchestrator.resolveWeather('pickup-001', 'request-001', { locationId: 'destination-hongqiao-t2' })
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      navigation: { routeId: 'route-airport-1', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' as const },
+    }
+
+    const spec = composeAgentSpec(task, { 'weather.get-current': weather })
+
+    const card = spec.components.find((component) => component.type === 'weather-card')
+    expect(card).toBeDefined()
+    // The split layout must reference the appended card exactly once or the
+    // spec parse fails outright; pin where it landed.
+    if (spec.layout.type === 'split') {
+      expect(spec.layout.slots.secondary).toContain('weather-card')
+    } else {
+      expect(spec.layout.slots).toMatchObject({ main: expect.arrayContaining(['weather-card']) })
+    }
+  })
+
+  it('pins the reading to the moment without a flight arrival to anchor on', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const weather = orchestrator.resolveWeather('pickup-001', 'request-001', { locationId: 'destination-home' })
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'waiting-for-passengers' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+    }
+
+    const spec = composeAgentSpec(task, { 'weather.get-current': weather })
+
+    const card = spec.components.find((component) => component.type === 'weather-card')
+    if (card?.type !== 'weather-card') throw new Error('expected a weather-card component')
+    expect(card.props.timeLabel).toBe('现在')
+    // Cloudy needs no advisory line; an empty suggestion must not render as one.
+    expect(card.props.advisory).toBeUndefined()
+  })
+
+  it('composes no weather card when there is no weather reading', () => {
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'waiting-for-passengers' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+    }
+
+    const spec = composeAgentSpec(task, {})
+
+    expect(spec.components.some((component) => component.type === 'weather-card')).toBe(false)
+  })
+
   it('keeps the schedule strip on the return trip, anchored to the home eta', () => {
     const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
     const task = {

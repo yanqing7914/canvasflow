@@ -13,6 +13,7 @@ import { createMessageAuthorizationRevoker, createMessageConfirmationRevoker, cr
 import { createNavigationSideEffects } from './navigation'
 import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
+import { getWeather } from './weather'
 
 /** Risk levels and timeouts follow the P0 table in the tool contract. */
 export const toolDefinitions = {
@@ -114,6 +115,13 @@ export const toolDefinitions = {
     riskLevel: 'read',
     timeoutMs: 1000,
   },
+  'weather.get-current': {
+    name: 'weather.get-current',
+    version: '1.0',
+    description: '读取指定地点的天气快照',
+    riskLevel: 'read',
+    timeoutMs: 1000,
+  },
   'media.play': {
     name: 'media.play',
     version: '1.0',
@@ -186,6 +194,7 @@ export function createProviderRegistry(
     'vehicle.revert-cabin-profile': cabin.revertCabinProfile,
     'charging.recommend': recommendCharging,
     'calendar.list-upcoming': listUpcomingEvents,
+    'weather.get-current': getWeather,
     'media.play': playMedia,
     'message.prepare': prepareMessage,
     'message.send': sendMessage,
