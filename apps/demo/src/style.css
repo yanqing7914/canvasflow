@@ -2468,6 +2468,12 @@ a:focus-visible {
   .ui-cabin-grid,
   .ui-card--pickup-overview .ui-route-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
+  /* Two to a row is what the cabin grid wants here for two metrics or three, and
+     the rule above already says so. A lone metric is the case it does not cover,
+     and restating it inside the breakpoint is cheaper than asking a reader to work
+     out which of the two selectors is the more specific. */
+  .ui-cabin-grid:has(> .ui-metric:first-child:last-child) { grid-template-columns: minmax(0, 1fr); }
+
   .ui-metric:nth-child(odd) { border-left: 0; padding-left: 0; }
 
   .ui-metric:nth-child(even) { border-left: 1px solid var(--rule); }

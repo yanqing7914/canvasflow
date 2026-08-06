@@ -329,8 +329,15 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
  * can fail look nothing alike — a title too wide for one line loses its tail to the
  * ellipsis, and a title that wraps grows the shared grid row and can push the card
  * past the fold instead.
+ *
+ * It sweeps the 680px breakpoint as well, because the column the title has to fit
+ * is a different column on either side of it: above, the tracks follow the metric
+ * count, and below, the phone-width override lays the same metrics out two to a row.
+ * `expectNoScroll` deliberately stops at that breakpoint — DESIGN.md allows a
+ * phone-width brief to scroll — but the title still has to fit its own column there,
+ * so the leaf is measured at both widths and the frame only above.
  */
-test('fits longer and mixed-script media titles in the cabin metric @layout', async ({ page }) => {
+test('fits longer and mixed-script media titles in the cabin metric @layout', async ({ page }, testInfo) => {
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
@@ -341,33 +348,81 @@ test('fits longer and mixed-script media titles in the cabin metric @layout', as
     .locator('.ui-metric__value')
   await expect(mediaValue).toHaveText('豆豆故事')
 
-  for (const title of [
-    // The other title the demo's own preference domain allows.
-    '轻音乐',
-    // The calendar's wording for the same story, three glyphs longer than the
-    // preference's, and the nearest thing to a realistic longer title.
-    '豆豆的睡前故事',
-    // Latin, digits and CJK in one line, with the spaces the body face has to
-    // break on.
-    'Peppa Pig 第 3 季',
-    // Past one line at any plausible column width: these two prove the wrap, and
-    // that the second line is still inside the frame.
-    '小猪佩奇与恐龙世界大冒险',
-    'The Very Hungry Caterpillar',
-  ]) {
-    await mediaValue.evaluate((element, text) => {
-      const target = element.querySelector('.ui-metric__value-text') ?? element
-      target.textContent = text
-    }, title)
-    await expect(mediaValue).toHaveText(title)
-    const fit = await mediaValue.evaluate((element) => ({
-      clippedWidthBy: element.scrollWidth - element.clientWidth,
-      clippedBy: element.scrollHeight - element.clientHeight,
-    }))
-    expect(fit, `媒体 value clipped rendering ${title}`).toEqual({ clippedWidthBy: 0, clippedBy: 0 })
-    // The whole frame, not just the leaf: a wrapped title takes a second line out
-    // of the card's height budget, and the fixed-frame rule holds either way.
-    await expectNoScroll(page)
+  // The 1920x720 project supplies the demo resolution through its own viewport, so
+  // resizing here would throw it away; the default project sweeps desktop and phone.
+  const viewports = testInfo.project.name === 'chromium-1920x720'
+    ? [null]
+    : [null, { width: 375, height: 812 }]
+  for (const viewport of viewports) {
+    if (viewport) await page.setViewportSize(viewport)
+    for (const title of [
+      // The other title the demo's own preference domain allows.
+      '轻音乐',
+      // The calendar's wording for the same story, three glyphs longer than the
+      // preference's, and the nearest thing to a realistic longer title.
+      '豆豆的睡前故事',
+      // Latin, digits and CJK in one line, with the spaces the body face has to
+      // break on.
+      'Peppa Pig 第 3 季',
+      // Past one line at any plausible column width: these two prove the wrap, and
+      // that the second line is still inside the frame.
+      '小猪佩奇与恐龙世界大冒险',
+      'The Very Hungry Caterpillar',
+    ]) {
+      await mediaValue.evaluate((element, text) => {
+        const target = element.querySelector('.ui-metric__value-text') ?? element
+        target.textContent = text
+      }, title)
+      await expect(mediaValue).toHaveText(title)
+      const fit = await mediaValue.evaluate((element) => ({
+        width: document.documentElement.clientWidth,
+        // The empty track this fix is about: a grid holding fewer metrics than it
+        // has columns spends width on nothing while the title beside it truncates,
+        // and that is as true below the breakpoint as above it.
+        emptyTracks: getComputedStyle(element.closest('.ui-cabin-grid') as HTMLElement)
+          .gridTemplateColumns.split(' ').length
+          - (element.closest('.ui-cabin-grid') as HTMLElement).querySelectorAll('.ui-metric').length,
+        clippedWidthBy: element.scrollWidth - element.clientWidth,
+        clippedBy: element.scrollHeight - element.clientHeight,
+      }))
+      expect(fit, `媒体 value clipped rendering ${title}`)
+        .toEqual({ width: fit.width, emptyTracks: 0, clippedWidthBy: 0, clippedBy: 0 })
+      // The whole frame, not just the leaf: a wrapped title takes a second line out
+      // of the card's height budget, and the fixed-frame rule holds either way. Below
+      // the breakpoint there is no frame rule to hold, and `expectNoScroll` returns
+      // early there of its own accord.
+      await expectNoScroll(page)
+    }
+  }
+
+  // The metric count the demo never produces, and the one where the two-column
+  // phone override and the metric-count rules actually disagree — at two metrics
+  // they happen to want the same thing, so a sweep of the real brief cannot tell
+  // which rule is in force. The other metrics are taken out of the grid to ask
+  // directly, last, because it is destructive to the brief.
+  await mediaValue.evaluate((element) => {
+    const grid = element.closest('.ui-cabin-grid') as HTMLElement
+    const media = element.closest('.ui-metric') as HTMLElement
+    for (const metric of [...grid.querySelectorAll('.ui-metric')]) {
+      if (metric !== media) metric.remove()
+    }
+  })
+  for (const viewport of viewports) {
+    // Explicit sizes here rather than the sweep's leading `null`: the loop above
+    // left the page at the last width it visited, so "the project's own viewport"
+    // no longer means what it meant at the start of the test.
+    if (viewport) await page.setViewportSize(viewport)
+    else if (testInfo.project.name !== 'chromium-1920x720') await page.setViewportSize({ width: 1280, height: 720 })
+    const alone = await mediaValue.evaluate((element) => {
+      const grid = element.closest('.ui-cabin-grid') as HTMLElement
+      return {
+        width: document.documentElement.clientWidth,
+        tracks: getComputedStyle(grid).gridTemplateColumns.split(' ').length,
+        metrics: grid.querySelectorAll('.ui-metric').length,
+      }
+    })
+    expect(alone, 'a lone cabin metric must not leave an empty track')
+      .toEqual({ width: alone.width, tracks: 1, metrics: 1 })
   }
 })
 
