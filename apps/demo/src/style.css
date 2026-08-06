@@ -563,6 +563,18 @@ a:focus-visible {
 .ui-route-facts,
 .ui-cabin-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
+/* The cabin card carries one to three metrics depending on what the vehicle
+   actually applied, and three fixed tracks leave the unused ones standing empty —
+   room the metrics that are there could have had. The media title is the only
+   cabin value that is prose and so the first to run out of it: with a temperature
+   and a title alone, a third of the grid was going to a track with nothing in it
+   while the title ellipsised. The tracks follow the metric count instead. Below
+   the 680px breakpoint the two-column override wants the same thing for three
+   metrics, and these say nothing about that case. */
+.ui-cabin-grid:has(> .ui-metric:nth-child(2):last-child) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.ui-cabin-grid:has(> .ui-metric:first-child:last-child) { grid-template-columns: minmax(0, 1fr); }
+
 .ui-hero-metrics { grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr); }
 
 .ui-card--pickup-overview .ui-route-facts { grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); }
@@ -610,13 +622,28 @@ a:focus-visible {
    of `.ui-cabin-grid` the metric gets and ellipsise. Sizing in `em` off the figure
    keeps this in step with every density and breakpoint override of the value size
    without restating any of them, and the reciprocal line height holds the row at the
-   figure's own 1em so a text value and a numeric one in the same grid stay level. */
+   figure's own 1em so a text value and a numeric one in the same grid stay level.
+
+   The body face buys a short title room to fit on one line, not room for any title:
+   a media title is prose of no fixed length, and the demo's own 「豆豆故事」 filled
+   its column to the pixel. So prose wraps where a figure cannot — the reciprocal
+   line height makes each wrapped line exactly the figure's 1em, so a second line
+   grows the shared grid row and the metrics beside it stay top-aligned. Two lines is
+   the ceiling: past that the clamp ellipsises, which is the honest end of the road
+   for a title with more words than the column has pixels. `anywhere` is what lets a
+   long Latin word break at all — CJK breaks between glyphs on its own. */
 .ui-metric__value-text {
   --metric-text-scale: 0.62;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
   font-family: var(--font-body);
   font-size: calc(1em * var(--metric-text-scale));
   letter-spacing: -0.01em;
   line-height: calc(1 / var(--metric-text-scale));
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .ui-metric__detail {
@@ -2440,6 +2467,12 @@ a:focus-visible {
   .ui-hero-metrics,
   .ui-cabin-grid,
   .ui-card--pickup-overview .ui-route-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* Two to a row is what the cabin grid wants here for two metrics or three, and
+     the rule above already says so. A lone metric is the case it does not cover,
+     and restating it inside the breakpoint is cheaper than asking a reader to work
+     out which of the two selectors is the more specific. */
+  .ui-cabin-grid:has(> .ui-metric:first-child:last-child) { grid-template-columns: minmax(0, 1fr); }
 
   .ui-metric:nth-child(odd) { border-left: 0; padding-left: 0; }
 

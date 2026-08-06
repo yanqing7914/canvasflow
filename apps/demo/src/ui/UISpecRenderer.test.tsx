@@ -539,6 +539,41 @@ describe('UISpecRenderer', () => {
     expect(metricValue('媒体')).toHaveTextContent('豆豆故事')
   })
 
+  // The schema bounds a media title at one character and nothing more, so the length
+  // the demo's own preference domain happens to produce is not the length the
+  // renderer has to survive. Whether a longer or mixed-script title actually fits its
+  // column is a browser question and the e2e layout spec asks it there; what this
+  // pins is that the routing does not quietly depend on the title being short — every
+  // one of these reaches the text face, and the figures beside it never do.
+  it.each([
+    ['a longer CJK title', '豆豆的睡前故事'],
+    ['a mixed-script title', 'Peppa Pig 第 3 季'],
+    ['a title past one line', '小猪佩奇与恐龙世界大冒险'],
+    ['an all-Latin title', 'The Very Hungry Caterpillar'],
+  ])('routes %s through the prose face intact', (_name, mediaTitle) => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['cabin'] } },
+      components: [{
+        id: 'cabin',
+        type: 'cabin-profile',
+        props: { zone: 'rear', temperatureC: 25, fanLevel: 2, mediaTitle, appliedFromMemory: true, reversible: true },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const renderer = screen.getByRole('region', { name: 'Generated task interface' })
+    const textValues = [...renderer.querySelectorAll('.ui-metric__value-text')]
+    // Rendered whole, in one node: the fit is the stylesheet's job, and a renderer
+    // that truncated or split the string would take that decision away from it.
+    expect(textValues.map((element) => element.textContent)).toEqual([mediaTitle])
+    const metricValue = (label: string) => [...renderer.querySelectorAll('.ui-metric')]
+      .find((metric) => metric.querySelector('.ui-metric__label')?.textContent === label)
+      ?.querySelector('.ui-metric__value')
+    expect(metricValue('温度')?.querySelector('.ui-metric__value-text')).toBeNull()
+    expect(metricValue('风量')?.querySelector('.ui-metric__value-text')).toBeNull()
+  })
+
   it('keeps a component action with its matching summary rather than the global action bar', () => {
     const spec = baseSpec({
       layout: { type: 'stack', gap: 'md', slots: { main: ['message'] } },
