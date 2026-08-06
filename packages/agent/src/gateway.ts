@@ -35,7 +35,7 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, composeAgentSpec, composeFallbackSpec, departurePlan, weatherConditionLabels, type ComposeContext } from './composer'
+import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import { Planner, type Plan, type PlannerInput } from './planner'
@@ -2303,6 +2303,22 @@ export class AgentGateway {
     startedAt: number,
   ): AgentResponse {
     const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    // Once the car has left, when to leave is not a question with an answer any
+    // more, and the pre-departure recommendation is the one thing that must not be
+    // repeated: it was worked backwards from the landing, so it still reads as
+    // advice long after it stopped being any. What the driver is actually asking
+    // at that point is whether they are on time, so they get the arrival they are
+    // heading for — no card, and nothing about the trip touched.
+    if (hasDeparted(current.task)) {
+      const eta = current.task.navigation?.eta
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: eta && current.task.navigation?.destination
+          ? `已经在路上了，预计 ${clockLabel(eta)} 到${current.task.navigation.destination}。`
+          : '已经出发了，我会跟着行程提醒你。',
+        shouldSpeak: supportsTts,
+      })
+    }
     const plan = departurePlan(current.task, current.toolResults?.['navigation.plan-route']?.data)
     if (!plan) {
       this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
@@ -2375,6 +2391,22 @@ function weatherSpokenSummary(data: WeatherOutput, forArrival: boolean, returnin
 const FIXTURE_CALENDAR_DATE = '2026-07-22'
 
 /** One short spoken answer; the card lists the entries. */
+/**
+ * Whether the car has already left for the airport.
+ *
+ * Phase alone is the wrong test on its own — a trip can be `preparing` with a
+ * planned route and no wheels turning, and that is exactly when the departure
+ * question belongs. What marks the crossing is navigation going active, which is
+ * what `start-navigation` does and what every later phase inherits.
+ */
+function hasDeparted(task: AirportPickupTaskState): boolean {
+  return task.navigation?.status === 'active'
+    || task.phase === 'driving-to-airport'
+    || task.phase === 'approaching-airport'
+    || task.phase === 'waiting-for-passengers'
+    || task.phase === 'returning-home'
+}
+
 function scheduleSpokenSummary(events: Array<{ title: string; startAt: string }>): string {
   if (events.length === 0) return '今天没有更多安排了。'
   const nextClock = events[0]!.startAt.match(/T(\d{2}:\d{2})/)?.[1]

@@ -3552,6 +3552,70 @@ describe('AgentGateway', () => {
       expect(asked.assistant?.text).toContain('还没有航班和路线')
     })
 
+    it('answers with where the car is heading once it has already left', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-before-departure-question',
+        expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-before-departure-question',
+      })
+      expect(driving.task.phase).toBe('driving-to-airport')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-underway', expectedTaskRevision: driving.task.taskRevision,
+        event: { eventId: 'departure-underway', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:05:00+08:00' },
+      })
+
+      // The recommendation was worked backwards from the landing, so repeating it
+      // underway would be advice about a departure that already happened. What the
+      // driver is really asking about now is the arrival, so answer that.
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
+      expect(asked.assistant?.text).not.toContain('建议')
+      expect(asked.assistant?.text).toContain('已经在路上了')
+      // And asking changed nothing about the drive.
+      expect(asked.task).toEqual(driving.task)
+      expect(asked.ui.uiRevision).toBe(driving.ui.uiRevision)
+    })
+
+    it('answers the same way on the way home, where there is no departure left to plan', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-before-returning-question',
+        expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-before-returning-question',
+      })
+      const approaching = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-geofence-before-returning', expectedTaskRevision: driving.task.taskRevision,
+        event: { eventId: 'geofence-before-returning', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:30:00+08:00' },
+      })
+      const waiting = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-parked-before-returning', expectedTaskRevision: approaching.task.taskRevision,
+        event: { eventId: 'parked-before-returning', type: 'vehicle.parked', timestamp: '2026-07-22T12:35:00+08:00' },
+      })
+      const returning = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-onboard-before-returning', expectedTaskRevision: waiting.task.taskRevision,
+        event: { eventId: 'onboard-before-returning', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:50:00+08:00' },
+      })
+      expect(returning.task.phase).toBe('returning-home')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-returning', expectedTaskRevision: returning.task.taskRevision,
+        event: { eventId: 'departure-returning', type: 'user.input', text: '几点出发比较好', timestamp: '2026-07-22T13:00:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
+      expect(asked.assistant?.text).not.toContain('建议')
+      expect(asked.task).toEqual(returning.task)
+    })
+
     it('leaves terminal tasks on the ordinary event path', () => {
       const gateway = createGateway()
       const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))

@@ -732,7 +732,7 @@ function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
 }
 
 /** The clock time inside a fixture timestamp, or the timestamp if it has none. */
-function clockLabel(timestamp: string): string {
+export function clockLabel(timestamp: string): string {
   return timestamp.match(/T(\d{2}:\d{2})/)?.[1] ?? timestamp
 }
 
