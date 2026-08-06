@@ -7,7 +7,7 @@ import {
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from '@canvasflow/tools'
-import { applyRequestPresentation, composeAgentSpec } from './composer'
+import { applyRequestPresentation, composeAgentSpec, scheduleCardComponent } from './composer'
 import { applyEvent, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
 import type { StoredTask } from './store'
@@ -198,6 +198,84 @@ describe('Agent UISpec composer', () => {
     const spec = composeAgentSpec(task, {})
 
     expect(spec.components.some((component) => component.type === 'weather-card')).toBe(false)
+  })
+
+  it('lets a schedule query borrow the strip slot on the four-card preparing brief', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const reads = orchestrator.prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const query = orchestrator.resolveSchedule('pickup-001', 'request-001', { date: '2026-07-22' })
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const without = composeAgentSpec(task, reads.toolResults)
+    const spec = composeAgentSpec(task, { ...reads.toolResults, 'calendar.query': query })
+
+    expect(spec.components).toHaveLength(without.components.length)
+    expect(spec.components.some((component) => component.type === 'schedule-strip')).toBe(false)
+    const card = spec.components.find((component) => component.type === 'schedule-card')
+    if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+    expect(card.props.events).toEqual([
+      expect.objectContaining({ title: '豆豆的睡前故事', location: '家' }),
+    ])
+    expect(card.props.emptyCopy).toBeUndefined()
+  })
+
+  it('answers an empty schedule day with the empty copy instead of dropping the card', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const query = orchestrator.resolveSchedule('pickup-001', 'request-001', { date: '2026-07-24' })
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'waiting-for-passengers' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+    }
+
+    const spec = composeAgentSpec(task, { 'calendar.query': query })
+
+    const card = spec.components.find((component) => component.type === 'schedule-card')
+    if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+    expect(card.props.events).toEqual([])
+    expect(card.props.emptyCopy).toBe('今天没有更多安排了')
+    expect(card.props.moreCount).toBeUndefined()
+  })
+
+  it('caps the schedule card at four rows and reports the tail as a count', () => {
+    const events = Array.from({ length: 6 }, (_, index) => ({
+      eventId: `event-${index}`,
+      title: `安排 ${index}`,
+      startAt: `2026-07-22T1${index}:00:00+08:00`,
+    }))
+    const card = scheduleCardComponent(events)
+
+    if (card.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+    expect(card.props.events).toHaveLength(4)
+    expect(card.props.events[0]!.title).toBe('安排 0')
+    expect(card.props.moreCount).toBe(2)
+  })
+
+  it('extends the split layout when the schedule card appends while driving', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const query = orchestrator.resolveSchedule('pickup-001', 'request-001', { date: '2026-07-22' })
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      navigation: { routeId: 'route-airport-1', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' as const },
+    }
+
+    const spec = composeAgentSpec(task, { 'calendar.query': query })
+
+    expect(spec.components.some((component) => component.type === 'schedule-card')).toBe(true)
+    if (spec.layout.type === 'split') {
+      expect(spec.layout.slots.secondary).toContain('schedule-card')
+    } else {
+      expect(spec.layout.slots).toMatchObject({ main: expect.arrayContaining(['schedule-card']) })
+    }
   })
 
   it('keeps the schedule strip on the return trip, anchored to the home eta', () => {

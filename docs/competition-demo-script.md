@@ -29,6 +29,10 @@ HTTP API. Do not call reducers or tool providers from browser developer tools.
    State the boundary: a query turn changes no task fact, and the very next
    trip event gives the surface back (the strip returns). Fixed forms only:
    `看下天气` / `天气怎么样` / `到的时候天气怎么样`.
+   The schedule query rides the same contract: `看看我的日程` /
+   `今天有什么安排` / `我的待办` answers with a schedule card listing the
+   day's remaining events — same borrowed slot, same transience. Run one query
+   or the other in the live demo; both demonstrates the pattern, not more value.
 3. Select `开始导航`.
 4. Point to the `navigation.start:succeeded` receipt. Explain that the Agent
    publishes the driving state only after the policy gate and Provider result

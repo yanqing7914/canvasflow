@@ -2123,6 +2123,104 @@ a:focus-visible {
 .ui-card--weather-light-rain .ui-weather-brief__glyph,
 .ui-card--weather-heavy-rain .ui-weather-brief__glyph { color: var(--amber); }
 
+/* The transient schedule answer. Same one-band posture as the strip whose slot
+   it borrows: everything on one row, entries give up their tails before the
+   band ever wraps. */
+.ui-card--schedule-card {
+  flex-direction: row;
+  align-items: center;
+  gap: clamp(10px, 1.4vw, 24px);
+  border-top: 1px solid var(--quiet-rule);
+}
+
+.ui-schedule-card__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.ui-schedule-card__glyph { display: grid; place-items: center; color: var(--blue); }
+
+.ui-schedule-card__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.ui-schedule-card__list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: clamp(14px, 1.8vw, 32px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+
+.ui-schedule-card__event {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ui-schedule-card__event + .ui-schedule-card__event::before {
+  content: '';
+  align-self: center;
+  width: clamp(12px, 1.4vw, 26px);
+  height: 1px;
+  background: var(--rule);
+  margin-right: clamp(6px, 0.8vw, 12px);
+}
+
+.ui-schedule-card__time {
+  font-size: 17px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  color: var(--blue);
+  white-space: nowrap;
+}
+
+.ui-schedule-card__title {
+  font-size: 16px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-schedule-card__location {
+  font-size: 15px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ui-schedule-card__empty {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.ui-schedule-card__more {
+  flex: none;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--blue-pale);
+  color: var(--blue-deep);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 /* Four briefs only ever share the frame when the schedule strip joins the three
    preparing cards. The heroes each give back a notch of size and the stack a
    notch of air, so the band fits the fixed frame without anyone scrolling —
