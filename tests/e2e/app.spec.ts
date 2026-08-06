@@ -317,6 +317,61 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
 })
 
 /**
+ * The media title is the one cabin value that is prose, and prose has no fixed
+ * length. The demo can only ever produce two titles — `memory.propose-update`
+ * rejects anything outside `knownMediaTitles`, and the shorter of the two filled
+ * its column to the pixel — so the flow alone cannot show whether a longer or a
+ * mixed-script title still fits. The text is substituted in place for that reason:
+ * what is under test is the cascade that lays a string out in that column, and that
+ * is a function of the string, not of which tool delivered it.
+ *
+ * Each candidate is measured on both axes of the leaf, because the two ways this
+ * can fail look nothing alike — a title too wide for one line loses its tail to the
+ * ellipsis, and a title that wraps grows the shared grid row and can push the card
+ * past the fold instead.
+ */
+test('fits longer and mixed-script media titles in the cabin metric @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await page.getByRole('button', { name: '开始导航' }).click()
+  for (let step = 0; step < 9; step += 1) await advanceFlow(page)
+
+  const mediaValue = page.locator('.ui-metric', { has: page.getByText('媒体', { exact: true }) })
+    .locator('.ui-metric__value')
+  await expect(mediaValue).toHaveText('豆豆故事')
+
+  for (const title of [
+    // The other title the demo's own preference domain allows.
+    '轻音乐',
+    // The calendar's wording for the same story, three glyphs longer than the
+    // preference's, and the nearest thing to a realistic longer title.
+    '豆豆的睡前故事',
+    // Latin, digits and CJK in one line, with the spaces the body face has to
+    // break on.
+    'Peppa Pig 第 3 季',
+    // Past one line at any plausible column width: these two prove the wrap, and
+    // that the second line is still inside the frame.
+    '小猪佩奇与恐龙世界大冒险',
+    'The Very Hungry Caterpillar',
+  ]) {
+    await mediaValue.evaluate((element, text) => {
+      const target = element.querySelector('.ui-metric__value-text') ?? element
+      target.textContent = text
+    }, title)
+    await expect(mediaValue).toHaveText(title)
+    const fit = await mediaValue.evaluate((element) => ({
+      clippedWidthBy: element.scrollWidth - element.clientWidth,
+      clippedBy: element.scrollHeight - element.clientHeight,
+    }))
+    expect(fit, `媒体 value clipped rendering ${title}`).toEqual({ clippedWidthBy: 0, clippedBy: 0 })
+    // The whole frame, not just the leaf: a wrapped title takes a second line out
+    // of the card's height budget, and the fixed-frame rule holds either way.
+    await expectNoScroll(page)
+  }
+})
+
+/**
  * The route panel is a drawing of the UISpec the Agent sent, and its marker moves
  * only because a newer spec carried a newer authored progress value — nothing on
  * the page animates or advances a position of its own. The renderer unit tests pin
