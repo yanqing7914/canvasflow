@@ -190,6 +190,29 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
     }),
   }),
   componentBase.extend({
+    type: z.literal('schedule-card'),
+    props: z.object({
+      /** Which day the list answers for, e.g. 今天. */
+      dateLabel: z.string().min(1),
+      /**
+       * The day's remaining events, ordered by start time. Capped at four rows:
+       * the card is a glance, and `moreCount` owns the tail.
+       */
+      events: z.array(z.object({
+        eventId: z.string().min(1),
+        title: z.string().min(1),
+        startAt: z.string().min(1),
+        endAt: z.string().min(1).optional(),
+        location: z.string().min(1).optional(),
+      })).max(4),
+      /** How many events the cap cut off; absent when everything fits. */
+      moreCount: z.number().int().positive().optional(),
+      /** Shown instead of rows when the day has nothing left. */
+      emptyCopy: z.string().min(1).optional(),
+      freshness: z.enum(['live', 'cached', 'fixture']),
+    }),
+  }),
+  componentBase.extend({
     type: z.literal('alert'),
     props: z.object({ level: z.enum(['info', 'warning', 'critical']), title: z.string(), message: z.string().optional() }),
   }),

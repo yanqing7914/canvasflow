@@ -3347,6 +3347,127 @@ describe('AgentGateway', () => {
       expect(weatherInputs).toEqual([{ locationId: 'destination-grandma' }])
     })
   })
+
+  describe('check-schedule query turn', () => {
+    it('answers with a transient schedule card that yields the surface on the next event', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      expect(created.ui.components.some((component) => component.type === 'schedule-strip')).toBe(true)
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'schedule-1', type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // The query changed no task fact, only the composed surface.
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+      expect(asked.task.processedEventIds).not.toContain('schedule-1')
+      expect(asked.ui.uiRevision).toBeGreaterThan(created.ui.uiRevision)
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.events).toEqual([
+        expect.objectContaining({ title: '豆豆的睡前故事', startAt: '2026-07-22T21:30:00+08:00' }),
+      ])
+      expect(card.props.freshness).toBe('fixture')
+      // The strip's slot is borrowed, not joined: the count must not grow.
+      expect(asked.ui.components.some((component) => component.type === 'schedule-strip')).toBe(false)
+      expect(asked.ui.components).toHaveLength(created.ui.components.length)
+      expect(asked.assistant?.text).toContain('1 项安排')
+      expect(asked.assistant?.text).toContain('21:30')
+
+      // Transience: the next accepted event recomposes without the reading.
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-after-schedule', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'moving-after-schedule', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(moved.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(moved.ui.components.some((component) => component.type === 'schedule-strip')).toBe(true)
+    })
+
+    it('replays an identical schedule event id idempotently', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-schedule-replay', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'schedule-replay', type: 'user.input' as const, text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+
+      const first = gateway.submitEvent(created.task.taskId, request)
+      const second = gateway.submitEvent(created.task.taskId, request)
+
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+    })
+
+    it('degrades to a spoken notice on the unchanged snapshot when the calendar read fails', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const failing: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveSchedule: () => {
+          throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'calendar provider timed out', true)
+        },
+      }
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator: failing,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule-fail', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'schedule-fail', type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task).toEqual(created.task)
+      expect(asked.ui.uiRevision).toBe(created.ui.uiRevision)
+      expect(asked.ui.meta.generatedBy).not.toBe('fallback')
+      expect(asked.assistant?.text).toContain('日程服务暂时不可用')
+    })
+
+    it('answers an empty day with the empty card, not silence', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const empty: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        // A calendar day with nothing left is a successful read of zero events.
+        resolveSchedule: (taskId, requestId) => orchestrator.resolveSchedule!(taskId, requestId, { date: '2026-07-24' }),
+      }
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator: empty,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule-empty', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'schedule-empty', type: 'user.input', text: '今天有什么安排', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.events).toEqual([])
+      expect(card.props.emptyCopy).toBe('今天没有更多安排了')
+      expect(asked.assistant?.text).toContain('没有更多安排')
+    })
+
+    it('leaves terminal tasks on the ordinary event path', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const cancelled = gateway.cancelTask(created.task.taskId, {
+        clientRequestId: 'client-cancel-for-schedule', expectedTaskRevision: created.task.taskRevision,
+        eventId: 'cancel-for-schedule',
+      })
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule-terminal', expectedTaskRevision: cancelled.task.taskRevision,
+        event: { eventId: 'schedule-terminal', type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:10:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(asked.task.phase).toBe('cancelled')
+    })
+  })
 })
 
 function returningTask(gateway: AgentGateway) {

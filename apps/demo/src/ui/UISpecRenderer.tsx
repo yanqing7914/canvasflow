@@ -593,6 +593,37 @@ function WeatherCard({ component }: { component: Extract<ComponentSpec, { type: 
   )
 }
 
+/**
+ * The on-demand schedule answer: the day's remaining events on one band, in
+ * the same single-row posture as the strip whose slot it borrows. Each entry
+ * is time + title (+ location); the tail beyond the cap collapses to a count.
+ */
+function ScheduleCard({ component }: { component: Extract<ComponentSpec, { type: 'schedule-card' }> }) {
+  const { props } = component
+  return (
+    <ComponentSurface component={component} className="ui-schedule-card">
+      <header className="ui-schedule-card__header">
+        <span className="ui-schedule-card__glyph" aria-hidden="true"><ClockIcon size={18} /></span>
+        <p className="ui-schedule-card__eyebrow">{props.dateLabel}的日程</p>
+      </header>
+      {props.events.length === 0 ? (
+        <p className="ui-schedule-card__empty">{props.emptyCopy ?? '今天没有更多安排了'}</p>
+      ) : (
+        <ol className="ui-schedule-card__list" aria-label="今日日程列表">
+          {props.events.map((event) => (
+            <li className="ui-schedule-card__event" key={event.eventId}>
+              <time className="ui-schedule-card__time" dateTime={event.startAt}>{formatTime(event.startAt)}</time>
+              <span className="ui-schedule-card__title">{event.title}</span>
+              {event.location && <span className="ui-schedule-card__location">{event.location}</span>}
+            </li>
+          ))}
+        </ol>
+      )}
+      {props.moreCount !== undefined && <span className="ui-schedule-card__more">还有 {props.moreCount} 项</span>}
+    </ComponentSurface>
+  )
+}
+
 function AlertCard({ component }: { component: Extract<ComponentSpec, { type: 'alert' }> }) {
   return (
     <ComponentSurface
@@ -696,6 +727,7 @@ function ComponentCard({
     case 'task-progress': return <TaskProgressCard component={result.data} phase={phase} />
     case 'schedule-strip': return <ScheduleStripCard component={result.data} />
     case 'weather-card': return <WeatherCard component={result.data} />
+    case 'schedule-card': return <ScheduleCard component={result.data} />
     case 'alert': return <AlertCard component={result.data} />
     case 'status-banner': return <StatusBannerCard component={result.data} />
   }

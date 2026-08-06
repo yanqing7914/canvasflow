@@ -345,6 +345,32 @@ test('surfaces a transient weather card on demand without growing the preparing 
   await expectNoScroll(page)
 })
 
+test('surfaces a transient schedule card on demand without growing the preparing frame @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await expect(page.locator('.ui-card--schedule-strip')).toBeVisible()
+  const cardCountBefore = await page.locator('.ui-card').count()
+
+  // The second query domain rides the same turn contract as the weather card:
+  // it answers on the brief, borrows the strip's slot, and touches no trip fact.
+  await sendText(page, '看看我的日程')
+  const scheduleCard = page.locator('.ui-card--schedule-card')
+  await expect(scheduleCard).toBeVisible()
+  await expect(scheduleCard).toContainText('今天的日程')
+  await expect(scheduleCard).toContainText('豆豆的睡前故事')
+  await expect(scheduleCard).toContainText('21:30')
+  await expect(page.locator('.ui-card--schedule-strip')).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // Transient: the next trip event recomposes without it and the strip returns.
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.locator('.ui-card--schedule-card')).toHaveCount(0)
+  await expectNoScroll(page)
+})
+
 /**
  * The media title is the one cabin value that is prose, and prose has no fixed
  * length. The demo can only ever produce two titles — `memory.propose-update`

@@ -491,11 +491,13 @@ export class AgentGateway {
       : undefined
     if (
       request.event.type === 'user.input'
-      && plan?.intent === 'check-weather'
+      && (plan?.intent === 'check-weather' || plan?.intent === 'check-schedule')
       && current.task.phase !== 'completed'
       && current.task.phase !== 'cancelled'
     ) {
-      return this.#submitWeatherQuery(taskId, current, request, startedAt)
+      return plan.intent === 'check-weather'
+        ? this.#submitWeatherQuery(taskId, current, request, startedAt)
+        : this.#submitScheduleQuery(taskId, current, request, startedAt)
     }
     let next = applyEvent(
       current.task,
@@ -2187,6 +2189,54 @@ export class AgentGateway {
     })
   }
 
+  /**
+   * The check-schedule query turn. Same transient contract as the weather
+   * query: nothing about the task changes, the answer rides one published
+   * snapshot, and the next accepted event recomposes without it. The reading
+   * goes under its own 'calendar.query' key so the schedule strip's persisted
+   * 'calendar.list-upcoming' data is never disturbed.
+   */
+  #submitScheduleQuery(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    let schedule: ReadToolResults['calendar.query']
+    try {
+      schedule = this.#orchestrator.resolveSchedule?.(taskId, request.clientRequestId, {
+        date: FIXTURE_CALENDAR_DATE,
+      })
+    } catch (error) {
+      if (!(error instanceof ReadToolOrchestrationError)) this.#throwProviderError(error, current)
+      schedule = undefined
+    }
+
+    if (!schedule) {
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: '日程服务暂时不可用，稍后可以再问我。',
+        shouldSpeak: supportsTts,
+      })
+    }
+
+    const published = this.#publish(
+      current.task,
+      { ...current.toolResults, 'calendar.query': schedule },
+      current.requestContext,
+      current.effectReceipts,
+    )
+    // Transience lives in this one line: the published UI carries the card,
+    // the persisted toolResults do not.
+    const stored = this.#store.save({ ...published, toolResults: current.toolResults })
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+      text: scheduleSpokenSummary(schedule.data.events),
+      shouldSpeak: supportsTts,
+    })
+  }
+
   #response(
     requestId: string,
     stored: StoredTask,
@@ -2230,6 +2280,17 @@ function weatherSpokenSummary(data: WeatherOutput, forArrival: boolean, returnin
     ? returning ? '，路上请慢行' : '，建议家人在到达层室内等候'
     : returning ? '' : '，适合接机'
   return `${moment}${data.locationName}${weatherConditionLabels[data.condition]} ${Math.round(data.temperatureC)} 度${closing}。`
+}
+
+/** The demo calendar's fixture day; the shipped fixture data lives on it. */
+const FIXTURE_CALENDAR_DATE = '2026-07-22'
+
+/** One short spoken answer; the card lists the entries. */
+function scheduleSpokenSummary(events: Array<{ title: string; startAt: string }>): string {
+  if (events.length === 0) return '今天没有更多安排了。'
+  const nextClock = events[0]!.startAt.match(/T(\d{2}:\d{2})/)?.[1]
+  const nextPart = nextClock ? `，最近是 ${nextClock} 的${events[0]!.title}` : ''
+  return `今天还有 ${events.length} 项安排${nextPart}。`
 }
 
 function isCabinRevertPolicyDenial(errorCode: string | undefined): boolean {

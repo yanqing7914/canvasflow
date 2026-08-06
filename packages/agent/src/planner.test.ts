@@ -204,6 +204,24 @@ describe('airport pickup Planner', () => {
     expect(planAirportPickup({ text: '接妈妈，顺便看下天气', timestamp }).intent).toBe('create-airport-pickup')
   })
 
+  it.each(['看看我的日程', '今天有什么安排', '我的待办', '看看我的待办事项'])('recognizes %s as a whole-utterance schedule query', (text) => {
+    expect(planAirportPickup({ text, timestamp })).toMatchObject({
+      intent: 'check-schedule',
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+    })
+  })
+
+  it('keeps the task meaning of a mixed sentence that also mentions the schedule', () => {
+    expect(planAirportPickup({ text: '接妈妈，顺便看看日程', timestamp }).intent).toBe('create-airport-pickup')
+  })
+
+  it('does not consume schedule questions outside the fixed forms', () => {
+    expect(planAirportPickup({ text: '明天有什么安排', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '安排一下接机', timestamp }).intent).toBe('unknown')
+  })
+
   it('does not consume open-ended weather questions outside the fixed forms', () => {
     expect(planAirportPickup({ text: '明天天气怎么样', timestamp }).intent).toBe('unknown')
     expect(planAirportPickup({ text: '天气预报', timestamp }).intent).toBe('unknown')

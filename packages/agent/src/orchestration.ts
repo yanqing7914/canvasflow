@@ -31,6 +31,13 @@ export type ReadToolResults = Partial<{
   'vehicle.get-status': SuccessfulToolResult<VehicleStatusOutput>
   'charging.recommend': SuccessfulToolResult<ChargingRecommendationOutput>
   'calendar.list-upcoming': SuccessfulToolResult<ListUpcomingEventsOutput>
+  /**
+   * The check-schedule query turn's own reading. A separate key on purpose:
+   * 'calendar.list-upcoming' persists across events to feed the schedule
+   * strip, while this key exists only in the one published snapshot that
+   * answers the query — the strip and the card must never fight over data.
+   */
+  'calendar.query': SuccessfulToolResult<ListUpcomingEventsOutput>
   'weather.get-current': SuccessfulToolResult<WeatherOutput>
 }>
 
@@ -81,6 +88,12 @@ export interface ReadToolOrchestration {
    * orchestration without it degrades to the weather-unavailable reply.
    */
   resolveWeather?(taskId: string, requestId: string, input: { locationId: string; at?: string }): SuccessfulToolResult<WeatherOutput>
+  /**
+   * On-demand calendar read for the check-schedule query intent. Optional for
+   * the same reason as resolveWeather; a missing implementation degrades to
+   * the schedule-unavailable reply.
+   */
+  resolveSchedule?(taskId: string, requestId: string, input: { date: string }): SuccessfulToolResult<ListUpcomingEventsOutput>
 }
 
 export class ReadToolOrchestrator implements ReadToolOrchestration {
@@ -227,6 +240,16 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       requestId,
       input,
       toolResultSchema(weatherOutputSchema),
+    )
+  }
+
+  resolveSchedule(taskId: string, requestId: string, input: { date: string }): SuccessfulToolResult<ListUpcomingEventsOutput> {
+    return this.#call(
+      'calendar.list-upcoming',
+      taskId,
+      requestId,
+      input,
+      toolResultSchema(listUpcomingEventsOutputSchema),
     )
   }
 

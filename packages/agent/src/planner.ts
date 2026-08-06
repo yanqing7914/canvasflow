@@ -10,6 +10,7 @@ export type PlannerIntent =
   | 'confirm-passengers-onboard'
   | 'apply-cabin-preferences'
   | 'check-weather'
+  | 'check-schedule'
   | 'cancel-task'
   | 'unknown'
 
@@ -143,6 +144,17 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
+  if (isScheduleQuery(compactText)) {
+    return {
+      intent: 'check-schedule',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，正在为你查看今天的日程。',
+    }
+  }
+
   const isPickupRequest = /去机场接/.test(actionableText)
     || /机场接(?:人|妈妈|爸爸|豆豆)/.test(actionableText)
     || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(actionableText)
@@ -212,6 +224,15 @@ function isTaskCancellation(text: string): boolean {
  */
 function isWeatherQuery(text: string): boolean {
   return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:到(?:的时候|达时|那边))?(?:的)?天气(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
+}
+
+/**
+ * A whole-utterance schedule question, anchored like the weather form. 今天
+ * is optional but nothing else may ride along: a sentence that also carries
+ * passengers or a flight number keeps its task meaning.
+ */
+function isScheduleQuery(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:我)?(?:今天)?(?:的)?(?:还)?有?(?:什么|哪些)?(?:日程|待办|安排|行程安排)(?:事项)?(?:怎么样|有哪些|有什么)?[?？。！!]?$/.test(text)
 }
 
 function stableHash(value: string): string {

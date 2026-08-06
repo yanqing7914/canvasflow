@@ -425,6 +425,53 @@ describe('UISpecRenderer', () => {
     expect(document.querySelector('.ui-weather-brief__advisory')).not.toBeInTheDocument()
   })
 
+  it('lists the schedule answer with time, title, location, and the capped tail', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['schedule-card'] } },
+      components: [{
+        id: 'schedule-card',
+        type: 'schedule-card',
+        props: {
+          dateLabel: '今天',
+          events: [
+            { eventId: 'e-1', title: '豆豆的睡前故事', startAt: '2026-07-22T21:30:00+08:00', location: '家' },
+            { eventId: 'e-2', title: '家庭电话', startAt: '2026-07-22T22:00:00+08:00' },
+          ],
+          moreCount: 3,
+          freshness: 'fixture',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const list = screen.getByRole('list', { name: '今日日程列表' })
+    expect(list.textContent).toMatch(/21:30.*豆豆的睡前故事.*家.*22:00.*家庭电话/u)
+    expect(screen.getByText('还有 3 项')).toBeInTheDocument()
+    expect(document.querySelector('.ui-schedule-card__empty')).not.toBeInTheDocument()
+  })
+
+  it('answers an empty schedule with its copy instead of an empty list', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['schedule-card'] } },
+      components: [{
+        id: 'schedule-card',
+        type: 'schedule-card',
+        props: {
+          dateLabel: '今天',
+          events: [],
+          emptyCopy: '今天没有更多安排了',
+          freshness: 'fixture',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(screen.getByText('今天没有更多安排了')).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: '今日日程列表' })).not.toBeInTheDocument()
+  })
+
   it('leads the charging card with the suggested duration when one is supplied', () => {
     const spec = baseSpec({
       layout: { type: 'stack', gap: 'md', slots: { main: ['charging'] } },
