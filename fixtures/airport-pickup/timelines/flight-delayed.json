@@ -1,0 +1,26 @@
+{
+  "id": "flight-delayed",
+  "title": "航班延误与航站楼变更",
+  "description": "MU5103 返回延误到达 T1；不应自动调度落地通知。",
+  "mode": "fixture",
+  "initialTaskState": { "taskId": "pickup-delayed-001", "surfaceId": "airport-pickup-main", "taskRevision": 0, "uiRevision": 0, "phase": "collecting-information", "passengers": { "memberIds": [], "names": [], "confirmedOnboard": false }, "charging": { "recommended": false, "accepted": false, "status": "none" }, "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false }, "processedEventIds": [], "updatedAt": "2026-07-22T20:00:00+08:00" },
+  "steps": [
+    {
+      "event": { "eventId": "delayed-task-input", "type": "user.input", "text": "接妈妈，航班 MU5103", "timestamp": "2026-07-22T20:01:00+08:00" },
+      "toolCalls": ["family.resolve-members", "flight.get-status"],
+      "statePatch": { "passengers": { "memberIds": ["mom"], "names": ["妈妈"], "confirmedOnboard": false } },
+      "expectedPhase": "preparing",
+      "expectedTaskRevision": 1,
+      "note": "延误航班查询成功，但仍停留在准备出发"
+    },
+    {
+      "event": { "eventId": "delayed-flight-update", "type": "flight.updated", "flight": { "flightNumber": "MU5103", "status": "delayed", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T21:10:00+08:00", "terminal": "T1" }, "timestamp": "2026-07-22T20:10:00+08:00" },
+      "toolCalls": ["flight.get-status"],
+      "expectedToolErrors": {},
+      "expectedUI": { "generatedBy": "composer", "primaryComponent": "flight-status", "priority": "normal" },
+      "expectedPhase": "preparing",
+      "expectedTaskRevision": 2,
+      "note": "航站楼切到 T1；延误状态优先于路线卡片"
+    }
+  ]
+}

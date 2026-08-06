@@ -1,6 +1,6 @@
 # CanvasFlow Agent Guide
 
-This repository is designed for agent-assisted development. It is a private GitHub Free repository, so access control is part of the merge gate: teammates work from private forks, while the owner is the only person who writes to or merges the upstream repository.
+This repository is designed for agent-assisted development. It is a public repository with three collaborators who have normal `Write` access. `dev` and `main` are protected branches: direct pushes are rejected, force pushes and branch deletion are blocked, and every change must arrive through a pull request that passes the required checks. Repository administrators can bypass protection, so the owner still avoids pushing directly.
 
 ## Repo Shape
 
@@ -9,7 +9,17 @@ This repository is designed for agent-assisted development. It is a private GitH
 - All work happens on short-lived `feat/*`, `fix/*`, `test/*`, or `chore/*` branches.
 - Every change lands through a pull request.
 - Keep pull requests small enough to review in one sitting.
-- If you cannot write to the upstream repository, work in your private fork and open a PR back to `yanqing7914/canvasflow`.
+- Teammates may push short-lived feature branches to the upstream repository. Direct pushes to `dev` or `main` are rejected by branch protection.
+
+## Repository Settings
+
+The repository is public, but it is not open for outside contributions during the competition:
+
+- Issues are disabled.
+- Interaction is limited to collaborators. The limit expires on 2027-01-27 and has to be renewed if it is still needed.
+- Workflows on pull requests from forks require manual approval from a maintainer.
+- `dev` and `main` require the `quality`, `e2e`, and `branch-and-files` checks to pass. They do not require an approving review, because the auto-merge automation acts with `GITHUB_TOKEN` and cannot approve a pull request.
+- The review model comes from the `CODEX_REVIEW_MODEL` repository variable, with `CODEX_REVIEW_FALLBACK_MODEL` used only when the first model fails. If a review model reports that it is at capacity, switch `CODEX_REVIEW_MODEL` to another model the provider serves rather than re-running against the same one.
 
 ## Required Checks
 
@@ -20,17 +30,20 @@ npm run lint
 npm run typecheck
 npm test
 npm run build
+npm run test:e2e
 ```
+
+The end-to-end suite needs a browser once per machine: `npx playwright install chromium`.
 
 ## Development Flow
 
-1. Start from the latest `dev` for normal work. Start from `main` only for an owner-managed release or hotfix.
-2. Create a new branch for the current change.
+1. Sync the latest `dev` branch from `origin`. Start from `main` only for an owner-managed release or hotfix.
+2. Create a short-lived branch from `origin/dev` for the current change.
 3. Implement the smallest coherent slice of work.
 4. Add or update tests when behavior changes.
 5. Run the required checks locally.
-6. Push the branch to your fork and open a PR into `dev`.
-7. Wait for CI and complete the local Codex review handoff before asking the owner to merge.
+6. Push the branch to the shared upstream repository and open a PR into `dev`.
+7. Wait for the automation: once CI is green and the latest completed Codex review ends with `CODEX-REVIEW-VERDICT: PASS`, the review workflow squash-merges the PR into `dev` automatically. Do not merge ordinary PRs manually; if auto-merge fails, fix the reported cause and push again, or escalate to the owner.
 8. Only the owner opens and merges the `dev` -> `main` release PR.
 
 ## Working Rules
@@ -51,14 +64,15 @@ Stop and report instead of guessing when the request conflicts with product dire
 
 ## Review and handoff contract
 
-The PR author must describe before/after behavior, tests run, visual changes, known risks, and rollback approach. Generated code must be reviewed by the author before handoff. The owner performs the final merge decision after checking CI, the diff, and Codex feedback. A green CI job is necessary but is not a substitute for human review.
+The PR author must describe before/after behavior, tests run, visual changes, known risks, and rollback approach. Generated code must be reviewed by the author before handoff. A PR merges automatically once CI is green and the latest completed Codex review reports a PASS verdict; a green CI job alone is not sufficient, and owner review is no longer a merge gate for ordinary PRs into `dev`. Branch protection rejects a direct push to `dev` or `main`, so a commit can only land outside this flow if an administrator bypasses protection; if that happens, stop and notify the owner so the commit can be reviewed or reverted.
 
 For a UI change, include a screenshot or short recording. For behavior changes, add a focused test or explain why a test is not practical. Never claim that a check ran if it did not run.
 
 ## Review guidelines
 
 - The repository owner is the default code owner.
-- PRs should not merge until CI is green, Codex review has run, and owner review is complete.
+- PRs should not merge until CI is green and the latest completed Codex review has no unresolved P0 or P1 findings. A failed, cancelled, or still-running Codex review is not a passing review.
+- Ordinary same-repo PRs into `dev` are squash-merged automatically by the Codex review workflow on a PASS verdict. The `dev` -> `main` release PR is never auto-merged; only the owner merges it.
 - Use Codex or another agent for a second-pass review when the change touches shared UI flows, state models, deployment config, or auth/security code.
 - When reviewing, focus first on correctness, then regression risk, then clarity.
 - Treat visual regressions, broken loading states, and lost keyboard accessibility as review blockers.

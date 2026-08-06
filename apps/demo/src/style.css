@@ -1,0 +1,2589 @@
+:root {
+  --font-body: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", sans-serif;
+  color: #102033;
+  background: #edf0f4;
+  font-family: var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body,
+#root {
+  width: 100%;
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+}
+
+body { background: #edf0f4; }
+
+button,
+a { font: inherit; }
+
+button { cursor: pointer; }
+
+button:disabled { cursor: not-allowed; }
+
+button:focus-visible,
+a:focus-visible {
+  outline: 3px solid rgba(36, 107, 253, 0.45);
+  outline-offset: 3px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+
+.demo-shell {
+  --cabin: #edf0f4;
+  --surface: #ffffff;
+  --ink: #102033;
+  --muted: #667384;
+  --rule: #dde3ea;
+  --quiet-rule: #edf0f4;
+  --blue: #246bfd;
+  --blue-deep: #1559e5;
+  --blue-pale: #edf3ff;
+  --green: #2ead63;
+  --green-pale: #edf9f1;
+  --amber: #c77a18;
+  --amber-pale: #fff7e9;
+  --red: #c74646;
+  --red-pale: #fff0f0;
+  min-height: 100dvh;
+  overflow: hidden;
+  background: var(--cabin);
+  color: var(--ink);
+}
+
+.cockpit-stage {
+  display: grid;
+  width: 100%;
+  height: 100dvh;
+  min-height: 100dvh;
+  padding: 24px clamp(24px, 5vw, 96px);
+  place-items: center;
+}
+
+.task-surface {
+  display: flex;
+  flex-direction: column;
+  width: min(100%, 1720px);
+  height: min(680px, calc(100dvh - 48px));
+  max-height: none;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 28px;
+  background: var(--surface);
+  box-shadow: 0 18px 46px rgba(16, 32, 51, 0.08);
+}
+
+.trip-brief__header {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 clamp(28px, 3vw, 52px);
+}
+
+.brand-lockup {
+  display: inline-flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 10px;
+  color: var(--ink);
+  text-decoration: none;
+}
+
+.brand-wordmark {
+  color: var(--blue);
+  font-family: Bahnschrift, "DIN Alternate", sans-serif;
+  font-size: clamp(23px, 1.7vw, 30px);
+  font-weight: 700;
+  letter-spacing: -0.055em;
+}
+
+.brand-separator,
+.trip-brief__phase {
+  color: var(--muted);
+  font-size: clamp(17px, 1.3vw, 22px);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.header-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 9px;
+}
+
+.mic-button,
+.keyboard-toggle,
+.control-toggle,
+.console-close {
+  display: inline-flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 0 13px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 650;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.mic-button:hover,
+.keyboard-toggle:hover,
+.control-toggle:hover {
+  border-color: #b8c4d2;
+  background: #f7f9fc;
+}
+
+/* Pressed state only, not a status colour: the keyboard is a utility, not a
+   condition of the trip. */
+.keyboard-toggle--open {
+  border-color: #b8c4d2;
+  background: #eef1f5;
+}
+
+.keyboard-toggle:disabled {
+  background: #f5f7f9;
+  color: var(--muted);
+}
+
+.mic-button.mic-listening {
+  border-color: #b8e1c8;
+  background: var(--green-pale);
+  color: #1d7b48;
+}
+
+/* Awaiting confirmation and playback both read as "the assistant has the turn". */
+.mic-button.mic-transcribing,
+.mic-button.mic-speaking {
+  border-color: #bfd3fb;
+  background: var(--blue-pale);
+  color: var(--blue-deep);
+}
+
+.mic-button.mic-submitting {
+  border-color: #e6d4b0;
+  background: var(--amber-pale);
+  color: var(--amber);
+}
+
+.mic-button.mic-error {
+  border-color: #eec2c2;
+  background: var(--red-pale);
+  color: var(--red);
+}
+
+.mic-button.mic-unavailable {
+  background: #f5f7f9;
+  color: var(--muted);
+}
+
+/* Announces listening/submitting/playback without adding visual weight. */
+.voice-status {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 clamp(24px, 3vw, 52px);
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.voice-status:empty { display: none; }
+
+/* Model provenance is a quiet, factual line: present only when the Agent reports
+   a validated model plan, and visually subordinate to the voice status above. */
+.model-provenance {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 clamp(24px, 3vw, 52px);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.model-provenance strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
+.voice-composer {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 10px;
+  margin: clamp(14px, 1.8vh, 20px) clamp(24px, 3vw, 52px) 0;
+  border: 1px solid var(--rule);
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: #fbfcfe;
+}
+
+/* Why the field opened is what it means, so the reason carries the colour. A
+   failed or missing voice path is red; a transcript awaiting confirmation shares
+   the blue that means "the assistant holds the turn"; a keyboard the driver
+   simply asked for stays neutral. */
+.voice-composer[data-composer-reason="error"],
+.voice-composer[data-composer-reason="unavailable"] {
+  border-color: #eec2c2;
+  background: var(--red-pale);
+}
+
+.voice-composer[data-composer-reason="transcript"] {
+  border-color: #bfd3fb;
+  background: var(--blue-pale);
+}
+
+.voice-composer[data-composer-reason="transcript"][data-voice-state="submitting"] {
+  border-color: #e6d4b0;
+  background: var(--amber-pale);
+}
+
+.voice-composer__notice {
+  margin: 0;
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 620;
+  line-height: 1.5;
+}
+
+.voice-composer__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.voice-composer__input {
+  min-width: 0;
+  min-height: 52px;
+  flex: 1 1 auto;
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 0 14px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.voice-composer__input::placeholder { color: var(--muted); }
+
+.voice-composer__send {
+  display: inline-flex;
+  min-height: 52px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0 18px;
+  font-size: 17px;
+  font-weight: 700;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.voice-composer__send {
+  background: var(--blue);
+  color: #ffffff;
+}
+
+.voice-composer__send:hover:not(:disabled) { background: var(--blue-deep); }
+
+.voice-composer__send:disabled {
+  border-color: var(--rule);
+  background: #f2f4f6;
+  color: var(--muted);
+}
+
+.trip-brief__content {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  padding: clamp(24px, 3vh, 34px) clamp(28px, 3.5vw, 62px) 28px;
+}
+
+.task-heading {
+  flex: 0 0 auto;
+  padding-bottom: 18px;
+}
+
+.task-heading h1 {
+  max-width: none;
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(48px, 3.25vw, 62px);
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.028em;
+  text-wrap: balance;
+}
+
+/* The semantic h1 stays present; a component-level conclusion leads when supplied. */
+.task-heading--contextual { padding-bottom: 14px; }
+
+.task-heading--contextual h1 {
+  color: #506176;
+  font-size: clamp(20px, 1.45vw, 26px);
+  font-weight: 640;
+  letter-spacing: -0.022em;
+  line-height: 1.28;
+}
+
+/* While driving, the component's ETA is the conclusion; the page title stays a quiet orientation cue. */
+.task-heading--driving-to-airport h1 {
+  max-width: 36ch;
+  font-size: clamp(18px, 1.22vw, 22px);
+}
+
+.task-heading--completed { padding-top: clamp(16px, 3vh, 30px); }
+
+.ui-spec-renderer {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 16px;
+  padding-top: 0;
+  border-top: 0;
+  animation: phase-settle 200ms cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+
+.ui-layout {
+  display: grid;
+  min-height: 0;
+  flex: 1 1 auto;
+  gap: clamp(18px, 2.2vw, 36px);
+}
+
+.ui-layout--stack,
+.ui-layout--column { grid-template-columns: minmax(0, 1fr); }
+
+.ui-layout--row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.ui-layout--split {
+  grid-template-columns: var(--ui-primary-ratio, 1.45fr) var(--ui-secondary-ratio, 1fr);
+}
+
+.ui-layout--focus {
+  grid-template-columns: minmax(0, 1fr);
+  max-width: 1260px;
+  margin: 0 auto;
+}
+
+/* A one-component spec is a brief, not a dashboard tile that must consume the whole frame. */
+.ui-spec-renderer[data-single-component="true"] .ui-layout { align-content: start; }
+
+.ui-slot {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  gap: clamp(16px, 2vh, 24px);
+  align-content: stretch;
+}
+
+.ui-layout--row .ui-slot { display: contents; }
+
+.ui-component {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-content: stretch;
+  gap: 16px;
+}
+
+/* Each stacked card sits in its own content-floored row, and `align-content: stretch` shares
+   any leftover space between them. The slot used to declare a single `minmax(0, 1fr)` track:
+   rows 2..N fell into implicit `auto` tracks, took their natural height first, and the one
+   explicit track absorbed the entire remainder — so the first card was trimmed mid-sentence
+   for no reason other than its position. An even split only moves that trim onto whichever
+   card is tallest. A `min-content` floor instead keeps every card's content intact; when the
+   stack genuinely exceeds the slot the overflow is a single visible failure at the bottom of
+   the frame, which the layout tests catch. */
+.ui-layout--stack .ui-slot,
+.ui-layout--focus .ui-slot {
+  grid-auto-rows: minmax(min-content, auto);
+}
+
+.ui-layout--stack .ui-component,
+.ui-layout--focus .ui-component,
+.ui-spec-renderer[data-single-component="true"] .ui-component {
+  height: 100%;
+}
+
+/* `.ui-card` is a scroll container, so its automatic minimum size is zero and an `auto` row
+   would happily crush it. `min-content` asks the card what it actually needs. */
+.ui-layout--stack .ui-component,
+.ui-layout--focus .ui-component {
+  min-height: auto;
+  grid-template-rows: minmax(min-content, 1fr) auto;
+}
+
+.ui-spec-renderer[data-single-component="true"] .ui-slot {
+  align-self: start;
+  grid-template-rows: none;
+}
+
+.ui-spec-renderer[data-single-component="true"] .ui-component {
+  width: 100%;
+  height: auto;
+  grid-template-rows: auto auto;
+  align-content: start;
+}
+
+.ui-spec-renderer[data-single-component="true"] .ui-card,
+.ui-layout > .ui-card--empty {
+  height: auto;
+  min-height: 0;
+}
+
+/* A single brief owns the frame, but its content keeps a deliberate reading width. */
+.ui-spec-renderer[data-single-component="true"] .ui-card--status-banner,
+.ui-spec-renderer[data-single-component="true"] .ui-card--alert,
+.ui-spec-renderer[data-single-component="true"] .ui-card--fallback {
+  width: min(100%, 1040px);
+  max-width: none;
+  margin: 0;
+}
+
+.ui-spec-renderer[data-single-component="true"] .ui-card--status-banner,
+.ui-spec-renderer[data-single-component="true"] .ui-card--alert {
+  height: auto;
+  min-height: 0;
+}
+
+/* Components are content regions of one trip brief, not a stack of dashboard tiles. */
+.ui-card {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  padding: clamp(4px, 1vh, 12px) 0;
+  background: transparent;
+}
+
+.ui-card__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.ui-card__heading { min-width: 0; }
+
+.ui-card__icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--blue);
+}
+
+.ui-card__icon svg {
+  width: 28px;
+  height: 28px;
+}
+
+.ui-card__eyebrow {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.ui-card__title {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(26px, 2.1vw, 38px);
+  font-weight: 720;
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+}
+
+.ui-card__body {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+
+.ui-card__lead {
+  margin: clamp(20px, 3vh, 38px) 0 0;
+  color: var(--ink);
+  font-size: clamp(34px, 3.2vw, 56px);
+  font-weight: 750;
+  line-height: 1.12;
+  letter-spacing: -0.04em;
+}
+
+.ui-card__summary,
+.ui-card__body > p {
+  max-width: 38ch;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: clamp(18px, 1.38vw, 22px);
+  line-height: 1.5;
+}
+
+.ui-route-facts,
+.ui-hero-metrics,
+.ui-cabin-grid {
+  display: grid;
+  margin-top: clamp(28px, 4vh, 46px);
+  padding-top: clamp(18px, 2.6vh, 30px);
+  border-top: 1px solid var(--rule);
+}
+
+.ui-route-facts,
+.ui-cabin-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+/* The cabin card carries one to three metrics depending on what the vehicle
+   actually applied, and three fixed tracks leave the unused ones standing empty —
+   room the metrics that are there could have had. The media title is the only
+   cabin value that is prose and so the first to run out of it: with a temperature
+   and a title alone, a third of the grid was going to a track with nothing in it
+   while the title ellipsised. The tracks follow the metric count instead. Below
+   the 680px breakpoint the two-column override wants the same thing for three
+   metrics, and these say nothing about that case. */
+.ui-cabin-grid:has(> .ui-metric:nth-child(2):last-child) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.ui-cabin-grid:has(> .ui-metric:first-child:last-child) { grid-template-columns: minmax(0, 1fr); }
+
+.ui-hero-metrics { grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr); }
+
+.ui-card--pickup-overview .ui-route-facts { grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); }
+
+.ui-metric {
+  min-width: 0;
+  padding: 0 clamp(12px, 2vw, 30px);
+  border-left: 1px solid var(--rule);
+}
+
+.ui-metric:first-child {
+  border-left: 0;
+  padding-left: 0;
+}
+
+.ui-metric__label {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-metric__value,
+.ui-navigation-eta {
+  display: block;
+  overflow: hidden;
+  margin-top: 6px;
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(28px, 2.35vw, 46px);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.055em;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A metric whose value is prose, not a figure: the display face above is a tabular
+   numeral face at a numeral size, and four CJK glyphs at that size overrun the third
+   of `.ui-cabin-grid` the metric gets and ellipsise. Sizing in `em` off the figure
+   keeps this in step with every density and breakpoint override of the value size
+   without restating any of them, and the reciprocal line height holds the row at the
+   figure's own 1em so a text value and a numeric one in the same grid stay level.
+
+   The body face buys a short title room to fit on one line, not room for any title:
+   a media title is prose of no fixed length, and the demo's own 「豆豆故事」 filled
+   its column to the pixel. So prose wraps where a figure cannot — the reciprocal
+   line height makes each wrapped line exactly the figure's 1em, so a second line
+   grows the shared grid row and the metrics beside it stay top-aligned. Two lines is
+   the ceiling: past that the clamp ellipsises, which is the honest end of the road
+   for a title with more words than the column has pixels. `anywhere` is what lets a
+   long Latin word break at all — CJK breaks between glyphs on its own. */
+.ui-metric__value-text {
+  --metric-text-scale: 0.62;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-family: var(--font-body);
+  font-size: calc(1em * var(--metric-text-scale));
+  letter-spacing: -0.01em;
+  line-height: calc(1 / var(--metric-text-scale));
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.ui-metric__detail {
+  display: block;
+  overflow: hidden;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-metric--comparison { color: var(--muted); }
+
+.ui-metric--comparison .ui-metric__value { color: #58677a; }
+
+.ui-card__status-line,
+.ui-detail-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 16px;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.ui-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: #506176;
+  font-size: 18px;
+  font-weight: 700;
+  line-height: 1.25;
+}
+
+.ui-status::before {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+
+.ui-status--landed,
+.ui-status--sent,
+.ui-status--confirmed,
+.ui-status--confirmed-onboard { color: #20814a; }
+
+.ui-status--delayed,
+.ui-status--waiting,
+.ui-status--sending { color: #a6620e; }
+
+.ui-status--cancelled,
+.ui-status--failed { color: var(--red); }
+
+.ui-card--flight-status .ui-card__title {
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(38px, 4vw, 68px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.055em;
+}
+
+.ui-card--flight-status .ui-hero-metrics { margin-top: clamp(30px, 4vh, 46px); }
+
+.ui-card--flight-status .ui-metric--hero .ui-metric__value {
+  font-size: clamp(52px, 5.8vw, 92px);
+  color: var(--blue);
+}
+
+.ui-flight-brief__header,
+.ui-charge-brief__header,
+.ui-message-brief__header,
+.ui-passenger-brief__header,
+.ui-cabin-brief__header,
+.ui-progress-brief__header,
+.ui-navigation-brief__header,
+.ui-pickup-brief__header {
+  display: flex;
+  min-width: 0;
+  align-items: flex-start;
+  gap: 13px;
+}
+
+.ui-flight-brief__glyph,
+.ui-charge-brief__glyph,
+.ui-message-brief__glyph,
+.ui-passenger-brief__glyph,
+.ui-cabin-brief__glyph,
+.ui-progress-brief__glyph,
+.ui-navigation-brief__glyph,
+.ui-pickup-brief__glyph {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--blue);
+}
+
+.ui-flight-brief__glyph svg,
+.ui-charge-brief__glyph svg,
+.ui-message-brief__glyph svg,
+.ui-passenger-brief__glyph svg,
+.ui-cabin-brief__glyph svg,
+.ui-progress-brief__glyph svg,
+.ui-navigation-brief__glyph svg,
+.ui-pickup-brief__glyph svg {
+  width: 28px;
+  height: 28px;
+}
+
+.ui-flight-brief__source,
+.ui-charge-brief__eyebrow,
+.ui-message-brief__eyebrow,
+.ui-passenger-brief__eyebrow,
+.ui-cabin-brief__eyebrow,
+.ui-progress-brief__eyebrow,
+.ui-navigation-brief__eyebrow,
+.ui-pickup-brief__phase {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.ui-flight-brief__number,
+.ui-charge-brief__title,
+.ui-message-brief__contact,
+.ui-cabin-brief__title,
+.ui-progress-brief__title,
+.ui-navigation-brief__destination {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(27px, 2.2vw, 40px);
+  font-weight: 720;
+  line-height: 1.14;
+  letter-spacing: -0.035em;
+}
+
+.ui-flight-brief__number {
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(38px, 4vw, 68px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.055em;
+}
+
+.ui-flight-brief__header .ui-status { margin-left: auto; }
+
+.ui-flight-brief__arrival {
+  display: grid;
+  gap: 8px;
+  margin-top: clamp(32px, 5vh, 68px);
+}
+
+.ui-flight-brief__time {
+  color: var(--blue);
+  font-size: clamp(60px, 6.7vw, 108px);
+}
+
+.ui-flight-brief__facts { margin-top: clamp(30px, 4vh, 46px); }
+
+@media (min-width: 1180px) {
+  .ui-card--flight-status {
+    display: grid;
+    grid-template-columns: minmax(260px, 0.9fr) minmax(340px, 1.15fr) minmax(250px, 0.75fr);
+    align-items: center;
+    column-gap: clamp(30px, 3vw, 56px);
+    padding-block: clamp(10px, 1.6vh, 18px);
+  }
+
+  .ui-flight-brief__header {
+    grid-column: 1;
+    align-self: start;
+  }
+
+  .ui-flight-brief__arrival {
+    grid-column: 2;
+    align-self: center;
+    margin-top: 0;
+    padding-inline: clamp(28px, 3vw, 52px);
+    border-inline: 1px solid var(--rule);
+  }
+
+  .ui-flight-brief__facts {
+    display: grid;
+    grid-column: 3;
+    align-self: center;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .ui-flight-brief__facts .ui-metric {
+    padding: 0;
+    border-left: 0;
+  }
+
+  .ui-flight-brief__facts .ui-metric + .ui-metric {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+  }
+}
+
+.ui-charge-brief__recommendation { margin-bottom: 0; }
+
+.ui-charge-brief__reason { margin-top: 18px; }
+
+.ui-message-brief__status { margin-top: 18px; }
+
+.ui-passenger-brief__lead {
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(42px, 4.4vw, 76px);
+  font-weight: 750;
+  line-height: 1.06;
+  letter-spacing: -0.04em;
+}
+
+.ui-passenger-brief__status { margin-top: clamp(22px, 3vh, 36px); }
+
+.ui-card--passenger-status {
+  justify-content: flex-start;
+  padding-top: clamp(16px, 2.5vh, 28px);
+}
+
+.ui-passenger-brief__meeting-point { margin-top: clamp(28px, 4vh, 46px); }
+
+/* Sparse onboard states keep their confirmed fact close to the conclusion. */
+.ui-card--passenger-status:not(:has(.ui-passenger-brief__meeting-point))
+  .ui-passenger-brief__status {
+  margin-top: clamp(24px, 3.5vh, 38px);
+  padding-top: 0;
+  border-top: 0;
+}
+
+.ui-cabin-brief__facts { margin-top: clamp(30px, 4vh, 46px); }
+
+.ui-cabin-brief__state {
+  margin-top: clamp(22px, 3vh, 34px);
+  padding-top: clamp(18px, 2.5vh, 28px);
+  border-top: 1px solid var(--rule);
+}
+
+.ui-progress-brief__title { font-size: clamp(34px, 3vw, 54px); }
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress-brief__title {
+  color: var(--green);
+  font-size: clamp(30px, 2.4vw, 44px);
+}
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress {
+  margin-top: clamp(30px, 4.5vh, 52px);
+  padding-top: 0;
+}
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress__step { font-size: 16px; }
+
+.ui-status-card {
+  display: grid;
+  width: min(100%, 1040px);
+  max-width: 1040px;
+  margin: 0;
+  padding: clamp(28px, 4vh, 44px) clamp(28px, 4vw, 52px);
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: clamp(18px, 2vw, 30px);
+  border: 1px solid #dce6f4;
+  border-radius: 22px;
+  background: #f8fbff;
+}
+
+.ui-status-card::before {
+  grid-column: 1 / -1;
+  width: 54px;
+  margin-bottom: 0;
+}
+
+.ui-status-card__glyph {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.ui-status-card__content {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.ui-status-card__glyph {
+  display: grid;
+  width: clamp(46px, 5vw, 68px);
+  height: clamp(46px, 5vw, 68px);
+  flex: 0 0 auto;
+  place-items: center;
+  color: var(--blue);
+}
+
+.ui-status-card__glyph svg {
+  width: 100%;
+  height: 100%;
+}
+
+.ui-status-card__content {
+  max-width: 42rem;
+  min-width: 0;
+  text-align: left;
+}
+
+.ui-status-card__kind {
+  margin: 0 0 9px;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.ui-status-card__title {
+  max-width: 18ch;
+  margin: 0;
+  color: var(--ink);
+  font-size: clamp(42px, 4.6vw, 76px);
+  font-weight: 750;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.ui-status-card__message {
+  max-width: 42ch;
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: clamp(18px, 1.4vw, 22px);
+  line-height: 1.5;
+}
+
+.ui-status-card__state { margin-top: 22px; }
+
+.ui-navigation-hero {
+  position: relative;
+  margin-top: clamp(22px, 3vh, 40px);
+  padding-bottom: 0;
+}
+
+.ui-navigation-eta {
+  margin-top: 10px;
+  color: var(--ink);
+  font-size: clamp(108px, 7.55vw, 146px);
+  line-height: 0.82;
+}
+
+.ui-navigation-brief__route-rule {
+  display: flex;
+  width: fit-content;
+  min-height: 14px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 18px;
+  color: var(--blue);
+}
+
+/* No location/progress field exists in the current contract: this is an activity stroke, never a route-progress claim. */
+.ui-navigation-brief__route-rule[data-route-progress="unavailable"] {
+  width: auto;
+  min-height: 14px;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.ui-navigation-brief__route-start,
+.ui-navigation-brief__route-end {
+  display: block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.ui-navigation-brief__route-start { background: var(--blue); }
+
+.ui-navigation-brief__route-end { color: #b9c5d3; }
+
+.ui-navigation-brief__route-rule[data-route-progress="unavailable"]
+  .ui-navigation-brief__route-end { display: none; }
+
+.ui-navigation-brief__route-line {
+  display: block;
+  width: 48px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+.ui-navigation-brief__route-rule[data-route-progress="unavailable"]
+  .ui-navigation-brief__route-line {
+  width: 48px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--blue);
+}
+
+/* ---------------------------------------------------------------------------
+   Offline route sketch
+   A quiet roadbook drawing, not a map: fine lines on the brief's own white, one
+   blue for the active route and the vehicle, no basemap, no tiles, no grid. It
+   stays a supporting band — the ETA above it remains the largest thing in the
+   card — and it sits in the same region the activity stroke used to occupy.
+   --------------------------------------------------------------------------- */
+.ui-navigation-brief__route-rule.ui-route-sketch {
+  display: block;
+  width: min(100%, 480px);
+  min-height: 0;
+}
+
+/* The view box aspect is fixed, so height follows width and the drawing scales
+   uniformly with its column instead of distorting strokes and marker dots. */
+.ui-route-sketch__canvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.ui-route-sketch__line {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ui-route-sketch__marker {
+  fill: #ffffff;
+  stroke: var(--blue);
+  stroke-width: 2.5;
+}
+
+/* Start filled, vias small and hollow, destination ringed: the three roles stay
+   distinguishable without colour doing the work, and the stop names below name
+   them in order for anyone the drawing does not reach. */
+.ui-route-sketch__marker[data-role="origin"] { fill: var(--blue); }
+
+.ui-route-sketch__marker[data-role="via"] { stroke-width: 2; }
+
+.ui-route-sketch__marker[data-role="destination"] { stroke-width: 3; }
+
+.ui-route-sketch__vehicle {
+  /* One short move between two authored positions when a new spec arrives.
+     Nothing loops, nothing self-advances; `prefers-reduced-motion: reduce` is
+     handled globally at the end of this file and lands the marker directly. */
+  transition: transform 200ms ease-out;
+}
+
+.ui-route-sketch__vehicle-halo {
+  fill: #ffffff;
+  stroke: var(--blue-pale);
+  stroke-width: 2;
+}
+
+.ui-route-sketch__vehicle-dot { fill: var(--blue); }
+
+/* Stop names on one side, the staged progress figure on the other: one caption
+   row for the drawing instead of a stack of supporting lines, so the band stays
+   shorter than the ETA it sits under. */
+.ui-route-sketch__caption {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 18px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 15px;
+  line-height: 1.3;
+}
+
+.ui-route-sketch__stops {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 18px;
+}
+
+/* Spacing alone separates the stops: a generated arrow would be one more thing
+   for a screen reader to read out for no information. */
+.ui-route-sketch__stop[data-role="destination"] { color: var(--ink); }
+
+.ui-route-sketch__progress { font-variant-numeric: tabular-nums; }
+
+/* The in-card band is the drawing for a spec that has no map of its own. When a
+   brief carries geometry worth showing, the composer sends a `route-map`
+   component and the drawing gets its own column, so the band would be the same
+   route drawn a second time in a card that has no height for it: the desktop
+   navigation card is a three-column band — header over route region, then ETA,
+   then facts — and at 1920x720 that stack has no 45px to spare. Dropping the band
+   keeps every fact in the card and costs nothing the panel beside it is not
+   already showing; it returns as soon as the navigation brief owns the frame. */
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__route-rule.ui-route-sketch {
+  display: none;
+}
+
+/* ---------------------------------------------------------------------------
+   Route map panel
+   The same fixture geometry as the band, given a column of its own: the drawing
+   fills the slot instead of squeezing between two lines of a card, so it reads as
+   a picture of the trip rather than a rule under a heading. Still no basemap, no
+   tiles, and no colour beyond the one blue — a quiet roadbook at panel size.
+   --------------------------------------------------------------------------- */
+.ui-card--route-map {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  border-radius: 18px;
+  background: var(--cabin);
+}
+
+.ui-route-map__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+/* The real basemap fills the whole panel and sits above the sketch once AMap has
+   drawn the route; until then it is empty and hidden, so the sketch shows. The
+   caption keeps its own z-index above both. */
+.ui-route-map__basemap {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  /* Keep a measurable box while AMap initializes. `display: none` gives the
+     imperative map a zero-sized container, so use visibility for the fallback. */
+  visibility: hidden;
+}
+
+.ui-route-map__basemap[data-active="true"] { visibility: visible; }
+
+.ui-route-map__line {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 3.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.ui-route-map__marker {
+  fill: #ffffff;
+  stroke: var(--blue);
+  stroke-width: 3;
+}
+
+/* Same three roles the band distinguishes, at panel weight: origin filled, vias
+   small and hollow, destination ringed. */
+.ui-route-map__stop[data-role="origin"] .ui-route-map__marker { fill: var(--blue); }
+
+.ui-route-map__stop[data-role="via"] .ui-route-map__marker { stroke-width: 2.5; }
+
+.ui-route-map__stop[data-role="destination"] .ui-route-map__marker { stroke-width: 4; }
+
+/* Names sit on the drawing here rather than in a caption row: a panel has the
+   room, and a stop reads better beside its own dot than in a list underneath. */
+.ui-route-map__label {
+  fill: var(--muted);
+  font-size: 17px;
+  paint-order: stroke;
+  stroke: var(--cabin);
+  stroke-width: 5;
+  stroke-linejoin: round;
+}
+
+.ui-route-map__stop[data-role="destination"] .ui-route-map__label { fill: var(--ink); }
+
+.ui-route-map__vehicle {
+  /* One short move between two authored positions when a new spec arrives.
+     Nothing loops, nothing self-advances; `prefers-reduced-motion: reduce` is
+     handled globally at the end of this file and lands the marker directly. */
+  transition: transform 200ms ease-out;
+}
+
+.ui-route-map__vehicle-halo {
+  fill: #ffffff;
+  stroke: var(--blue-pale);
+  stroke-width: 3;
+}
+
+.ui-route-map__vehicle-dot { fill: var(--blue); }
+
+/* Over the bottom of the canvas rather than below it, so the drawing keeps the
+   whole slot. The projection reserves this strip, so no stop lands underneath. */
+.ui-route-map__caption {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  /* Above the basemap (z-index 1) so 模拟行程进度 stays legible over real tiles. */
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 18px;
+  padding: 14px 20px;
+  background: linear-gradient(to top, rgba(237, 240, 244, 0.94), rgba(237, 240, 244, 0));
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1.3;
+}
+
+.ui-route-map__destination { color: var(--ink); }
+
+.ui-route-map__progress { font-variant-numeric: tabular-nums; }
+
+.ui-card--navigation-summary .ui-route-facts {
+  width: min(100%, 760px);
+  margin-top: clamp(28px, 4vh, 46px);
+  padding-top: clamp(18px, 2.2vh, 26px);
+  border-top: 0;
+}
+
+.ui-card--navigation-summary .ui-metric { border-left: 0; }
+
+/* The drawing already separates the ETA from the facts, so the gap below it is
+   smaller than the one a bare stroke needed. */
+.ui-route-sketch + .ui-route-facts {
+  margin-top: clamp(20px, 3vh, 34px);
+}
+
+.ui-card--navigation-summary .ui-metric + .ui-metric { border-left: 1px solid var(--rule); }
+
+.ui-battery-journey {
+  display: grid;
+  margin-top: clamp(26px, 4vh, 50px);
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: end;
+  gap: clamp(16px, 2vw, 28px);
+}
+
+.ui-battery-journey .ui-metric {
+  border-left: 0;
+  padding: 0;
+}
+
+.ui-battery-journey__arrow {
+  margin-bottom: 6px;
+  color: var(--blue);
+}
+
+.ui-card--charging-recommendation .ui-metric__value { color: var(--blue); }
+
+.ui-card__lead--recommendation {
+  margin-top: clamp(22px, 3vh, 34px);
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(42px, 4.1vw, 68px);
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-card--attention::before,
+.ui-card--settled::before,
+.ui-card--status-banner::before,
+.ui-card--alert::before {
+  display: block;
+  width: 54px;
+  height: 3px;
+  margin-bottom: clamp(18px, 3vh, 32px);
+  background: var(--blue);
+  content: "";
+}
+
+.ui-card--attention::before { background: var(--amber); }
+
+.ui-card--settled::before { background: var(--green); }
+
+.ui-message-preview {
+  max-width: 41ch;
+  margin: clamp(24px, 4vh, 54px) 0 0;
+  padding: 0;
+  border: 0;
+  color: var(--ink);
+  font-size: clamp(26px, 2.55vw, 46px);
+  font-weight: 700;
+  line-height: 1.34;
+  letter-spacing: -0.035em;
+}
+
+.ui-card--message-preview .ui-card__status-line { margin-top: 18px; }
+
+.ui-callout {
+  display: grid;
+  gap: 8px;
+  margin-top: clamp(28px, 4vh, 46px);
+  padding: clamp(20px, 3vh, 34px) 0 0;
+  border-top: 1px solid var(--rule);
+}
+
+.ui-callout__label {
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.ui-callout strong {
+  color: var(--blue);
+  font-size: clamp(32px, 3.1vw, 54px);
+  font-weight: 730;
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.ui-card--passenger-status .ui-card__title {
+  font-size: clamp(42px, 4.4vw, 76px);
+  line-height: 1.06;
+}
+
+.ui-card--passenger-status .ui-status { margin-top: clamp(22px, 4vh, 48px); }
+
+.ui-card--cabin-profile .ui-cabin-grid { margin-top: clamp(32px, 5vh, 70px); }
+
+.ui-card--cabin-profile .ui-detail-row {
+  margin-top: clamp(22px, 3vh, 34px);
+  padding-top: clamp(18px, 2.5vh, 28px);
+  border-top: 1px solid var(--rule);
+}
+
+.ui-progress {
+  display: grid;
+  margin: clamp(30px, 4.5vh, 52px) 0 0;
+  padding: 0;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 0;
+  list-style: none;
+}
+
+.ui-progress__step {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 17px;
+}
+
+.ui-progress__step:not(:last-child)::after {
+  position: absolute;
+  top: 8px;
+  left: 17px;
+  width: calc(100% - 2px);
+  height: 2px;
+  background: var(--rule);
+  content: "";
+}
+
+.ui-progress[data-has-next="true"] .ui-progress__step--active::after { background: var(--blue); }
+
+.ui-progress__marker {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 2px solid #aeb9c7;
+  border-radius: 50%;
+  background: #ffffff;
+  color: transparent;
+  font-size: 0;
+}
+
+.ui-progress__marker svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ui-progress__step--completed { color: #207d49; }
+
+.ui-progress__step--completed .ui-progress__marker {
+  border-color: var(--green);
+  background: var(--green);
+  color: #ffffff;
+}
+
+.ui-progress__step--active {
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.ui-progress__step--active .ui-progress__marker {
+  border-color: var(--blue);
+  background: var(--blue);
+}
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress__step--active {
+  color: #207d49;
+}
+
+.ui-spec-renderer[data-phase="completed"] .ui-progress__step--active .ui-progress__marker {
+  border-color: var(--green);
+  background: var(--green);
+  color: #ffffff;
+}
+
+/* The renderer marks the actual terminal step. Keep its finish state distinct even without a following segment. */
+.ui-progress[data-terminal="true"] .ui-progress__step[data-terminal-step="true"] {
+  color: #207d49;
+  font-weight: 700;
+}
+
+.ui-progress[data-terminal="true"] .ui-progress__step[data-terminal-step="true"] .ui-progress__marker {
+  border-color: var(--green);
+  background: var(--green);
+  color: #ffffff;
+}
+
+.ui-progress__empty {
+  margin: clamp(24px, 3vh, 34px) 0 0;
+  color: var(--muted);
+}
+
+.ui-progress__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-progress__step small {
+  color: inherit;
+  font-size: 16px;
+}
+
+.ui-card--task-progress .ui-card__title { font-size: clamp(34px, 3vw, 54px); }
+
+.ui-card--status-banner,
+.ui-card--alert {
+  justify-content: flex-start;
+  width: min(100%, 1040px);
+  max-width: 1040px;
+  margin: 0;
+}
+
+.ui-status-card.ui-card--status-banner,
+.ui-status-card.ui-card--alert,
+.ui-status-card.ui-card--fallback {
+  padding: clamp(28px, 4vh, 44px) clamp(28px, 4vw, 52px);
+}
+
+.ui-status-card[data-level="warning"] {
+  border-color: #ead7b1;
+  background: #fffaf0;
+}
+
+.ui-status-card[data-level="error"],
+.ui-status-card[data-level="critical"] {
+  border-color: #efc9c9;
+  background: #fff6f6;
+}
+
+.ui-status-card {
+  width: min(100%, 1040px);
+  max-width: 1040px;
+}
+
+.ui-card--status-banner .ui-card__title,
+.ui-card--alert .ui-card__title {
+  font-size: clamp(42px, 4.6vw, 76px);
+  line-height: 1.08;
+}
+
+.ui-card--warning::before,
+.ui-card[data-level="warning"]::before { background: var(--amber); }
+
+.ui-card--error::before,
+.ui-card--critical::before,
+.ui-card[data-level="error"]::before,
+.ui-card[data-level="critical"]::before { background: var(--red); }
+
+.ui-card--fallback {
+  justify-content: flex-start;
+  min-height: 0;
+  padding: clamp(24px, 3.8vh, 44px);
+  border: 1px dashed #b9c5d3;
+  border-radius: 16px;
+  background: #fbfcfd;
+}
+
+.ui-card--empty {
+  justify-content: flex-start;
+  align-items: flex-start;
+}
+
+.ui-card__empty {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1.5;
+}
+
+.ui-card__actions,
+.ui-actions {
+  display: grid;
+  flex: 0 0 auto;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  padding-top: 16px;
+  border-top: 1px solid var(--rule);
+}
+
+.ui-card__actions:has(.ui-action:only-child),
+.ui-actions:has(.ui-action:only-child) { grid-template-columns: minmax(0, 1fr); }
+
+.ui-card__actions:has(.ui-action--primary):has(.ui-action--secondary),
+.ui-actions:has(.ui-action--primary):has(.ui-action--secondary) {
+  grid-template-columns: minmax(0, 1.3fr) minmax(0, 0.7fr);
+}
+
+.ui-action,
+.advance-button {
+  display: inline-flex;
+  min-height: 72px;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 0 24px;
+  font-size: 20px;
+  font-weight: 700;
+  transition: background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+
+.ui-action--primary,
+.advance-button {
+  background: var(--blue);
+  color: #ffffff;
+}
+
+.ui-action--primary:hover,
+.advance-button:hover:not(:disabled) { background: var(--blue-deep); }
+
+.ui-action--secondary {
+  border-color: #bac6d4;
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.ui-action--secondary:hover { background: #f5f8fb; }
+
+.ui-action--unavailable {
+  border-color: var(--rule);
+  background: #f2f4f6;
+  color: var(--muted);
+}
+
+/* Schedule strip: one low band that lays task milestones alongside the family
+   calendar. It shares a fixed frame with three taller briefs, so everything —
+   header, dots, labels, times — sits on a single baseline row and never wraps
+   into a second line the frame has no room for. */
+.ui-card--schedule-strip {
+  flex-direction: row;
+  align-items: center;
+  gap: clamp(14px, 1.6vw, 28px);
+  border-top: 1px solid var(--quiet-rule);
+}
+
+.ui-schedule-strip__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.ui-schedule-strip__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.ui-schedule-strip__track {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: clamp(14px, 1.8vw, 32px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+
+.ui-schedule-strip__milestone {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* The connecting stroke between neighbouring points. */
+.ui-schedule-strip__milestone + .ui-schedule-strip__milestone::before {
+  content: '';
+  width: clamp(12px, 1.4vw, 26px);
+  height: 1px;
+  background: var(--rule);
+  margin-right: clamp(6px, 0.8vw, 12px);
+}
+
+/* Solid = the task's own milestones; hollow = the family calendar's. */
+.ui-schedule-strip__dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.ui-schedule-strip__milestone[data-kind="task"] .ui-schedule-strip__dot { background: var(--blue); }
+
+.ui-schedule-strip__milestone[data-kind="calendar"] .ui-schedule-strip__dot {
+  background: transparent;
+  border: 2px solid var(--muted);
+}
+
+.ui-schedule-strip__milestone[data-status="at-risk"] .ui-schedule-strip__dot {
+  background: transparent;
+  border-color: var(--amber);
+}
+
+.ui-schedule-strip__label {
+  font-size: 16px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-schedule-strip__time {
+  font-size: 17px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.ui-schedule-strip__milestone[data-kind="calendar"] .ui-schedule-strip__label,
+.ui-schedule-strip__milestone[data-kind="calendar"] .ui-schedule-strip__time { color: var(--muted); }
+
+.ui-schedule-strip__milestone[data-status="at-risk"] .ui-schedule-strip__label,
+.ui-schedule-strip__milestone[data-status="at-risk"] .ui-schedule-strip__time { color: var(--amber); }
+
+.ui-schedule-strip__risk {
+  flex: none;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--amber-pale);
+  color: var(--amber);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* Four briefs only ever share the frame when the schedule strip joins the three
+   preparing cards. The heroes each give back a notch of size and the stack a
+   notch of air, so the band fits the fixed frame without anyone scrolling —
+   and three-card layouts keep their exact metrics. */
+.ui-spec-renderer[data-component-count="4"] .ui-slot { gap: clamp(8px, 1.2vh, 14px); }
+/* The component grid always reserves its action row's gap, actions or not; with
+   four briefs those empty 16px seams are exactly the height the strip needs. */
+.ui-spec-renderer[data-component-count="4"] .ui-component { gap: 8px; }
+.ui-spec-renderer[data-component-count="4"] .ui-card { padding-block: 2px; }
+.ui-spec-renderer[data-component-count="4"] .ui-navigation-eta { font-size: clamp(88px, 6.2vw, 104px); }
+.ui-spec-renderer[data-component-count="4"] .ui-flight-brief__time { font-size: clamp(52px, 5.5vw, 80px); }
+.ui-spec-renderer[data-component-count="4"] .ui-card__lead--recommendation { font-size: clamp(36px, 3.4vw, 50px); }
+.ui-spec-renderer[data-component-count="4"] .ui-flight-brief__arrival { margin-top: clamp(16px, 2.5vh, 34px); }
+.ui-spec-renderer[data-component-count="4"] .ui-flight-brief__facts { margin-top: clamp(14px, 2vh, 24px); }
+.ui-spec-renderer[data-component-count="4"] .ui-navigation-hero { margin-top: clamp(10px, 1.5vh, 20px); }
+.ui-spec-renderer[data-component-count="4"] .ui-battery-journey { margin-top: clamp(12px, 2vh, 25px); }
+.ui-spec-renderer[data-component-count="4"] .ui-card__lead--recommendation { margin-top: clamp(10px, 1.5vh, 18px); }
+
+.ui-spec-renderer[data-density="compact"] .ui-card__eyebrow { font-size: 14px; }
+
+.ui-spec-renderer[data-density="compact"] .ui-card__summary,
+.ui-spec-renderer[data-density="compact"] .ui-card__body > p { font-size: 18px; }
+
+.ui-spec-renderer[data-density="compact"] .ui-metric__value { font-size: clamp(25px, 2vw, 39px); }
+
+/* A compact flight card still leads with its supplied arrival time. */
+.ui-spec-renderer[data-density="compact"] .ui-flight-brief__time {
+  font-size: clamp(64px, 5.8vw, 94px) !important;
+}
+
+.ui-spec-renderer[data-density="minimal"] {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.ui-spec-renderer[data-density="minimal"] .ui-card__eyebrow,
+.ui-spec-renderer[data-density="minimal"] .ui-route-facts,
+.ui-spec-renderer[data-density="minimal"] .ui-cabin-grid,
+.ui-spec-renderer[data-density="minimal"] .ui-detail-row,
+.ui-spec-renderer[data-density="minimal"] .ui-card__summary,
+.ui-spec-renderer[data-density="minimal"] .ui-card__muted,
+.ui-spec-renderer[data-density="minimal"] .ui-card--schedule-strip,
+.ui-spec-renderer[data-density="minimal"] .ui-metric--comparison { display: none; }
+
+.ui-spec-renderer[data-density="minimal"] .ui-card__lead { margin-top: 16px; }
+
+/* Compact driving states favour the legal conclusion over a decorative full-height spread. */
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary,
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--passenger-status,
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--cabin-profile {
+  justify-content: flex-start;
+}
+
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary .ui-route-facts,
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--passenger-status .ui-passenger-brief__meeting-point,
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--cabin-profile .ui-cabin-brief__state {
+  margin-top: clamp(28px, 5vh, 54px);
+}
+
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary .ui-route-facts {
+  width: min(100%, 620px);
+  margin-top: clamp(32px, 6vh, 68px);
+}
+
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary .ui-navigation-brief__route-rule {
+  margin-top: 18px;
+}
+
+.ui-spec-renderer[data-density="compact"][data-single-component="true"] .ui-card--navigation-summary
+  .ui-route-sketch + .ui-route-facts {
+  margin-top: clamp(20px, 3vh, 34px);
+}
+
+/* Minimal density is a glance, not a read: the drawing and its stop names go,
+   the same way every other supporting band does. */
+.ui-spec-renderer[data-density="minimal"] .ui-navigation-brief__route-rule.ui-route-sketch { display: none; }
+
+.ui-spec-renderer[data-priority="high"] .ui-card:first-child::before { background: var(--amber); }
+
+.ui-spec-renderer[data-priority="critical"] .ui-card:first-child::before { background: var(--red); }
+
+/* ---------------------------------------------------------------------------
+   Stacked briefs
+   Every card above is scaled for a brief that owns the whole frame: vh-based
+   band margins, a 108-146px ETA, a 60-108px arrival time. Two or three of them
+   in one 505px slot cannot all keep that spread, and the frame is fixed, so the
+   only honest lever is the editorial scale. Supporting facts compress first and
+   each card keeps its conclusion as the largest thing in its band, per DESIGN
+   "At 1024px and above, compress supporting facts before reducing the primary
+   conclusion". Nothing is dropped: every supplied fact still renders.
+   --------------------------------------------------------------------------- */
+.ui-spec-renderer[data-single-component="false"] .ui-card__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__source,
+.ui-spec-renderer[data-single-component="false"] .ui-charge-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-message-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-progress-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__eyebrow,
+.ui-spec-renderer[data-single-component="false"] .ui-pickup-brief__phase {
+  margin-bottom: 3px;
+  font-size: 15px;
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__title,
+.ui-spec-renderer[data-single-component="false"] .ui-charge-brief__title,
+.ui-spec-renderer[data-single-component="false"] .ui-message-brief__contact,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__title,
+.ui-spec-renderer[data-single-component="false"] .ui-progress-brief__title,
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__destination {
+  font-size: clamp(24px, 1.55vw, 31px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card--flight-status .ui-card__title,
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__number {
+  font-size: clamp(29px, 1.95vw, 38px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-metric__value,
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-eta,
+.ui-spec-renderer[data-single-component="false"] .ui-card--flight-status .ui-metric--hero .ui-metric__value {
+  font-size: clamp(23px, 1.55vw, 31px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-metric__label { font-size: 15px; }
+
+/* The one number each band is built around stays clearly ahead of its facts. */
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__time,
+.ui-spec-renderer[data-single-component="false"][data-density="compact"] .ui-flight-brief__time {
+  font-size: clamp(44px, 3.1vw, 60px) !important;
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-eta {
+  margin-top: 6px;
+  font-size: clamp(46px, 3.3vw, 64px);
+  line-height: 0.9;
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__lead--recommendation {
+  font-size: clamp(32px, 2.3vw, 44px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__lead {
+  font-size: clamp(34px, 2.6vw, 50px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-message-preview {
+  margin-top: clamp(14px, 2vh, 22px);
+  font-size: clamp(22px, 1.7vw, 32px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__lead {
+  margin-top: clamp(12px, 1.6vh, 20px);
+  font-size: clamp(28px, 2.2vw, 40px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__summary,
+.ui-spec-renderer[data-single-component="false"] .ui-card__body > p {
+  margin-top: 10px;
+  font-size: 17px;
+}
+
+/* Inter-band spacing was tuned for one card breathing into the whole slot. */
+.ui-spec-renderer[data-single-component="false"] .ui-route-facts,
+.ui-spec-renderer[data-single-component="false"] .ui-hero-metrics,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-grid,
+.ui-spec-renderer[data-single-component="false"] .ui-card--flight-status .ui-hero-metrics,
+.ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary .ui-route-facts,
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__facts,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__facts,
+.ui-spec-renderer[data-single-component="false"] .ui-battery-journey,
+.ui-spec-renderer[data-single-component="false"] .ui-callout,
+.ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__meeting-point {
+  margin-top: clamp(14px, 2vh, 22px);
+  padding-top: clamp(10px, 1.4vh, 16px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-flight-brief__arrival,
+.ui-spec-renderer[data-single-component="false"] .ui-navigation-hero,
+.ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__status,
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__state,
+.ui-spec-renderer[data-single-component="false"] .ui-card__lead--recommendation {
+  margin-top: clamp(12px, 1.8vh, 20px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__state {
+  padding-top: clamp(10px, 1.4vh, 16px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card--attention::before,
+.ui-spec-renderer[data-single-component="false"] .ui-card--settled::before {
+  margin-bottom: clamp(8px, 1.2vh, 14px);
+}
+
+.ui-spec-renderer[data-single-component="false"] .ui-card__status-line,
+.ui-spec-renderer[data-single-component="false"] .ui-detail-row,
+.ui-spec-renderer[data-single-component="false"] .ui-charge-brief__reason,
+.ui-spec-renderer[data-single-component="false"] .ui-message-brief__status,
+.ui-spec-renderer[data-single-component="false"] .ui-card--message-preview .ui-card__status-line {
+  margin-top: 10px;
+}
+
+/* At desktop widths a shared frame reads better as a row of bands than as a
+   column of tall cards. `flight-status` already resolves this way; the other
+   stackable briefs follow the same header / conclusion / facts anatomy. */
+@media (min-width: 1180px) {
+  .ui-spec-renderer[data-single-component="false"] .ui-card--flight-status {
+    grid-template-columns: minmax(180px, 0.7fr) auto minmax(320px, 1.25fr);
+    column-gap: clamp(26px, 2.6vw, 50px);
+    padding-block: clamp(4px, 0.8vh, 10px);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__arrival {
+    padding-inline: clamp(24px, 2.6vw, 48px);
+  }
+
+  /* The flight facts read as a band of parallel facts, not a tall side column. */
+  .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__facts {
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    grid-template-columns: none;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__facts .ui-metric + .ui-metric {
+    margin-top: 0;
+    padding-top: 0;
+    padding-left: clamp(12px, 1.3vw, 24px);
+    border-top: 0;
+    border-left: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(200px, 0.85fr) auto minmax(300px, 1.1fr);
+    grid-template-rows: auto auto;
+    column-gap: clamp(26px, 2.6vw, 50px);
+    row-gap: 8px;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__header {
+    grid-row: 1;
+    grid-column: 1;
+    align-self: end;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__route-rule {
+    grid-row: 2;
+    grid-column: 1;
+    align-self: start;
+    margin-top: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__eta {
+    grid-row: 1 / -1;
+    grid-column: 2;
+    margin-top: 0;
+    padding-inline: clamp(24px, 2.6vw, 48px);
+    border-inline: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__facts {
+    width: auto;
+    grid-row: 1 / -1;
+    grid-column: 3;
+    margin-top: 0;
+    padding-top: 0;
+  }
+
+  /* The three-column band above assumes the card spans the task surface: its
+     200px + auto + 300px tracks need ~817px, so in the split layout's narrow
+     rail the facts overflowed the card and 到达电量 fell outside it entirely.
+     Beside a map the card is a tall rail, so stack the same regions instead of
+     banding them — no track floor, nothing to clip. */
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-card--navigation-summary {
+    align-content: center;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+    row-gap: clamp(12px, 2vh, 22px);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__header,
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__route-rule,
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__eta,
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__facts {
+    grid-row: auto;
+    grid-column: 1;
+    align-self: start;
+  }
+
+  /* The rules that separated the banded columns would now cut across the stack. */
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__eta {
+    padding-inline: 0;
+    border-inline: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--charging-recommendation {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(200px, 0.85fr) auto minmax(280px, 1fr);
+    grid-template-rows: auto auto auto;
+    column-gap: clamp(26px, 2.6vw, 50px);
+    row-gap: 8px;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--charging-recommendation::before {
+    grid-row: 1;
+    grid-column: 1;
+    align-self: start;
+    margin-bottom: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__header {
+    grid-row: 2;
+    grid-column: 1;
+    align-self: end;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__reason {
+    grid-row: 3;
+    grid-column: 1;
+    align-self: start;
+    max-width: 30ch;
+    margin-top: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__recommendation {
+    grid-row: 2 / -1;
+    grid-column: 2;
+    margin-top: 0;
+    padding-inline: clamp(24px, 2.6vw, 48px);
+    border-inline: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__battery {
+    grid-row: 2;
+    grid-column: 3;
+    align-self: end;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-charge-brief__detail {
+    grid-row: 3;
+    grid-column: 3;
+    align-self: start;
+    margin-top: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--passenger-status {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(200px, 1fr) auto auto;
+    column-gap: clamp(26px, 2.6vw, 50px);
+    padding-block: clamp(4px, 0.8vh, 10px);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__header { grid-column: 1; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__status,
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__meeting-point {
+    margin-top: 0;
+    padding-top: 0;
+    padding-inline-start: clamp(24px, 2.6vw, 48px);
+    border-top: 0;
+    border-inline-start: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__status { grid-column: 2; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-passenger-brief__meeting-point { grid-column: 3; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-card--cabin-profile {
+    display: grid;
+    align-items: center;
+    grid-template-columns: minmax(200px, 0.9fr) minmax(0, 1.1fr) auto;
+    column-gap: clamp(26px, 2.6vw, 50px);
+    padding-block: clamp(4px, 0.8vh, 10px);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__header { grid-column: 1; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__facts,
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__state {
+    margin-top: 0;
+    padding-top: 0;
+    padding-inline-start: clamp(24px, 2.6vw, 48px);
+    border-top: 0;
+    border-inline-start: 1px solid var(--rule);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__facts { grid-column: 2; }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-brief__state { grid-column: 3; }
+}
+
+.drawer-scrim {
+  position: fixed;
+  z-index: 10;
+  inset: 0;
+  border: 0;
+  background: rgba(16, 32, 51, 0.19);
+}
+
+.event-console {
+  position: fixed;
+  z-index: 11;
+  top: 18px;
+  right: 18px;
+  bottom: 18px;
+  width: min(370px, calc(100vw - 36px));
+  overflow-y: auto;
+  padding: 28px;
+  border: 1px solid var(--rule);
+  border-radius: 16px;
+  background: #ffffff;
+  box-shadow: -12px 18px 44px rgba(16, 32, 51, 0.16);
+  animation: drawer-in 200ms ease both;
+}
+
+.console-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding-bottom: 22px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.console-kicker {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.console-heading h2 {
+  margin: 0;
+  color: var(--ink);
+  font-size: 28px;
+  letter-spacing: -0.035em;
+}
+
+.console-close {
+  width: 44px;
+  flex: 0 0 auto;
+  padding: 0;
+}
+
+.console-phase {
+  display: grid;
+  gap: 7px;
+  padding: 22px 0;
+  border-bottom: 1px solid var(--rule);
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.console-phase strong {
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", monospace;
+  font-size: 23px;
+}
+
+.revision-grid {
+  display: grid;
+  margin: 0;
+  padding: 22px 0;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px 12px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.revision-grid div { min-width: 0; }
+
+.revision-grid dt {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.revision-grid dd {
+  overflow: hidden;
+  margin: 6px 0 0;
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", monospace;
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-progress { padding: 22px 0; }
+
+.console-progress__copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.console-progress__copy strong {
+  color: var(--ink);
+  font-family: Bahnschrift, "DIN Alternate", monospace;
+  font-size: 22px;
+}
+
+.progress-track {
+  height: 5px;
+  margin-top: 12px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: #e3e8ee;
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  background: var(--blue);
+}
+
+.advance-button { width: 100%; }
+
+.advance-button:disabled {
+  background: #dbe2ea;
+  color: #8491a1;
+}
+
+.console-hint {
+  margin: 18px 0 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.console-voice-fallback {
+  margin-top: 22px;
+  border-top: 1px solid var(--rule);
+  padding-top: 22px;
+}
+
+.console-voice-fallback__title {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.console-voice-fallback__actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.voice-fallback-button {
+  min-height: 56px;
+  border: 1px solid #bac6d4;
+  border-radius: 12px;
+  padding: 0 16px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 600;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.voice-fallback-button:hover:not(:disabled) { background: #f5f8fb; }
+
+.voice-fallback-button:disabled {
+  border-color: var(--rule);
+  background: #f2f4f6;
+  color: var(--muted);
+}
+
+@keyframes phase-settle {
+  from { opacity: 0.65; transform: translateY(7px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes drawer-in {
+  from { opacity: 0; transform: translateX(18px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@media (max-width: 1024px) {
+  .cockpit-stage { padding: 18px 24px; }
+
+  .task-surface { width: 100%; }
+
+  .trip-brief__content { padding: 28px 34px; }
+
+  .ui-layout--split { grid-template-columns: minmax(0, 1.2fr) minmax(250px, 0.8fr); }
+
+  .ui-navigation-eta { font-size: clamp(86px, 11vw, 126px); }
+}
+
+@media (max-width: 680px) {
+  .demo-shell {
+    min-height: 100dvh;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .cockpit-stage {
+    display: block;
+    height: auto;
+    min-height: 100dvh;
+    padding: 12px;
+  }
+
+  .task-surface {
+    height: auto;
+    min-height: calc(100dvh - 24px);
+    overflow: visible;
+    border-radius: 16px;
+  }
+
+  .trip-brief__header {
+    min-height: 66px;
+    gap: 12px;
+    padding: 0 16px;
+  }
+
+  .brand-wordmark { font-size: 24px; }
+
+  .brand-separator,
+  .trip-brief__phase { font-size: 16px; }
+
+  .header-actions { gap: 6px; }
+
+  .mic-button,
+  .keyboard-toggle,
+  .control-toggle { min-height: 40px; padding: 0 10px; font-size: 14px; }
+
+  .mic-button span,
+  .keyboard-toggle span { display: none; }
+
+  .voice-status { padding: 0 16px; font-size: 15px; }
+
+  .voice-composer {
+    margin: 12px 16px 0;
+    padding: 12px;
+  }
+
+  .voice-composer__row { flex-wrap: wrap; }
+
+  .voice-composer__input {
+    min-height: 44px;
+    flex: 1 1 100%;
+    font-size: 16px;
+  }
+
+  .voice-composer__send {
+    min-height: 44px;
+    flex: 1 1 0;
+    padding: 0 12px;
+    font-size: 15px;
+  }
+
+  .trip-brief__content { padding: 24px 18px 22px; }
+
+  .task-heading { padding-bottom: 18px; }
+
+  .task-heading h1 { font-size: clamp(36px, 10vw, 52px); }
+
+  .ui-spec-renderer {
+    height: auto;
+    min-height: 0;
+    padding-top: 18px;
+  }
+
+  .ui-spec-renderer[data-single-component="true"] .ui-layout,
+  .ui-spec-renderer[data-single-component="true"] .ui-slot,
+  .ui-spec-renderer[data-single-component="true"] .ui-component {
+    width: 100%;
+    height: auto;
+  }
+
+  .ui-layout,
+  .ui-layout--row,
+  .ui-layout--split { grid-template-columns: minmax(0, 1fr); }
+
+  .ui-layout--row .ui-slot { display: grid; }
+
+  .ui-layout--stack .ui-slot,
+  .ui-layout--focus .ui-slot,
+  .ui-spec-renderer[data-single-component="true"] .ui-slot { grid-template-rows: none; }
+
+  .ui-layout--stack .ui-component,
+  .ui-layout--focus .ui-component,
+  .ui-spec-renderer[data-single-component="true"] .ui-component { height: auto; }
+
+  .ui-card { height: auto; min-height: 0; }
+
+  /* Once the split has collapsed to one column, the map is stacked above the
+     cards instead of beside them. It gets a band of the fold rather than the
+     `display: none` the in-card sketch takes: a route panel that vanishes on a
+     narrow screen leaves the driver with no picture of the trip at all, and the
+     cards below it still have to fit, so it is compressed, not dropped. */
+  .ui-card--route-map {
+    height: clamp(160px, 26vh, 240px);
+    max-height: 34vh;
+  }
+
+  .ui-spec-renderer[data-single-component="true"] .ui-card {
+    min-height: 0;
+  }
+
+  .ui-spec-renderer[data-single-component="true"] .ui-card--status-banner,
+  .ui-spec-renderer[data-single-component="true"] .ui-card--alert,
+  .ui-spec-renderer[data-single-component="true"] .ui-card--fallback {
+    width: 100%;
+    padding-top: 14px;
+  }
+
+  .ui-card--status-banner,
+  .ui-card--alert { justify-content: flex-start; }
+
+  .ui-card--navigation-summary .ui-route-facts,
+  .ui-card--passenger-status .ui-passenger-brief__meeting-point,
+  .ui-card--cabin-profile .ui-cabin-brief__state,
+  .ui-card--passenger-status:not(:has(.ui-passenger-brief__meeting-point)) .ui-passenger-brief__status {
+    margin-top: 28px;
+  }
+
+  .ui-card--navigation-summary .ui-route-facts,
+  .ui-card--cabin-profile .ui-cabin-brief__state {
+    padding-top: 22px;
+  }
+
+  .ui-card__title,
+  .ui-card--flight-status .ui-card__title { font-size: clamp(27px, 7.5vw, 40px); }
+
+  .ui-card--passenger-status .ui-card__title,
+  .ui-card--status-banner .ui-card__title,
+  .ui-card--alert .ui-card__title { font-size: clamp(36px, 10vw, 54px); }
+
+  .ui-card__lead,
+  .ui-card__lead--recommendation { font-size: clamp(34px, 9vw, 50px); }
+
+  .ui-navigation-eta { font-size: clamp(82px, 24vw, 122px); }
+
+  .ui-route-facts,
+  .ui-hero-metrics,
+  .ui-cabin-grid,
+  .ui-card--pickup-overview .ui-route-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  /* Two to a row is what the cabin grid wants here for two metrics or three, and
+     the rule above already says so. A lone metric is the case it does not cover,
+     and restating it inside the breakpoint is cheaper than asking a reader to work
+     out which of the two selectors is the more specific. */
+  .ui-cabin-grid:has(> .ui-metric:first-child:last-child) { grid-template-columns: minmax(0, 1fr); }
+
+  .ui-metric:nth-child(odd) { border-left: 0; padding-left: 0; }
+
+  .ui-metric:nth-child(even) { border-left: 1px solid var(--rule); }
+
+  .ui-metric:nth-child(n + 3) {
+    margin-top: 18px;
+    padding-top: 18px;
+    border-top: 1px solid var(--rule);
+  }
+
+  .ui-metric__value { font-size: clamp(24px, 7vw, 36px); }
+
+  .ui-card--flight-status .ui-metric--hero .ui-metric__value { font-size: clamp(44px, 12vw, 62px); }
+
+  .ui-card--navigation-summary .ui-metric + .ui-metric { border-left: 1px solid var(--rule); }
+
+  .ui-progress {
+    margin-top: 32px;
+    padding-top: 0;
+    overflow: hidden;
+  }
+
+  .ui-progress__label { font-size: 12px; }
+
+  .ui-progress__step small { display: none; }
+
+  .ui-card__actions,
+  .ui-actions {
+    grid-template-columns: minmax(0, 1fr);
+    padding-top: 12px;
+  }
+
+  .ui-action { min-height: 58px; font-size: 17px; }
+
+  .event-console {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    max-height: min(76dvh, 620px);
+    border: 1px solid var(--rule);
+    border-radius: 16px 16px 0 0;
+    padding: 20px;
+    animation-name: sheet-in;
+  }
+
+  .drawer-scrim { background: rgba(16, 32, 51, 0.26); }
+}
+
+@media (max-width: 420px) {
+  .trip-brief__header { gap: 8px; padding: 0 12px; }
+
+  .brand-lockup { gap: 6px; }
+
+  .brand-wordmark { font-size: 22px; }
+
+  .brand-separator,
+  .trip-brief__phase { font-size: 14px; }
+
+  .keyboard-toggle,
+  .control-toggle { width: 40px; padding: 0; }
+
+  .control-toggle span { display: none; }
+}
+
+@keyframes sheet-in {
+  from { opacity: 0; transform: translateY(18px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/*
+ * The demo drawer is the only place engineering metadata is allowed to appear, so its
+ * effect receipts read as a technical log rather than as a trip fact.
+ */
+.console-effects {
+  margin: 0;
+  color: var(--muted);
+  font-family: Bahnschrift, "DIN Alternate", monospace;
+  font-size: 15px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  /* Exactly two lines, always. Receipts arrive over SSE while the drawer is
+     open; a line that grows or appears would move the advance button under
+     the user's pointer. Longer logs scroll inside the box instead. */
+  height: calc(2 * 1.6em);
+  overflow-y: auto;
+}
+
+.console-effects[data-empty] { color: var(--rule); }
+
+/*
+ * A failed request is not a trip fact. It sits between the input and the journey
+ * content, uses the failure colour, and never dresses itself up as a journey card.
+ */
+.brief-error {
+  flex: 0 0 auto;
+  margin: 0 clamp(20px, 2.4vw, 44px) 12px;
+  padding: 12px 16px;
+  border: 1px solid var(--red);
+  border-radius: 12px;
+  background: var(--red-pale);
+  color: var(--red);
+  font-size: 17px;
+}
+
+/* Before the first task the brief invites the driver instead of showing an empty frame. */
+.brief-placeholder {
+  margin: 0;
+  color: var(--muted);
+  font-size: clamp(19px, 1.5vw, 24px);
+  line-height: 1.55;
+}

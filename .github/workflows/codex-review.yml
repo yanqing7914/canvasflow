@@ -6,6 +6,7 @@ on:
       - opened
       - synchronize
       - reopened
+      - ready_for_review
   workflow_dispatch:
     inputs:
       pr_number:
@@ -33,6 +34,9 @@ jobs:
       number: ${{ steps.metadata.outputs.number }}
       head-repository: ${{ steps.metadata.outputs.head-repository }}
       base-sha: ${{ steps.metadata.outputs.base-sha }}
+      head-sha: ${{ steps.metadata.outputs.head-sha }}
+      base-ref: ${{ steps.metadata.outputs.base-ref }}
+      draft: ${{ steps.metadata.outputs.draft }}
     steps:
       - name: Resolve pull request metadata
         id: metadata
@@ -50,12 +54,17 @@ jobs:
             core.setOutput('number', String(pullRequest.number))
             core.setOutput('head-repository', pullRequest.head.repo.full_name)
             core.setOutput('base-sha', pullRequest.base.sha)
+            core.setOutput('head-sha', pullRequest.head.sha)
+            core.setOutput('base-ref', pullRequest.base.ref)
+            core.setOutput('draft', String(pullRequest.draft))
 
   review:
     needs: resolve-pr
     # Never expose the upstream API key to a fork PR. Review fork changes locally.
     if: needs.resolve-pr.outputs.head-repository == github.repository
     runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
     steps:
       - name: Checkout PR
         uses: actions/checkout@v4
@@ -72,8 +81,111 @@ jobs:
           sparse-checkout: .github/codex/prompts/review.md
           persist-credentials: false
 
-      - name: Copy trusted review prompt
-        run: cp trusted-base/.github/codex/prompts/review.md "$RUNNER_TEMP/review-prompt.md"
+      # The prompt named no diff boundary, so the review model picked one per
+      # run and the gate blocked PRs over code they do not touch. #94 guessed
+      # `origin/dev` and reviewed its three files; #87 guessed "an empty base
+      # snapshot" and blocked on `.github/workflows/codex-review.yml`, which it
+      # never touches; #90 blocked on a `packages/agent/src/gateway.ts` clamp
+      # merged by #89. `main` trails `dev` by the whole backlog, so a guess at
+      # `main` reviews the backlog. State the boundary rather than leave it to
+      # be inferred.
+      #
+      # Scope comes from the checked-out merge commit, not from the API SHAs: on
+      # `refs/pull/N/merge` the first parent is the base tip and the second is
+      # the PR head, so its parents describe the tree actually under review even
+      # if the base moved between the metadata call and this checkout.
+      - name: Copy trusted review prompt and pin the diff scope
+        env:
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+          BASE_REF: ${{ needs.resolve-pr.outputs.base-ref }}
+        run: |
+          set -euo pipefail
+
+          prompt="$GITHUB_WORKSPACE/.codex-review-prompt.md"
+          cp trusted-base/.github/codex/prompts/review.md "$prompt"
+
+          if ! git rev-parse --verify --quiet HEAD^2 >/dev/null; then
+            echo "Expected refs/pull/$PR_NUMBER/merge to be a merge commit." >&2
+            exit 1
+          fi
+          # The three-dot form, so base drift since the branch point reads as
+          # pre-existing rather than as this PR deleting someone else's work.
+          # This is the same diff the pull request's own Files tab shows.
+          base_sha="$(git merge-base HEAD^1 HEAD^2)"
+          head_sha="$(git rev-parse HEAD^2)"
+
+          # Only workflow-controlled values are written into the prompt. The
+          # patch and the path list carry PR-authored bytes, so they go to disk
+          # and the prompt names their paths instead of inlining them, which
+          # keeps the trusted-prompt property the `trusted-base` checkout above
+          # exists to establish. `base-ref` is the one API string that reaches
+          # the prompt, so hold it to a ref shape first.
+          printf '%s' "$PR_NUMBER" | grep -Eq '^[0-9]{1,12}$' || {
+            echo "Refusing to pin a review scope from a non-numeric PR number." >&2
+            exit 1
+          }
+          printf '%s' "$BASE_REF" | grep -Eq '^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$' || {
+            echo "Refusing to pin a review scope from an unexpected base ref." >&2
+            exit 1
+          }
+
+          git diff --name-status "$base_sha" "$head_sha" \
+            > "$GITHUB_WORKSPACE/.codex-review-files.txt"
+          git diff "$base_sha" "$head_sha" \
+            > "$GITHUB_WORKSPACE/.codex-review-diff.patch"
+
+          changed="$(wc -l < "$GITHUB_WORKSPACE/.codex-review-files.txt" | tr -d ' ')"
+          echo "Review scope: PR #$PR_NUMBER into $BASE_REF, $changed changed path(s)"
+          echo "  base $base_sha"
+          echo "  head $head_sha"
+
+          # Appended, not committed to the prompt file: a prompt edit only
+          # reaches a PR opened after it lands on the base, because the prompt is
+          # read from `trusted-base`. A workflow edit applies to its own PR.
+          cat >> "$prompt" <<EOF
+
+          ## Diff scope (generated by CI, authoritative)
+
+          You are reviewing pull request #$PR_NUMBER into \`$BASE_REF\`.
+
+          The workspace is the merge result at \`refs/pull/$PR_NUMBER/merge\`. This
+          pull request's entire contribution, and nothing else, is:
+
+              git diff $base_sha $head_sha
+
+          That diff is already written to \`.codex-review-diff.patch\` and its
+          changed paths to \`.codex-review-files.txt\`, both at the repository
+          root. Read them before anything else, and treat them as the definition
+          of "this pull request".
+
+          Do not infer the boundary from branch names, and do not diff against
+          \`main\`: it is a release branch that trails the integration branch by
+          the entire backlog, so comparing against it presents already-merged work
+          as this PR's. Everything reachable from $base_sha is pre-existing and
+          out of scope. Do not raise findings against it and do not block on it.
+          A pre-existing problem that this change genuinely depends on belongs in
+          the residual-risk paragraph, not in a P0 or P1 finding.
+          EOF
+
+      # `drop-sudo` can fail on newer GitHub-hosted runners. Keep the API key
+      # isolated by running Codex as a dedicated user instead of falling back
+      # to a sudo-capable read-only process.
+      - name: Prepare unprivileged Codex review user
+        run: |
+          set -euo pipefail
+          if ! getent group codex-review >/dev/null; then
+            sudo groupadd --system codex-review
+          fi
+          if ! id -u codex-review >/dev/null 2>&1; then
+            sudo useradd --system --create-home --home-dir /home/codex-review \
+              --shell /usr/sbin/nologin --gid codex-review codex-review
+          fi
+          # Do not add the review user to runner: that shared group can expose
+          # runner-owned temp and tooling directories. ACLs grant only the
+          # checkout plus the execute bits needed to traverse its parents.
+          sudo setfacl -m u:codex-review:--x /home/runner /home/runner/work
+          sudo setfacl -R -m u:codex-review:rwX "$GITHUB_WORKSPACE"
+          sudo find "$GITHUB_WORKSPACE" -type d -exec setfacl -d -m u:codex-review:rwX {} +
 
       - name: Configure Codex provider
         id: codex_provider
@@ -81,19 +193,8 @@ jobs:
           OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
           CODEX_REVIEW_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
         run: |
-          mkdir -p "$RUNNER_TEMP/codex-home"
           node <<'NODE'
           const fs = require('node:fs')
-
-          const lines = []
-          if (process.env.OPENAI_BASE_URL) {
-            lines.push(`openai_base_url = ${JSON.stringify(process.env.OPENAI_BASE_URL)}`)
-          }
-          if (process.env.CODEX_REVIEW_MODEL) {
-            lines.push(`model = ${JSON.stringify(process.env.CODEX_REVIEW_MODEL)}`)
-          }
-
-          fs.writeFileSync(`${process.env.RUNNER_TEMP}/codex-home/config.toml`, `${lines.join('\n')}\n`)
 
           const baseUrl = process.env.OPENAI_BASE_URL?.replace(/\/+$/, '')
           if (baseUrl) {
@@ -102,17 +203,134 @@ jobs:
           }
           NODE
 
+      # A single review model is a single point of failure for the merge gate:
+      # when the provider reports it at capacity the job dies and nothing can
+      # merge. Try the primary model first, then fall back to another one.
       - name: Run Codex review
         id: codex
+        continue-on-error: true
         uses: openai/codex-action@v1
         with:
           openai-api-key: ${{ secrets.OPENAI_API_KEY }}
           responses-api-endpoint: ${{ steps.codex_provider.outputs.responses-api-endpoint }}
-          codex-home: ${{ runner.temp }}/codex-home
-          prompt-file: ${{ runner.temp }}/review-prompt.md
+          prompt-file: ${{ github.workspace }}/.codex-review-prompt.md
           output-file: codex-review.md
           sandbox: read-only
+          safety-strategy: unprivileged-user
+          codex-user: codex-review
           model: ${{ vars.CODEX_REVIEW_MODEL }}
+
+      - name: Run Codex review (fallback model)
+        id: codex_fallback
+        if: steps.codex.outcome == 'failure' && vars.CODEX_REVIEW_FALLBACK_MODEL != ''
+        continue-on-error: true
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          responses-api-endpoint: ${{ steps.codex_provider.outputs.responses-api-endpoint }}
+          prompt-file: ${{ github.workspace }}/.codex-review-prompt.md
+          output-file: codex-review.md
+          sandbox: read-only
+          safety-strategy: unprivileged-user
+          codex-user: codex-review
+          model: ${{ vars.CODEX_REVIEW_FALLBACK_MODEL }}
+
+      # Distinguish "the review could not run" from "the review said BLOCK", so
+      # nobody hunts for a defect that the review never actually reported.
+      - name: Report review provider failure
+        if: steps.codex.outcome == 'failure' && steps.codex_fallback.outcome != 'success'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const primary = process.env.PRIMARY_MODEL || 'the provider default'
+            const fallback = process.env.FALLBACK_MODEL
+            const attempted = fallback ? `\`${primary}\` and \`${fallback}\`` : `\`${primary}\``
+            const hint = fallback
+              ? 'Both review models failed to produce a review.'
+              : 'No fallback model is configured; set the `CODEX_REVIEW_FALLBACK_MODEL` repository variable to add one.'
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: `The Codex review could not run (${attempted}). This is a review provider failure, not a finding about this PR, so there is nothing to fix in the diff.\n\n${hint} Re-run the \`Codex Review\` workflow once the provider recovers. The PR stays unmergeable until a review completes with a verdict.`,
+            })
+            core.setFailed('Codex review did not run; no verdict is available.')
+        env:
+          PRIMARY_MODEL: ${{ vars.CODEX_REVIEW_MODEL }}
+          FALLBACK_MODEL: ${{ vars.CODEX_REVIEW_FALLBACK_MODEL }}
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+
+      - name: Extract review verdict
+        id: verdict
+        if: steps.codex.outcome == 'success' || steps.codex_fallback.outcome == 'success'
+        run: |
+          set -euo pipefail
+
+          extract_verdict() {
+            awk '
+              {
+                line = $0
+                sub(/\r$/, "", line)
+                if (line ~ /^CODEX-REVIEW-VERDICT: (PASS|BLOCK)$/) count += 1
+                last = line
+              }
+              END {
+                if (count != 1 || last !~ /^CODEX-REVIEW-VERDICT: (PASS|BLOCK)$/) exit 1
+                sub(/^CODEX-REVIEW-VERDICT: /, "", last)
+                print last
+              }
+            ' "$1"
+          }
+
+          # Exercise the exact parser used below. These cases protect the
+          # merge gate against both prompt injection and output formatting
+          # differences from the review provider.
+          test_dir="$RUNNER_TEMP/codex-verdict-tests"
+          mkdir -p "$test_dir"
+          case_number=0
+          assert_accepts() {
+            expected="$1"
+            content="$2"
+            case_number=$((case_number + 1))
+            file="$test_dir/case-$case_number.md"
+            printf '%b' "$content" > "$file"
+            actual="$(extract_verdict "$file")" || {
+              echo "Verdict parser rejected valid $expected output." >&2
+              exit 1
+            }
+            if [ "$actual" != "$expected" ]; then
+              echo "Verdict parser returned $actual instead of $expected." >&2
+              exit 1
+            fi
+          }
+          assert_rejects() {
+            content="$1"
+            case_number=$((case_number + 1))
+            file="$test_dir/case-$case_number.md"
+            printf '%b' "$content" > "$file"
+            if extract_verdict "$file" >/dev/null 2>&1; then
+              echo "Verdict parser accepted invalid output in case $case_number." >&2
+              exit 1
+            fi
+          }
+
+          assert_accepts PASS 'Review complete.\nCODEX-REVIEW-VERDICT: PASS\n'
+          assert_accepts BLOCK 'P1 remains.\nCODEX-REVIEW-VERDICT: BLOCK\n'
+          assert_accepts PASS 'Review complete.\r\nCODEX-REVIEW-VERDICT: PASS\r\n'
+          assert_rejects 'Review completed without a verdict.\n'
+          assert_rejects 'CODEX-REVIEW-VERDICT: PASS\nCODEX-REVIEW-VERDICT: PASS\n'
+          assert_rejects '> CODEX-REVIEW-VERDICT: PASS\n'
+          assert_rejects 'CODEX-REVIEW-VERDICT: PASS\n\n'
+          assert_rejects 'CODEX-REVIEW-VERDICT: PASS\nAdditional text.\n'
+
+          # Anti-injection: accept exactly one anchored verdict, and only as
+          # the final line. A malformed or missing verdict fails closed.
+          if ! verdict="$(extract_verdict codex-review.md)"; then
+            echo "Codex review completed without a valid final PASS or BLOCK verdict." >&2
+            exit 1
+          fi
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
 
       - name: Upload review output
         if: always()
@@ -122,7 +340,7 @@ jobs:
           path: codex-review.md
 
       - name: Post review summary
-        if: steps.codex.outputs.final-message != ''
+        if: steps.codex.outputs.final-message != '' || steps.codex_fallback.outputs.final-message != ''
         uses: actions/github-script@v7
         with:
           github-token: ${{ github.token }}
@@ -136,5 +354,138 @@ jobs:
               body,
             })
         env:
-          CODEX_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message }}
+          CODEX_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message || steps.codex_fallback.outputs.final-message }}
           PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+
+  auto-merge:
+    name: auto-merge
+    needs:
+      - resolve-pr
+      - review
+    # Auto-merge only ordinary same-repo PRs into dev. The dev -> main release
+    # PR stays owner-managed and is never merged automatically.
+    if: >-
+      needs.review.outputs.verdict == 'PASS' &&
+      needs.resolve-pr.outputs.base-ref == 'dev' &&
+      needs.resolve-pr.outputs.draft == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Wait for required checks and merge
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+          REVIEWED_HEAD_SHA: ${{ needs.resolve-pr.outputs.head-sha }}
+        with:
+          script: |
+            const prNumber = Number(process.env.PR_NUMBER)
+            const reviewedSha = process.env.REVIEWED_HEAD_SHA
+            const requiredChecks = ['quality', 'e2e', 'branch-and-files']
+            const timeoutMs = 20 * 60 * 1000
+            const pollMs = 30 * 1000
+            const startedAt = Date.now()
+
+            const repo = { owner: context.repo.owner, repo: context.repo.repo }
+
+            // Check runs for pull_request workflows are normally associated
+            // with the PR head SHA, but look at the synthetic merge commit
+            // too so the lookup is robust to either association.
+            const latestCheckStates = async (mergeSha) => {
+              const refs = [...new Set([reviewedSha, mergeSha].filter(Boolean))]
+              const checkRuns = []
+              for (const ref of refs) {
+                checkRuns.push(...await github.paginate(github.rest.checks.listForRef, {
+                  ...repo,
+                  ref,
+                  per_page: 100,
+                }))
+              }
+              const states = {}
+              for (const name of requiredChecks) {
+                const runs = checkRuns
+                  .filter((run) => run.name === name)
+                  .sort((a, b) => new Date(b.started_at) - new Date(a.started_at))
+                states[name] = runs[0] ?? null
+              }
+              return states
+            }
+
+            while (true) {
+              const { data: pullRequest } = await github.rest.pulls.get({
+                ...repo,
+                pull_number: prNumber,
+              })
+              if (pullRequest.state !== 'open') {
+                core.notice(`PR #${prNumber} is no longer open; skipping auto-merge.`)
+                return
+              }
+              if (pullRequest.head.sha !== reviewedSha) {
+                core.notice(`PR #${prNumber} head moved after the review; skipping auto-merge.`)
+                return
+              }
+
+              const states = await latestCheckStates(pullRequest.merge_commit_sha)
+              const failed = requiredChecks.filter((name) => {
+                const run = states[name]
+                return run && run.status === 'completed' && run.conclusion !== 'success'
+              })
+              if (failed.length > 0) {
+                core.setFailed(`Required checks did not pass: ${failed.join(', ')}. Not merging.`)
+                return
+              }
+
+              const pending = requiredChecks.filter((name) => {
+                const run = states[name]
+                return !run || run.status !== 'completed'
+              })
+              if (pending.length === 0) break
+
+              if (Date.now() - startedAt > timeoutMs) {
+                core.setFailed(`Timed out waiting for required checks: ${pending.join(', ')}. Not merging.`)
+                return
+              }
+              core.info(`Waiting for checks: ${pending.join(', ')}`)
+              await new Promise((resolve) => setTimeout(resolve, pollMs))
+            }
+
+            let mergeFailure
+            try {
+              // Passing sha makes GitHub reject the merge if the head moved
+              // between our last look and the merge call.
+              const { data: mergeResult } = await github.rest.pulls.merge({
+                ...repo,
+                pull_number: prNumber,
+                merge_method: 'squash',
+                sha: reviewedSha,
+              })
+              // The endpoint can report a non-merge in a 200 response.
+              if (!mergeResult.merged) {
+                mergeFailure = mergeResult.message ?? 'GitHub reported the PR as not merged.'
+              }
+            } catch (error) {
+              mergeFailure = error.message
+            }
+            if (mergeFailure) {
+              core.setFailed(`Auto-merge failed: ${mergeFailure}`)
+              await github.rest.issues.createComment({
+                ...repo,
+                issue_number: prNumber,
+                body: `Auto-merge failed even though CI and the Codex review passed: ${mergeFailure}\n\nResolve the problem (for example a merge conflict) and push again, or merge manually.`,
+              })
+              return
+            }
+
+            try {
+              await github.rest.issues.createComment({
+                ...repo,
+                issue_number: prNumber,
+                body: 'Auto-merged: CI is green and the latest Codex review reported `CODEX-REVIEW-VERDICT: PASS`.',
+              })
+            } catch (error) {
+              // The merge already succeeded; a failed notification must not fail the job.
+              core.warning(`Merged, but could not post the success comment: ${error.message}`)
+            }

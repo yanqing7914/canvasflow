@@ -1,0 +1,12 @@
+{
+  "name": "@canvasflow/tools",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./demo-fixtures": "./src/demo-fixtures.ts"
+  },
+  "scripts": { "build": "tsc --noEmit", "typecheck": "tsc --noEmit" },
+  "dependencies": { "@canvasflow/schema": "0.1.0", "zod": "^4.0.5" }
+}

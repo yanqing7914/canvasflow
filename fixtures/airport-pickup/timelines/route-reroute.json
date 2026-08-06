@@ -1,0 +1,37 @@
+{
+  "id": "route-reroute",
+  "title": "拥堵触发外环改线",
+  "description": "主路线启动后收到拥堵提示，改用带外环 waypoint 的确定性路线草图。",
+  "mode": "fixture",
+  "initialTaskState": { "taskId": "pickup-reroute-001", "surfaceId": "airport-pickup-main", "taskRevision": 0, "uiRevision": 0, "phase": "collecting-information", "passengers": { "memberIds": [], "names": [], "confirmedOnboard": false }, "charging": { "recommended": false, "accepted": false, "status": "none" }, "message": { "autoNotifyAuthorized": true, "status": "idle", "landingNoticeSent": false }, "processedEventIds": [], "updatedAt": "2026-07-22T20:00:00+08:00" },
+  "steps": [
+    {
+      "event": { "eventId": "reroute-task-input", "type": "user.input", "text": "接妈妈，航班 MU5102", "timestamp": "2026-07-22T20:01:00+08:00" },
+      "toolCalls": ["family.resolve-members", "flight.get-status", "navigation.plan-route"],
+      "statePatch": {
+        "passengers": { "memberIds": ["mom"], "names": ["妈妈"], "confirmedOnboard": false },
+        "navigation": { "routeId": "route-airport-001", "destination": "虹桥机场 T2", "eta": "2026-07-22T20:25:00+08:00", "status": "planned" }
+      },
+      "expectedPhase": "preparing",
+      "expectedTaskRevision": 1,
+      "note": "先规划直达机场路线"
+    },
+    {
+      "event": { "eventId": "reroute-navigation-started", "type": "navigation.started", "routeId": "route-airport-001", "timestamp": "2026-07-22T20:05:00+08:00" },
+      "toolCalls": ["navigation.start"],
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 2,
+      "note": "启动直达路线"
+    },
+    {
+      "event": { "eventId": "reroute-congestion", "type": "user.input", "text": "前方拥堵，改走外环去机场", "timestamp": "2026-07-22T20:08:00+08:00" },
+      "toolCalls": ["navigation.update-route"],
+      "expectedToolErrors": {},
+      "statePatch": { "navigation": { "routeId": "route-airport-bypass-001", "destination": "虹桥机场 T2", "eta": "2026-07-22T20:35:00+08:00", "status": "active" } },
+      "expectedUI": { "generatedBy": "composer", "primaryComponent": "navigation-summary", "priority": "normal" },
+      "expectedPhase": "driving-to-airport",
+      "expectedTaskRevision": 2,
+      "note": "拥堵输入本身不改事实；改线结果由 navigation.update-route 写入"
+    }
+  ]
+}

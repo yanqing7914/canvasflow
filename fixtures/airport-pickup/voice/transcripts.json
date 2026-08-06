@@ -1,0 +1,29 @@
+{
+  "version": "1.0",
+  "language": "zh-CN",
+  "sampleRateHz": 16000,
+  "channels": 1,
+  "samples": [
+    {
+      "id": "create-airport-pickup",
+      "file": "create-airport-pickup.wav",
+      "text": "我现在要去机场接妈妈和豆豆",
+      "confidence": 0.96,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "flight-number",
+      "file": "flight-number.wav",
+      "text": "航班 MU5102",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "noisy-create",
+      "file": "noisy-create.wav",
+      "text": "我现在要去机场接妈妈和豆豆",
+      "confidence": 0.51,
+      "requiresConfirmation": true
+    }
+  ]
+}
