@@ -614,16 +614,23 @@ export const weatherConditionLabels: Record<WeatherOutput['condition'], string> 
 
 /**
  * The on-demand weather answer as one card. Which moment it describes follows
- * the task: with a flight attached the reading is pinned to the arrival, and
- * rain earns the one advisory line the pickup actually needs.
+ * the trip: an arrival still ahead pins the reading to it, while a landed or
+ * cancelled flight — or a return trip already underway — reads as now. Rain
+ * earns the one advisory line the pickup actually needs.
  */
 export function weatherCardComponent(
   task: AirportPickupTaskState,
   data: WeatherOutput,
 ): UISpec['components'][number] {
-  const arrival = task.flight?.estimatedArrival
-  const arrivalClock = arrival?.match(/T(\d{2}:\d{2})/)?.[1]
+  const arrivalAhead = !task.passengers.confirmedOnboard
+    && task.flight !== undefined
+    && task.flight.status !== 'landed'
+    && task.flight.status !== 'cancelled'
+  const arrivalClock = arrivalAhead ? task.flight!.estimatedArrival.match(/T(\d{2}:\d{2})/)?.[1] : undefined
+  // The advisory tells the family where to wait, which stops being advice the
+  // moment they are in the car.
   const raining = data.condition === 'light-rain' || data.condition === 'heavy-rain'
+  const advising = raining && !task.passengers.confirmedOnboard
   return {
     id: 'weather-card',
     type: 'weather-card',
@@ -635,7 +642,7 @@ export function weatherCardComponent(
       conditionLabel: weatherConditionLabels[data.condition],
       ...(data.windLevel !== undefined ? { windLevel: data.windLevel } : {}),
       ...(data.precipitationChance !== undefined ? { precipitationChance: data.precipitationChance } : {}),
-      ...(raining ? { advisory: '到达时段有雨，建议家人在到达层室内等候。' } : {}),
+      ...(advising ? { advisory: '到达时段有雨，建议家人在到达层室内等候。' } : {}),
       freshness: 'fixture',
     },
   }

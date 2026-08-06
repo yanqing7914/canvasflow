@@ -371,8 +371,13 @@ function successfulWeather(value: unknown): WeatherOutput | undefined {
 
 /** Mirrors composeAgentSpec's weatherCardComponent; fixtures-conformance locks the two together. */
 function weatherCard(task: AirportPickupTaskState, data: WeatherOutput): UISpec['components'][number] {
-  const arrivalClock = task.flight?.estimatedArrival?.match(/T(\d{2}:\d{2})/)?.[1]
+  const arrivalAhead = !task.passengers.confirmedOnboard
+    && task.flight !== undefined
+    && task.flight.status !== 'landed'
+    && task.flight.status !== 'cancelled'
+  const arrivalClock = arrivalAhead ? task.flight!.estimatedArrival.match(/T(\d{2}:\d{2})/)?.[1] : undefined
   const raining = data.condition === 'light-rain' || data.condition === 'heavy-rain'
+  const advising = raining && !task.passengers.confirmedOnboard
   return {
     id: 'weather-card',
     type: 'weather-card',
@@ -384,7 +389,7 @@ function weatherCard(task: AirportPickupTaskState, data: WeatherOutput): UISpec[
       conditionLabel: weatherConditionLabels[data.condition],
       ...(data.windLevel !== undefined ? { windLevel: data.windLevel } : {}),
       ...(data.precipitationChance !== undefined ? { precipitationChance: data.precipitationChance } : {}),
-      ...(raining ? { advisory: '到达时段有雨，建议家人在到达层室内等候。' } : {}),
+      ...(advising ? { advisory: '到达时段有雨，建议家人在到达层室内等候。' } : {}),
       freshness: 'fixture',
     },
   }

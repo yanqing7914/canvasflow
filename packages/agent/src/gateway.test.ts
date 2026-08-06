@@ -3259,6 +3259,45 @@ describe('AgentGateway', () => {
       expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
       expect(asked.task.phase).toBe('cancelled')
     })
+
+    it('asks about home, in the present tense, once the passengers are onboard', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const started = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'weather-home-start', expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation',
+        componentId: 'navigation-plan', idempotencyKey: 'weather-home-start',
+      })
+      const approaching = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'weather-home-geofence', expectedTaskRevision: started.task.taskRevision,
+        event: { eventId: 'weather-home-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T20:50:00+08:00' },
+      })
+      const waiting = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'weather-home-parked', expectedTaskRevision: approaching.task.taskRevision,
+        event: { eventId: 'weather-home-parked', type: 'vehicle.parked', timestamp: '2026-07-22T20:52:00+08:00' },
+      })
+      const returning = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'weather-home-onboard', expectedTaskRevision: waiting.task.taskRevision,
+        event: { eventId: 'weather-home-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T20:54:00+08:00' },
+      })
+      expect(returning.task.passengers.confirmedOnboard).toBe(true)
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-home', expectedTaskRevision: returning.task.taskRevision,
+        event: { eventId: 'weather-home', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T20:55:00+08:00' },
+      })
+
+      // The trip is routing home now: the airport stored at create time is the
+      // wrong place, the landed flight's arrival the wrong moment, and the
+      // wait-indoors advisory the wrong advice with everyone already in the car.
+      const card = asked.ui.components.find((component) => component.type === 'weather-card')
+      if (card?.type !== 'weather-card') throw new Error('expected a weather-card component')
+      expect(card.props.location).toBe('家')
+      expect(card.props.timeLabel).toBe('现在')
+      expect(card.props.advisory).toBeUndefined()
+      expect(asked.assistant?.text).toContain('家')
+      expect(asked.task.taskRevision).toBe(returning.task.taskRevision)
+    })
   })
 })
 

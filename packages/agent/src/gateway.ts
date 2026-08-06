@@ -2141,11 +2141,22 @@ export class AgentGateway {
     startedAt: number,
   ): AgentResponse {
     const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    // Where and when follow the trip, not the request context: once the
+    // passengers are onboard the car is routing home, so the airport stored at
+    // create time is no longer the place being asked about — and a landed
+    // flight's arrival is history, not a forecast moment.
+    const returning = current.task.passengers.confirmedOnboard
+    const arrivalAhead = !returning
+      && current.task.flight !== undefined
+      && current.task.flight.status !== 'landed'
+      && current.task.flight.status !== 'cancelled'
     let weather: ReadToolResults['weather.get-current']
     try {
       weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, {
-        locationId: current.requestContext?.destination.id ?? 'destination-hongqiao-t2',
-        ...(current.task.flight?.estimatedArrival ? { at: current.task.flight.estimatedArrival } : {}),
+        locationId: returning
+          ? 'destination-home'
+          : current.requestContext?.destination.id ?? 'destination-hongqiao-t2',
+        ...(arrivalAhead ? { at: current.task.flight!.estimatedArrival } : {}),
       })
     } catch (error) {
       if (!(error instanceof ReadToolOrchestrationError)) this.#throwProviderError(error, current)
@@ -2171,7 +2182,7 @@ export class AgentGateway {
     const stored = this.#store.save({ ...published, toolResults: current.toolResults })
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
     return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
-      text: weatherSpokenSummary(weather.data, Boolean(current.task.flight?.estimatedArrival)),
+      text: weatherSpokenSummary(weather.data, arrivalAhead, returning),
       shouldSpeak: supportsTts,
     })
   }
@@ -2210,10 +2221,14 @@ export class AgentGateway {
 }
 
 /** One short cabin-appropriate sentence; the card carries the detail. */
-function weatherSpokenSummary(data: WeatherOutput, forArrival: boolean): string {
+function weatherSpokenSummary(data: WeatherOutput, forArrival: boolean, returning: boolean): string {
   const moment = forArrival ? '到达时' : '现在'
   const rain = data.condition === 'light-rain' || data.condition === 'heavy-rain'
-  const closing = rain ? '，建议家人在到达层室内等候' : '，适合接机'
+  // The wait-indoors suggestion is for family still to be picked up; on the way
+  // home with everyone onboard the rain is just a fact worth hearing.
+  const closing = rain
+    ? returning ? '，路上请慢行' : '，建议家人在到达层室内等候'
+    : returning ? '' : '，适合接机'
   return `${moment}${data.locationName}${weatherConditionLabels[data.condition]} ${Math.round(data.temperatureC)} 度${closing}。`
 }
 
