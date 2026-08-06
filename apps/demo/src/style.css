@@ -3150,6 +3150,24 @@ a:focus-visible {
   .ui-layout--split { grid-template-columns: minmax(0, 1.2fr) minmax(250px, 0.8fr); }
 
   .ui-navigation-eta { font-size: clamp(86px, 11vw, 126px); }
+
+  /* The band the departure answer borrows narrows faster than its own contents do,
+     and the frame here still forbids scrolling — so something has to leave rather
+     than be cut off mid-word. The route the drive time came from is the one line
+     the driver never acts on, so it goes first and whole, leaving the clock and
+     the three facts that explain it their full width. */
+  .ui-departure-plan__fact--via { display: none; }
+
+  /* And what stays gives up its own tail before it gives up its edge: at the bottom
+     of this range the three facts still come close to the width they have, and a
+     fact that ellipsises is one the driver can see is abbreviated. One that ran off
+     the card looks like it was never said. */
+  .ui-departure-plan__fact {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 @media (max-width: 680px) {
@@ -3324,6 +3342,35 @@ a:focus-visible {
   .ui-card--flight-status .ui-metric--hero .ui-metric__value { font-size: clamp(44px, 12vw, 62px); }
 
   .ui-card--navigation-summary .ui-metric + .ui-metric { border-left: 1px solid var(--rule); }
+
+  /* Below the split the brief becomes a scrolling column, so the departure answer
+     can spend height instead of losing the ends of its facts: the row becomes a
+     column and the route comes back, because there is now room to say it. The dots
+     go with the row — they separated items along a line, and a column separates
+     them already. */
+  .ui-card--departure-plan {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .ui-departure-plan__facts {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    overflow: visible;
+  }
+
+  .ui-departure-plan__fact {
+    flex: none;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .ui-departure-plan__fact + .ui-departure-plan__fact::before { content: none; }
+
+  .ui-departure-plan__fact--via { display: block; }
 
   .ui-progress {
     margin-top: 32px;

@@ -409,6 +409,44 @@ test('answers when to leave from the button on the brief without growing the fra
   await expectNoScroll(page)
 })
 
+test('reflows the departure answer at phone width instead of cutting its facts off @layout', async ({ page }, testInfo) => {
+  // The card is one horizontal band at the demo resolution, which is a shape that
+  // only works while there is width to hold it. The 1920x720 project cannot see the
+  // other end of that range at all, so it sits this one out rather than repeating
+  // the desktop assertion above.
+  test.skip(testInfo.project.name === 'chromium-1920x720', 'this spec is about the narrow end of the range')
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  const plan = page.locator('.ui-component:has([data-component-id="navigation-plan"])')
+  await plan.getByRole('button', { name: '什么时候出发' }).click()
+
+  const departureCard = page.locator('.ui-card--departure-plan')
+  await expect(departureCard).toBeVisible()
+  // Every fact the recommendation was worked backwards from is still readable —
+  // including the route, which the middle of the range drops and this end can afford.
+  await expect(departureCard).toContainText('20:10')
+  await expect(departureCard).toContainText('MU5102 20:40 落地')
+  await expect(departureCard).toContainText('路上 20 分钟')
+  await expect(departureCard).toContainText('提前 10 分钟到')
+  await expect(departureCard).toContainText('直达虹桥机场 T2')
+
+  // `.ui-card` hides its overflow, so containing the text is not the same as showing
+  // it: a fact laid out past the card's right edge reads as absent. Measured on the
+  // leaves, where the truncation would happen.
+  const clipped = await departureCard.evaluate((card) => [...card.querySelectorAll('.ui-departure-plan__fact, .ui-departure-plan__time')]
+    .map((element) => ({
+      text: (element.textContent ?? '').slice(0, 24),
+      clippedWidthBy: element.scrollWidth - element.clientWidth,
+    }))
+    .filter((box) => box.clippedWidthBy > 1))
+  expect(clipped).toEqual([])
+  // The phone brief is allowed to scroll, so the frame rule is not the check here;
+  // what must not happen is the document growing sideways.
+  await expectNoHorizontalOverflow(page)
+})
+
 /**
  * The media title is the one cabin value that is prose, and prose has no fixed
  * length. The demo can only ever produce two titles — `memory.propose-update`
