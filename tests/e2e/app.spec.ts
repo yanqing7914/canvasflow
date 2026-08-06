@@ -226,16 +226,21 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     const surface = page.getByRole('region', { name: 'Generated task interface' })
     await expect(surface).toBeVisible()
     await expect(surface).toHaveAttribute('data-layout', 'stack')
-    await expect(surface.locator('[data-component-type="status-banner"]')).toBeVisible()
+    // The opening screen offers the arrivals board rather than asking for a number.
+    const board = surface.locator('[data-component-type="flight-choices"]')
+    await expect(board).toBeVisible()
+    await expect(board.getByRole('listitem')).toHaveCount(5)
     // The composer is open-ended content between header and journey, so a phase
     // holding one is where the fixed frame is most likely to be pushed past the fold.
     await expectNoScroll(page)
 
-    // The keyboard left with its words, so it is out of the tab order too: this
-    // phase only asks a question, so the header is the whole of it.
+    // The keyboard left with its words, so it is out of the tab order too. What
+    // follows the header is the board itself: a choice offered on screen has to be
+    // reachable without touching it.
     await controls.focus()
     await page.keyboard.press('Tab')
     await expect(page.getByLabel('任务输入')).toHaveCount(0)
+    await expect(board.getByRole('button').first()).toBeFocused()
 
     await sendText(page, 'MU5102')
     // The demo player lives in the drawer, so tabbing on from the header reaches
@@ -650,6 +655,25 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await page.getByRole('button', { name: '保存本次偏好' }).click()
   await readControls(page, 'memory.confirm-update:succeeded')
   await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
+})
+
+test('prepares the trip from a flight picked off the arrivals board', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await readControls(page, 'collecting-information')
+
+  // The board is the Agent's answer to a pickup with no flight number yet, and
+  // every row it offers has to be one the trip can actually be prepared from.
+  const row = page.locator('.ui-flight-choices__row', { hasText: 'CA1516' })
+  await expect(row).toBeEnabled()
+  await row.click()
+
+  await readControls(page, 'preparing')
+  const flightCard = page.locator('.ui-card--flight-status')
+  await expect(flightCard).toContainText('CA1516')
+  // The choice has been made, so the offer is gone rather than sitting under the brief.
+  await expect(page.locator('.ui-flight-choices')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
 })
 
 test('keeps the task usable around a voice attempt', async ({ page }) => {

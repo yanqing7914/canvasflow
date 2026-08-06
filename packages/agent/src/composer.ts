@@ -1,4 +1,4 @@
-import { uiSpecSchema, type AirportPickupTaskState, type CalendarEvent, type RouteSketch, type UISpec, type WeatherOutput } from '@canvasflow/schema'
+import { uiSpecSchema, type AirportPickupTaskState, type CalendarEvent, type FlightArrivalCandidate, type FlightArrivalsOutput, type RouteSketch, type UISpec, type WeatherOutput } from '@canvasflow/schema'
 import {
   chargingStation,
   chargingStationsForDensity,
@@ -15,6 +15,9 @@ import type { StoredTask } from './store'
 
 /** Canonical demo round-trip legs, used when no charging.recommend output is available. */
 const DEMO_LEG_KM = 32
+
+/** Rows the arrivals board offers: the schema's ceiling, and the frame's. */
+const MAX_FLIGHT_CHOICES = 5
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息',
@@ -62,7 +65,14 @@ export function composeAgentSpec(
   let requiresConfirm = false
 
   if (task.phase === 'collecting-information') {
-    components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '请补充航班号' } }]
+    // A board the driver can pick from answers the missing slot better than a
+    // banner asking them to recall a number. When there is no usable board the
+    // ask stands unchanged: the question is still the question.
+    const board = flightChoicesComponent(toolResults['flight.list-arrivals']?.data)
+    components = board
+      ? [board.component]
+      : [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '请补充航班号' } }]
+    actions = board?.actions ?? []
   } else if (task.phase === 'cancelled') {
     title = '接机任务已取消'
     priority = 'high'
@@ -609,6 +619,86 @@ function returningScheduleStrip(
       ],
     },
   }
+}
+
+export const flightStatusLabels: Record<FlightArrivalCandidate['status'], string> = {
+  scheduled: '计划中',
+  'in-air': '飞行中',
+  landed: '已落地',
+  delayed: '延误',
+  cancelled: '已取消',
+}
+
+/**
+ * The arrivals board as the pickup's opening question, together with the action
+ * each row dispatches.
+ *
+ * A cancelled arrival is left off. Nobody can be picked up from it, and a row
+ * that exists only to be refused spends the one glance the driver has. What is
+ * left has to be an actual choice — fewer than two rows is an answer, not a
+ * board, and more than the schema's ceiling is a list to scan rather than pick
+ * from — so anything else returns nothing and the caller keeps asking for the
+ * number.
+ *
+ * Each row's action is a plain `agent-message` carrying the flight number, so a
+ * pick travels the same planner path as typing it. The board is a faster way to
+ * say the number, never a second way to set the slot.
+ */
+function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
+  component: UISpec['components'][number]
+  actions: UISpec['actions']
+} | undefined {
+  if (!board) return undefined
+  const pickable = board.arrivals.filter((arrival) => arrival.status !== 'cancelled')
+  if (pickable.length < 2) return undefined
+  const rows = pickable.slice(0, MAX_FLIGHT_CHOICES).map((arrival) => ({
+    arrival,
+    actionId: `pick-${arrival.flightNumber}`,
+  }))
+  return {
+    component: {
+      id: 'flight-choices',
+      type: 'flight-choices',
+      actions: rows.map((row) => row.actionId),
+      props: {
+        arrivalCityName: board.arrivalCityName,
+        dateLabel: '今天',
+        choices: rows.map(({ arrival, actionId }) => ({
+          flightNumber: arrival.flightNumber,
+          airlineName: arrival.airlineName,
+          originName: arrival.originName,
+          status: arrival.status,
+          statusLabel: flightStatusLabels[arrival.status],
+          arrivalTimeLabel: clockLabel(arrival.scheduledArrival),
+          ...(arrival.estimatedArrival !== arrival.scheduledArrival
+            ? {
+                revisedTimeLabel: `预计 ${clockLabel(arrival.estimatedArrival)}`,
+                revisedDirection: Date.parse(arrival.estimatedArrival) > Date.parse(arrival.scheduledArrival)
+                  ? ('later' as const)
+                  : ('earlier' as const),
+              }
+            : {}),
+          terminal: arrival.terminal,
+          actionId,
+        })),
+        freshness: 'fixture',
+      },
+    },
+    // The card draws every row identically, so `style` only matters to a group
+    // renderer that never sees these. The first row still reads as the primary
+    // one there, which is what the ordering already says.
+    actions: rows.map(({ arrival, actionId }, index) => ({
+      id: actionId,
+      label: `接 ${arrival.flightNumber}`,
+      style: index === 0 ? 'primary' : 'secondary',
+      event: { type: 'agent-message', text: `航班号 ${arrival.flightNumber}` },
+    })),
+  }
+}
+
+/** The clock time inside a fixture timestamp, or the timestamp if it has none. */
+function clockLabel(timestamp: string): string {
+  return timestamp.match(/T(\d{2}:\d{2})/)?.[1] ?? timestamp
 }
 
 export const weatherConditionLabels: Record<WeatherOutput['condition'], string> = {

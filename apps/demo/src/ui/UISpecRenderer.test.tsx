@@ -1276,3 +1276,141 @@ describe('UISpecRenderer route map panel', () => {
     expect(panel()!.textContent).not.toContain('undefined')
   })
 })
+
+describe('UISpecRenderer flight choices board', () => {
+  const choices = [
+    {
+      flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled' as const,
+      statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'pick-MU5102',
+    },
+    {
+      flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed' as const,
+      statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', actionId: 'pick-MU5103',
+    },
+    {
+      flightNumber: 'CA1516', airlineName: '中国国际航空', originName: '广州白云', status: 'in-air' as const,
+      statusLabel: '飞行中', arrivalTimeLabel: '21:15', revisedTimeLabel: '预计 21:05', terminal: 'T1', actionId: 'pick-CA1516',
+    },
+  ]
+
+  function boardSpec(overrides: {
+    choices?: unknown
+    actionIds?: string[]
+    definedActionIds?: string[]
+  } = {}): UISpec {
+    // `in` rather than `??`: one of the broken cases is a board with no choices
+    // key at all, which a default would quietly repair.
+    const rows = 'choices' in overrides ? overrides.choices : choices
+    const declared = overrides.actionIds ?? choices.map((choice) => choice.actionId)
+    const defined = overrides.definedActionIds ?? declared
+    return baseSpec({
+      phase: 'collecting-information',
+      title: '选择航班',
+      layout: { type: 'stack', gap: 'md', slots: { main: ['flight-choices'] } },
+      components: [{
+        id: 'flight-choices',
+        type: 'flight-choices',
+        actions: declared,
+        props: { arrivalCityName: '上海', dateLabel: '今天', choices: rows, freshness: 'fixture' },
+      } as ComponentSpec],
+      actions: defined.map((actionId) => ({
+        id: actionId,
+        label: `选择 ${actionId}`,
+        style: 'secondary' as const,
+        event: { type: 'agent-message' as const, text: actionId },
+      })),
+    })
+  }
+
+  const renderer = () => screen.getByRole('region', { name: 'Generated task interface' })
+  const rows = () => Array.from(renderer().querySelectorAll<HTMLButtonElement>('.ui-flight-choices__row'))
+
+  it('numbers every arrival and shows what tells two of them apart', () => {
+    render(<UISpecRenderer spec={boardSpec()} onAction={vi.fn()} pending={false} />)
+
+    expect(rows()).toHaveLength(3)
+    const [first, second] = rows()
+    expect(first).toHaveAttribute('data-flight-number', 'MU5102')
+    expect(first!.querySelector('.ui-flight-choices__rank')).toHaveTextContent('1')
+    expect(first).toHaveTextContent('东方航空')
+    expect(first).toHaveTextContent('北京首都')
+    expect(first).toHaveTextContent('20:30')
+    expect(first).toHaveTextContent('T2')
+    // The two 20:30 arrivals are told apart by the revision, not the schedule.
+    expect(first!.querySelector('.ui-flight-choices__revised')).toBeNull()
+    expect(second!.querySelector('.ui-flight-choices__revised')).toHaveTextContent('预计 21:10')
+    expect(second!.querySelector('.ui-status--delayed')).toHaveTextContent('延误')
+  })
+
+  it('sends the picked row’s own action, dispatched from the board', async () => {
+    const onAction = vi.fn()
+    const user = userEvent.setup()
+    render(<UISpecRenderer spec={boardSpec()} onAction={onAction} pending={false} />)
+
+    await user.click(rows()[2]!)
+
+    expect(onAction).toHaveBeenCalledExactlyOnceWith('pick-CA1516', 'flight-choices')
+  })
+
+  it('draws each row’s action once, in the row, and never in the action bars', () => {
+    render(<UISpecRenderer spec={boardSpec()} onAction={vi.fn()} pending={false} />)
+
+    // The rows are the controls: no duplicate button group under the card, and
+    // nothing promoted into the task-wide bar either.
+    expect(renderer().querySelector('.ui-card__actions')).toBeNull()
+    expect(renderer().querySelector('.ui-actions')).toBeNull()
+    expect(renderer().querySelectorAll('[data-action-id="pick-MU5102"]')).toHaveLength(1)
+    // The actions are still on screen, so the surface must not read as actionless.
+    expect(renderer()).toHaveAttribute('data-has-actions', 'true')
+  })
+
+  it('keeps a row readable but unpressable when the spec never defined its action', () => {
+    render(<UISpecRenderer
+      spec={boardSpec({ definedActionIds: ['pick-MU5102', 'pick-CA1516'] })}
+      onAction={vi.fn()}
+      pending={false}
+    />)
+
+    const [first, second] = rows()
+    expect(second).toBeDisabled()
+    expect(second).toHaveTextContent('MU5103')
+    expect(second).toHaveTextContent('预计 21:10')
+    expect(first).toBeEnabled()
+  })
+
+  it('disables every row while a pick is in flight so a second cannot race it', () => {
+    render(<UISpecRenderer spec={boardSpec()} onAction={vi.fn()} pending />)
+
+    for (const row of rows()) expect(row).toBeDisabled()
+  })
+
+  it('degrades the board to a fallback when the choices are not a real list', () => {
+    const unusable: unknown[] = [
+      // Nothing to choose between, and one row was an answer rather than a choice.
+      [],
+      [choices[0]],
+      'not-a-list',
+      undefined,
+      // A row that names no action would be a choice the driver cannot make.
+      choices.map((choice) => ({ ...choice, actionId: undefined })),
+      // Six rows: past the point where a driver picks rather than reads.
+      [...choices, ...choices],
+    ]
+
+    for (const broken of unusable) {
+      const { unmount } = render(<UISpecRenderer spec={boardSpec({ choices: broken })} onAction={vi.fn()} pending={false} />)
+
+      expect(renderer().querySelector('.ui-flight-choices')).toBeNull()
+      expect(renderer().querySelector('.ui-card--fallback')).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('keeps action ids and internal names out of what the driver reads', () => {
+    render(<UISpecRenderer spec={boardSpec()} onAction={vi.fn()} pending={false} />)
+
+    for (const internal of ['pick-MU5102', 'flight-choices', 'actionId', 'arrivalCityName', 'fixture', 'agent-message']) {
+      expect(renderer().textContent).not.toContain(internal)
+    }
+  })
+})

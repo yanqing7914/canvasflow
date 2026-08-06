@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { UISpec } from '@canvasflow/schema'
 import { createProviderRegistry, createSideEffectRuntime } from '@canvasflow/tools'
 import { AgentGateway, AgentGatewayError } from './gateway'
 import { ReadToolOrchestrationError, ReadToolOrchestrator, type ReadToolOrchestration } from './orchestration'
@@ -3466,6 +3467,73 @@ describe('AgentGateway', () => {
 
       expect(asked.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
       expect(asked.task.phase).toBe('cancelled')
+    })
+  })
+
+  describe('arrivals board turn', () => {
+    function boardOf(ui: UISpec) {
+      const component = ui.components.find((candidate) => candidate.type === 'flight-choices')
+      if (!component || component.type !== 'flight-choices') return undefined
+      return component
+    }
+
+    it('offers the arrivals board while the flight number is still missing', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+
+      const board = boardOf(created.ui)
+      expect(created.task.phase).toBe('collecting-information')
+      expect(board?.props.choices.length).toBeGreaterThanOrEqual(2)
+      // Every offered row is pressable: the ids the card declares are exactly the
+      // actions the spec defines.
+      expect(created.ui.actions.map((action) => action.id)).toEqual(board?.actions)
+    })
+
+    it('prepares the trip from a picked row and retires the board', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      const pick = created.ui.actions.find((action) => action.id === 'pick-CA1516')
+      expect(pick?.event).toEqual({ type: 'agent-message', text: '航班号 CA1516' })
+
+      // The client replays the action's own text as user input, which is the only
+      // path a picked row takes into the Agent.
+      const picked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-pick-row',
+        expectedTaskRevision: created.task.taskRevision,
+        event: {
+          eventId: 'pick-row',
+          type: 'user.input',
+          text: pick!.event.type === 'agent-message' ? pick!.event.text : '',
+          timestamp: '2026-07-22T12:01:00+08:00',
+        },
+      })
+
+      expect(picked.task.phase).toBe('preparing')
+      expect(picked.task.flight?.flightNumber).toBe('CA1516')
+      // The choice has been made, so the offer goes away rather than following the
+      // driver into the brief.
+      expect(boardOf(picked.ui)).toBeUndefined()
+      expect(picked.ui.components.map((component) => component.type)).toContain('flight-status')
+    })
+
+    it('asks for the number when the orchestration cannot offer a board', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => now,
+        createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        },
+      })
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+
+      expect(boardOf(created.ui)).toBeUndefined()
+      expect(created.ui.components).toEqual([
+        { id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '请补充航班号' } },
+      ])
     })
   })
 })

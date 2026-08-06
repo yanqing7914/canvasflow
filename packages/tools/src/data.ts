@@ -120,7 +120,9 @@ export type FlightRecord = FlightStatusOutput & { date: string }
  * Fixtures are keyed by flight number; `date` must also match the request.
  * MU5102 is the main-demo flight (scheduled baseline; in-air / landed / delayed /
  * cancelled updates arrive as provider pushes on the timeline). MU5103 / MU5104
- * are exception lookup fixtures for delayed and cancelled tool demos.
+ * are exception lookup fixtures for delayed and cancelled tool demos. HO1252 /
+ * CA1516 / CZ3588 exist so the arrivals board below has more than one airline to
+ * offer, and so any row the driver picks resolves here too.
  */
 export const flights: Record<string, FlightRecord> = {
   MU5102: {
@@ -150,7 +152,62 @@ export const flights: Record<string, FlightRecord> = {
     terminal: 'T2',
     sourceUpdatedAt: FIXTURE_GENERATED_AT,
   },
+  HO1252: {
+    flightNumber: 'HO1252',
+    date: '2026-07-22',
+    status: 'scheduled',
+    scheduledArrival: '2026-07-22T20:55:00+08:00',
+    estimatedArrival: '2026-07-22T20:55:00+08:00',
+    terminal: 'T2',
+    sourceUpdatedAt: FIXTURE_GENERATED_AT,
+  },
+  CA1516: {
+    flightNumber: 'CA1516',
+    date: '2026-07-22',
+    status: 'in-air',
+    scheduledArrival: '2026-07-22T21:15:00+08:00',
+    estimatedArrival: '2026-07-22T21:05:00+08:00',
+    terminal: 'T1',
+    sourceUpdatedAt: FIXTURE_GENERATED_AT,
+  },
+  CZ3588: {
+    flightNumber: 'CZ3588',
+    date: '2026-07-22',
+    status: 'scheduled',
+    scheduledArrival: '2026-07-22T21:40:00+08:00',
+    estimatedArrival: '2026-07-22T21:40:00+08:00',
+    terminal: 'T2',
+    sourceUpdatedAt: FIXTURE_GENERATED_AT,
+  },
 }
+
+/** The one city the arrivals board covers; requests for any other id find nothing. */
+export const ARRIVAL_CITY = { id: 'arrival-city-shanghai', name: '上海' } as const
+
+/**
+ * The arrivals board: which flights the driver can choose from before they have
+ * named one.
+ *
+ * Only the fields a board adds are authored here — the airline, where the flight
+ * is coming from, and the order the rows are read in. Times, terminal and status
+ * are read out of `flights` at call time, so a board row and the `flight.get-status`
+ * lookup behind it can never disagree, and every row is guaranteed preparable:
+ * a number listed here always resolves for the same date.
+ *
+ * Rows are authored in scheduled-arrival order, earliest first, which is the
+ * order the board presents. MU5104 is deliberately absent: it stays an exception
+ * lookup fixture rather than something the driver can pick.
+ *
+ * Every row lands in the same city, so the pickup destination stays the demo's
+ * single airport; the board does not yet offer a choice of airport.
+ */
+export const arrivalBoard: { flightNumber: string; airlineName: string; originName: string }[] = [
+  { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都' },
+  { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安' },
+  { flightNumber: 'HO1252', airlineName: '吉祥航空', originName: '成都天府' },
+  { flightNumber: 'CA1516', airlineName: '中国国际航空', originName: '广州白云' },
+  { flightNumber: 'CZ3588', airlineName: '中国南方航空', originName: '西安咸阳' },
+]
 
 /** Canonical demo origin used by airport-pickup fixtures (fictional Shanghai CBD). */
 export const DEMO_ORIGIN = { latitude: 31.23, longitude: 121.47 } as const

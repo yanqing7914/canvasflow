@@ -1,5 +1,6 @@
 import {
   chargingRecommendationOutputSchema,
+  flightArrivalsOutputSchema,
   flightStatusOutputSchema,
   getPreferencesOutputSchema,
   listUpcomingEventsOutputSchema,
@@ -9,6 +10,7 @@ import {
   vehicleStatusOutputSchema,
   weatherOutputSchema,
   type ChargingRecommendationOutput,
+  type FlightArrivalsOutput,
   type FlightStatusOutput,
   type GetPreferencesOutput,
   type ListUpcomingEventsOutput,
@@ -19,7 +21,7 @@ import {
   type VehicleStatusOutput,
   type WeatherOutput,
 } from '@canvasflow/schema'
-import { createProviderRegistry, DEMO_ORIGIN, type ProviderRegistry, type ToolName } from '@canvasflow/tools'
+import { ARRIVAL_CITY, createProviderRegistry, DEMO_ORIGIN, type ProviderRegistry, type ToolName } from '@canvasflow/tools'
 
 type SuccessfulToolResult<T> = ToolResult<T> & { ok: true; data: T; error: null }
 
@@ -27,6 +29,12 @@ export type ReadToolResults = Partial<{
   'family.resolve-members': SuccessfulToolResult<ResolveMembersOutput>
   'memory.get-preferences': SuccessfulToolResult<GetPreferencesOutput>
   'flight.get-status': SuccessfulToolResult<FlightStatusOutput>
+  /**
+   * The arrivals board offered before the driver has named a flight. Read on the
+   * turns that still lack the slot and dropped once it is filled: a board kept
+   * around after the pick would keep offering a choice already made.
+   */
+  'flight.list-arrivals': SuccessfulToolResult<FlightArrivalsOutput>
   'navigation.plan-route': SuccessfulToolResult<RoutePlanOutput>
   'vehicle.get-status': SuccessfulToolResult<VehicleStatusOutput>
   'charging.recommend': SuccessfulToolResult<ChargingRecommendationOutput>
@@ -94,6 +102,12 @@ export interface ReadToolOrchestration {
    * the schedule-unavailable reply.
    */
   resolveSchedule?(taskId: string, requestId: string, input: { date: string }): SuccessfulToolResult<ListUpcomingEventsOutput>
+  /**
+   * The arrivals board for the demo's one pickup city, on the fixture date.
+   * Optional for the same reason as the two above; without it the Agent asks
+   * for the flight number instead of offering a list.
+   */
+  resolveArrivals?(taskId: string, requestId: string, input?: { limit?: number }): SuccessfulToolResult<FlightArrivalsOutput>
 }
 
 export class ReadToolOrchestrator implements ReadToolOrchestration {
@@ -250,6 +264,25 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       requestId,
       input,
       toolResultSchema(listUpcomingEventsOutputSchema),
+    )
+  }
+
+  /**
+   * The city and the date are the orchestrator's own, not the caller's: the
+   * demo has one pickup city and one fixture day, and letting a caller pass
+   * either would invite a board for a date the flight lookups cannot match.
+   */
+  resolveArrivals(taskId: string, requestId: string, input: { limit?: number } = {}): SuccessfulToolResult<FlightArrivalsOutput> {
+    return this.#call(
+      'flight.list-arrivals',
+      taskId,
+      requestId,
+      {
+        arrivalCityId: ARRIVAL_CITY.id,
+        date: this.#fixtureDate,
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+      },
+      toolResultSchema(flightArrivalsOutputSchema),
     )
   }
 

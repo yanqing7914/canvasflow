@@ -213,6 +213,45 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
     }),
   }),
   componentBase.extend({
+    type: z.literal('flight-choices'),
+    props: z.object({
+      /** Human place label the board is for, e.g. 上海. Never an internal city id. */
+      arrivalCityName: z.string().min(1),
+      /** Which day the board answers for, e.g. 今天. */
+      dateLabel: z.string().min(1),
+      /**
+       * The rows the driver chooses between, in the order they are presented.
+       * Between two and five: one row is not a choice and should have been read
+       * as the answer, and past five the driver is scanning rather than picking.
+       *
+       * `actionId` is the row's own button — a row without one would be a
+       * choice that cannot be made, so the renderer draws the row as plain text
+       * and only the referenced action becomes a control.
+       */
+      choices: z.array(z.object({
+        flightNumber: z.string().min(1),
+        airlineName: z.string().min(1),
+        originName: z.string().min(1),
+        status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
+        /** Localized status copy; the enum stays stable for renderers. */
+        statusLabel: z.string().min(1),
+        /** Clock time the row leads with, e.g. 20:30. */
+        arrivalTimeLabel: z.string().min(1),
+        /** Only when the estimate differs from the schedule, e.g. 预计 21:10. */
+        revisedTimeLabel: z.string().min(1).optional(),
+        /**
+         * Which way the estimate moved. Renderers tone `later` as a caution and
+         * `earlier` as plain fact: an early arrival is news, not a warning, and an
+         * amber figure that means "good" teaches the driver to ignore amber.
+         */
+        revisedDirection: z.enum(['later', 'earlier']).optional(),
+        terminal: z.string().min(1),
+        actionId: z.string().min(1),
+      })).min(2).max(5),
+      freshness: z.enum(['live', 'cached', 'fixture']),
+    }),
+  }),
+  componentBase.extend({
     type: z.literal('alert'),
     props: z.object({ level: z.enum(['info', 'warning', 'critical']), title: z.string(), message: z.string().optional() }),
   }),
