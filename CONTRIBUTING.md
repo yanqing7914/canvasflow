@@ -65,6 +65,25 @@ PLAYWRIGHT_CROSS_BROWSER=1 npm run test:e2e -- --grep @layout
 Without the variable the two projects do not exist, so the default run stays on
 the browser CI has.
 
+Two `@layout` specs fail on the extra engines today, and both are known:
+
+- **Gecko, four specs, `expectNoScroll`.** The voice composer is on screen from
+  the first frame in Firefox — `SpeechRecognition` is unimplemented, so the
+  keyboard is the only input there — and its ~140px is not in the fixed frame's
+  budget. `.ui-slot--main`'s stacked cards then ask for more than the slot has
+  and Gecko reports the difference as `scrollHeight`, where Blink compresses the
+  same rows to fit. This is the fixed frame genuinely not holding on a
+  keyboard-only browser, not a measurement artefact.
+- **WebKit and Gecko, the keyboard-accessibility sweep.** Safari excludes links
+  from the tab order unless "Press Tab to highlight each item" is on, so the
+  brand lockup is skipped; Firefox has no voice entry to tab past. Both are
+  browser preferences rather than app defects, so the fix belongs in the spec's
+  expectations rather than in the app.
+
+Neither is caused by the glass panel: the takeover, the crawl, the fold, and the
+tiered blur were each checked directly on all three engines and behave
+identically.
+
 ## Shared repository setup
 
 ```bash
