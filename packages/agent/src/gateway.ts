@@ -2176,6 +2176,24 @@ export class AgentGateway {
   }
 
   /**
+   * Persists the one snapshot a side answer rides on.
+   *
+   * A side answer changes nothing about the trip, so what stays in the store is
+   * the brief that was already there — carrying the answer's revision, so the
+   * next compose still moves forward and the client's optimistic concurrency
+   * still lines up. The answer itself lives only in the response that carries it:
+   * a reconnect, a stream replay, or an event that turns out to be a no-op all
+   * show the trip, not yesterday's reading of the weather.
+   */
+  #persistBriefBehind(published: StoredTask, current: StoredTask): StoredTask {
+    return this.#store.save({
+      ...current,
+      task: { ...current.task, uiRevision: published.task.uiRevision },
+      ui: { ...current.ui, uiRevision: published.ui.uiRevision },
+    })
+  }
+
+  /**
    * The check-weather query turn. A query mutates nothing: the task state,
    * revision, and processed-event bookkeeping stay untouched. Only the UI is
    * re-composed with the weather read merged in — and the merged read is
@@ -2227,11 +2245,12 @@ export class AgentGateway {
       current.requestContext,
       current.effectReceipts,
     )
-    // Transience lives in this one line: the published UI carries the card,
-    // the persisted toolResults do not.
-    const stored = this.#store.save({ ...published, toolResults: current.toolResults })
-    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
-    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+    // Transience lives in these two lines: the answer is what the caller gets,
+    // and the brief is what the store keeps.
+    const answered = { ...published, toolResults: current.toolResults }
+    this.#persistBriefBehind(published, current)
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored: answered, effects: [] })
+    return this.#response(request.clientRequestId, answered, [], performance.now() - startedAt, {
       text: weatherSpokenSummary(weather.data, arrivalAhead, returning),
       shouldSpeak: supportsTts,
     })
@@ -2275,11 +2294,12 @@ export class AgentGateway {
       current.requestContext,
       current.effectReceipts,
     )
-    // Transience lives in this one line: the published UI carries the card,
-    // the persisted toolResults do not.
-    const stored = this.#store.save({ ...published, toolResults: current.toolResults })
-    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
-    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+    // Same two lines as the weather answer: the caller gets the card, the store
+    // keeps the brief.
+    const answered = { ...published, toolResults: current.toolResults }
+    this.#persistBriefBehind(published, current)
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored: answered, effects: [] })
+    return this.#response(request.clientRequestId, answered, [], performance.now() - startedAt, {
       text: scheduleSpokenSummary(schedule.data.events),
       shouldSpeak: supportsTts,
     })
@@ -2334,9 +2354,11 @@ export class AgentGateway {
       current.effectReceipts,
       true,
     )
-    const stored = this.#store.save(published)
-    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
-    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+    // The card is not in the persisted toolResults to begin with — it exists
+    // because this turn asked — so the brief goes back behind it the same way.
+    this.#persistBriefBehind(published, current)
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored: published, effects: [] })
+    return this.#response(request.clientRequestId, published, [], performance.now() - startedAt, {
       text: `建议 ${plan.departAtLabel} 出发，路上约 ${plan.driveMinutes} 分钟，比落地早 ${plan.bufferMinutes} 分钟到。`,
       shouldSpeak: supportsTts,
     })

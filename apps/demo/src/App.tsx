@@ -257,7 +257,7 @@ export default function App({
     const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
     const next = await run(() => api.event(response.task, { type: 'user.input', text: trimmed }))
     if (!next) return { sent: false }
-    if (nextTimelineIndex !== undefined) setStepIndex(nextTimelineIndex)
+    if (nextTimelineIndex !== undefined && movedTheTrip(response, next)) setStepIndex(nextTimelineIndex)
     setText('')
     setDraftProtected(false)
     return { sent: true, speak: spokenReply(next) }
@@ -482,7 +482,7 @@ export default function App({
       // left alone: the pick is not the sentence they were writing.
       const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
       void run(() => api.event(response.task, { type: 'user.input', text: actionEvent.text })).then((next) => {
-        if (!next || nextTimelineIndex === undefined) return
+        if (!next || nextTimelineIndex === undefined || !movedTheTrip(response, next)) return
         setStepIndex(nextTimelineIndex)
       })
     } else {
@@ -494,6 +494,19 @@ export default function App({
         setStepIndex(consumeAdvisoryContext(nextTimelineIndex))
       })
     }
+  }
+
+  /**
+   * Whether a turn moved the trip, as opposed to answering a question about it.
+   * Asking for the weather or the day's schedule is answered on the spot and the
+   * task is deliberately left exactly as it was — same revision, nothing added to
+   * the processed events. The demo player's cursor tracks the fixture timeline, so
+   * a turn that did not move the trip must not move the cursor either: doing so
+   * would spend a step the timeline still owes and strand the rest of the drive.
+   */
+  function movedTheTrip(before: AgentResponse, after: AgentResponse): boolean {
+    return after.task.taskRevision !== before.task.taskRevision
+      || after.task.processedEventIds.length !== before.task.processedEventIds.length
   }
 
   function nextIndexForTimelineEvent(type: AirportPickupEvent['type']): number | undefined {

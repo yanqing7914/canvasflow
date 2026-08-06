@@ -3171,19 +3171,30 @@ describe('AgentGateway', () => {
       expect(moved.ui.components.some((component) => component.type === 'schedule-strip')).toBe(true)
     })
 
-    it('publishes the weather turn on the update stream', () => {
+    it('moves the turn forward on the update stream without leaving the reading on it', () => {
       const gateway = createGateway()
       const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
       const before = gateway.getTaskUpdates(created.task.taskId).latestCursor
 
-      gateway.submitEvent(created.task.taskId, {
+      const asked = gateway.submitEvent(created.task.taskId, {
         clientRequestId: 'client-weather-sse', expectedTaskRevision: created.task.taskRevision,
         event: { eventId: 'weather-sse', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
       })
 
+      // The turn happened, so the stream moves: the revision the asking client is
+      // now holding is the revision the stream reports, and its next action lines
+      // up with the store.
       const read = gateway.getTaskUpdates(created.task.taskId, before)
       expect(read.updates.length).toBeGreaterThan(0)
-      expect(read.updates.at(-1)?.snapshot.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+      const latest = read.updates.at(-1)?.snapshot
+      expect(latest?.ui.uiRevision).toBe(asked.ui.uiRevision)
+
+      // But the reading itself is not trip state, and the durable snapshot is what
+      // a reconnect and a replayed no-op event both read. Leaving the card there
+      // means a driver who comes back an hour later is shown an hour-old sky. The
+      // answer rides the response that was asked for; the stream keeps the trip.
+      expect(latest?.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+      expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
     })
 
     it('replays an identical weather event id idempotently', () => {
@@ -3674,6 +3685,26 @@ describe('AgentGateway', () => {
           expect.arrayContaining(['ask-weather', 'ask-schedule']),
         )
       }
+    })
+
+    it('gives the brief back on the next real trip event', () => {
+      const { gateway, driving } = drivingTask()
+      const asked = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-side-scene-transient',
+        expectedTaskRevision: driving.task.taskRevision,
+        event: { eventId: 'side-scene-transient', type: 'user.input', text: '看看日程', timestamp: '2026-07-22T12:05:00+08:00' },
+      })
+      expect(asked.ui.components.some((component) => component.type === 'schedule-card')).toBe(true)
+
+      // The answer rode one snapshot. The next thing that actually happens on the
+      // trip recomposes without it, and the ETA is back where it was.
+      const charging = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-side-scene-after',
+        expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'side-scene-after', type: 'charging.started', stationId: 'station-hongqiao-01', timestamp: '2026-07-22T12:06:00+08:00' },
+      })
+      expect(charging.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(charging.ui.components.some((component) => component.id === 'navigation-summary')).toBe(true)
     })
 
     it('refuses the side-scene ids on the action path, which is not where they travel', () => {

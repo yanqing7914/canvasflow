@@ -787,6 +787,97 @@ test('prepares the trip from a flight picked off the arrivals board', async ({ p
   await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
 })
 
+/**
+ * The whole scenario in one pass, driver-side only: the trip is asked for in
+ * words, the flight is picked off a board, the departure time is asked about, the
+ * drive begins, two side scenes are read on the way, and the airport is reached.
+ * Every other e2e here enters somewhere in the middle with the flight number
+ * already typed; this is the only one that walks the arc a driver actually walks,
+ * and its job is to catch a seam between two steps that each pass alone.
+ *
+ * It measures the frame at every generative screen, because the sequence is where
+ * a layout regression hides: a card composed correctly on its own can still be the
+ * second card in a slot that only holds one.
+ */
+test('walks the pickup scenario from the arrivals board to the airport @layout', async ({ page }) => {
+  await page.goto('/')
+
+  // 1 — the intent, in words. No flight number yet, on purpose.
+  await sendText(page)
+  await readControls(page, 'collecting-information')
+  await expectNoScroll(page)
+
+  // 2 — the Agent answers with the arrivals it can actually prepare a trip from,
+  // as a board rather than a question.
+  const board = page.locator('.ui-card--flight-choices')
+  await expect(board).toBeVisible()
+  const rows = page.locator('.ui-flight-choices__row')
+  expect(await rows.count()).toBeGreaterThan(1)
+  await expectNoScroll(page)
+
+  // 3 — the driver picks one, tapped off the board rather than typed. It is the
+  // demo's own flight because the rest of the arc is the timeline authored for it;
+  // that a different row prepares just as well is what the arrivals-board test
+  // above is for.
+  await page.locator('.ui-flight-choices__row', { hasText: 'MU5102' }).click()
+  await readControls(page, 'preparing')
+  await expect(page.locator('.ui-card--flight-status')).toContainText('MU5102')
+  await expect(board).toHaveCount(0)
+  await expectNoScroll(page)
+
+  // 4 — before leaving, the one question the brief cannot answer by itself.
+  await page
+    .locator('.ui-component:has([data-component-id="navigation-plan"])')
+    .getByRole('button', { name: '什么时候出发' })
+    .click()
+  const departure = page.locator('.ui-card--departure-plan')
+  await expect(departure).toBeVisible()
+  await expect(departure).toContainText('落地')
+  await expectNoScroll(page)
+
+  // 5 — and then the drive, which is where the generative screen becomes a cockpit.
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  // The question was transient: it left with the turn, unasked-for state and all.
+  await expect(departure).toHaveCount(0)
+  await expectNoScroll(page)
+
+  // 6 and 7 — the side scenes, read off the brief without leaving the drive.
+  const summary = page.locator('.ui-component:has([data-component-id="navigation-summary"])')
+  await summary.getByRole('button', { name: '看下天气' }).click()
+  await expect(page.locator('.ui-card--weather-card')).toBeVisible()
+  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  await expectNoScroll(page)
+
+  await page
+    .locator('.ui-component:has(.ui-card--weather-card)')
+    .getByRole('button', { name: '看看日程' })
+    .click()
+  await expect(page.locator('.ui-card--schedule-card')).toBeVisible()
+  await expectNoScroll(page)
+
+  // 8 — the trip carries on from where it was. Asking wrote nothing, so the next
+  // real event restores the brief and the arc continues to the airport.
+  await advanceFlow(page) // charging.started
+  await expect(summary).toHaveCount(1)
+  await expect(page.locator('.ui-card--schedule-card')).toHaveCount(0)
+  await advanceFlow(page) // flight in-air
+  await advanceFlow(page) // charging.completed
+  await advanceFlow(page) // flight landed
+  await advanceFlow(page) // message.sent
+  await advanceFlow(page) // airport geofence
+  await readControls(page, 'approaching-airport')
+  await expectNoScroll(page)
+  await advanceFlow(page) // parked
+  await readControls(page, 'waiting-for-passengers')
+  await expectNoScroll(page)
+
+  // Nothing internal reached the driver anywhere along the way.
+  await expect(page.locator('.task-surface')).not.toContainText('route-airport')
+  await expect(page.locator('.task-surface')).not.toContainText('flight.list-arrivals')
+})
+
 test('keeps the task usable around a voice attempt', async ({ page }) => {
   await page.goto('/')
   const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
