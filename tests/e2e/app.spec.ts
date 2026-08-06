@@ -109,9 +109,10 @@ async function expectNoHorizontalOverflow(page: Page) {
  * genuinely fit rather than merely be unscrollable. `.demo-shell` sets
  * `overflow: hidden`, which clamps `document.scrollHeight` to the viewport: a brief
  * taller than the fold is silently clipped instead of scrollable, so asserting on
- * page scroll height alone can never fail. What is checkable is the three ways the
+ * page scroll height alone can never fail. What is checkable is the four ways the
  * rule can actually break — a clipped scroll container, a box clipped across its
- * own width, or the brief's own box extending past the fold.
+ * own width, a line of text ellipsized inside a box that itself fits, or the
+ * brief's own box extending past the fold.
  *
  * The cards are measured alongside the containers because that is where clipping
  * actually lands: `.ui-card` hides its own overflow, so a card starved of height by
@@ -470,6 +471,43 @@ test('draws the offline route panel and steps its marker on authored progress @l
   // to be taller than the 72px band it replaced to be worth its column.
   const canvas = await panel.locator('.ui-route-map__canvas').boundingBox()
   expect(canvas?.height ?? 0).toBeGreaterThan(120)
+
+  // Above the breakpoint the brief stops being a column beside the map and
+  // becomes a panel floating over it, which is a failure mode `expectNoScroll`
+  // cannot see: it measures clipping and overflow, and one box laid over another
+  // overflows nothing. 模拟行程进度 sits at the right end of the map's caption,
+  // exactly where the panel lands, so measure the gap between them directly.
+  const glass = page.locator('.ui-slot--secondary .ui-card--navigation-summary')
+  await expect(glass).toBeVisible()
+  const glassBox = await glass.boundingBox()
+  const mapBox = await panel.boundingBox()
+  expect(glassBox).not.toBeNull()
+  expect(mapBox).not.toBeNull()
+  // First that the takeover happened at all. It is guarded on the rail holding a
+  // single card, and a guard that quietly stops matching would leave an ordinary
+  // two-column split — which still fits the frame and still clears the caption,
+  // so every other assertion here would go on passing over a silent revert.
+  expect(glassBox!.x).toBeGreaterThan(mapBox!.x)
+  expect(glassBox!.x + glassBox!.width).toBeLessThanOrEqual(mapBox!.x + mapBox!.width)
+
+  const captionEnd = await progress.boundingBox()
+  expect(captionEnd).not.toBeNull()
+  expect(captionEnd!.x + captionEnd!.width).toBeLessThanOrEqual(glassBox!.x)
+
+  // The rail turns pointer events off so the map behind it stays draggable, and
+  // the panel has to take them back — at the component, because a card's buttons
+  // render in a sibling of the card. Ask the browser what a click at the panel's
+  // own centre would land on: anything under the glass means the panel is inert.
+  const hitsPanel = await page.evaluate(() => {
+    const card = document.querySelector('.ui-slot--secondary .ui-card--navigation-summary')
+    if (!card) return 'no panel'
+    const box = card.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+    if (!hit) return 'nothing'
+    return hit.closest('.ui-slot--secondary') ? 'panel' : hit.tagName.toLowerCase()
+  })
+  expect(hitsPanel).toBe('panel')
+
   const departedLine = await line.getAttribute('d')
   const departedAt = await vehicle.getAttribute('transform')
   await expectNoScroll(page)
