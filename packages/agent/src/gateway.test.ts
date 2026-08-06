@@ -3208,8 +3208,20 @@ describe('AgentGateway', () => {
       const first = gateway.submitEvent(created.task.taskId, request)
       const second = gateway.submitEvent(created.task.taskId, request)
 
-      expect(second.task).toEqual(first.task)
-      expect(second.ui).toEqual(first.ui)
+      // A repeated question is answered again rather than replayed from a cache:
+      // the same answer, worked out from the same unchanged trip. What replay
+      // protection is for — applying something twice — has nothing to protect
+      // here, and a cached answer would outlive the state it was true of.
+      // The revision is the one thing a read does move — it is how the client's
+      // next write knows which snapshot it was looking at — so it is normalized
+      // out here rather than asserted equal.
+      expect({ ...second.task, uiRevision: 0 }).toEqual({ ...first.task, uiRevision: 0 })
+      expect(second.task.processedEventIds).toEqual(first.task.processedEventIds)
+      expect(second.ui.components).toEqual(first.ui.components)
+      expect(second.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+      // Each answer still moves the revision forward, so the client's next write
+      // is checked against the read it actually saw.
+      expect(second.ui.uiRevision).toBeGreaterThan(first.ui.uiRevision)
     })
 
     it('degrades to a spoken notice on the unchanged snapshot when the weather read fails', () => {
@@ -3411,8 +3423,20 @@ describe('AgentGateway', () => {
       const first = gateway.submitEvent(created.task.taskId, request)
       const second = gateway.submitEvent(created.task.taskId, request)
 
-      expect(second.task).toEqual(first.task)
-      expect(second.ui).toEqual(first.ui)
+      // A repeated question is answered again rather than replayed from a cache:
+      // the same answer, worked out from the same unchanged trip. What replay
+      // protection is for — applying something twice — has nothing to protect
+      // here, and a cached answer would outlive the state it was true of.
+      // The revision is the one thing a read does move — it is how the client's
+      // next write knows which snapshot it was looking at — so it is normalized
+      // out here rather than asserted equal.
+      expect({ ...second.task, uiRevision: 0 }).toEqual({ ...first.task, uiRevision: 0 })
+      expect(second.task.processedEventIds).toEqual(first.task.processedEventIds)
+      expect(second.ui.components).toEqual(first.ui.components)
+      expect(second.ui.components.some((component) => component.type === 'schedule-card')).toBe(true)
+      // Each answer still moves the revision forward, so the client's next write
+      // is checked against the read it actually saw.
+      expect(second.ui.uiRevision).toBeGreaterThan(first.ui.uiRevision)
     })
 
     it('degrades to a spoken notice on the unchanged snapshot when the calendar read fails', () => {
@@ -3542,8 +3566,20 @@ describe('AgentGateway', () => {
       const first = gateway.submitEvent(created.task.taskId, request)
       const second = gateway.submitEvent(created.task.taskId, request)
 
-      expect(second.task).toEqual(first.task)
-      expect(second.ui).toEqual(first.ui)
+      // A repeated question is answered again rather than replayed from a cache:
+      // the same answer, worked out from the same unchanged trip. What replay
+      // protection is for — applying something twice — has nothing to protect
+      // here, and a cached answer would outlive the state it was true of.
+      // The revision is the one thing a read does move — it is how the client's
+      // next write knows which snapshot it was looking at — so it is normalized
+      // out here rather than asserted equal.
+      expect({ ...second.task, uiRevision: 0 }).toEqual({ ...first.task, uiRevision: 0 })
+      expect(second.task.processedEventIds).toEqual(first.task.processedEventIds)
+      expect(second.ui.components).toEqual(first.ui.components)
+      expect(second.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
+      // Each answer still moves the revision forward, so the client's next write
+      // is checked against the read it actually saw.
+      expect(second.ui.uiRevision).toBeGreaterThan(first.ui.uiRevision)
     })
 
     it('says so instead of inventing a time when there is nothing to work backwards from', () => {

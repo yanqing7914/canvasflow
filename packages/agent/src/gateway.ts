@@ -2184,6 +2184,14 @@ export class AgentGateway {
    * still lines up. The answer itself lives only in the response that carries it:
    * a reconnect, a stream replay, or an event that turns out to be a no-op all
    * show the trip, not yesterday's reading of the weather.
+   *
+   * Nor does a query turn record an event result. The replay cache exists so an
+   * event that changed something is not applied twice; a question changed nothing,
+   * so there is nothing to protect — and caching the answer would defeat the point
+   * of not persisting it. A retried question is re-answered from the state the car
+   * is in when the retry arrives, which is the only answer worth giving: a
+   * duplicate that arrived after the trip moved on would otherwise replay a
+   * recommendation about a departure that had already happened.
    */
   #persistBriefBehind(published: StoredTask, current: StoredTask): StoredTask {
     return this.#store.save({
@@ -2232,7 +2240,6 @@ export class AgentGateway {
     }
 
     if (!weather) {
-      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
       return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
         text: '天气服务暂时不可用，稍后可以再问我。',
         shouldSpeak: supportsTts,
@@ -2249,7 +2256,6 @@ export class AgentGateway {
     // and the brief is what the store keeps.
     const answered = { ...published, toolResults: current.toolResults }
     this.#persistBriefBehind(published, current)
-    this.#store.recordEventResult(taskId, request.event.eventId, { stored: answered, effects: [] })
     return this.#response(request.clientRequestId, answered, [], performance.now() - startedAt, {
       text: weatherSpokenSummary(weather.data, arrivalAhead, returning),
       shouldSpeak: supportsTts,
@@ -2281,7 +2287,6 @@ export class AgentGateway {
     }
 
     if (!schedule) {
-      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
       return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
         text: '日程服务暂时不可用，稍后可以再问我。',
         shouldSpeak: supportsTts,
@@ -2298,7 +2303,6 @@ export class AgentGateway {
     // keeps the brief.
     const answered = { ...published, toolResults: current.toolResults }
     this.#persistBriefBehind(published, current)
-    this.#store.recordEventResult(taskId, request.event.eventId, { stored: answered, effects: [] })
     return this.#response(request.clientRequestId, answered, [], performance.now() - startedAt, {
       text: scheduleSpokenSummary(schedule.data.events),
       shouldSpeak: supportsTts,
@@ -2331,7 +2335,6 @@ export class AgentGateway {
     // heading for — no card, and nothing about the trip touched.
     if (hasDeparted(current.task)) {
       const eta = current.task.navigation?.eta
-      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
       return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
         text: eta && current.task.navigation?.destination
           ? `已经在路上了，预计 ${clockLabel(eta)} 到${current.task.navigation.destination}。`
@@ -2341,7 +2344,6 @@ export class AgentGateway {
     }
     const plan = departurePlan(current.task, current.toolResults?.['navigation.plan-route']?.data)
     if (!plan) {
-      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
       return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
         text: '还没有航班和路线可以推算出发时间。',
         shouldSpeak: supportsTts,
@@ -2357,7 +2359,6 @@ export class AgentGateway {
     // The card is not in the persisted toolResults to begin with — it exists
     // because this turn asked — so the brief goes back behind it the same way.
     this.#persistBriefBehind(published, current)
-    this.#store.recordEventResult(taskId, request.event.eventId, { stored: published, effects: [] })
     return this.#response(request.clientRequestId, published, [], performance.now() - startedAt, {
       text: `建议 ${plan.departAtLabel} 出发，路上约 ${plan.driveMinutes} 分钟，比落地早 ${plan.bufferMinutes} 分钟到。`,
       shouldSpeak: supportsTts,
