@@ -25,13 +25,20 @@ import { renderAMapRoute } from './amap/render'
  * `mode` is the composer's read of what the driver needs to see — the whole trip
  * or the part they are on. The sketch reflects the intent in
  * `data-route-map-mode`; the basemap renderer turns it into a camera.
+ *
+ * `theme` is the Agent's, carried in `presentation.theme`, and it reaches the
+ * basemap because a light-tiled map under a dark cabin is the one surface that
+ * would still be daylight at night. It only ever selects a basemap style and a
+ * route colour; what the car reported is upstream of it.
  */
 export function RouteMapCard({
   component,
   drawing,
+  theme,
 }: {
   component: Extract<ComponentSpec, { type: 'route-map' }>
   drawing: RouteSketchDrawing
+  theme: 'light' | 'dark'
 }) {
   const { props } = component
   const mapContainer = useRef<HTMLDivElement>(null)
@@ -45,7 +52,11 @@ export function RouteMapCard({
 
     void loadAMap().then((amap) => {
       if (cancelled || !amap) return
-      return renderAMapRoute(amap, container, { sketch: props.routeSketch, mode: props.mode }).then((rendered) => {
+      return renderAMapRoute(amap, container, {
+        sketch: props.routeSketch,
+        mode: props.mode,
+        theme,
+      }).then((rendered) => {
         if (cancelled) {
           rendered?.destroy()
           return
@@ -62,9 +73,9 @@ export function RouteMapCard({
       handle?.destroy()
       setSource('sketch')
     }
-    // Re-run when the drawn route or the camera intent changes, so a new spec
-    // redraws on the basemap instead of leaving a stale route behind.
-  }, [props.routeSketch, props.mode])
+    // Re-run when the drawn route, the camera intent, or the theme changes, so a
+    // new spec redraws on the basemap instead of leaving a stale route behind.
+  }, [props.routeSketch, props.mode, theme])
 
   return (
     <ComponentSurface

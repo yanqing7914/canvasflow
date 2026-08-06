@@ -641,10 +641,12 @@ function ComponentCard({
   component,
   slotId,
   phase,
+  theme,
 }: {
   component?: unknown
   slotId: string
   phase: UISpec['phase']
+  theme: UISpec['presentation']['theme']
 }) {
   const result = componentSpecSchema.safeParse(component)
   if (!result.success) return <ComponentFallback component={component} slotId={slotId} />
@@ -659,7 +661,7 @@ function ComponentCard({
       // to the same fallback a malformed component would get.
       const drawing = buildRouteSketchDrawing(result.data.props.routeSketch, ROUTE_MAP_DRAWING_OPTIONS)
       return drawing
-        ? <RouteMapCard component={result.data} drawing={drawing} />
+        ? <RouteMapCard component={result.data} drawing={drawing} theme={theme} />
         : <ComponentFallback component={component} slotId={slotId} />
     }
     case 'charging-recommendation': return <ChargingRecommendationCard component={result.data} />
@@ -868,7 +870,7 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
               const actionIds = parsedComponent.success ? componentActionIds(parsedComponent.data) : []
               return (
                 <div className="ui-component" data-component-order={index} key={`${componentId}-${index}`}>
-                  <ComponentCard component={component} slotId={componentId} phase={spec.phase} />
+                  <ComponentCard component={component} slotId={componentId} phase={spec.phase} theme={theme} />
                   <ActionGroup
                     className="ui-card__actions"
                     actionIds={actionIds}

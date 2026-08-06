@@ -59,6 +59,43 @@ export const defaultDemoVehicleContext: CreateTaskRequest['vehicleContext'] = {
   isNight: false,
 }
 
+/**
+ * Whether the car is driving in the dark, from the clock alone.
+ *
+ * A car reads its own light conditions from a sensor; a browser has no such
+ * thing, so the honest stand-in is the local hour. It is deliberately not
+ * `prefers-color-scheme`: the cabin follows the trip, not the desktop theme
+ * somebody set last week, and this trip's 20:25 arrival is a night drive
+ * whether or not the laptop is in light mode.
+ *
+ * The boundary is fixed rather than solar. Real dusk moves with the date and
+ * the latitude, and a demo that changed its own boundary by season would be
+ * claiming a precision it has no data for.
+ */
+export function isNightAt(date: Date): boolean {
+  const hour = date.getHours()
+  return hour < 6 || hour >= 18
+}
+
+/**
+ * The demo's own vehicle reading, with the light condition resolved.
+ *
+ * `override` is the demo drawer's switch: `auto` follows {@link isNightAt}, and
+ * the two explicit values pin it so a screenshot or a walkthrough can show
+ * either state at any hour. Everything else is the same canned reading as
+ * {@link defaultDemoVehicleContext}, which stays a fixed literal so callers
+ * that want a deterministic context still have one.
+ */
+export function demoVehicleContext(
+  override: 'auto' | 'day' | 'night' = 'auto',
+  now: Date = new Date(),
+): CreateTaskRequest['vehicleContext'] {
+  return {
+    ...defaultDemoVehicleContext,
+    isNight: override === 'auto' ? isNightAt(now) : override === 'night',
+  }
+}
+
 const defaultClientCapabilities: CreateTaskRequest['clientCapabilities'] = {
   uiSchemaVersion: '1.0',
   supportsSse: true,
