@@ -252,6 +252,24 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
     }),
   }),
   componentBase.extend({
+    type: z.literal('departure-plan'),
+    props: z.object({
+      /** Clock time the answer leads with, e.g. 20:10. */
+      departAtLabel: z.string().min(1),
+      /** What the departure is timed against, e.g. MU5102 20:40 落地. */
+      arrivalLabel: z.string().min(1),
+      driveMinutes: z.number().int().nonnegative(),
+      /**
+       * How early the recommendation puts the car at the terminal. Stated rather
+       * than folded into the departure time: a driver who wants to cut it finer
+       * can only do that if they can see what was set aside for them.
+       */
+      bufferMinutes: z.number().int().nonnegative(),
+      /** Route variant the drive time came from, e.g. 经超充站. Never a route id. */
+      viaLabel: z.string().min(1).optional(),
+    }),
+  }),
+  componentBase.extend({
     type: z.literal('alert'),
     props: z.object({ level: z.enum(['info', 'warning', 'critical']), title: z.string(), message: z.string().optional() }),
   }),
