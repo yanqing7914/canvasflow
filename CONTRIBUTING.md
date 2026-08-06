@@ -51,6 +51,20 @@ The end-to-end suite needs a browser once per machine:
 npx playwright install chromium
 ```
 
+CI runs Chromium only. The layout specs can also be run against WebKit and
+Gecko, which is where the floating glass panel is actually worth checking —
+`:has()`, `backdrop-filter`, and `display: contents` each behave a little
+differently per engine, and the failures are visual rather than assertable from
+the unit suite. Install the two extra browsers and set the gate:
+
+```bash
+npx playwright install webkit firefox
+PLAYWRIGHT_CROSS_BROWSER=1 npm run test:e2e -- --grep @layout
+```
+
+Without the variable the two projects do not exist, so the default run stays on
+the browser CI has.
+
 ## Shared repository setup
 
 ```bash

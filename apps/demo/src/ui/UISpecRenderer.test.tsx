@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ComponentSpec, UISpec } from '@canvasflow/schema'
 import { UISpecRenderer } from './UISpecRenderer'
@@ -1196,6 +1196,31 @@ describe('UISpecRenderer route map panel', () => {
 
   const followProps = { destination: '虹桥机场 T2', mode: 'follow', routeSketch: { ...viaCharge, progress: 0.4 } }
 
+  /** The card that rides in the rail beside the map, on its own. */
+  function navigationCard(id = 'navigation'): ComponentSpec {
+    return {
+      id,
+      type: 'navigation-summary',
+      props: {
+        routeId: 'route-airport-via-charge-001',
+        destination: '虹桥机场 T2',
+        eta: '2026-07-22T20:37:00+08:00',
+        distanceKm: 38,
+        estimatedBatteryAtArrival: 55,
+      },
+    } as ComponentSpec
+  }
+
+  /** A legal state the density trim allows: a map beside two cards, not one. */
+  function railOfTwo(): UISpec {
+    const spec = splitSpec(followProps)
+    return {
+      ...spec,
+      layout: { type: 'split', ratio: [1.75, 1], slots: { primary: ['route-map'], secondary: ['navigation', 'second'] } },
+      components: [...spec.components, navigationCard('second')],
+    } as UISpec
+  }
+
   function renderer() {
     return screen.getByRole('region', { name: 'Generated task interface' })
   }
@@ -1251,15 +1276,15 @@ describe('UISpecRenderer route map panel', () => {
     expect(panel()!.querySelector('.ui-route-map__progress')).not.toBeInTheDocument()
   })
 
-  it('moves the marker only when a new spec carries a different authored value', () => {
+  it('holds the marker where the spec put it when no crawl is authored', () => {
     const { rerender } = render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
     const before = {
       path: panel()!.querySelector('.ui-route-map__line')!.getAttribute('d'),
       vehicle: panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform'),
     }
 
-    // Same geometry, same progress, new render: nothing in this component
-    // advances on its own, so the marker has not budged.
+    // Same geometry, same progress, no authored span, new render: there is
+    // nothing for the component to move between, so the marker has not budged.
     rerender(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
     expect(panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform')).toBe(before.vehicle)
 
@@ -1273,6 +1298,102 @@ describe('UISpecRenderer route map panel', () => {
     expect(panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform')).not.toBe(before.vehicle)
     expect(panel()!.querySelector('.ui-route-map__line')!.getAttribute('d')).toBe(before.path)
     expect(panel()!.querySelector('.ui-route-map__progress')).toHaveTextContent('模拟行程进度 72%')
+  })
+
+  /**
+   * The crawl, seen from the outside: what the driver actually reads.
+   *
+   * `crawl.test.ts` covers the interpolation itself. What matters here is that
+   * the marker and the percentage are one reading rather than two — a caption
+   * that lagged the dot would be the panel contradicting itself — and that the
+   * crawl stops at the authored bound instead of running to the destination.
+   *
+   * Frames are driven by hand through `requestAnimationFrame`, so no test waits
+   * on a real one and every assertion lands on an exact position.
+   */
+  describe('authored crawl', () => {
+    const crawlProps = {
+      destination: '虹桥机场 T2',
+      mode: 'follow',
+      routeSketch: { ...viaCharge, progress: 0.4, crawl: { toProgress: 0.6, durationSeconds: 10 } },
+    }
+
+    let frames: Array<(timestampMs: number) => void> = []
+
+    beforeEach(() => {
+      frames = []
+      vi.stubGlobal('requestAnimationFrame', (callback: (timestampMs: number) => void) => {
+        frames.push(callback)
+        return frames.length
+      })
+      vi.stubGlobal('cancelAnimationFrame', (handle: number) => { frames[handle - 1] = () => {} })
+    })
+
+    afterEach(() => { vi.unstubAllGlobals() })
+
+    function step(timestampMs: number) {
+      const due = frames
+      frames = []
+      act(() => { for (const frame of due) frame(timestampMs) })
+    }
+
+    function reading() {
+      return {
+        vehicle: panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform'),
+        percent: panel()!.querySelector('.ui-route-map__progress')!.textContent,
+      }
+    }
+
+    it('moves the marker and the percentage as one reading', () => {
+      render(<UISpecRenderer spec={splitSpec(crawlProps)} onAction={vi.fn()} pending={false} />)
+
+      step(0)
+      const start = reading()
+      expect(start.percent).toBe('模拟行程进度 40%')
+
+      step(5000)
+      const halfway = reading()
+      expect(halfway.percent).toBe('模拟行程进度 50%')
+      expect(halfway.vehicle).not.toBe(start.vehicle)
+    })
+
+    it('stops at the authored bound rather than at the destination', () => {
+      render(<UISpecRenderer spec={splitSpec(crawlProps)} onAction={vi.fn()} pending={false} />)
+
+      step(0)
+      step(60_000)
+      expect(reading().percent).toBe('模拟行程进度 60%')
+
+      // The span is spent, so nothing further is scheduled and the marker holds
+      // well short of the 100% it would reach if this were a run to the end.
+      expect(frames).toHaveLength(0)
+      const settled = reading()
+      step(120_000)
+      expect(reading()).toEqual(settled)
+    })
+
+    it('never schedules a frame for a spec that authored no crawl', () => {
+      render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+      expect(frames).toHaveLength(0)
+      expect(panel()!.querySelector('.ui-route-map__progress')).toHaveTextContent('模拟行程进度 40%')
+    })
+
+    it('restarts from the new authored value when a new spec arrives mid-crawl', () => {
+      const { rerender } = render(<UISpecRenderer spec={splitSpec(crawlProps)} onAction={vi.fn()} pending={false} />)
+      step(0)
+      step(5000)
+      expect(reading().percent).toBe('模拟行程进度 50%')
+
+      // A new checkpoint is the truth; whatever the last span had crawled to is
+      // dropped rather than carried onto it.
+      rerender(<UISpecRenderer
+        spec={splitSpec({ ...crawlProps, routeSketch: { ...viaCharge, progress: 0.72 } })}
+        onAction={vi.fn()}
+        pending={false}
+      />)
+      expect(reading().percent).toBe('模拟行程进度 72%')
+    })
   })
 
   it('costs the panel its own slot when the geometry is unusable, and nothing else', () => {
@@ -1306,6 +1427,106 @@ describe('UISpecRenderer route map panel', () => {
       expect(renderer().querySelector('.ui-route-facts')).toHaveTextContent('38')
       unmount()
     }
+  })
+
+  /**
+   * The fold: the one thing on this surface the driver decides rather than the
+   * Agent.
+   *
+   * What the collapsed state actually looks like is the stylesheet's, and
+   * `glass-panel-scope.test.ts` holds it to the same single-card guard as the
+   * rest of the panel. What is pinned here is the contract the styles hang off:
+   * that the control exists only where a panel does, that `data-panel` reports
+   * the driver's choice, and that the choice survives the Agent replacing the
+   * spec underneath it.
+   */
+  describe('minimizing the floating panel', () => {
+    function brief() {
+      return renderer().querySelector('.ui-card--navigation-summary')
+    }
+
+    function fold() {
+      return screen.queryByRole('button', { name: /面板$/ })
+    }
+
+    it('offers the fold on the panel, and reports which way it is folded', async () => {
+      const user = userEvent.setup()
+      render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+      // Open is the state the Agent's spec arrives in; the driver opts out of it.
+      expect(brief()).toHaveAttribute('data-panel', 'expanded')
+      expect(fold()).toHaveAccessibleName('收起面板')
+      expect(fold()).toHaveAttribute('aria-expanded', 'true')
+
+      await user.click(fold()!)
+      expect(brief()).toHaveAttribute('data-panel', 'collapsed')
+      expect(fold()).toHaveAccessibleName('展开面板')
+      expect(fold()).toHaveAttribute('aria-expanded', 'false')
+
+      await user.click(fold()!)
+      expect(brief()).toHaveAttribute('data-panel', 'expanded')
+    })
+
+    it('names the region it folds away, so the state is not the button alone', () => {
+      render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+      const controls = fold()!.getAttribute('aria-controls')
+      expect(controls).toBeTruthy()
+      expect(document.getElementById(controls!)).toBeInTheDocument()
+    })
+
+    it('keeps the destination and the ETA in the DOM while folded', async () => {
+      const user = userEvent.setup()
+      render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+      await user.click(fold()!)
+
+      // The two answers a driver glances down for stay; only the detail region
+      // goes, and it goes to a stylesheet rule rather than to an unmount — a
+      // window narrowed below the panel's breakpoint has to show a whole card
+      // again, not a folded one with no control left to open it.
+      expect(brief()!.querySelector('.ui-navigation-brief__destination')).toHaveTextContent('虹桥机场 T2')
+      expect(brief()!.querySelector('.ui-navigation-eta')).toHaveTextContent('20:37')
+      expect(brief()!.querySelector('.ui-navigation-brief__detail')).toBeInTheDocument()
+    })
+
+    it('holds the fold across a new spec for the same trip', async () => {
+      const user = userEvent.setup()
+      const { rerender } = render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+      await user.click(fold()!)
+
+      // A newer UISpec is newer trip facts, not a fresh opinion about how much of
+      // the panel the driver wanted to see.
+      rerender(<UISpecRenderer
+        spec={splitSpec({ ...followProps, routeSketch: { ...viaCharge, progress: 0.72 } })}
+        onAction={vi.fn()}
+        pending={false}
+      />)
+      expect(brief()).toHaveAttribute('data-panel', 'collapsed')
+    })
+
+    it('has no fold where the card is a column rather than a panel', () => {
+      // Nothing behind an ordinary card to uncover, so there is nothing to fold
+      // it away for. Each of these fails a different clause of the guard.
+      const notPanels: UISpec[] = [
+        // No map: the split is two ordinary columns.
+        baseSpec({
+          layout: { type: 'split', ratio: [1, 1], slots: { primary: ['navigation'], secondary: ['navigation'] } },
+          components: [navigationCard()],
+        }),
+        // A map whose geometry will not draw renders the fallback, which the
+        // stylesheet's `:has(.ui-card--route-map)` never matches.
+        splitSpec({ destination: '虹桥机场 T2', mode: 'follow', routeSketch: { ...viaCharge, polyline: [] } }),
+        // Two cards in the rail: the takeover is off, so the panel is off too.
+        railOfTwo(),
+      ]
+
+      for (const spec of notPanels) {
+        const { unmount } = render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+        expect(fold()).toBeNull()
+        expect(renderer().querySelector('[data-panel]')).toBeNull()
+        unmount()
+      }
+    })
   })
 
   it('keeps route ids, fixture names, and prop names out of the panel', () => {

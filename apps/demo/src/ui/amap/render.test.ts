@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RouteSketch } from '@canvasflow/schema'
-import type { AMapApi, AMapOverlay } from './loader'
+import type { AMapApi, AMapMarker, AMapPolyline } from './loader'
 import { renderAMapRoute } from './render'
 
 const sketch: RouteSketch = {
@@ -19,6 +19,11 @@ const sketch: RouteSketch = {
 function fakeAMap() {
   const mapOptions: Array<Record<string, unknown> | undefined> = []
   const polylineOptions: Array<Record<string, unknown>> = []
+  /** Every path the traversed tail has been given, in order, starting with its
+      constructor argument — so a test can see the tail grow rather than only
+      where it ended up. */
+  const tailPaths: Array<Array<[number, number]>> = []
+  const markerPositions: Array<[number, number]> = []
   const destroy = vi.fn()
   const remove = vi.fn()
   const map = {
@@ -50,13 +55,21 @@ function fakeAMap() {
   class Polyline {
     constructor(options: Record<string, unknown>) {
       polylineOptions.push(options)
-      return {} as AMapOverlay
+      // The route line is built first and never moves; only the second polyline,
+      // the traversed tail, is the one `setProgress` rewrites.
+      const isTail = polylineOptions.length === 2
+      if (isTail) tailPaths.push(options.path as Array<[number, number]>)
+      return {
+        setPath: (path: Array<[number, number]>) => { if (isTail) tailPaths.push(path) },
+      } as unknown as AMapPolyline
     }
   }
   class Marker {
     constructor(options: Record<string, unknown>) {
-      void options
-      return {} as AMapOverlay
+      markerPositions.push(options.position as [number, number])
+      return {
+        setPosition: (position: [number, number]) => { markerPositions.push(position) },
+      } as unknown as AMapMarker
     }
   }
   class LngLat {
@@ -67,8 +80,10 @@ function fakeAMap() {
     amap: { Map, Driving, Polyline, Marker, LngLat } as unknown as AMapApi,
     destroy,
     mapOptions,
+    markerPositions,
     polylineOptions,
     remove,
+    tailPaths,
   }
 }
 
@@ -93,5 +108,73 @@ describe('renderAMapRoute themes', () => {
     handle?.destroy()
     expect(fake.remove).toHaveBeenCalled()
     expect(fake.destroy).toHaveBeenCalledOnce()
+  })
+})
+
+/**
+ * `setProgress` is the whole of the crawl's reach into the map.
+ *
+ * It moves a marker and rewrites a tail on geometry that is already drawn; it
+ * starts nothing, schedules nothing, and holds no position of its own. These
+ * tests pin that: the same call twice with the same value is the same result,
+ * and a route with no marker to move accepts the call and does nothing.
+ */
+describe('renderAMapRoute progress', () => {
+  async function rendered(routeSketch: RouteSketch = sketch) {
+    const fake = fakeAMap()
+    const handle = await renderAMapRoute(fake.amap, document.createElement('div'), {
+      sketch: routeSketch,
+      mode: 'follow',
+      theme: 'light',
+    })
+    return { fake, handle: handle! }
+  }
+
+  it('moves the marker and grows the traversed tail together', async () => {
+    const { fake, handle } = await rendered()
+    const startedAt = fake.markerPositions.at(-1)!
+    const tailAtStart = fake.tailPaths.at(-1)!
+
+    handle.setProgress(0.9)
+
+    const movedTo = fake.markerPositions.at(-1)!
+    const tailAfter = fake.tailPaths.at(-1)!
+    expect(movedTo).not.toEqual(startedAt)
+    // Further along the route means further west and south on this geometry.
+    expect(movedTo[0]).toBeLessThan(startedAt[0])
+    expect(tailAfter.length).toBeGreaterThanOrEqual(tailAtStart.length)
+    expect(tailAfter.at(-1)).toEqual(movedTo)
+  })
+
+  it('places the marker exactly at the ends of the route', async () => {
+    const { fake, handle } = await rendered()
+
+    handle.setProgress(0)
+    expect(fake.markerPositions.at(-1)).toEqual([121.47, 31.23])
+
+    handle.setProgress(1)
+    expect(fake.markerPositions.at(-1)).toEqual([121.336, 31.198])
+  })
+
+  it('ignores a value that is not a position on the route', async () => {
+    const { fake, handle } = await rendered()
+    const before = fake.markerPositions.length
+
+    handle.setProgress(1.5)
+    handle.setProgress(-0.2)
+    handle.setProgress(Number.NaN)
+
+    expect(fake.markerPositions).toHaveLength(before)
+  })
+
+  it('is a no-op on a route the spec staged no marker for', async () => {
+    // Rebuilt rather than spread-and-omitted so the absent `progress` is the
+    // point of the fixture rather than a detail of how it was derived.
+    const withoutProgress: RouteSketch = { waypoints: sketch.waypoints, polyline: sketch.polyline }
+    const { fake, handle } = await rendered(withoutProgress)
+
+    expect(fake.markerPositions).toHaveLength(0)
+    expect(() => handle.setProgress(0.5)).not.toThrow()
+    expect(fake.markerPositions).toHaveLength(0)
   })
 })

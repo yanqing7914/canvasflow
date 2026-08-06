@@ -47,8 +47,66 @@ const returnTrip: NonNullable<AirportPickupTaskState['returnTrip']> = {
   media: { status: 'pending' },
 }
 
-describe('routeSketchProgress', () => {
-  it('reads every step of the ladder from the fixture rather than accumulating one', () => {
+/**
+ * The crawl spans, checked as a ladder rather than one at a time.
+ *
+ * The fixture's own prose makes two promises the renderer then relies on: a span
+ * only ever moves forwards, and it stops short of the next authored stage. The
+ * second is the one that matters — a bound that reached or passed the next
+ * checkpoint would let the marker present a stage the Agent has not sent, which
+ * is exactly the claim the demo must not make. Both are properties of the
+ * fixture as a whole, so they are asserted across it rather than spot-checked.
+ */
+describe('authored crawl spans', () => {
+  const crawling = routeProgressCheckpoints.filter((checkpoint) => checkpoint.crawl)
+
+  it('authors a crawl for the driving stages and none for the stopped ones', () => {
+    // Named rather than counted, so adding a checkpoint has to say which it is.
+    expect(crawling.map((checkpoint) => checkpoint.id)).toEqual([
+      'outbound-departed',
+      'outbound-charged',
+      'outbound-flight-landed',
+      'airport-approach',
+      'return-departed',
+      'return-cabin-ready',
+    ])
+    for (const id of ['outbound-charging-under-way', 'airport-parked', 'home-arrived']) {
+      expect(routeProgressCheckpoints.find((entry) => entry.id === id)?.crawl, id).toBeUndefined()
+    }
+  })
+
+  it.each(crawling)('moves $id forwards over a positive duration', (checkpoint) => {
+    expect(checkpoint.crawl!.toProgress).toBeGreaterThan(checkpoint.progress)
+    expect(checkpoint.crawl!.toProgress).toBeLessThanOrEqual(1)
+    expect(checkpoint.crawl!.durationSeconds).toBeGreaterThan(0)
+  })
+
+  it('stops every span short of the next stage on the same leg', () => {
+    // The ladder restarts at `return-departed` — the sketch becomes the home
+    // route there, so its 0.08 is a different line's 0.08 and comparing across
+    // the two legs would be comparing different geometry.
+    const legStart = routeProgressCheckpoints.findIndex((entry) => entry.id === 'return-departed')
+    for (const [index, checkpoint] of routeProgressCheckpoints.entries()) {
+      if (!checkpoint.crawl) continue
+      const next = routeProgressCheckpoints[index + 1]
+      if (!next || index + 1 === legStart) continue
+      expect(checkpoint.crawl.toProgress, `${checkpoint.id} -> ${next.id}`).toBeLessThan(next.progress)
+    }
+  })
+
+  it('carries the authored span onto the sketch, and omits it where none is authored', () => {
+    expect(routeSketchFor(taskState(), { routeId: 'route-airport-001' })?.crawl)
+      .toEqual({ toProgress: 0.34, durationSeconds: 90 })
+    const parked = routeSketchFor(
+      taskState({ phase: 'waiting-for-passengers' }),
+      { routeId: 'route-airport-001' },
+    )
+    expect(parked?.progress).toBe(1)
+    expect(parked?.crawl).toBeUndefined()
+  })
+})
+
+describe('routeSketchProgress', () => {  it('reads every step of the ladder from the fixture rather than accumulating one', () => {
     // Anchor the first value so a fixture edit shows up as a behaviour change,
     // then compare the rest against the fixture itself: nothing here is computed.
     expect(routeSketchProgress(taskState())).toBe(0.08)

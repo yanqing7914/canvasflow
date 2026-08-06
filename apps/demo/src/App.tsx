@@ -19,6 +19,7 @@ import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, demoVehicleContext, isNightAt } from './agent-client'
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
+import { GLASS_TIERS, useGlassTier } from './ui/glass-capability'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 import {
   createFixtureRecognition,
@@ -658,6 +659,12 @@ export default function App({
   // overstates what the model did. Rules-only turns render nothing.
   const modelUsed = response?.meta.modelUsed
 
+  // How expensive the floating panel's blur is allowed to be on this machine.
+  // Decided from what the device reports about itself rather than from which
+  // engine is running, so a capable browser is never punished for being the
+  // minority one — see `glass-capability.ts`.
+  const glassTier = useGlassTier()
+
   return (
     <main
       className="demo-shell"
@@ -666,6 +673,8 @@ export default function App({
       data-density={spec?.presentation.density}
       data-theme={spec?.presentation.theme}
       data-priority={spec?.presentation.priority}
+      data-glass={glassTier}
+      style={GLASS_TIERS[glassTier]}
     >
       <section className="cockpit-stage" aria-label="机场接人任务">
         <section

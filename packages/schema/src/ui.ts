@@ -51,11 +51,30 @@ export const routeSketchSchema = z.object({
   /** Ordered sketch line; two points is the minimum that can be drawn. */
   polyline: z.array(routeSketchPointSchema).min(2),
   /**
-   * Discrete simulated trip progress along the sketch: 0 is the start, 1 the end.
-   * Authored per task state by fixtures — the UI never advances it on its own, and
-   * an absent value means "no vehicle marker" rather than "at the start".
+   * Simulated trip progress along the sketch: 0 is the start, 1 the end. Authored
+   * per task state by fixtures, and an absent value means "no vehicle marker"
+   * rather than "at the start". Where {@link routeSketchSchema.shape.crawl} is
+   * present this is the near end of the authored span rather than a fixed point.
    */
   progress: z.number().min(0).max(1).optional(),
+  /**
+   * How far the marker may drift from `progress` while the task state holds, and
+   * over how long.
+   *
+   * A car under way that sits perfectly still until the next event reads as a
+   * frozen demo, so the marker crawls — but only between two points the fixture
+   * authored, at a rate the fixture authored, and it stops dead at `toProgress`.
+   * The UI interpolates inside that span; it does not choose either end of it,
+   * extend it, or carry it past a task state the Agent has not sent. Absent means
+   * the marker holds at `progress`, which is every parked, charging, and arrived
+   * state.
+   */
+  crawl: z.object({
+    /** The far end of the authored span. Always beyond `progress`, never past 1. */
+    toProgress: z.number().min(0).max(1),
+    /** Wall-clock seconds the span takes end to end, so the rate is authored too. */
+    durationSeconds: z.number().positive(),
+  }).optional(),
 })
 
 export const componentSpecSchema = z.discriminatedUnion('type', [

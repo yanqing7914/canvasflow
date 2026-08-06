@@ -15,8 +15,8 @@
 export type AMapApi = {
   Map: new (container: HTMLElement, options?: Record<string, unknown>) => AMapMap
   Driving: new (options?: Record<string, unknown>) => AMapDriving
-  Polyline: new (options: Record<string, unknown>) => AMapOverlay
-  Marker: new (options: Record<string, unknown>) => AMapOverlay
+  Polyline: new (options: Record<string, unknown>) => AMapPolyline
+  Marker: new (options: Record<string, unknown>) => AMapMarker
   LngLat: new (lng: number, lat: number) => unknown
 }
 
@@ -37,7 +37,24 @@ export type AMapDriving = {
   ) => void
 }
 
+/**
+ * An overlay the panel has added to the map.
+ *
+ * Structurally empty because nothing generic is read off one — they are handed
+ * back to `map.remove` and no further. The two the crawl repositions are narrower
+ * types below, so a plain overlay still cannot be moved by accident.
+ */
 export type AMapOverlay = Record<string, never>
+
+/** A marker the crawl moves, rather than removes and rebuilds each frame. */
+export type AMapMarker = AMapOverlay & {
+  setPosition: (position: [number, number]) => void
+}
+
+/** A polyline whose points the crawl rewrites, for the traversed tail. */
+export type AMapPolyline = AMapOverlay & {
+  setPath: (path: Array<[number, number]>) => void
+}
 
 type AMapWindow = typeof globalThis & {
   AMap?: AMapApi

@@ -37,6 +37,8 @@ const stylesheet = readFileSync(
 
 const AAA = 7
 const AA = 4.5
+/** The alpha the fold control repaints the panel's own base at. */
+const FOLD_FILL = 0.5
 
 /** WCAG 2.x relative luminance of an `#rrggbb` colour. */
 function relativeLuminance(hex: string): number {
@@ -134,6 +136,24 @@ describe('floating navigation panel contrast', () => {
       // same floor; the reduced-transparency branch drops the alpha entirely and
       // clears it trivially.
       expect(Number.parseFloat(token(block, 'glass-fill-solid'))).toBeGreaterThanOrEqual(fill)
+    })
+
+    it('keeps the fold control at least as readable as the panel it sits on', () => {
+      // The control paints the panel's own base again at `FOLD_FILL`, so the two
+      // layers stack to `FOLD_FILL + fill x (1 - FOLD_FILL)` over the same worst
+      // case. That is more opaque than the panel by construction, and more opaque
+      // is more contrast in both themes — for opposite reasons, per the block
+      // comment above. The point of measuring it rather than asserting it is that
+      // painting the control from any other colour breaks the argument, and a
+      // chevron the driver cannot find is a panel they cannot reopen.
+      expect(stylesheet).toContain(`background: rgb(var(--glass-base) / ${FOLD_FILL});`)
+      const stacked = FOLD_FILL + fill * (1 - FOLD_FILL)
+      expect(stacked).toBeGreaterThan(fill)
+      const onControl = contrastRatio(token(block, 'glass-ink'), worstCaseBackdrop(base, stacked, over))
+      expect(onControl).toBeGreaterThanOrEqual(contrastRatio(token(block, 'glass-ink'), backdrop))
+      // A chevron is a graphic, so 3:1 is its own floor; it clears the text floor
+      // here because it is drawn in the text colour.
+      expect(onControl).toBeGreaterThanOrEqual(AAA)
     })
   })
 })
