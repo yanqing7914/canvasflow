@@ -3208,20 +3208,13 @@ describe('AgentGateway', () => {
       const first = gateway.submitEvent(created.task.taskId, request)
       const second = gateway.submitEvent(created.task.taskId, request)
 
-      // A repeated question is answered again rather than replayed from a cache:
-      // the same answer, worked out from the same unchanged trip. What replay
-      // protection is for — applying something twice — has nothing to protect
-      // here, and a cached answer would outlive the state it was true of.
-      // The revision is the one thing a read does move — it is how the client's
-      // next write knows which snapshot it was looking at — so it is normalized
-      // out here rather than asserted equal.
-      expect({ ...second.task, uiRevision: 0 }).toEqual({ ...first.task, uiRevision: 0 })
-      expect(second.task.processedEventIds).toEqual(first.task.processedEventIds)
-      expect(second.ui.components).toEqual(first.ui.components)
+      // A retry that lands while the trip is where it was gets the response it
+      // lost, whole — snapshot, card, and spoken line — and does not move the
+      // revision a second time.
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+      expect(second.assistant).toEqual(first.assistant)
       expect(second.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
-      // Each answer still moves the revision forward, so the client's next write
-      // is checked against the read it actually saw.
-      expect(second.ui.uiRevision).toBeGreaterThan(first.ui.uiRevision)
     })
 
     it('degrades to a spoken notice on the unchanged snapshot when the weather read fails', () => {
@@ -3423,20 +3416,13 @@ describe('AgentGateway', () => {
       const first = gateway.submitEvent(created.task.taskId, request)
       const second = gateway.submitEvent(created.task.taskId, request)
 
-      // A repeated question is answered again rather than replayed from a cache:
-      // the same answer, worked out from the same unchanged trip. What replay
-      // protection is for — applying something twice — has nothing to protect
-      // here, and a cached answer would outlive the state it was true of.
-      // The revision is the one thing a read does move — it is how the client's
-      // next write knows which snapshot it was looking at — so it is normalized
-      // out here rather than asserted equal.
-      expect({ ...second.task, uiRevision: 0 }).toEqual({ ...first.task, uiRevision: 0 })
-      expect(second.task.processedEventIds).toEqual(first.task.processedEventIds)
-      expect(second.ui.components).toEqual(first.ui.components)
+      // A retry that lands while the trip is where it was gets the response it
+      // lost, whole — snapshot, card, and spoken line — and does not move the
+      // revision a second time.
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+      expect(second.assistant).toEqual(first.assistant)
       expect(second.ui.components.some((component) => component.type === 'schedule-card')).toBe(true)
-      // Each answer still moves the revision forward, so the client's next write
-      // is checked against the read it actually saw.
-      expect(second.ui.uiRevision).toBeGreaterThan(first.ui.uiRevision)
     })
 
     it('degrades to a spoken notice on the unchanged snapshot when the calendar read fails', () => {
@@ -3566,20 +3552,42 @@ describe('AgentGateway', () => {
       const first = gateway.submitEvent(created.task.taskId, request)
       const second = gateway.submitEvent(created.task.taskId, request)
 
-      // A repeated question is answered again rather than replayed from a cache:
-      // the same answer, worked out from the same unchanged trip. What replay
-      // protection is for — applying something twice — has nothing to protect
-      // here, and a cached answer would outlive the state it was true of.
-      // The revision is the one thing a read does move — it is how the client's
-      // next write knows which snapshot it was looking at — so it is normalized
-      // out here rather than asserted equal.
-      expect({ ...second.task, uiRevision: 0 }).toEqual({ ...first.task, uiRevision: 0 })
-      expect(second.task.processedEventIds).toEqual(first.task.processedEventIds)
-      expect(second.ui.components).toEqual(first.ui.components)
+      // A retry that lands while the trip is where it was gets the response it
+      // lost, whole — snapshot, card, and spoken line — and does not move the
+      // revision a second time.
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+      expect(second.assistant).toEqual(first.assistant)
       expect(second.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
-      // Each answer still moves the revision forward, so the client's next write
-      // is checked against the read it actually saw.
-      expect(second.ui.uiRevision).toBeGreaterThan(first.ui.uiRevision)
+    })
+
+    it('answers a duplicate afresh once the trip has moved past the answer it replayed', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-departure-stale', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-stale', type: 'user.input' as const, text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+      const asked = gateway.submitEvent(created.task.taskId, request)
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
+
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-after-stale-question',
+        expectedTaskRevision: asked.task.taskRevision,
+        expectedUiRevision: asked.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-after-stale-question',
+      })
+      expect(driving.task.phase).toBe('driving-to-airport')
+
+      // The same eventId, arriving late. Replaying the recommendation here would
+      // put advice about a departure back on screen after the car made it, so the
+      // duplicate is answered from where the car is instead.
+      const late = gateway.submitEvent(created.task.taskId, { ...request, expectedTaskRevision: driving.task.taskRevision })
+      expect(late.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
+      expect(late.assistant?.text).toContain('已经在路上了')
+      expect(late.task.taskRevision).toBe(driving.task.taskRevision)
     })
 
     it('says so instead of inventing a time when there is nothing to work backwards from', () => {
