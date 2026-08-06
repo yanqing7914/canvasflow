@@ -3634,6 +3634,62 @@ describe('AgentGateway', () => {
     })
   })
 
+  describe('en-route side scenes', () => {
+    function drivingTask() {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-for-side-scenes',
+        expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-for-side-scenes',
+      })
+      expect(driving.task.phase).toBe('driving-to-airport')
+      return { gateway, driving }
+    }
+
+    it('offers both side scenes on the driving brief and answers each from its own label', () => {
+      const { gateway, driving } = drivingTask()
+      const offered = driving.ui.actions.filter((action) => action.id === 'ask-weather' || action.id === 'ask-schedule')
+      expect(offered).toHaveLength(2)
+
+      for (const [index, action] of offered.entries()) {
+        if (action.event.type !== 'agent-message') throw new Error('expected an agent-message action')
+        const asked = gateway.submitEvent(driving.task.taskId, {
+          clientRequestId: `client-side-scene-${index}`,
+          expectedTaskRevision: driving.task.taskRevision,
+          event: { eventId: `side-scene-${index}`, type: 'user.input', text: action.event.text, timestamp: '2026-07-22T12:05:00+08:00' },
+        })
+
+        // Answered mid-drive, and the drive is untouched by the answering.
+        expect(asked.task.phase).toBe('driving-to-airport')
+        expect(asked.task.taskRevision).toBe(driving.task.taskRevision)
+        expect(asked.ui.components.some((component) => (
+          component.type === 'weather-card' || component.type === 'schedule-card'
+        ))).toBe(true)
+        // Reading one must not cost the driver the way back to the other.
+        expect(asked.ui.actions.map((candidate) => candidate.id)).toEqual(
+          expect.arrayContaining(['ask-weather', 'ask-schedule']),
+        )
+      }
+    })
+
+    it('refuses the side-scene ids on the action path, which is not where they travel', () => {
+      const { gateway, driving } = drivingTask()
+
+      expect(() => gateway.submitAction(driving.task.taskId, {
+        clientRequestId: 'client-side-scene-action',
+        expectedTaskRevision: driving.task.taskRevision,
+        expectedUiRevision: driving.ui.uiRevision,
+        actionId: 'ask-weather',
+        componentId: 'navigation-summary',
+        idempotencyKey: 'side-scene-action',
+      })).toThrow(/Action is not registered/)
+    })
+  })
+
   describe('arrivals board turn', () => {
     function boardOf(ui: UISpec) {
       const component = ui.components.find((candidate) => candidate.type === 'flight-choices')

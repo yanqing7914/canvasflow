@@ -1522,7 +1522,13 @@ a:focus-visible {
   }
 
   .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
-    .ui-card--navigation-summary {
+    .ui-card--navigation-summary,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--weather-card,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--schedule-card,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--departure-plan {
     height: auto;
     padding: clamp(20px, 2.6vh, 32px) clamp(20px, 1.8vw, 32px);
     /* A hairline of the panel's own light rather than a drawn outline: it catches
@@ -1580,19 +1586,108 @@ a:focus-visible {
     right: var(--glass-rail);
   }
 
+  /* The three query answers are bands on the full-width brief and cannot be bands
+     in the rail: every figure on them is `nowrap`, and the panel is a third of the
+     row. In here they stand up into short stacks instead — the header above the
+     reading, one item per line — which is the same content at the width it has,
+     not a smaller version of the band.
+
+     The dots and the connecting rules go with the row: they separated items along
+     a line, and a column separates them already. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--weather-card,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--schedule-card,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--departure-plan {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: clamp(10px, 1.6vh, 18px);
+    border-top: 0;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-weather-brief__reading {
+    flex-wrap: wrap;
+    row-gap: clamp(6px, 1vh, 12px);
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-weather-brief__advisory {
+    white-space: normal;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__list,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__facts {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: clamp(6px, 1vh, 12px);
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__event {
+    width: 100%;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__event + .ui-schedule-card__event::before,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__fact + .ui-departure-plan__fact::before {
+    content: none;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__fact {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Same reason the brief's own labels are re-toned in here: `--muted` does not
+     clear AA over the glass. See the token block. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-weather-brief__eyebrow,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-weather-brief__fact,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__eyebrow,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__location,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__eyebrow,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__fact--via {
+    color: var(--glass-label);
+  }
+
   /* Without `backdrop-filter` the panel would be a flat translucent wash with the
      map legible straight through it — worse to read than no effect at all. Go
      nearly opaque instead: the layering survives, the transparency does not. */
   @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
     .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
-      .ui-card--navigation-summary {
+      .ui-card--navigation-summary,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--weather-card,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--schedule-card,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--departure-plan {
       background: rgb(var(--glass-base) / var(--glass-fill-solid));
     }
   }
 
   @media (prefers-reduced-transparency: reduce) {
     .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
-      .ui-card--navigation-summary {
+      .ui-card--navigation-summary,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--weather-card,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--schedule-card,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--departure-plan {
       background: rgb(var(--glass-base));
       -webkit-backdrop-filter: none;
       backdrop-filter: none;

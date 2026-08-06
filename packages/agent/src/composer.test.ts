@@ -7,7 +7,7 @@ import {
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from '@canvasflow/tools'
-import { ASK_DEPARTURE_TIME_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent } from './composer'
+import { ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent } from './composer'
 import { applyEvent, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
 import type { StoredTask } from './store'
@@ -358,6 +358,55 @@ describe('Agent UISpec composer', () => {
     const card = asked.components.find((component) => component.type === 'departure-plan')
     if (card?.type !== 'departure-plan') throw new Error('expected a departure-plan component')
     expect(card.props).toMatchObject({ departAtLabel: '20:10', driveMinutes: 20, bufferMinutes: 10 })
+  })
+
+  it('offers the two side scenes on the driving brief', () => {
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' as const },
+    }
+
+    const spec = composeAgentSpec(task, {})
+
+    expect(spec.components).toContainEqual(expect.objectContaining({
+      id: 'navigation-summary',
+      actions: [ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID],
+    }))
+    // The label is the sentence, so the button teaches the voice command.
+    expect(spec.actions).toEqual([
+      { id: ASK_WEATHER_ACTION_ID, label: '看下天气', style: 'secondary', event: { type: 'agent-message', text: '看下天气' } },
+      { id: ASK_SCHEDULE_ACTION_ID, label: '看看日程', style: 'secondary', event: { type: 'agent-message', text: '看看日程' } },
+    ])
+  })
+
+  it('keeps both side scenes offered while one of them is being answered', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const weather = orchestrator.resolveWeather('pickup-001', 'request-001', { locationId: 'destination-hongqiao-t2' })
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' as const },
+    }
+
+    const spec = composeAgentSpec(task, { 'weather.get-current': weather })
+
+    // Reading the weather must not cost the driver the way back to the calendar.
+    expect(spec.actions.map((action) => action.id)).toEqual([ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID])
+
+    // Underway the rail beside the map holds exactly one card — that is what makes
+    // the panel read as floating over the map instead of as a second column. So the
+    // answer takes the brief's slot rather than joining it, and it carries the brief's
+    // buttons across: the way to the other scene is not what asking costs.
+    const answer = spec.components.find((component) => component.type === 'weather-card')
+    expect(answer).toBeDefined()
+    expect(answer!.actions).toEqual([ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID])
+    expect(spec.components.some((component) => component.id === 'navigation-summary')).toBe(false)
+    const layout = spec.layout
+    if (layout?.type !== 'split') throw new Error(`expected a split layout underway, got ${layout?.type}`)
+    expect(layout.slots.secondary).toEqual([answer!.id])
   })
 
   it('keeps the schedule strip on the return trip, anchored to the home eta', () => {
