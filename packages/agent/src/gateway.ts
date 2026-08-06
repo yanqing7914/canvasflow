@@ -2154,7 +2154,7 @@ export class AgentGateway {
     try {
       weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, {
         locationId: returning
-          ? 'destination-home'
+          ? current.task.returnTrip?.homeDestinationId ?? 'destination-home'
           : current.requestContext?.destination.id ?? 'destination-hongqiao-t2',
         ...(arrivalAhead ? { at: current.task.flight!.estimatedArrival } : {}),
       })

@@ -3298,6 +3298,54 @@ describe('AgentGateway', () => {
       expect(asked.assistant?.text).toContain('家')
       expect(asked.task.taskRevision).toBe(returning.task.taskRevision)
     })
+
+    it('resolves the weather for a non-default home destination on the return trip', () => {
+      // The fixture route table only knows the default home, so the non-default
+      // destination is injected as stored task state: what is under test is that
+      // the weather query reads the return trip's own destination, not how that
+      // destination got there.
+      const store = new MemoryTaskStore()
+      const orchestrator = new ReadToolOrchestrator()
+      const weatherInputs: Array<{ locationId: string; at?: string }> = []
+      const stubbed: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveWeather: (taskId, requestId, input) => {
+          weatherInputs.push(input)
+          return orchestrator.resolveWeather(taskId, requestId, { locationId: 'destination-home' })
+        },
+      }
+      const gateway = new AgentGateway({
+        store, now: () => now, createId: () => '001', orchestrator: stubbed,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const stored = store.get(created.task.taskId)!
+      store.save({
+        ...stored,
+        task: {
+          ...stored.task,
+          phase: 'returning-home',
+          passengers: { ...stored.task.passengers, confirmedOnboard: true },
+          returnTrip: {
+            workflowId: 'wf-grandma',
+            homeDestinationId: 'destination-grandma',
+            route: { status: 'succeeded', routeId: 'route-grandma', eta: '2026-07-22T21:20:00+08:00' },
+            cabin: { status: 'skipped' },
+            media: { status: 'skipped' },
+          },
+          navigation: { routeId: 'route-grandma', destination: '外婆家', eta: '2026-07-22T21:20:00+08:00', status: 'active' },
+        },
+      })
+
+      gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-grandma',
+        expectedTaskRevision: stored.task.taskRevision,
+        event: { eventId: 'weather-grandma', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T20:55:00+08:00' },
+      })
+
+      expect(weatherInputs).toEqual([{ locationId: 'destination-grandma' }])
+    })
   })
 })
 
