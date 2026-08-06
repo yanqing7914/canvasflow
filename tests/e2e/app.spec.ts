@@ -447,6 +447,46 @@ test('reflows the departure answer at phone width instead of cutting its facts o
   await expectNoHorizontalOverflow(page)
 })
 
+test('answers weather and the calendar from the driving brief without breaking the frame @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expectNoScroll(page)
+
+  const summary = page.locator('.ui-component:has([data-component-id="navigation-summary"])')
+  const cardCountBefore = await page.locator('.ui-card').count()
+
+  // Mid-drive, the side scenes are offered on the brief that carries the ETA —
+  // the number both answers are relative to. Underway the rail beside the map
+  // holds exactly one card, so the answer takes the brief's place for the turn
+  // instead of crowding in next to it: same card count, ETA back on the next
+  // trip event.
+  await summary.getByRole('button', { name: '看下天气' }).click()
+  const weatherCard = page.locator('.ui-card--weather-card')
+  await expect(weatherCard).toBeVisible()
+  await expect(weatherCard).toContainText('虹桥机场 T2')
+  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  await expect(summary).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // Reading one answer must not cost the driver the way back to the other: the
+  // answer inherits the buttons from the brief it replaced.
+  const weatherComponent = page.locator('.ui-component:has(.ui-card--weather-card)')
+  await weatherComponent.getByRole('button', { name: '看看日程' }).click()
+  const scheduleCard = page.locator('.ui-card--schedule-card')
+  await expect(scheduleCard).toBeVisible()
+  await expect(scheduleCard).toContainText('豆豆的睡前故事')
+  await expect(page.locator('.ui-card--weather-card')).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // And the drive itself is still there to go back to.
+  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+})
+
 /**
  * The media title is the one cabin value that is prose, and prose has no fixed
  * length. The demo can only ever produce two titles — `memory.propose-update`

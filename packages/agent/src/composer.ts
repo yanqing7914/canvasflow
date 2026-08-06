@@ -35,6 +35,22 @@ export type ComposeContext = {
 /** The pre-departure screen's own question, asked as ordinary user input. */
 export const ASK_DEPARTURE_TIME_ACTION_ID = 'ask-departure-time'
 
+/**
+ * The two side scenes the drive can ask about without leaving it.
+ *
+ * The labels are the sentences. A driver who reads 看下天气 off the brief has
+ * also just learned what to say next time, and both paths land in the same
+ * planner branch — so the button teaches the voice command instead of being an
+ * alternative to it.
+ */
+export const ASK_WEATHER_ACTION_ID = 'ask-weather'
+export const ASK_SCHEDULE_ACTION_ID = 'ask-schedule'
+
+const EN_ROUTE_QUERY_ACTIONS: UISpec['actions'] = [
+  { id: ASK_WEATHER_ACTION_ID, label: '看下天气', style: 'secondary', event: { type: 'agent-message', text: '看下天气' } },
+  { id: ASK_SCHEDULE_ACTION_ID, label: '看看日程', style: 'secondary', event: { type: 'agent-message', text: '看看日程' } },
+]
+
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息',
   preparing: '准备出发',
@@ -317,12 +333,21 @@ export function composeAgentSpec(
     density = 'compact'
     const activeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
     const underway = withRouteMap(
-      [{ id: 'navigation-summary', type: 'navigation-summary', props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 } }],
+      [{
+        id: 'navigation-summary',
+        type: 'navigation-summary',
+        props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 },
+        // The drive is where the side scenes belong: the driver is committed to a
+        // destination and is now asking about what happens around it. They sit on
+        // the brief that carries the ETA — the number both answers are relative to.
+        actions: [ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID],
+      }],
       activeSketch,
       task.navigation.destination,
     )
     components = underway.components
     layout = underway.layout
+    actions = EN_ROUTE_QUERY_ACTIONS
   } else if (task.flight && task.flight.trusted === false) {
     components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '航班号已收到', message: '航班信息正在确认中。' } }]
   } else if (task.flight) {
@@ -346,11 +371,34 @@ export function composeAgentSpec(
     : undefined
   if (queryCard) {
     const stripIndex = components.findIndex((component) => component.id === 'schedule-strip')
+    const summaryIndex = components.findIndex((component) => component.id === 'navigation-summary')
     if (stripIndex >= 0) {
       // The brief already runs at its card budget when the strip is on it, and
       // the strip is the auxiliary band of the two. The query turn borrows its
       // slot; the reading is not persisted, so the strip returns next event.
       components = components.map((component, index) => index === stripIndex ? queryCard : component)
+    } else if (summaryIndex >= 0 && layout?.type === 'split') {
+      // Underway the map has its own column and the rail beside it holds exactly
+      // one card — that is what makes it read as a panel floating over the map
+      // rather than a second column. So the answer takes the rail instead of
+      // appending beside the brief, and it brings the side-scene buttons with it:
+      // the way to the other scene must not be what the driver loses by asking.
+      //
+      // The ETA is what the rail gives up for one turn. It is the number they can
+      // already see the route for, they asked for something else, and the next
+      // trip event brings the brief back unchanged.
+      const answered: UISpec['components'][number] = {
+        ...queryCard,
+        ...(components[summaryIndex]!.actions ? { actions: components[summaryIndex]!.actions } : {}),
+      }
+      components = components.map((component, index) => index === summaryIndex ? answered : component)
+      layout = {
+        ...layout,
+        slots: {
+          ...layout.slots,
+          secondary: layout.slots.secondary.map((id) => id === 'navigation-summary' ? answered.id : id),
+        },
+      }
     } else {
       components = [...components, queryCard]
       if (layout?.type === 'split') {
