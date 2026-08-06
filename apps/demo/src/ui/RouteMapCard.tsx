@@ -33,7 +33,9 @@ import { renderAMapRoute, type AMapRouteHandle } from './amap/render'
  * The sketch marker, the basemap marker, and the percentage in the caption all
  * read the same crawled value, so the three never disagree about where the car
  * is. The basemap one is moved imperatively through the render handle because the
- * map owns its own overlays; the other two are ordinary React state.
+ * map owns its own overlays; the other two are ordinary React state. A basemap
+ * that arrives late is caught up to the current reading the moment it exists,
+ * rather than waiting for the next frame it may never get.
  *
  * `mode` is the composer's read of what the driver needs to see — the whole trip
  * or the part they are on. The sketch reflects the intent in
@@ -59,6 +61,16 @@ export function RouteMapCard({
   const [source, setSource] = useState<'sketch' | 'amap'>('sketch')
   /** Where the crawl has reached, or `undefined` while the marker holds. */
   const [crawled, setCrawled] = useState<number | undefined>(undefined)
+  /**
+   * The same reading, for the map effect to catch up from.
+   *
+   * The map is drawn once per sketch and moved imperatively after that, so its
+   * effect cannot depend on `crawled` — it would tear the map down and rebuild it
+   * every frame. A ref lets the load resolve at any point in the span and still
+   * find where the crawl has got to, which a stale closure over the state could
+   * not.
+   */
+  const crawledRef = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     let cancelled = false
@@ -78,6 +90,12 @@ export function RouteMapCard({
         }
         if (rendered) {
           mapHandle.current = rendered
+          // AMap may have finished loading part-way through the span, or after it
+          // ended. The route was drawn from the sketch's authored progress, so
+          // without this the basemap marker would sit at the start while the
+          // sketch and the caption read further along — and if the span were
+          // already spent, no further frame would ever correct it.
+          if (crawledRef.current !== undefined) rendered.setProgress(crawledRef.current)
           setSource('amap')
         }
       })
@@ -97,6 +115,7 @@ export function RouteMapCard({
     // A new sketch is a new authored position: drop whatever the last one had
     // crawled to rather than carrying it onto different geometry.
     setCrawled(undefined)
+    crawledRef.current = undefined
 
     const { progress, crawl } = props.routeSketch
     if (progress === undefined || !crawl) return
@@ -106,6 +125,7 @@ export function RouteMapCard({
       span: crawl,
       onProgress: (next) => {
         setCrawled(next)
+        crawledRef.current = next
         // The map may still be loading, or may never load at all; the sketch
         // below it moves either way.
         mapHandle.current?.setProgress(next)
