@@ -172,6 +172,24 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
     }),
   }),
   componentBase.extend({
+    type: z.literal('weather-card'),
+    props: z.object({
+      /** Human place label the reading is for, e.g. 虹桥机场 T2. */
+      location: z.string().min(1),
+      /** Which moment the reading describes, e.g. 20:40 到达时 or 现在. */
+      timeLabel: z.string().min(1),
+      temperatureC: z.number(),
+      condition: z.enum(['sunny', 'cloudy', 'overcast', 'light-rain', 'heavy-rain', 'fog']),
+      /** Localized condition copy; the enum stays stable for renderers. */
+      conditionLabel: z.string().min(1),
+      windLevel: z.number().int().min(0).max(12).optional(),
+      precipitationChance: z.number().min(0).max(100).optional(),
+      /** One pickup-relevant suggestion; absent when the weather needs none. */
+      advisory: z.string().min(1).optional(),
+      freshness: z.enum(['live', 'cached', 'fixture']),
+    }),
+  }),
+  componentBase.extend({
     type: z.literal('alert'),
     props: z.object({ level: z.enum(['info', 'warning', 'critical']), title: z.string(), message: z.string().optional() }),
   }),

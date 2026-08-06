@@ -2047,6 +2047,82 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+/* The transient weather answer. It borrows the schedule strip's slot on a full
+   brief, so it keeps the same one-band posture: a single row where the advisory
+   is one more inline segment that gives up its tail before the band wraps. */
+.ui-card--weather-card {
+  flex-direction: row;
+  align-items: center;
+  gap: clamp(10px, 1.4vw, 24px);
+  border-top: 1px solid var(--quiet-rule);
+}
+
+.ui-weather-brief__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.ui-weather-brief__glyph { display: grid; place-items: center; color: var(--blue); }
+
+.ui-weather-brief__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.ui-weather-brief__reading {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: clamp(12px, 1.6vw, 28px);
+}
+
+.ui-weather-brief__condition {
+  color: var(--ink);
+  font-size: clamp(20px, 1.6vw, 26px);
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.ui-weather-brief__temperature {
+  color: var(--blue);
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(24px, 2vw, 34px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+}
+
+.ui-weather-brief__fact {
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ui-weather-brief__advisory {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--amber);
+  font-size: 15px;
+  font-weight: 620;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Rain is the state the advisory exists for; let the band say so quietly. */
+.ui-card--weather-light-rain .ui-weather-brief__glyph,
+.ui-card--weather-heavy-rain .ui-weather-brief__glyph { color: var(--amber); }
+
 /* Four briefs only ever share the frame when the schedule strip joins the three
    preparing cards. The heroes each give back a notch of size and the stack a
    notch of air, so the band fits the fixed frame without anyone scrolling —

@@ -368,6 +368,63 @@ describe('UISpecRenderer', () => {
     expect(screen.getByText('这项信息暂时无法显示')).toBeInTheDocument()
   })
 
+  it('renders the weather answer with its advisory line', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['weather-card'] } },
+      components: [{
+        id: 'weather-card',
+        type: 'weather-card',
+        props: {
+          location: '虹桥机场 T2',
+          timeLabel: '20:40 到达时',
+          temperatureC: 24,
+          condition: 'light-rain',
+          conditionLabel: '小雨',
+          windLevel: 3,
+          precipitationChance: 70,
+          advisory: '到达时段有雨，建议家人在到达层室内等候。',
+          freshness: 'fixture',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(screen.getByText('20:40 到达时 · 虹桥机场 T2')).toBeInTheDocument()
+    expect(screen.getByText('小雨')).toBeInTheDocument()
+    expect(screen.getByText('24°C')).toBeInTheDocument()
+    expect(screen.getByText('风力 3 级')).toBeInTheDocument()
+    expect(screen.getByText('降水 70%')).toBeInTheDocument()
+    expect(screen.getByText('到达时段有雨，建议家人在到达层室内等候。')).toHaveClass('ui-weather-brief__advisory')
+  })
+
+  it('keeps the weather band to one line when the sky needs no advisory', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['weather-card'] } },
+      components: [{
+        id: 'weather-card',
+        type: 'weather-card',
+        props: {
+          location: '家',
+          timeLabel: '现在',
+          temperatureC: 26.4,
+          condition: 'cloudy',
+          conditionLabel: '多云',
+          freshness: 'fixture',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(screen.getByText('现在 · 家')).toBeInTheDocument()
+    expect(screen.getByText('26°C')).toBeInTheDocument()
+    // No fabricated facts: absent wind/precipitation render nothing, and a calm
+    // sky earns no advisory row.
+    expect(document.querySelector('.ui-weather-brief__fact')).not.toBeInTheDocument()
+    expect(document.querySelector('.ui-weather-brief__advisory')).not.toBeInTheDocument()
+  })
+
   it('leads the charging card with the suggested duration when one is supplied', () => {
     const spec = baseSpec({
       layout: { type: 'stack', gap: 'md', slots: { main: ['charging'] } },

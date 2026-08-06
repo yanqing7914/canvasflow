@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createProviderRegistry, createSideEffectRuntime } from '@canvasflow/tools'
 import { AgentGateway, AgentGatewayError } from './gateway'
-import { ReadToolOrchestrationError, ReadToolOrchestrator } from './orchestration'
+import { ReadToolOrchestrationError, ReadToolOrchestrator, type ReadToolOrchestration } from './orchestration'
 import { Planner } from './planner'
 import { MemoryTaskStore } from './store'
 
@@ -3128,6 +3128,137 @@ describe('AgentGateway', () => {
         message: '没有已授权的落地通知联系人',
       },
     }))
+  })
+
+  describe('check-weather query turn', () => {
+    it('answers with a transient weather card that yields the surface on the next event', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      expect(created.task.phase).toBe('preparing')
+      expect(created.ui.components.some((component) => component.type === 'schedule-strip')).toBe(true)
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-1', type: 'user.input', text: '到的时候天气怎么样', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // The query changed no task fact, only the composed surface.
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+      expect(asked.task.processedEventIds).not.toContain('weather-1')
+      expect(asked.ui.uiRevision).toBeGreaterThan(created.ui.uiRevision)
+      const card = asked.ui.components.find((component) => component.type === 'weather-card')
+      expect(card).toMatchObject({
+        props: expect.objectContaining({ location: '虹桥机场 T2', condition: 'light-rain' }),
+      })
+      // preparing already runs at the four-card budget: the strip yields its slot.
+      expect(asked.ui.components.some((component) => component.type === 'schedule-strip')).toBe(false)
+      expect(asked.ui.components).toHaveLength(created.ui.components.length)
+      expect(asked.assistant).toMatchObject({ shouldSpeak: true })
+      expect(asked.assistant?.text).toContain('虹桥机场')
+
+      // The next accepted event recomposes without the reading: the card is gone
+      // and the schedule strip returns.
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-after-weather', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'moving-after-weather', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(moved.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+      expect(moved.ui.components.some((component) => component.type === 'schedule-strip')).toBe(true)
+    })
+
+    it('publishes the weather turn on the update stream', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const before = gateway.getTaskUpdates(created.task.taskId).latestCursor
+
+      gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-sse', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-sse', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      const read = gateway.getTaskUpdates(created.task.taskId, before)
+      expect(read.updates.length).toBeGreaterThan(0)
+      expect(read.updates.at(-1)?.snapshot.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+    })
+
+    it('replays an identical weather event id idempotently', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-weather-replay', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-replay', type: 'user.input' as const, text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+
+      const first = gateway.submitEvent(created.task.taskId, request)
+      const second = gateway.submitEvent(created.task.taskId, request)
+
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+    })
+
+    it('degrades to a spoken notice on the unchanged snapshot when the weather read fails', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const failing: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveWeather: () => {
+          throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'weather provider timed out', true)
+        },
+      }
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator: failing,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-fail', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-fail', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task).toEqual(created.task)
+      expect(asked.ui.uiRevision).toBe(created.ui.uiRevision)
+      expect(asked.ui.meta.generatedBy).not.toBe('fallback')
+      expect(asked.assistant?.text).toContain('天气服务暂时不可用')
+    })
+
+    it('degrades the same way when the orchestration offers no weather read at all', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const withoutWeather: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+      }
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator: withoutWeather,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-none', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-none', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task).toEqual(created.task)
+      expect(asked.assistant?.text).toContain('天气服务暂时不可用')
+    })
+
+    it('leaves terminal tasks on the ordinary event path', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const cancelled = gateway.cancelTask(created.task.taskId, {
+        clientRequestId: 'client-cancel-for-weather', expectedTaskRevision: created.task.taskRevision,
+        eventId: 'cancel-for-weather',
+      })
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-terminal', expectedTaskRevision: cancelled.task.taskRevision,
+        event: { eventId: 'weather-terminal', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:10:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+      expect(asked.task.phase).toBe('cancelled')
+    })
   })
 })
 

@@ -20,6 +20,7 @@ import {
   type EffectRecord,
   type UISpec,
   type ProviderMode,
+  type WeatherOutput,
 } from '@canvasflow/schema'
 import {
   buildLandingNotifyContent,
@@ -34,7 +35,7 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, composeAgentSpec, composeFallbackSpec } from './composer'
+import { applyRequestPresentation, composeAgentSpec, composeFallbackSpec, weatherConditionLabels } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import { Planner, type Plan, type PlannerInput } from './planner'
@@ -488,6 +489,14 @@ export class AgentGateway {
     const plan = request.event.type === 'user.input'
       ? this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
       : undefined
+    if (
+      request.event.type === 'user.input'
+      && plan?.intent === 'check-weather'
+      && current.task.phase !== 'completed'
+      && current.task.phase !== 'cancelled'
+    ) {
+      return this.#submitWeatherQuery(taskId, current, request, startedAt)
+    }
     let next = applyEvent(
       current.task,
       request.event,
@@ -2116,13 +2125,65 @@ export class AgentGateway {
     return this.#planner.plan(input)
   }
 
+  /**
+   * The check-weather query turn. A query mutates nothing: the task state,
+   * revision, and processed-event bookkeeping stay untouched. Only the UI is
+   * re-composed with the weather read merged in — and the merged read is
+   * deliberately NOT persisted, so the very next accepted event re-composes
+   * without it and the card yields the surface back to the trip. Failure
+   * degrades to a spoken notice on the unchanged snapshot; the fallback
+   * banner is for broken trips, not for a missing side answer.
+   */
+  #submitWeatherQuery(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    let weather: ReadToolResults['weather.get-current']
+    try {
+      weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, {
+        locationId: current.requestContext?.destination.id ?? 'destination-hongqiao-t2',
+        ...(current.task.flight?.estimatedArrival ? { at: current.task.flight.estimatedArrival } : {}),
+      })
+    } catch (error) {
+      if (!(error instanceof ReadToolOrchestrationError)) this.#throwProviderError(error, current)
+      weather = undefined
+    }
+
+    if (!weather) {
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: '天气服务暂时不可用，稍后可以再问我。',
+        shouldSpeak: supportsTts,
+      })
+    }
+
+    const published = this.#publish(
+      current.task,
+      { ...current.toolResults, 'weather.get-current': weather },
+      current.requestContext,
+      current.effectReceipts,
+    )
+    // Transience lives in this one line: the published UI carries the card,
+    // the persisted toolResults do not.
+    const stored = this.#store.save({ ...published, toolResults: current.toolResults })
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+      text: weatherSpokenSummary(weather.data, Boolean(current.task.flight?.estimatedArrival)),
+      shouldSpeak: supportsTts,
+    })
+  }
+
   #response(
     requestId: string,
     stored: StoredTask,
     effects: AgentResponse['effects'],
     durationMs: number,
+    assistantOverride?: { text: string; shouldSpeak: boolean },
   ): AgentResponse {
-    const assistant = stored.task.phase === 'collecting-information'
+    const assistant = assistantOverride ?? (stored.task.phase === 'collecting-information'
       ? {
           text: stored.requestContext?.inputConfidence !== undefined && stored.requestContext.inputConfidence < 0.6
             ? '我不太确定刚才的内容，请确认或编辑后再试一次。'
@@ -2131,7 +2192,7 @@ export class AgentGateway {
             : '好的，请告诉我要接哪位家人。',
           shouldSpeak: stored.requestContext?.clientCapabilities.supportsTts ?? true,
         }
-      : undefined
+      : undefined)
     return agentResponseSchema.parse({
       requestId,
       task: stored.task,
@@ -2146,6 +2207,14 @@ export class AgentGateway {
       },
     })
   }
+}
+
+/** One short cabin-appropriate sentence; the card carries the detail. */
+function weatherSpokenSummary(data: WeatherOutput, forArrival: boolean): string {
+  const moment = forArrival ? '到达时' : '现在'
+  const rain = data.condition === 'light-rain' || data.condition === 'heavy-rain'
+  const closing = rain ? '，建议家人在到达层室内等候' : '，适合接机'
+  return `${moment}${data.locationName}${weatherConditionLabels[data.condition]} ${Math.round(data.temperatureC)} 度${closing}。`
 }
 
 function isCabinRevertPolicyDenial(errorCode: string | undefined): boolean {

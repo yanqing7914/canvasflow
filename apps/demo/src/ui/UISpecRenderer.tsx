@@ -18,6 +18,7 @@ import {
   MessageIcon,
   NavigationIcon,
   SeatIcon,
+  WeatherIcon,
 } from './icons'
 import { ComponentSurface } from './ComponentSurface'
 import { RouteMapCard } from './RouteMapCard'
@@ -568,6 +569,30 @@ function ScheduleStripCard({ component }: { component: Extract<ComponentSpec, { 
   )
 }
 
+/**
+ * The on-demand weather answer. One horizontal band — glyph, condition,
+ * temperature, facts, one advisory — sized like the schedule strip whose slot
+ * it borrows on a full brief, so the fixed frame never has to grow for it.
+ */
+function WeatherCard({ component }: { component: Extract<ComponentSpec, { type: 'weather-card' }> }) {
+  const { props } = component
+  return (
+    <ComponentSurface component={component} className={`ui-weather-brief ui-card--weather-${props.condition}`}>
+      <header className="ui-weather-brief__header">
+        <span className="ui-weather-brief__glyph" aria-hidden="true"><WeatherIcon size={18} /></span>
+        <p className="ui-weather-brief__eyebrow">{props.timeLabel} · {props.location}</p>
+      </header>
+      <div className="ui-weather-brief__reading">
+        <strong className="ui-weather-brief__condition">{props.conditionLabel}</strong>
+        <strong className="ui-weather-brief__temperature">{Math.round(props.temperatureC)}°C</strong>
+        {props.windLevel !== undefined && <span className="ui-weather-brief__fact">风力 {props.windLevel} 级</span>}
+        {props.precipitationChance !== undefined && <span className="ui-weather-brief__fact">降水 {Math.round(props.precipitationChance)}%</span>}
+      </div>
+      {props.advisory && <p className="ui-weather-brief__advisory">{props.advisory}</p>}
+    </ComponentSurface>
+  )
+}
+
 function AlertCard({ component }: { component: Extract<ComponentSpec, { type: 'alert' }> }) {
   return (
     <ComponentSurface
@@ -670,6 +695,7 @@ function ComponentCard({
     case 'cabin-profile': return <CabinProfileCard component={result.data} />
     case 'task-progress': return <TaskProgressCard component={result.data} phase={phase} />
     case 'schedule-strip': return <ScheduleStripCard component={result.data} />
+    case 'weather-card': return <WeatherCard component={result.data} />
     case 'alert': return <AlertCard component={result.data} />
     case 'status-banner': return <StatusBannerCard component={result.data} />
   }

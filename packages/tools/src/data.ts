@@ -1,4 +1,4 @@
-import type { CalendarEvent, FlightStatusOutput, RoutePlanOutput, VehicleStatusOutput } from '@canvasflow/schema'
+import type { CalendarEvent, FlightStatusOutput, RoutePlanOutput, VehicleStatusOutput, WeatherOutput } from '@canvasflow/schema'
 import { FIXTURE_GENERATED_AT } from './result'
 
 /**
@@ -78,6 +78,41 @@ export const calendarEvents: CalendarEventRecord[] = [
  * PROVIDER_TIMEOUT for navigation.plan-route (mirrors MU0000 for flights).
  */
 export const TIMEOUT_DESTINATION_ID = 'destination-timeout'
+
+/**
+ * Requesting weather for this location id deterministically simulates
+ * PROVIDER_TIMEOUT for weather.get-current (mirrors MU0000 for flights).
+ */
+export const TIMEOUT_WEATHER_LOCATION_ID = 'destination-weather-timeout'
+
+export type WeatherSnapshotRecord = WeatherOutput
+
+/**
+ * Fictional weather fixtures keyed by location id. The airport reading carries
+ * light rain on purpose: it exercises the pickup advisory line and gives the
+ * demo something to say beyond a temperature. All values are competition
+ * fiction, not meteorology.
+ */
+export const weatherSnapshots: Record<string, WeatherSnapshotRecord> = {
+  'destination-hongqiao-t2': {
+    locationId: 'destination-hongqiao-t2',
+    locationName: '虹桥机场 T2',
+    temperatureC: 24,
+    condition: 'light-rain',
+    windLevel: 3,
+    precipitationChance: 70,
+    observedAt: '2026-07-22T19:05:00+08:00',
+  },
+  'destination-home': {
+    locationId: 'destination-home',
+    locationName: '家',
+    temperatureC: 26,
+    condition: 'cloudy',
+    windLevel: 2,
+    precipitationChance: 20,
+    observedAt: '2026-07-22T19:05:00+08:00',
+  },
+}
 
 export type FlightRecord = FlightStatusOutput & { date: string }
 

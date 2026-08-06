@@ -149,6 +149,24 @@ export const listUpcomingEventsOutputSchema = z.object({
   events: z.array(calendarEventSchema),
 })
 
+export const weatherConditionSchema = z.enum(['sunny', 'cloudy', 'overcast', 'light-rain', 'heavy-rain', 'fog'])
+
+export const weatherQueryInputSchema = z.object({
+  locationId: z.string().min(1),
+  /** Forecast point of interest; omitted means current conditions. */
+  at: z.iso.datetime({ offset: true }).optional(),
+})
+
+export const weatherOutputSchema = z.object({
+  locationId: z.string().min(1),
+  locationName: z.string().min(1),
+  temperatureC: z.number(),
+  condition: weatherConditionSchema,
+  windLevel: z.number().int().min(0).max(12).optional(),
+  precipitationChance: z.number().min(0).max(100).optional(),
+  observedAt: z.iso.datetime({ offset: true }),
+})
+
 export const vehicleStatusOutputSchema = z.object({
   speedKph: z.number().nonnegative(),
   batteryPercent: z.number().min(0).max(100),
@@ -346,6 +364,9 @@ export type ChargingRecommendationOutput = z.infer<typeof chargingRecommendation
 export type CalendarEvent = z.infer<typeof calendarEventSchema>
 export type ListUpcomingEventsInput = z.infer<typeof listUpcomingEventsInputSchema>
 export type ListUpcomingEventsOutput = z.infer<typeof listUpcomingEventsOutputSchema>
+export type WeatherCondition = z.infer<typeof weatherConditionSchema>
+export type WeatherQueryInput = z.infer<typeof weatherQueryInputSchema>
+export type WeatherOutput = z.infer<typeof weatherOutputSchema>
 export type VehicleStatusOutput = z.infer<typeof vehicleStatusOutputSchema>
 export type NavigationStartInput = z.infer<typeof navigationStartInputSchema>
 export type NavigationStartOutput = z.infer<typeof navigationStartOutputSchema>

@@ -317,6 +317,34 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
   await expectNoScroll(page)
 })
 
+test('surfaces a transient weather card on demand without growing the preparing frame @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await expect(page.locator('.ui-card--schedule-strip')).toBeVisible()
+  const cardCountBefore = await page.locator('.ui-card').count()
+
+  // A whole-utterance weather question is a query turn: it answers on the brief
+  // without touching the trip. On the four-card preparing frame the card borrows
+  // the schedule strip's slot, so the count must not grow.
+  await sendText(page, '到的时候天气怎么样')
+  const weatherCard = page.locator('.ui-card--weather-card')
+  await expect(weatherCard).toBeVisible()
+  await expect(weatherCard).toContainText('虹桥机场 T2')
+  await expect(weatherCard).toContainText('小雨')
+  await expect(weatherCard).toContainText('室内等候')
+  await expect(page.locator('.ui-card--schedule-strip')).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // The reading is transient: the next trip event recomposes without it and the
+  // schedule strip takes its slot back.
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.locator('.ui-card--weather-card')).toHaveCount(0)
+  await expectNoScroll(page)
+})
+
 /**
  * The media title is the one cabin value that is prose, and prose has no fixed
  * length. The demo can only ever produce two titles — `memory.propose-update`

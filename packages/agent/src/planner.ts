@@ -9,6 +9,7 @@ export type PlannerIntent =
   | 'plan-charging'
   | 'confirm-passengers-onboard'
   | 'apply-cabin-preferences'
+  | 'check-weather'
   | 'cancel-task'
   | 'unknown'
 
@@ -131,6 +132,17 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
+  if (isWeatherQuery(compactText)) {
+    return {
+      intent: 'check-weather',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，正在为你查看接机目的地的天气。',
+    }
+  }
+
   const isPickupRequest = /去机场接/.test(actionableText)
     || /机场接(?:人|妈妈|爸爸|豆豆)/.test(actionableText)
     || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(actionableText)
@@ -191,6 +203,15 @@ function pickupMissingSlots(
 
 function isTaskCancellation(text: string): boolean {
   return /取消(?:这个|本次)?(?:接机)?任务|取消接机|不去接了|不用接了|别去机场了/.test(text)
+}
+
+/**
+ * A whole-utterance weather question and nothing else. Anchored on purpose:
+ * a mixed sentence that also carries passengers or a flight number keeps its
+ * task meaning and must not be consumed by the query path.
+ */
+function isWeatherQuery(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:到(?:的时候|达时|那边))?(?:的)?天气(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
 }
 
 function stableHash(value: string): string {
