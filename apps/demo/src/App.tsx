@@ -16,7 +16,7 @@ import type {
 import type { SpeechControllerDeps } from '@canvasflow/voice'
 import { createBrowserRecognition, isRecognitionSupported, isSecureContextOk } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
-import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
+import { AgentApiClient, demoVehicleContext, isNightAt } from './agent-client'
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
@@ -118,7 +118,7 @@ export default function App({
   api = defaultClient,
   initialTask,
   composeContext = {},
-  initialVehicleContext = defaultDemoVehicleContext,
+  initialVehicleContext,
   voiceEnabled = true,
   speech,
   fixtureAudio,
@@ -135,12 +135,19 @@ export default function App({
   fixtureAudio?: FixtureAudioFactory
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
+  const startingVehicleContext = initialVehicleContext ?? demoVehicleContext()
   const [response, setResponse] = useState<AgentResponse>()
   const [text, setText] = useState('我现在要去机场接妈妈和豆豆')
   const [stepIndex, setStepIndex] = useState(0)
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
-  const [vehicleContext, setVehicleContext] = useState(initialVehicleContext)
+  const [vehicleContext, setVehicleContext] = useState(startingVehicleContext)
+  // Which light condition the car reports. `auto` is what a car does — read the
+  // world and say what it sees; the two pinned values exist so a walkthrough or
+  // a screenshot can show either cabin at any hour of the day.
+  const [lighting, setLighting] = useState<'auto' | 'day' | 'night'>(
+    initialVehicleContext ? (initialVehicleContext.isNight ? 'night' : 'day') : 'auto',
+  )
   const [controlsOpen, setControlsOpen] = useState(false)
   const [keyboardRequested, setKeyboardRequested] = useState(false)
   const pendingRef = useRef(false)
@@ -220,8 +227,13 @@ export default function App({
     const trimmed = value.trim()
     if (!trimmed || pendingRef.current) return { sent: false }
     if (!response && !localOnly) {
+      // Auto follows the clock at submission time, not at page-load time. A demo
+      // left open across the day/night boundary must report the current cabin.
+      const createVehicleContext = lighting === 'auto'
+        ? { ...vehicleContext, isNight: isNightAt(new Date()) }
+        : vehicleContext
       const created = await run(() => api.create(trimmed, {
-        vehicleContext,
+        vehicleContext: createVehicleContext,
         ...(meta ? { source: meta.source } : {}),
         ...(meta?.confidence === undefined ? {} : { confidence: meta.confidence }),
       }))
@@ -429,6 +441,19 @@ export default function App({
     } else if (event.type === 'vehicle.parked') {
       setVehicleContext((current) => ({ ...current, speedKph: 0, gear: 'P' }))
     }
+  }
+
+  /**
+   * Restate the car's light condition. The client only reports what the car
+   * senses — whether that becomes a dark cabin is the Agent's call, carried
+   * back in `presentation.theme`, so nothing here touches the rendered theme.
+   */
+  function selectLighting(next: 'auto' | 'day' | 'night') {
+    setLighting(next)
+    setVehicleContext((current) => ({
+      ...current,
+      isNight: next === 'auto' ? isNightAt(new Date()) : next === 'night',
+    }))
   }
 
   function handleAction(actionId: string, componentId: string) {
@@ -814,6 +839,33 @@ export default function App({
             <p className="console-effects" aria-label="Effect receipts" data-empty={effects.length === 0 || undefined}>
               {effects.length > 0 ? effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ') : '暂无回执'}
             </p>
+
+            <div className="console-lighting" role="group" aria-label="车外光线">
+              <span className="console-lighting__title">车外光线</span>
+              <div className="console-lighting__actions">
+                {([
+                  { id: 'auto', label: '跟随时间' },
+                  { id: 'day', label: '白天' },
+                  { id: 'night', label: '夜间' },
+                ] as const).map((option) => (
+                  <button
+                    key={option.id}
+                    className="lighting-button"
+                    type="button"
+                    aria-pressed={lighting === option.id}
+                    disabled={pending || Boolean(task)}
+                    onClick={() => selectLighting(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="console-hint">
+                {task
+                  ? '光线条件已随任务固定。如需演示另一种光线，请重新开始任务。'
+                  : '选择创建任务时车辆上报的光线；界面明暗由 Agent 决定。'}
+              </p>
+            </div>
 
             <button
               className="advance-button"
