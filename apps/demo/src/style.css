@@ -2221,6 +2221,188 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+/* The arrivals board. The driver is choosing, so the card gives its whole height
+   to rows and the row itself is the control: one full-width target per flight,
+   72px tall like every other action, laid out on one line so the eye reads down
+   a column of times rather than across five paragraphs. Five rows is the schema's
+   ceiling and the frame's: at 720px they fit without the surface ever scrolling. */
+.ui-card--flight-choices {
+  gap: clamp(10px, 1.6vh, 18px);
+}
+
+.ui-flight-choices__header {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ui-flight-choices__eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+
+.ui-flight-choices__hint {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.ui-flight-choices__list {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(6px, 1vh, 12px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-flight-choices__item { display: flex; }
+
+.ui-flight-choices__row {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 72px;
+  align-items: center;
+  gap: clamp(12px, 1.6vw, 26px);
+  border: 1px solid var(--control-edge);
+  border-radius: 12px;
+  padding: 0 clamp(14px, 1.4vw, 22px);
+  background: var(--control);
+  color: var(--ink);
+  text-align: left;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.ui-flight-choices__row:hover:not(:disabled) {
+  background: var(--control-hover);
+  border-color: var(--blue);
+}
+
+/* A row with no action behind it, or one waiting on a pick already sent. It keeps
+   every fact it was carrying and only gives up the affordance. */
+.ui-flight-choices__row:disabled {
+  background: var(--control-off);
+  border-color: var(--rule);
+}
+
+.ui-flight-choices__rank {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--blue-pale);
+  color: var(--blue-deep);
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-flight-choices__identity {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ui-flight-choices__number {
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.ui-flight-choices__origin {
+  /* The row's own state ink, not the page's `--muted`: these lines sit on the
+     control surfaces rather than the card, and `--muted` clears 4.5:1 on white
+     only — on a dimmed row it drops to 4.38:1. */
+  color: var(--state-ink);
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Fixed width, right aligned: the times differ in how much they have to say —
+   some rows carry a revised figure and some do not — and letting the column
+   breathe with the copy would ripple through the terminal, the status and the
+   arrow, leaving five ragged rows where the eye wants one straight edge. */
+.ui-flight-choices__timing {
+  display: flex;
+  flex: none;
+  width: clamp(80px, 6vw, 104px);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.ui-flight-choices__time {
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--blue);
+  white-space: nowrap;
+}
+
+/* Only present when the estimate has moved off the schedule, which is exactly
+   when the driver needs to see it beside the scheduled time rather than instead.
+   An arrival that moved earlier is plain news, so only a later one is toned. */
+.ui-flight-choices__revised {
+  color: var(--state-ink);
+  font-size: 14px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ui-flight-choices__revised[data-direction="later"] { color: var(--state-ink-caution); }
+
+/* The dimmer surface costs the caution hue its 4.5:1, and a row nobody can press
+   has no delay for them to act on: it keeps the figure, not the warning colour. */
+.ui-flight-choices__row:disabled .ui-flight-choices__revised { color: var(--state-ink); }
+
+.ui-flight-choices__terminal {
+  flex: none;
+  min-width: 46px;
+  text-align: center;
+  padding: 3px 11px;
+  border-radius: 999px;
+  background: var(--control-selected);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 660;
+  white-space: nowrap;
+}
+
+/* Fixed width for the same reason as the timing column: 计划中 and 延误 are two
+   characters apart, and the arrow at the end of every row has to sit still. */
+.ui-flight-choices__row .ui-status {
+  flex: none;
+  width: clamp(76px, 5.4vw, 92px);
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.ui-flight-choices__pick {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--blue);
+}
+
+.ui-flight-choices__row:disabled .ui-flight-choices__pick { color: var(--muted); }
+
 /* Four briefs only ever share the frame when the schedule strip joins the three
    preparing cards. The heroes each give back a notch of size and the stack a
    notch of air, so the band fits the fixed frame without anyone scrolling —

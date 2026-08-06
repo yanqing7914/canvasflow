@@ -1060,6 +1060,50 @@ describe('demo integration', () => {
       const drawer = await openControls(user)
       expect(drawer).toHaveTextContent('navigation.start:succeeded')
     })
+
+    it('sends a picked arrivals row as the driver saying that flight number', async () => {
+      const user = userEvent.setup()
+      const task = createInitialTask()
+      const base = composePickupSpec(task)
+      const ui: UISpec = {
+        ...base,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['flight-choices'] } },
+        components: [{
+          id: 'flight-choices',
+          type: 'flight-choices',
+          actions: ['pick-MU5102', 'pick-MU5103'],
+          props: {
+            arrivalCityName: '上海',
+            dateLabel: '今天',
+            choices: [
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'pick-MU5102' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', actionId: 'pick-MU5103' },
+            ],
+            freshness: 'fixture',
+          },
+        }],
+        actions: [
+          { id: 'pick-MU5102', label: '接 MU5102', style: 'primary', event: { type: 'agent-message', text: '航班号 MU5102' } },
+          { id: 'pick-MU5103', label: '接 MU5103', style: 'secondary', event: { type: 'agent-message', text: '航班号 MU5103' } },
+        ],
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue({ ...apiResponse(task), ui }),
+        event: vi.fn().mockResolvedValue({ ...apiResponse(task), ui }),
+        action: vi.fn(),
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      const rows = await screen.findAllByRole('button', { name: /MU510/ })
+      await user.click(rows[1]!)
+
+      // The pick travels as user input, not as a tool action: the row is a faster
+      // way to say the number, so the Agent sees the same event either way.
+      expect(api.event).toHaveBeenCalledWith(expect.anything(), { type: 'user.input', text: '航班号 MU5103' })
+      expect(api.action).not.toHaveBeenCalled()
+    })
   })
 
   describe('voice input', () => {

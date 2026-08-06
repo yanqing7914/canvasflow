@@ -209,6 +209,7 @@ export class AgentGateway {
         task = prepared.task
         toolResults = { ...toolResults, ...prepared.toolResults }
       }
+      toolResults = this.#withArrivalsBoard(taskId, request.clientRequestId, task, toolResults)
       const stored = this.#store.create(this.#publish(task, toolResults, requestContext), request.clientRequestId)
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
     } catch (error) {
@@ -950,6 +951,7 @@ export class AgentGateway {
       }
       this.#throwProviderError(error, current)
     }
+    toolResults = this.#withArrivalsBoard(taskId, request.clientRequestId, next, toolResults)
     const shouldPrepare = request.event.type === 'user.input'
       && next !== current.task
       && next.phase === 'preparing'
@@ -981,6 +983,7 @@ export class AgentGateway {
         this.#throwProviderError(error, current)
       }
     }
+    toolResults = this.#withArrivalsBoard(taskId, request.clientRequestId, next, toolResults)
     if (
       request.event.type === 'user.confirmed-passengers-onboard'
       && (current.task.phase === 'waiting-for-passengers' || current.task.phase === 'returning-home')
@@ -2070,6 +2073,37 @@ export class AgentGateway {
     return event.type === 'vehicle.moving'
       || event.type === 'vehicle.parked'
       || event.type === 'charging.completed'
+  }
+
+  /**
+   * Adds or retires the arrivals board for a task snapshot.
+   *
+   * The board only exists while the flight number is still missing: carried past
+   * the pick it would keep offering a choice the driver already made, so a task
+   * that has one — or has left the collecting phase — drops the key outright.
+   *
+   * Reading it is best-effort. A board is a shortcut for saying the number, not
+   * the way to say it, so a provider failure leaves the plain ask standing
+   * instead of taking the whole snapshot to the provider fallback.
+   */
+  #withArrivalsBoard(
+    taskId: string,
+    requestId: string,
+    task: AirportPickupTaskState,
+    toolResults: ReadToolResults | undefined,
+  ): ReadToolResults {
+    const carried: ReadToolResults = { ...toolResults }
+    if (task.phase !== 'collecting-information' || task.flight) {
+      delete carried['flight.list-arrivals']
+      return carried
+    }
+    if (carried['flight.list-arrivals']) return carried
+    try {
+      const board = this.#orchestrator.resolveArrivals?.(taskId, `${requestId}:arrivals`)
+      return board ? { ...carried, 'flight.list-arrivals': board } : carried
+    } catch {
+      return carried
+    }
   }
 
   #prepareTask(

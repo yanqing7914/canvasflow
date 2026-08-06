@@ -475,6 +475,16 @@ export default function App({
     const actionEvent = action?.event
     if (actionEvent?.type === 'confirmation') {
       void run(() => api.confirmation(response.task, actionEvent.confirmationId, actionEvent.decision))
+    } else if (actionEvent?.type === 'agent-message') {
+      // Pressing a row is the driver saying what it says. It travels as the same
+      // user input the composer sends, so the planner sees one kind of answer and
+      // a card can never set a slot that typing could not. The draft field is
+      // left alone: the pick is not the sentence they were writing.
+      const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
+      void run(() => api.event(response.task, { type: 'user.input', text: actionEvent.text })).then((next) => {
+        if (!next || nextTimelineIndex === undefined) return
+        setStepIndex(nextTimelineIndex)
+      })
     } else {
       const nextTimelineIndex = actionId === 'start-navigation'
         ? nextIndexForTimelineEvent('navigation.started')

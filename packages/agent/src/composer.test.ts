@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import type { AirportPickupTaskState } from '@canvasflow/schema'
+import type { AirportPickupTaskState, FlightArrivalCandidate } from '@canvasflow/schema'
 import {
   chargingStationsForDensity,
   estimateFinalBatteryPercent,
@@ -907,6 +907,89 @@ describe('Agent UISpec composer route sketch', () => {
       id: 'navigation-summary',
       props: expect.objectContaining({ destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00' }),
     }))
+  })
+})
+
+describe('Agent UISpec composer flight choices', () => {
+  const board = () => new ReadToolOrchestrator().resolveArrivals('pickup-001', 'request-001')
+
+  function boardSpec(arrivals?: FlightArrivalCandidate[]) {
+    const read = board()
+    const toolResults = {
+      'flight.list-arrivals': arrivals
+        ? { ...read, data: { ...read.data, arrivals } }
+        : read,
+    }
+    return composeAgentSpec(createInitialTask('pickup-001', timestamp), toolResults)
+  }
+
+  function choicesComponent(spec: ReturnType<typeof composeAgentSpec>) {
+    const component = spec.components.find((candidate) => candidate.type === 'flight-choices')
+    if (component?.type !== 'flight-choices') throw new Error('没有航班选择卡片')
+    return component
+  }
+
+  it('offers the arrivals board instead of asking for a number', () => {
+    const spec = boardSpec()
+    const choices = choicesComponent(spec)
+
+    expect(spec.components.map((component) => component.type)).toEqual(['flight-choices'])
+    expect(choices.props.arrivalCityName).toBe('上海')
+    // Board order is the presentation order, so the numbered rows the driver sees
+    // match the numbers the fixture authored.
+    expect(choices.props.choices.map((choice) => choice.flightNumber))
+      .toEqual(board().data.arrivals.map((arrival) => arrival.flightNumber))
+  })
+
+  it('sends each pick back as the user saying that flight number', () => {
+    const spec = boardSpec()
+    const choices = choicesComponent(spec)
+
+    // Every row's action is declared on the component (so it stays out of the
+    // global bar) and defined in the spec (so the row is pressable).
+    expect(choices.actions).toEqual(choices.props.choices.map((choice) => choice.actionId))
+    expect(spec.actions.map((action) => action.id)).toEqual(choices.actions)
+    for (const action of spec.actions) {
+      expect(action.event.type).toBe('agent-message')
+    }
+    expect(spec.actions[0]).toMatchObject({
+      id: 'pick-MU5102',
+      label: '接 MU5102',
+      event: { type: 'agent-message', text: '航班号 MU5102' },
+    })
+  })
+
+  it('marks a revised arrival time only when the estimate moved', () => {
+    const rows = choicesComponent(boardSpec()).props.choices
+    const onTime = rows.find((choice) => choice.flightNumber === 'HO1252')!
+    const delayed = rows.find((choice) => choice.flightNumber === 'MU5103')!
+
+    expect(onTime.arrivalTimeLabel).toBe('20:55')
+    expect(onTime.revisedTimeLabel).toBeUndefined()
+    expect(delayed).toMatchObject({ arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', statusLabel: '延误' })
+  })
+
+  it('leaves a cancelled arrival off the board', () => {
+    const arrivals = board().data.arrivals
+    const spec = boardSpec(arrivals.map((arrival, index) => index === 0 ? { ...arrival, status: 'cancelled' as const } : arrival))
+
+    const numbers = choicesComponent(spec).props.choices.map((choice) => choice.flightNumber)
+    expect(numbers).not.toContain(arrivals[0]!.flightNumber)
+    expect(numbers).toHaveLength(arrivals.length - 1)
+  })
+
+  it('asks for the number when there is no board, or nothing left to choose between', () => {
+    const arrivals = board().data.arrivals
+    const withoutBoard = composeAgentSpec(createInitialTask('pickup-001', timestamp))
+    const oneRow = boardSpec(arrivals.slice(0, 1))
+    const allCancelled = boardSpec(arrivals.map((arrival) => ({ ...arrival, status: 'cancelled' as const })))
+
+    for (const spec of [withoutBoard, oneRow, allCancelled]) {
+      expect(spec.components).toEqual([
+        { id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '请补充航班号' } },
+      ])
+      expect(spec.actions).toEqual([])
+    }
   })
 })
 

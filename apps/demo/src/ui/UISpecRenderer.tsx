@@ -21,6 +21,7 @@ import {
   WeatherIcon,
 } from './icons'
 import { ComponentSurface } from './ComponentSurface'
+import { FlightChoicesCard } from './FlightChoicesCard'
 import { RouteMapCard } from './RouteMapCard'
 import { ROUTE_MAP_DRAWING_OPTIONS, ROUTE_SKETCH_VIEWBOX, buildRouteSketchDrawing } from './route-sketch'
 
@@ -698,11 +699,18 @@ function ComponentCard({
   slotId,
   phase,
   theme,
+  actionById,
+  pending,
+  onAction,
 }: {
   component?: unknown
   slotId: string
   phase: UISpec['phase']
   theme: UISpec['presentation']['theme']
+  /** Only cards whose own contents are the controls need these. */
+  actionById: Map<string, unknown>
+  pending: boolean
+  onAction: UISpecRendererProps['onAction']
 }) {
   const result = componentSpecSchema.safeParse(component)
   if (!result.success) return <ComponentFallback component={component} slotId={slotId} />
@@ -728,6 +736,15 @@ function ComponentCard({
     case 'schedule-strip': return <ScheduleStripCard component={result.data} />
     case 'weather-card': return <WeatherCard component={result.data} />
     case 'schedule-card': return <ScheduleCard component={result.data} />
+    case 'flight-choices':
+      return (
+        <FlightChoicesCard
+          component={result.data}
+          actionById={actionById}
+          pending={pending}
+          onAction={onAction}
+        />
+      )
     case 'alert': return <AlertCard component={result.data} />
     case 'status-banner': return <StatusBannerCard component={result.data} />
   }
@@ -775,6 +792,20 @@ function ActionButton({
 function componentActionIds(component: unknown): string[] {
   if (!isRecord(component) || !Array.isArray(component.actions)) return []
   return component.actions.filter((actionId): actionId is string => typeof actionId === 'string' && actionId.length > 0)
+}
+
+/**
+ * Action ids a card draws inside itself, so the slot's button group does not draw
+ * them a second time.
+ *
+ * The ids stay on the component's `actions` list either way — that list is what
+ * keeps them out of the global bar and what the on-screen action count reads — so
+ * this only answers who renders them, not who owns them.
+ */
+function cardOwnedActionIds(component: ComponentSpec): string[] {
+  return component.type === 'flight-choices'
+    ? component.props.choices.map((choice) => choice.actionId)
+    : []
 }
 
 function resolveLayout(spec: UISpec, runtimeComponents: unknown[]): {
@@ -925,10 +956,21 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
             {slot.ids.map((componentId, index) => {
               const component = componentById.get(componentId)
               const parsedComponent = componentSpecSchema.safeParse(component)
-              const actionIds = parsedComponent.success ? componentActionIds(parsedComponent.data) : []
+              const ownedByCard = parsedComponent.success ? new Set(cardOwnedActionIds(parsedComponent.data)) : new Set<string>()
+              const actionIds = parsedComponent.success
+                ? componentActionIds(parsedComponent.data).filter((actionId) => !ownedByCard.has(actionId))
+                : []
               return (
                 <div className="ui-component" data-component-order={index} key={`${componentId}-${index}`}>
-                  <ComponentCard component={component} slotId={componentId} phase={spec.phase} theme={theme} />
+                  <ComponentCard
+                    component={component}
+                    slotId={componentId}
+                    phase={spec.phase}
+                    theme={theme}
+                    actionById={actionById}
+                    pending={pending}
+                    onAction={onAction}
+                  />
                   <ActionGroup
                     className="ui-card__actions"
                     actionIds={actionIds}
