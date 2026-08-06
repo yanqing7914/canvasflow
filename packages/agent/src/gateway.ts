@@ -35,7 +35,7 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, composeAgentSpec, composeFallbackSpec, weatherConditionLabels } from './composer'
+import { applyRequestPresentation, composeAgentSpec, composeFallbackSpec, departurePlan, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import { Planner, type Plan, type PlannerInput } from './planner'
@@ -96,7 +96,7 @@ export type AgentGatewayOptions = {
     task: AirportPickupTaskState,
     toolResults?: ReadToolResults,
     preferences?: Record<string, MemberPreferenceRecord>,
-    privateContext?: { cabinRevertActionToken?: string },
+    composeContext?: ComposeContext,
   ) => UISpec
   orchestrator?: ReadToolOrchestration
   providers?: ProviderRegistry
@@ -122,7 +122,7 @@ export class AgentGateway {
     task: AirportPickupTaskState,
     toolResults?: ReadToolResults,
     preferences?: Record<string, MemberPreferenceRecord>,
-    privateContext?: { cabinRevertActionToken?: string },
+    composeContext?: ComposeContext,
   ) => UISpec
   readonly #orchestrator: ReadToolOrchestration
   readonly #effectExecutor: EffectExecutor
@@ -492,13 +492,15 @@ export class AgentGateway {
       : undefined
     if (
       request.event.type === 'user.input'
-      && (plan?.intent === 'check-weather' || plan?.intent === 'check-schedule')
+      && (plan?.intent === 'check-weather' || plan?.intent === 'check-schedule' || plan?.intent === 'check-departure-time')
       && current.task.phase !== 'completed'
       && current.task.phase !== 'cancelled'
     ) {
       return plan.intent === 'check-weather'
         ? this.#submitWeatherQuery(taskId, current, request, startedAt)
-        : this.#submitScheduleQuery(taskId, current, request, startedAt)
+        : plan.intent === 'check-schedule'
+          ? this.#submitScheduleQuery(taskId, current, request, startedAt)
+          : this.#submitDepartureQuery(taskId, current, request, startedAt)
     }
     let next = applyEvent(
       current.task,
@@ -1835,6 +1837,11 @@ export class AgentGateway {
     toolResults?: ReadToolResults,
     requestContext?: StoredTask['requestContext'],
     effectReceipts?: StoredTask['effectReceipts'],
+    /**
+     * Whether this turn asked when to leave. Not derivable from the snapshot —
+     * the answer changes nothing about the task — so the asking turn says so.
+     */
+    departureAnswer?: true,
   ): StoredTask {
     // A terminal transition may defer a parked-only cabin cleanup. Keep only
     // that private receipt so a later parked event can safely finish it.
@@ -1852,7 +1859,12 @@ export class AgentGateway {
       task,
       toolResults,
       this.#preferences,
-      cabinRevertActionToken ? { cabinRevertActionToken } : undefined,
+      cabinRevertActionToken || departureAnswer
+        ? {
+            ...(cabinRevertActionToken ? { cabinRevertActionToken } : {}),
+            ...(departureAnswer ? { departureAnswer } : {}),
+          }
+        : undefined,
     ), requestContext)
     const uiWithoutStartNavigation = {
       ...ui,
@@ -1875,8 +1887,10 @@ export class AgentGateway {
     const publishedUi = canStartNavigation
       ? {
           ...uiWithoutStartNavigation,
+          // Prepended, not appended: the card can carry the pre-departure question
+          // as well, and the control that leaves has to lead the one that asks.
           components: uiWithoutStartNavigation.components.map((component) => component.id === 'navigation-plan'
-            ? { ...component, actions: [...(component.actions ?? []), 'start-navigation'] }
+            ? { ...component, actions: ['start-navigation', ...(component.actions ?? [])] }
             : component),
           actions: [
             ...uiWithoutStartNavigation.actions,
@@ -2267,6 +2281,47 @@ export class AgentGateway {
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
     return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
       text: scheduleSpokenSummary(schedule.data.events),
+      shouldSpeak: supportsTts,
+    })
+  }
+
+  /**
+   * The check-departure-time query turn. Same transient contract as the weather
+   * and schedule queries — nothing about the task changes, the answer rides one
+   * published snapshot — but with no provider behind it: the landing time and the
+   * planned drive are already on the snapshot, so the answer is arithmetic over
+   * facts the trip has, not a new read.
+   *
+   * Nothing to work backwards from (no flight, or no planned route yet) leaves
+   * the snapshot untouched and says so out loud. A missing side answer is not a
+   * broken trip, so the fallback banner stays out of it.
+   */
+  #submitDepartureQuery(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    const plan = departurePlan(current.task, current.toolResults?.['navigation.plan-route']?.data)
+    if (!plan) {
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: '还没有航班和路线可以推算出发时间。',
+        shouldSpeak: supportsTts,
+      })
+    }
+    const published = this.#publish(
+      current.task,
+      current.toolResults,
+      current.requestContext,
+      current.effectReceipts,
+      true,
+    )
+    const stored = this.#store.save(published)
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+      text: `建议 ${plan.departAtLabel} 出发，路上约 ${plan.driveMinutes} 分钟，比落地早 ${plan.bufferMinutes} 分钟到。`,
       shouldSpeak: supportsTts,
     })
   }

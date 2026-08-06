@@ -2221,6 +2221,83 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+/* The transient departure answer. Borrows the same one-band slot as the schedule
+   answer, but inverts its emphasis: one clock time carries the card, and the
+   facts it was worked backwards from trail behind at reading weight. Dots, not
+   the timeline rules the schedule uses — the facts are not a sequence. */
+.ui-card--departure-plan {
+  flex-direction: row;
+  align-items: center;
+  gap: clamp(10px, 1.4vw, 24px);
+  border-top: 1px solid var(--quiet-rule);
+}
+
+.ui-departure-plan__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.ui-departure-plan__glyph { display: grid; place-items: center; color: var(--blue); }
+
+.ui-departure-plan__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+/* The lead number. Sized to the band it borrows rather than to its own
+   importance: 24px is the largest the auxiliary slot can hold at 1920×720
+   without the frame growing, and against 15px facts it still reads as the one
+   figure the driver acts on. */
+.ui-departure-plan__time {
+  flex: none;
+  font-size: 24px;
+  font-weight: 660;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--blue);
+}
+
+.ui-departure-plan__facts {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: baseline;
+  gap: clamp(8px, 1vw, 16px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+
+.ui-departure-plan__fact {
+  flex: none;
+  font-size: 15px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.ui-departure-plan__fact + .ui-departure-plan__fact::before {
+  content: '·';
+  margin-right: clamp(8px, 1vw, 16px);
+  color: var(--muted);
+}
+
+/* The route the drive time came from: true, but the last thing the driver needs
+   from this card, so it gives up its tail first. */
+.ui-departure-plan__fact--via {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* The arrivals board. The driver is choosing, so the card gives its whole height
    to rows and the row itself is the control: one full-width target per flight,
    72px tall like every other action, laid out on one line so the eye reads down

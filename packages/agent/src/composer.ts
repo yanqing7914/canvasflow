@@ -19,6 +19,22 @@ const DEMO_LEG_KM = 32
 /** Rows the arrivals board offers: the schema's ceiling, and the frame's. */
 const MAX_FLIGHT_CHOICES = 5
 
+/**
+ * Everything the gateway knows that is neither task state nor a tool read.
+ *
+ * `cabinRevertActionToken` is a secret the composer may only spend, never mint.
+ * `departureAnswer` is the opposite kind of thing — a flag saying this turn was
+ * a question about when to leave — and it lives here for the same reason: the
+ * composer cannot tell from the snapshot alone which turn asked.
+ */
+export type ComposeContext = {
+  cabinRevertActionToken?: string
+  departureAnswer?: true
+}
+
+/** The pre-departure screen's own question, asked as ordinary user input. */
+export const ASK_DEPARTURE_TIME_ACTION_ID = 'ask-departure-time'
+
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息',
   preparing: '准备出发',
@@ -39,13 +55,13 @@ export function composeAgentSpec(
   task: AirportPickupTaskState,
   toolResults?: ReadToolResults,
   preferences?: Record<string, MemberPreferenceRecord>,
-  privateContext?: { cabinRevertActionToken?: string },
+  composeContext?: ComposeContext,
 ): UISpec
 export function composeAgentSpec(
   task: AirportPickupTaskState,
   context?: ReadToolResults | Record<string, MemberPreferenceRecord>,
   preferences?: Record<string, MemberPreferenceRecord>,
-  privateContext?: { cabinRevertActionToken?: string },
+  composeContext?: ComposeContext,
 ): UISpec {
   const hasExplicitPreferences = preferences !== undefined
   const contextIsToolResults = hasExplicitPreferences || context === undefined || isReadToolResults(context)
@@ -109,6 +125,20 @@ export function composeAgentSpec(
       const strip = preparingScheduleStrip(task.flight, route, charging, calendar.data.events)
       if (strip) components.push(strip)
     }
+    // The one thing the pre-departure screen cannot answer by standing still. It
+    // sits on the card that carries the ETA rather than in the global bar, beside
+    // the number it is a question about, and it travels as ordinary user input so
+    // the button and the spoken sentence reach the same planner branch.
+    const planIndex = components.findIndex((component) => component.id === 'navigation-plan')
+    if (planIndex >= 0) {
+      components[planIndex] = { ...components[planIndex]!, actions: [ASK_DEPARTURE_TIME_ACTION_ID] }
+      actions = [{
+        id: ASK_DEPARTURE_TIME_ACTION_ID,
+        label: '什么时候出发',
+        style: 'secondary',
+        event: { type: 'agent-message', text: '什么时候出发' },
+      }]
+    }
   } else if (task.passengers.confirmedOnboard) {
     title = '返程回家'
     density = 'compact'
@@ -119,7 +149,7 @@ export function composeAgentSpec(
     const cabinRevertStatus = task.returnTrip?.cabin.revert?.status
     const cabinReverted = cabinRevertStatus === 'succeeded'
     const cabinApplied = task.returnTrip?.cabin.status === 'succeeded' && !cabinReverted
-    const cabinRevertAvailable = privateContext?.cabinRevertActionToken !== undefined
+    const cabinRevertAvailable = composeContext?.cabinRevertActionToken !== undefined
       && cabinRevertStatus !== 'unknown'
       && cabinRevertStatus !== 'succeeded'
     if (cabinApplied && (temperatureC !== undefined || mediaTitle !== undefined)) {
@@ -158,7 +188,7 @@ export function composeAgentSpec(
             style: 'secondary',
             event: {
               type: 'tool-request',
-              actionToken: privateContext!.cabinRevertActionToken!,
+              actionToken: composeContext!.cabinRevertActionToken!,
             },
           }]
         : []
@@ -302,12 +332,17 @@ export function composeAgentSpec(
   const weather = toolResults['weather.get-current']
   const scheduleQuery = toolResults['calendar.query']
   const queryAnswerable = task.phase !== 'collecting-information' && task.phase !== 'cancelled' && task.phase !== 'completed'
+  const departure = composeContext?.departureAnswer
+    ? departurePlan(task, toolResults['navigation.plan-route']?.data)
+    : undefined
   const queryCard = queryAnswerable
-    ? weather
-      ? weatherCardComponent(task, weather.data)
-      : scheduleQuery
-        ? scheduleCardComponent(scheduleQuery.data.events)
-        : undefined
+    ? departure
+      ? departurePlanComponent(departure)
+      : weather
+        ? weatherCardComponent(task, weather.data)
+        : scheduleQuery
+          ? scheduleCardComponent(scheduleQuery.data.events)
+          : undefined
     : undefined
   if (queryCard) {
     const stripIndex = components.findIndex((component) => component.id === 'schedule-strip')
@@ -699,6 +734,58 @@ function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
 /** The clock time inside a fixture timestamp, or the timestamp if it has none. */
 function clockLabel(timestamp: string): string {
   return timestamp.match(/T(\d{2}:\d{2})/)?.[1] ?? timestamp
+}
+
+/**
+ * How early the recommendation puts the car at the terminal.
+ *
+ * Arriving before the wheels touch down is the whole point of a pickup, and
+ * parking costs nothing but time already set aside. Ten minutes is small enough
+ * that a driver who wants to leave later can spend it knowingly, which is why
+ * the card states the figure instead of folding it into the departure time.
+ */
+const AIRPORT_ARRIVAL_BUFFER_MINUTES = 10
+
+export type DeparturePlan = {
+  departAtLabel: string
+  arrivalLabel: string
+  driveMinutes: number
+  bufferMinutes: number
+  viaLabel?: string
+}
+
+/**
+ * When to leave, worked backwards from the landing the trip is timed against.
+ *
+ * Deliberately no comparison against a clock. The fixture timeline and the wall
+ * clock disagree by design, so "you should have left already" is a sentence this
+ * demo cannot say truthfully — the card gives the driver the three numbers and
+ * lets them make the call.
+ *
+ * Nothing to work backwards from means no answer: without a flight or a planned
+ * route the caller says so rather than inventing a time.
+ */
+export function departurePlan(
+  task: AirportPickupTaskState,
+  route: { durationMinutes: number; summary?: string } | undefined,
+): DeparturePlan | undefined {
+  if (!task.flight || !route) return undefined
+  const landingMs = Date.parse(task.flight.estimatedArrival)
+  if (Number.isNaN(landingMs)) return undefined
+  const driveMinutes = Math.round(route.durationMinutes)
+  const departAtMs = landingMs - (driveMinutes + AIRPORT_ARRIVAL_BUFFER_MINUTES) * 60_000
+  return {
+    departAtLabel: clockLabel(fixtureIso(departAtMs)),
+    arrivalLabel: `${task.flight.flightNumber} ${clockLabel(task.flight.estimatedArrival)} 落地`,
+    driveMinutes,
+    bufferMinutes: AIRPORT_ARRIVAL_BUFFER_MINUTES,
+    ...(route.summary ? { viaLabel: route.summary } : {}),
+  }
+}
+
+/** The departure answer as one card, shaped like the other query answers. */
+export function departurePlanComponent(plan: DeparturePlan): UISpec['components'][number] {
+  return { id: 'departure-plan', type: 'departure-plan', props: plan }
 }
 
 export const weatherConditionLabels: Record<WeatherOutput['condition'], string> = {

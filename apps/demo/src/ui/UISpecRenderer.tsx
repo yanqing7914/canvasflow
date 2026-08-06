@@ -745,6 +745,7 @@ function ComponentCard({
           onAction={onAction}
         />
       )
+    case 'departure-plan': return <DeparturePlanCard component={result.data} />
     case 'alert': return <AlertCard component={result.data} />
     case 'status-banner': return <StatusBannerCard component={result.data} />
   }
@@ -806,6 +807,35 @@ function cardOwnedActionIds(component: ComponentSpec): string[] {
   return component.type === 'flight-choices'
     ? component.props.choices.map((choice) => choice.actionId)
     : []
+}
+
+/**
+ * The on-demand departure answer: one clock time, and the three facts it was
+ * worked backwards from.
+ *
+ * The time leads because it is the only thing the driver has to act on, and the
+ * facts follow because a recommendation nobody can check is one they have to take
+ * on faith. There is deliberately no "leave now" verdict — the demo's fixture
+ * timeline and the wall clock disagree, so the card gives the numbers and the
+ * driver keeps the decision.
+ */
+function DeparturePlanCard({ component }: { component: Extract<ComponentSpec, { type: 'departure-plan' }> }) {
+  const { props } = component
+  return (
+    <ComponentSurface component={component} className="ui-departure-plan">
+      <header className="ui-departure-plan__header">
+        <span className="ui-departure-plan__glyph" aria-hidden="true"><ClockIcon size={18} /></span>
+        <p className="ui-departure-plan__eyebrow">建议出发</p>
+      </header>
+      <strong className="ui-departure-plan__time">{props.departAtLabel}</strong>
+      <ul className="ui-departure-plan__facts">
+        <li className="ui-departure-plan__fact">{props.arrivalLabel}</li>
+        <li className="ui-departure-plan__fact">路上 {props.driveMinutes} 分钟</li>
+        <li className="ui-departure-plan__fact">提前 {props.bufferMinutes} 分钟到</li>
+        {props.viaLabel && <li className="ui-departure-plan__fact ui-departure-plan__fact--via">{props.viaLabel}</li>}
+      </ul>
+    </ComponentSurface>
+  )
 }
 
 function resolveLayout(spec: UISpec, runtimeComponents: unknown[]): {

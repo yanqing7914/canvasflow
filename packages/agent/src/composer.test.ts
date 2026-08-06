@@ -7,7 +7,7 @@ import {
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from '@canvasflow/tools'
-import { applyRequestPresentation, composeAgentSpec, scheduleCardComponent } from './composer'
+import { ASK_DEPARTURE_TIME_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent } from './composer'
 import { applyEvent, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
 import type { StoredTask } from './store'
@@ -276,6 +276,88 @@ describe('Agent UISpec composer', () => {
     } else {
       expect(spec.layout.slots).toMatchObject({ main: expect.arrayContaining(['schedule-card']) })
     }
+  })
+
+  it('offers the pre-departure question on the card that carries the eta', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const spec = composeAgentSpec(task, reads.toolResults)
+
+    expect(spec.components).toContainEqual(expect.objectContaining({
+      id: 'navigation-plan',
+      actions: [ASK_DEPARTURE_TIME_ACTION_ID],
+    }))
+    // Ordinary user input, so the button and the spoken sentence reach the same
+    // planner branch instead of the button needing a path of its own.
+    expect(spec.actions).toContainEqual({
+      id: ASK_DEPARTURE_TIME_ACTION_ID,
+      label: '什么时候出发',
+      style: 'secondary',
+      event: { type: 'agent-message', text: '什么时候出发' },
+    })
+  })
+
+  it('works the departure time backwards from the landing it is timed against', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+    }
+
+    // MU5102 lands 20:40; the planned drive is 20 minutes; the buffer is 10.
+    expect(departurePlan(task, reads.route)).toEqual({
+      departAtLabel: '20:10',
+      arrivalLabel: 'MU5102 20:40 落地',
+      driveMinutes: 20,
+      bufferMinutes: 10,
+      viaLabel: reads.route.summary,
+    })
+  })
+
+  it('declines to invent a departure time with nothing to work backwards from', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const flight = { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal }
+    const base = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+    }
+
+    expect(departurePlan(base, reads.route)).toBeUndefined()
+    expect(departurePlan({ ...base, flight }, undefined)).toBeUndefined()
+  })
+
+  it('answers the departure question in the auxiliary slot only when the turn asked', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const quiet = composeAgentSpec(task, reads.toolResults)
+    const asked = composeAgentSpec(task, reads.toolResults, undefined, { departureAnswer: true })
+
+    expect(quiet.components.some((component) => component.type === 'departure-plan')).toBe(false)
+    // Borrows the auxiliary band rather than growing the brief.
+    expect(asked.components).toHaveLength(quiet.components.length)
+    expect(asked.components.some((component) => component.type === 'schedule-strip')).toBe(false)
+    const card = asked.components.find((component) => component.type === 'departure-plan')
+    if (card?.type !== 'departure-plan') throw new Error('expected a departure-plan component')
+    expect(card.props).toMatchObject({ departAtLabel: '20:10', driveMinutes: 20, bufferMinutes: 10 })
   })
 
   it('keeps the schedule strip on the return trip, anchored to the home eta', () => {

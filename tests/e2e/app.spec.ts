@@ -376,6 +376,39 @@ test('surfaces a transient schedule card on demand without growing the preparing
   await expectNoScroll(page)
 })
 
+test('answers when to leave from the button on the brief without growing the frame @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await expect(page.locator('.ui-card--schedule-strip')).toBeVisible()
+  const cardCountBefore = await page.locator('.ui-card').count()
+
+  // The question sits with the card that carries the ETA, beside the number it is
+  // about, and travels as ordinary user input — so the button reaches the same
+  // planner branch the spoken sentence does. (The card's controls are a sibling
+  // of the card surface, so scope to the component wrapper, not the article.)
+  const plan = page.locator('.ui-component:has([data-component-id="navigation-plan"])')
+  await plan.getByRole('button', { name: '什么时候出发' }).click()
+
+  const departureCard = page.locator('.ui-card--departure-plan')
+  await expect(departureCard).toBeVisible()
+  await expect(departureCard).toContainText('建议出发')
+  await expect(departureCard).toContainText('20:10')
+  await expect(departureCard).toContainText('MU5102 20:40 落地')
+  await expect(departureCard).toContainText('路上 20 分钟')
+  await expect(departureCard).toContainText('提前 10 分钟到')
+  await expect(page.locator('.ui-card--schedule-strip')).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // Same transient contract as the other query answers, and leaving still leads:
+  // 开始导航 remains the primary control on the card that hosts the question.
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.locator('.ui-card--departure-plan')).toHaveCount(0)
+  await expectNoScroll(page)
+})
+
 /**
  * The media title is the one cabin value that is prose, and prose has no fixed
  * length. The demo can only ever produce two titles — `memory.propose-update`

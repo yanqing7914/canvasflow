@@ -472,6 +472,47 @@ describe('UISpecRenderer', () => {
     expect(screen.queryByRole('list', { name: '今日日程列表' })).not.toBeInTheDocument()
   })
 
+  it('leads the departure answer with the clock time and states what it was worked back from', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['departure-plan'] } },
+      components: [{
+        id: 'departure-plan',
+        type: 'departure-plan',
+        props: {
+          departAtLabel: '20:10',
+          arrivalLabel: 'MU5102 20:40 落地',
+          driveMinutes: 20,
+          bufferMinutes: 10,
+          viaLabel: '直达虹桥机场 T2',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(document.querySelector('.ui-departure-plan__time')?.textContent).toBe('20:10')
+    expect(screen.getByText('MU5102 20:40 落地')).toBeInTheDocument()
+    expect(screen.getByText('路上 20 分钟')).toBeInTheDocument()
+    // The buffer is stated, never folded into the departure time.
+    expect(screen.getByText('提前 10 分钟到')).toBeInTheDocument()
+    expect(screen.getByText('直达虹桥机场 T2')).toBeInTheDocument()
+  })
+
+  it('omits the route line from the departure answer when there is none to name', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['departure-plan'] } },
+      components: [{
+        id: 'departure-plan',
+        type: 'departure-plan',
+        props: { departAtLabel: '20:10', arrivalLabel: 'MU5102 20:40 落地', driveMinutes: 20, bufferMinutes: 10 },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(document.querySelector('.ui-departure-plan__fact--via')).not.toBeInTheDocument()
+  })
+
   it('leads the charging card with the suggested duration when one is supplied', () => {
     const spec = baseSpec({
       layout: { type: 'stack', gap: 'md', slots: { main: ['charging'] } },

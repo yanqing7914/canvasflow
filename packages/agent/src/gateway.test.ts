@@ -1045,7 +1045,11 @@ describe('AgentGateway', () => {
       id: 'start-navigation',
       event: { type: 'tool-request', actionToken: 'start-navigation' },
     }))
-    expect(prepared.ui.components).toContainEqual(expect.objectContaining({ id: 'navigation-plan', actions: ['start-navigation'] }))
+    // Leaving leads the card; the pre-departure question follows it.
+    expect(prepared.ui.components).toContainEqual(expect.objectContaining({
+      id: 'navigation-plan',
+      actions: ['start-navigation', 'ask-departure-time'],
+    }))
 
     const request = {
       clientRequestId: 'client-start-navigation',
@@ -3466,6 +3470,102 @@ describe('AgentGateway', () => {
       })
 
       expect(asked.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(asked.task.phase).toBe('cancelled')
+    })
+  })
+
+  describe('check-departure-time query turn', () => {
+    it('answers with a transient departure card that yields the surface on the next event', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      expect(created.task.phase).toBe('preparing')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-1', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // Arithmetic over facts the trip already has: no task fact changes.
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+      expect(asked.task.processedEventIds).not.toContain('departure-1')
+      expect(asked.ui.uiRevision).toBeGreaterThan(created.ui.uiRevision)
+      expect(asked.ui.components).toContainEqual(expect.objectContaining({
+        type: 'departure-plan',
+        props: expect.objectContaining({
+          departAtLabel: '20:10', arrivalLabel: 'MU5102 20:40 落地', driveMinutes: 20, bufferMinutes: 10,
+        }),
+      }))
+      expect(asked.ui.components).toHaveLength(created.ui.components.length)
+      expect(asked.assistant).toMatchObject({ shouldSpeak: true })
+      expect(asked.assistant?.text).toContain('建议 20:10 出发')
+
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-after-departure', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'moving-after-departure', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(moved.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
+    })
+
+    it('answers the same question when the button asks it', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const action = created.ui.actions.find((candidate) => candidate.id === 'ask-departure-time')
+      if (action?.event.type !== 'agent-message') throw new Error('expected an agent-message action')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-button', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-button', type: 'user.input', text: action.event.text, timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
+    })
+
+    it('replays an identical departure event id idempotently', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-departure-replay', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-replay', type: 'user.input' as const, text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+
+      const first = gateway.submitEvent(created.task.taskId, request)
+      const second = gateway.submitEvent(created.task.taskId, request)
+
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+    })
+
+    it('says so instead of inventing a time when there is nothing to work backwards from', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('去机场接妈妈'))
+      expect(created.task.phase).toBe('collecting-information')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-empty', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-empty', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task).toEqual(created.task)
+      expect(asked.ui.uiRevision).toBe(created.ui.uiRevision)
+      // A missing side answer is not a broken trip.
+      expect(asked.ui.meta.generatedBy).not.toBe('fallback')
+      expect(asked.assistant?.text).toContain('还没有航班和路线')
+    })
+
+    it('leaves terminal tasks on the ordinary event path', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const cancelled = gateway.cancelTask(created.task.taskId, {
+        clientRequestId: 'client-cancel-for-departure', expectedTaskRevision: created.task.taskRevision,
+        eventId: 'cancel-for-departure',
+      })
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-terminal', expectedTaskRevision: cancelled.task.taskRevision,
+        event: { eventId: 'departure-terminal', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:10:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
       expect(asked.task.phase).toBe('cancelled')
     })
   })
