@@ -112,6 +112,14 @@ export function CompleteIcon(props: IconProps) {
   )
 }
 
+export function WeatherIcon(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <path d="M17.5 18.5h-11a4 4 0 0 1-.6-7.95 5.5 5.5 0 0 1 10.7-1.4 3.75 3.75 0 0 1 .9 9.35Z" />
+    </LineIcon>
+  )
+}
+
 export function MessageIcon(props: IconProps) {
   return (
     <LineIcon {...props}>
@@ -182,6 +190,17 @@ export function CloseIcon(props: IconProps) {
   return (
     <LineIcon {...props}>
       <path d="m6 6 12 12M18 6 6 18" />
+    </LineIcon>
+  )
+}
+
+/* Drawn pointing up, and rotated by the caller for the other direction, so an
+   expand and the collapse it undoes are one shape turned over rather than two
+   paths that could drift apart. */
+export function ChevronUpIcon(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <path d="m6 14.5 6-6 6 6" />
     </LineIcon>
   )
 }

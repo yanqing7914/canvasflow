@@ -5,10 +5,16 @@ import { parsePassengers, stripPassengerPhonePhrases } from './passengers'
 export type PlannerIntent =
   | 'create-airport-pickup'
   | 'provide-flight-number'
+  | 'pick-flight-choice'
   | 'start-navigation'
   | 'plan-charging'
   | 'confirm-passengers-onboard'
   | 'apply-cabin-preferences'
+  | 'check-weather'
+  | 'check-schedule'
+  | 'check-departure-time'
+  | 'send-weather-reminder'
+  | 'dismiss-weather-advisory'
   | 'cancel-task'
   | 'unknown'
 
@@ -21,6 +27,8 @@ export type PlannerSlotUpdates = {
   charging?: Pick<AirportPickupTaskState['charging'], 'recommended' | 'accepted' | 'status'>
   passengersOnboard?: boolean
   cancelled?: boolean
+  /** 1-based row on the arrivals board; the gateway resolves it to a flight. */
+  flightChoiceOrdinal?: number
 }
 
 export type Plan = {
@@ -131,6 +139,78 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
+  const flightChoiceOrdinal = parseFlightChoiceOrdinal(compactText)
+  if (flightChoiceOrdinal !== undefined) {
+    // Meaningful only while a board is on screen; the gateway checks that and
+    // falls back to the ordinary unknown reply when there is nothing to pick.
+    return {
+      intent: 'pick-flight-choice',
+      confidence: 0.97,
+      slotUpdates: { flightChoiceOrdinal },
+      missingSlots: pickupMissingSlots(state, passengers, flightNumber),
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: `好的，选第 ${flightChoiceOrdinal} 个航班。`,
+    }
+  }
+
+  if (isWeatherQuery(compactText)) {
+    return {
+      intent: 'check-weather',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，正在为你查看接机目的地的天气。',
+    }
+  }
+
+  if (isScheduleQuery(compactText)) {
+    return {
+      intent: 'check-schedule',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，正在为你查看今天的日程。',
+    }
+  }
+
+  if (isDepartureTimeQuery(compactText)) {
+    return {
+      intent: 'check-departure-time',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，正在算建议的出发时间。',
+    }
+  }
+
+  // The two answers to the proactive weather advisory. Meaningful only while
+  // an advisory is active; the gateway checks that and leaves the words on
+  // the ordinary unknown path otherwise.
+  if (/^(?:请|麻烦)?(?:帮我)?提醒(?:乘客|她们|他们|家人|妈妈|爸爸)?带伞(?:吧|好了)?[?？。！!]?$/.test(compactText)) {
+    return {
+      intent: 'send-weather-reminder',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，准备好带伞提醒，发送前请确认。',
+    }
+  }
+
+  if (/^(?:暂不处理|先不用|不用提醒(?:了)?|不用了|先这样)(?:吧|好了)?[。！!]?$/.test(compactText)) {
+    return {
+      intent: 'dismiss-weather-advisory',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，先不处理。',
+    }
+  }
+
   const isPickupRequest = /去机场接/.test(actionableText)
     || /机场接(?:人|妈妈|爸爸|豆豆)/.test(actionableText)
     || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(actionableText)
@@ -191,6 +271,55 @@ function pickupMissingSlots(
 
 function isTaskCancellation(text: string): boolean {
   return /取消(?:这个|本次)?(?:接机)?任务|取消接机|不去接了|不用接了|别去机场了/.test(text)
+}
+
+/**
+ * A whole-utterance weather question and nothing else. Anchored on purpose:
+ * a mixed sentence that also carries passengers or a flight number keeps its
+ * task meaning and must not be consumed by the query path.
+ */
+function isWeatherQuery(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:到(?:的时候|达时|那边))?(?:的)?天气(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
+}
+
+/**
+ * A whole-utterance schedule question, anchored like the weather form. 今天
+ * is optional but nothing else may ride along: a sentence that also carries
+ * passengers or a flight number keeps its task meaning.
+ */
+function isScheduleQuery(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:我)?(?:今天)?(?:的)?(?:还)?有?(?:什么|哪些)?(?:日程|待办|安排|行程安排)(?:事项)?(?:怎么样|有哪些|有什么)?[?？。！!]?$/.test(text)
+}
+
+const CHINESE_ORDINAL_DIGITS: Record<string, number> = {
+  一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
+  '1': 1, '2': 2, '3': 3, '4': 4, '5': 5,
+}
+
+/**
+ * A whole-utterance pick of an arrivals-board row: 第三个 / 选第三个 / 第3个航班.
+ * Anchored so a sentence that happens to contain a rank keeps its own meaning,
+ * and capped at five because the board never shows more rows than that. The
+ * ordinal is 1-based and means nothing outside the board the driver is looking
+ * at — the gateway resolves it against the same rows the composer rendered.
+ */
+function parseFlightChoiceOrdinal(text: string): number | undefined {
+  const match = /^(?:请|麻烦)?(?:帮我)?(?:选|要|接|就)?(?:选)?第([一二两三四五12345])(?:个|班|条|架)?(?:航班|飞机)?(?:吧|好了)?[?？。！!]?$/.exec(text)
+  if (!match) return undefined
+  return CHINESE_ORDINAL_DIGITS[match[1]!]
+}
+
+/**
+ * A whole-utterance question about when to leave, anchored like the weather and
+ * schedule forms.
+ *
+ * Two shapes only, and both have to be questions. A bare 现在出发 is an
+ * instruction, not a query — answering it with a card would swallow a command —
+ * so the "now" shape requires 吗/嘛/呢 and the open shape requires 什么时候/几点.
+ */
+function isDepartureTimeQuery(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|算下|算一下)?(?:我)?(?:现在)?(?:要|该|得|应该)?(?:什么时候|几点)(?:出发|走|动身)(?:比较好|合适|呢)?[?？。！!]?$/.test(text)
+    || /^现在(?:就)?(?:要|该|能|可以)?(?:出发|走|动身)(?:了)?(?:吗|嘛|呢)[?？。！!]?$/.test(text)
 }
 
 function stableHash(value: string): string {

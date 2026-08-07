@@ -24,10 +24,15 @@ import {
 } from '@canvasflow/tools'
 import { AgentGateway, type AgentGatewayOptions } from './gateway'
 import type { AgentHttpGateway } from './http'
+import type { ScheduleAdapter } from './lark-calendar-adapter'
 import { ModelGateway, type ModelGatewayResult } from './model-gateway'
-import type { Plan, PlannerInput } from './planner'
+import type { ReadToolResults } from './orchestration'
+import { planAirportPickup, type Plan, type PlannerInput } from './planner'
 import type { StoredEventResult, StoredIdempotencyResult, StoredTask, TaskStore, TaskUpdateRead } from './store'
 import { createTaskUpdate } from './task-updates'
+
+/** A resolved live calendar reading handed into the synchronous transaction. */
+type PrefetchedScheduleResult = NonNullable<ReadToolResults['calendar.query']>
 
 type SqlRow = Record<string, unknown>
 
@@ -230,6 +235,12 @@ export type PersistentAgentRuntimeOptions = {
   policyGate?: AgentGatewayOptions['policyGate']
   /** Optional rules-first model planner. It is evaluated before SQLite writes. */
   modelGateway?: Pick<ModelGateway, 'plan'>
+  /**
+   * Optional live calendar for check-schedule queries. Consulted outside the
+   * SQLite transaction (the gateway never awaits); failures fall back to the
+   * fixture calendar.
+   */
+  scheduleAdapter?: ScheduleAdapter
   /** Maximum retained SSE snapshots for each task; stale cursors receive an authoritative resync snapshot. */
   maxTaskUpdatesPerTask?: number
 }
@@ -252,6 +263,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
   readonly #providerFactory: ProviderFactory
   readonly #options: Omit<PersistentAgentRuntimeOptions, 'databasePath' | 'mode' | 'providerFactory'>
   readonly #modelGateway: Pick<ModelGateway, 'plan'> | undefined
+  readonly #scheduleAdapter: ScheduleAdapter | undefined
   readonly #inFlightOperations = new Map<string, Promise<unknown>>()
   #closed = false
 
@@ -274,6 +286,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       maxTaskUpdatesPerTask: options.maxTaskUpdatesPerTask,
     }
     this.#modelGateway = options.modelGateway
+    this.#scheduleAdapter = options.scheduleAdapter
     if (options.databasePath !== ':memory:') mkdirSync(dirname(resolve(options.databasePath)), { recursive: true })
     this.#database = new DatabaseSync(options.databasePath)
     this.#database.exec('PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;')
@@ -332,11 +345,20 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       return existing.then(() => this.#run((gateway) => gateway.submitEvent(taskId, request)))
     }
     const pending = (async () => {
-      const planned = await this.#planEvent(taskId, request)
+      // A board ordinal (第三个) is rewritten into the flight number's own
+      // words BEFORE planning, so the configured planner — model seam included
+      // — interprets the rewritten turn exactly as it would the typed number.
+      const rewriteText = this.#read((gateway) => gateway.ordinalRewriteText(taskId, request))
+      const effective = rewriteText !== undefined && request.event.type === 'user.input'
+        ? { ...request, event: { ...request.event, text: rewriteText } }
+        : request
+      const planned = await this.#planEvent(taskId, effective)
+      const prefetchedSchedule = await this.#prefetchSchedule(taskId, effective, planned?.plan)
       return this.#run(
-        (gateway) => gateway.submitEvent(taskId, request),
+        (gateway) => gateway.submitEvent(taskId, effective),
         planned?.plan,
         planned?.source === 'model' ? planned.modelUsed : undefined,
+        prefetchedSchedule,
       )
     })().finally(() => this.#inFlightOperations.delete(key))
     this.#inFlightOperations.set(key, pending)
@@ -369,7 +391,12 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     this.#closed = true
   }
 
-  #run<T>(operation: (gateway: AgentGateway) => T, plannedInput?: Plan, modelUsed?: string): T {
+  #run<T>(
+    operation: (gateway: AgentGateway) => T,
+    plannedInput?: Plan,
+    modelUsed?: string,
+    prefetchedSchedule?: PrefetchedScheduleResult,
+  ): T {
     this.#assertOpen()
     // Serializes Gateway calls across processes sharing this SQLite file.
     this.#database.exec('BEGIN IMMEDIATE')
@@ -388,6 +415,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
         compose: this.#options.compose,
         policyGate: this.#options.policyGate,
         modelUsed,
+        ...(prefetchedSchedule ? { prefetchedSchedule } : {}),
         ...(plannedInput ? { planner: { plan: () => plannedInput } } : {}),
       })
       const result = operation(gateway)
@@ -440,6 +468,44 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       eventId: input.event.eventId,
       timestamp: input.event.timestamp,
     })
+  }
+
+  /**
+   * The async seam for the optional live calendar. The gateway runs inside a
+   * synchronous SQLite transaction and can never await, so a configured Lark
+   * adapter is consulted HERE, before the transaction, and only for a turn the
+   * deterministic planner says is a schedule query. Any failure returns
+   * undefined and the gateway answers from the fixture calendar instead —
+   * a slow or broken calendar service must never take the turn down.
+   */
+  async #prefetchSchedule(
+    taskId: string,
+    request: SubmitEventRequest,
+    modelPlan?: Plan,
+  ): Promise<PrefetchedScheduleResult | undefined> {
+    if (!this.#scheduleAdapter || request.event.type !== 'user.input') return undefined
+    const intent = (modelPlan ?? planAirportPickup({ text: request.event.text })).intent
+    if (intent !== 'check-schedule') return undefined
+    try {
+      const data = await this.#scheduleAdapter.listToday()
+      const generatedAt = new Date((this.#options.nowMs?.() ?? Date.now())).toISOString()
+      return {
+        ok: true,
+        data,
+        error: null,
+        meta: {
+          requestId: `${request.clientRequestId}:calendar.query`,
+          taskId,
+          tool: 'calendar.list-upcoming',
+          provider: 'live',
+          durationMs: 0,
+          generatedAt,
+        },
+      }
+    } catch {
+      // Fall back to the fixture calendar inside the transaction.
+      return undefined
+    }
   }
 
   async #runModelPlan(input: PlannerInput): Promise<ModelGatewayResult> {

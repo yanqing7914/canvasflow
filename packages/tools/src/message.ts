@@ -86,6 +86,24 @@ export function buildLandingNotifyContent(
 }
 
 /**
+ * The proactive rain reminder sent while still en route. A fixed template like
+ * the landing notice: the trigger decides WHETHER to offer it, never what it
+ * says.
+ */
+export function buildWeatherUmbrellaContent(
+  taskId: string,
+  contactId: string,
+  flightNumber: string,
+): Pick<MessageSendBinding, 'contactId' | 'messageId' | 'text'> {
+  const normalizedFlight = flightNumber.toUpperCase()
+  return {
+    contactId,
+    messageId: `${taskId}:${normalizedFlight}:weather-umbrella`,
+    text: `到达时段机场有雨，记得带伞，我来接你们。`,
+  }
+}
+
+/**
  * Prepare a landing message and mint a single-use confirmation bound to the
  * prepared contactId / messageId / text. Callers pass the returned
  * `confirmationId` to `message.send`. Auto-notify still works without it when
@@ -103,12 +121,14 @@ export function createMessagePreparer(runtime: SideEffectRuntime) {
       return errorResult(ctx, PREPARE, 'AUTHORIZATION_REQUIRED', `联系人未授权：${parsed.data.contactId}`, false)
     }
 
-    const content = buildLandingNotifyContent(
-      ctx.taskId,
-      parsed.data.contactId,
-      parsed.data.flightNumber,
-      parsed.data.eta ?? '即将到达',
-    )
+    const content = parsed.data.kind === 'weather-umbrella'
+      ? buildWeatherUmbrellaContent(ctx.taskId, parsed.data.contactId, parsed.data.flightNumber)
+      : buildLandingNotifyContent(
+          ctx.taskId,
+          parsed.data.contactId,
+          parsed.data.flightNumber,
+          parsed.data.eta ?? '即将到达',
+        )
     const confirmationId = runtime.confirmations.issueSendMessageConfirmation({
       taskId: ctx.taskId,
       ...content,

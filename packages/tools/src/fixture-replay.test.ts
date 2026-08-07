@@ -7,6 +7,7 @@ import {
   chargingRecommendationOutputSchema,
   listUpcomingEventsOutputSchema,
   confirmMemoryUpdateOutputSchema,
+  flightArrivalsOutputSchema,
   flightStatusOutputSchema,
   getPreferencesOutputSchema,
   mediaPlayOutputSchema,
@@ -24,6 +25,7 @@ import {
   scenarioFixtureSchema,
   toolResultSchema,
   vehicleStatusOutputSchema,
+  weatherOutputSchema,
   type AirportPickupEvent,
   type AirportPickupTaskState,
   type ScenarioFixture,
@@ -45,6 +47,16 @@ const FIXTURE_DIR = resolve(process.cwd(), 'fixtures/airport-pickup')
 /** `ui.validate` documents UI-side spec validation; it is not a registry tool. */
 const NON_REGISTRY_RESULT_KEYS = new Set(['ui.validate'])
 
+/**
+ * Query-turn result keys: the payload is a registry tool's result stored under
+ * a separate key so it never collides with the persisted read it duplicates
+ * (calendar.query answers check-schedule while calendar.list-upcoming keeps
+ * feeding the schedule strip). Validated against the underlying tool contract.
+ */
+const QUERY_RESULT_KEY_TOOLS: Record<string, ToolName> = {
+  'calendar.query': 'calendar.list-upcoming',
+}
+
 const outputSchemas: Record<ToolName, z.ZodType> = {
   'family.resolve-members': resolveMembersOutputSchema,
   'memory.get-preferences': getPreferencesOutputSchema,
@@ -52,6 +64,7 @@ const outputSchemas: Record<ToolName, z.ZodType> = {
   'memory.confirm-update': confirmMemoryUpdateOutputSchema,
   'memory.reject-update': rejectMemoryUpdateOutputSchema,
   'flight.get-status': flightStatusOutputSchema,
+  'flight.list-arrivals': flightArrivalsOutputSchema,
   'navigation.plan-route': routePlanOutputSchema,
   'navigation.start': navigationStartOutputSchema,
   'navigation.update-route': navigationUpdateRouteOutputSchema,
@@ -60,6 +73,7 @@ const outputSchemas: Record<ToolName, z.ZodType> = {
   'vehicle.revert-cabin-profile': revertCabinProfileOutputSchema,
   'charging.recommend': chargingRecommendationOutputSchema,
   'calendar.list-upcoming': listUpcomingEventsOutputSchema,
+  'weather.get-current': weatherOutputSchema,
   'media.play': mediaPlayOutputSchema,
   'message.prepare': messagePrepareOutputSchema,
   'message.send': messageSendOutputSchema,
@@ -95,12 +109,13 @@ describe('fixture toolResults contract', () => {
     for (const fixture of fixtures) {
       for (const [tool, raw] of Object.entries(fixture.toolResults)) {
         if (NON_REGISTRY_RESULT_KEYS.has(tool)) continue
-        const dataSchema = outputSchemas[tool as ToolName]
+        const contractTool = QUERY_RESULT_KEY_TOOLS[tool] ?? (tool as ToolName)
+        const dataSchema = outputSchemas[contractTool]
         expect(dataSchema, `${fixture.id}: 未注册的工具 ${tool}`).toBeDefined()
         const parsed = toolResultSchema(dataSchema).safeParse(raw)
         expect(parsed.success, `${fixture.id}:${tool} ${JSON.stringify(parsed.success ? '' : parsed.error.issues)}`).toBe(true)
         if (!parsed.success) continue
-        expect(parsed.data.meta.tool, `${fixture.id}:${tool}`).toBe(tool)
+        expect(parsed.data.meta.tool, `${fixture.id}:${tool}`).toBe(contractTool)
         expect(parsed.data.meta.taskId, `${fixture.id}:${tool}`).toBe(fixture.initialTaskState.taskId)
         if (parsed.data.ok) {
           expect(parsed.data.data, `${fixture.id}:${tool}`).not.toBeNull()

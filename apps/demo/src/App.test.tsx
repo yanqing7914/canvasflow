@@ -94,6 +94,61 @@ describe('demo integration', () => {
     expect(screen.getByRole('button', { name: /推进下一事件/ })).toBeDisabled()
   })
 
+  it('uses the selected light condition for task creation and locks it afterwards', async () => {
+    const user = userEvent.setup()
+    const created = apiResponse(createInitialTask())
+    const api = {
+      create: vi.fn().mockResolvedValue(created),
+      event: vi.fn(),
+      action: vi.fn(),
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    let drawer = await openControls(user)
+    const night = screen.getByRole('button', { name: '夜间' })
+    await user.click(night)
+    expect(night).toHaveAttribute('aria-pressed', 'true')
+    expect(drawer).toHaveTextContent('选择创建任务时车辆上报的光线')
+    await user.keyboard('{Escape}')
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(api.create).toHaveBeenCalledWith(
+      '我现在要去机场接妈妈和豆豆',
+      { vehicleContext: expect.objectContaining({ isNight: true }) },
+    ))
+
+    drawer = await openControls(user)
+    expect(screen.getByRole('button', { name: '跟随时间' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '白天' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '夜间' })).toBeDisabled()
+    expect(drawer).toHaveTextContent('光线条件已随任务固定')
+  })
+
+  it('locks the selected light condition while task creation is pending', async () => {
+    const user = userEvent.setup()
+    let resolveCreate: ((value: AgentResponse) => void) | undefined
+    const create = vi.fn().mockImplementation(() => new Promise<AgentResponse>((resolve) => {
+      resolveCreate = resolve
+    }))
+    const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<App api={api} />)
+
+    await openControls(user)
+    await user.click(screen.getByRole('button', { name: '夜间' }))
+    await user.keyboard('{Escape}')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    await openControls(user)
+    expect(screen.getByRole('button', { name: '跟随时间' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '白天' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '夜间' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '夜间' })).toHaveAttribute('aria-pressed', 'true')
+
+    resolveCreate!(apiResponse(createInitialTask()))
+    await waitFor(() => expect(screen.getByText('准备接机')).toBeInTheDocument())
+  })
+
   it('applies newer validated task snapshots received over SSE and closes the stream on unmount', async () => {
     const initial = apiResponse(createInitialTask('pickup-sse', '2026-07-22T12:00:00+08:00'))
     const updatedTask = {
@@ -141,7 +196,7 @@ describe('demo integration', () => {
   it.each([
     {
       name: 'parked',
-      vehicle: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false } satisfies VehicleContext,
+      vehicle: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: true } satisfies VehicleContext,
       visibleTitle: '停车提示',
       hiddenTitle: '驾驶提示',
     },
@@ -859,6 +914,47 @@ describe('demo integration', () => {
       expect(drawer).toHaveTextContent('pickup-001')
     })
 
+    it('discloses model participation only when the Agent reports it', async () => {
+      const user = userEvent.setup()
+      const created = apiResponse(createInitialTask())
+      const withModel: AgentResponse = {
+        ...created,
+        meta: { ...created.meta, modelUsed: 'qwen-plus' },
+      }
+      const api = { create: vi.fn().mockResolvedValue(withModel), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+
+      // The disclosure names the exact model the Agent persisted with the task.
+      const provenance = screen.getByLabelText('模型参与说明')
+      expect(provenance).toHaveTextContent('qwen-plus')
+      expect(provenance).toHaveAttribute('data-model-used', 'qwen-plus')
+
+      // The drawer states the planning source for an engineer.
+      const drawer = await openControls(user)
+      expect(drawer).toHaveTextContent('规划来源')
+      expect(drawer).toHaveTextContent('qwen-plus')
+    })
+
+    it('stays silent about the model on rules-only turns', async () => {
+      const user = userEvent.setup()
+      const api = { create: vi.fn().mockResolvedValue(apiResponse(createInitialTask())), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+
+      // No meta.modelUsed means the rules planned this turn; claiming otherwise
+      // would overstate the model's role, so the disclosure never renders.
+      expect(screen.queryByLabelText('模型参与说明')).not.toBeInTheDocument()
+
+      const drawer = await openControls(user)
+      expect(drawer).toHaveTextContent('规划来源')
+      expect(drawer).toHaveTextContent('规则')
+    })
+
     it('traps focus in the drawer, closes on Escape, and restores focus to its trigger', async () => {
       const user = userEvent.setup()
       render(<App initialTask={createInitialTask()} />)
@@ -963,6 +1059,50 @@ describe('demo integration', () => {
 
       const drawer = await openControls(user)
       expect(drawer).toHaveTextContent('navigation.start:succeeded')
+    })
+
+    it('sends a picked arrivals row as the driver saying that flight number', async () => {
+      const user = userEvent.setup()
+      const task = createInitialTask()
+      const base = composePickupSpec(task)
+      const ui: UISpec = {
+        ...base,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['flight-choices'] } },
+        components: [{
+          id: 'flight-choices',
+          type: 'flight-choices',
+          actions: ['pick-MU5102', 'pick-MU5103'],
+          props: {
+            arrivalCityName: '上海',
+            dateLabel: '今天',
+            choices: [
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'pick-MU5102' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', actionId: 'pick-MU5103' },
+            ],
+            freshness: 'fixture',
+          },
+        }],
+        actions: [
+          { id: 'pick-MU5102', label: '接 MU5102', style: 'primary', event: { type: 'agent-message', text: '航班号 MU5102' } },
+          { id: 'pick-MU5103', label: '接 MU5103', style: 'secondary', event: { type: 'agent-message', text: '航班号 MU5103' } },
+        ],
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue({ ...apiResponse(task), ui }),
+        event: vi.fn().mockResolvedValue({ ...apiResponse(task), ui }),
+        action: vi.fn(),
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      const rows = await screen.findAllByRole('button', { name: /MU510/ })
+      await user.click(rows[1]!)
+
+      // The pick travels as user input, not as a tool action: the row is a faster
+      // way to say the number, so the Agent sees the same event either way.
+      expect(api.event).toHaveBeenCalledWith(expect.anything(), { type: 'user.input', text: '航班号 MU5103' })
+      expect(api.action).not.toHaveBeenCalled()
     })
   })
 

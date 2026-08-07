@@ -51,11 +51,30 @@ export const routeSketchSchema = z.object({
   /** Ordered sketch line; two points is the minimum that can be drawn. */
   polyline: z.array(routeSketchPointSchema).min(2),
   /**
-   * Discrete simulated trip progress along the sketch: 0 is the start, 1 the end.
-   * Authored per task state by fixtures — the UI never advances it on its own, and
-   * an absent value means "no vehicle marker" rather than "at the start".
+   * Simulated trip progress along the sketch: 0 is the start, 1 the end. Authored
+   * per task state by fixtures, and an absent value means "no vehicle marker"
+   * rather than "at the start". Where {@link routeSketchSchema.shape.crawl} is
+   * present this is the near end of the authored span rather than a fixed point.
    */
   progress: z.number().min(0).max(1).optional(),
+  /**
+   * How far the marker may drift from `progress` while the task state holds, and
+   * over how long.
+   *
+   * A car under way that sits perfectly still until the next event reads as a
+   * frozen demo, so the marker crawls — but only between two points the fixture
+   * authored, at a rate the fixture authored, and it stops dead at `toProgress`.
+   * The UI interpolates inside that span; it does not choose either end of it,
+   * extend it, or carry it past a task state the Agent has not sent. Absent means
+   * the marker holds at `progress`, which is every parked, charging, and arrived
+   * state.
+   */
+  crawl: z.object({
+    /** The far end of the authored span. Always beyond `progress`, never past 1. */
+    toProgress: z.number().min(0).max(1),
+    /** Wall-clock seconds the span takes end to end, so the rate is authored too. */
+    durationSeconds: z.number().positive(),
+  }).optional(),
 })
 
 export const componentSpecSchema = z.discriminatedUnion('type', [
@@ -169,6 +188,104 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
         kind: z.enum(['task', 'calendar']),
         status: z.enum(['done', 'next', 'upcoming', 'at-risk']),
       })).min(2).max(5),
+    }),
+  }),
+  componentBase.extend({
+    type: z.literal('weather-card'),
+    props: z.object({
+      /** Human place label the reading is for, e.g. 虹桥机场 T2. */
+      location: z.string().min(1),
+      /** Which moment the reading describes, e.g. 20:40 到达时 or 现在. */
+      timeLabel: z.string().min(1),
+      temperatureC: z.number(),
+      condition: z.enum(['sunny', 'cloudy', 'overcast', 'light-rain', 'heavy-rain', 'fog']),
+      /** Localized condition copy; the enum stays stable for renderers. */
+      conditionLabel: z.string().min(1),
+      windLevel: z.number().int().min(0).max(12).optional(),
+      precipitationChance: z.number().min(0).max(100).optional(),
+      /** One pickup-relevant suggestion; absent when the weather needs none. */
+      advisory: z.string().min(1).optional(),
+      freshness: z.enum(['live', 'cached', 'fixture']),
+    }),
+  }),
+  componentBase.extend({
+    type: z.literal('schedule-card'),
+    props: z.object({
+      /** Which day the list answers for, e.g. 今天. */
+      dateLabel: z.string().min(1),
+      /**
+       * The day's remaining events, ordered by start time. Capped at four rows:
+       * the card is a glance, and `moreCount` owns the tail.
+       */
+      events: z.array(z.object({
+        eventId: z.string().min(1),
+        title: z.string().min(1),
+        startAt: z.string().min(1),
+        endAt: z.string().min(1).optional(),
+        location: z.string().min(1).optional(),
+      })).max(4),
+      /** How many events the cap cut off; absent when everything fits. */
+      moreCount: z.number().int().positive().optional(),
+      /** Shown instead of rows when the day has nothing left. */
+      emptyCopy: z.string().min(1).optional(),
+      freshness: z.enum(['live', 'cached', 'fixture']),
+    }),
+  }),
+  componentBase.extend({
+    type: z.literal('flight-choices'),
+    props: z.object({
+      /** Human place label the board is for, e.g. 上海. Never an internal city id. */
+      arrivalCityName: z.string().min(1),
+      /** Which day the board answers for, e.g. 今天. */
+      dateLabel: z.string().min(1),
+      /**
+       * The rows the driver chooses between, in the order they are presented.
+       * Between two and five: one row is not a choice and should have been read
+       * as the answer, and past five the driver is scanning rather than picking.
+       *
+       * `actionId` is the row's own button — a row without one would be a
+       * choice that cannot be made, so the renderer draws the row as plain text
+       * and only the referenced action becomes a control.
+       */
+      choices: z.array(z.object({
+        flightNumber: z.string().min(1),
+        airlineName: z.string().min(1),
+        originName: z.string().min(1),
+        status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
+        /** Localized status copy; the enum stays stable for renderers. */
+        statusLabel: z.string().min(1),
+        /** Clock time the row leads with, e.g. 20:30. */
+        arrivalTimeLabel: z.string().min(1),
+        /** Only when the estimate differs from the schedule, e.g. 预计 21:10. */
+        revisedTimeLabel: z.string().min(1).optional(),
+        /**
+         * Which way the estimate moved. Renderers tone `later` as a caution and
+         * `earlier` as plain fact: an early arrival is news, not a warning, and an
+         * amber figure that means "good" teaches the driver to ignore amber.
+         */
+        revisedDirection: z.enum(['later', 'earlier']).optional(),
+        terminal: z.string().min(1),
+        actionId: z.string().min(1),
+      })).min(2).max(5),
+      freshness: z.enum(['live', 'cached', 'fixture']),
+    }),
+  }),
+  componentBase.extend({
+    type: z.literal('departure-plan'),
+    props: z.object({
+      /** Clock time the answer leads with, e.g. 20:10. */
+      departAtLabel: z.string().min(1),
+      /** What the departure is timed against, e.g. MU5102 20:40 落地. */
+      arrivalLabel: z.string().min(1),
+      driveMinutes: z.number().int().nonnegative(),
+      /**
+       * How early the recommendation puts the car at the terminal. Stated rather
+       * than folded into the departure time: a driver who wants to cut it finer
+       * can only do that if they can see what was set aside for them.
+       */
+      bufferMinutes: z.number().int().nonnegative(),
+      /** Route variant the drive time came from, e.g. 经超充站. Never a route id. */
+      viaLabel: z.string().min(1).optional(),
     }),
   }),
   componentBase.extend({

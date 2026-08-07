@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type { ComponentSpec, UISpec } from '@canvasflow/schema'
 import { UISpecRenderer } from './UISpecRenderer'
@@ -368,6 +368,151 @@ describe('UISpecRenderer', () => {
     expect(screen.getByText('这项信息暂时无法显示')).toBeInTheDocument()
   })
 
+  it('renders the weather answer with its advisory line', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['weather-card'] } },
+      components: [{
+        id: 'weather-card',
+        type: 'weather-card',
+        props: {
+          location: '虹桥机场 T2',
+          timeLabel: '20:40 到达时',
+          temperatureC: 24,
+          condition: 'light-rain',
+          conditionLabel: '小雨',
+          windLevel: 3,
+          precipitationChance: 70,
+          advisory: '到达时段有雨，建议家人在到达层室内等候。',
+          freshness: 'fixture',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(screen.getByText('20:40 到达时 · 虹桥机场 T2')).toBeInTheDocument()
+    expect(screen.getByText('小雨')).toBeInTheDocument()
+    expect(screen.getByText('24°C')).toBeInTheDocument()
+    expect(screen.getByText('风力 3 级')).toBeInTheDocument()
+    expect(screen.getByText('降水 70%')).toBeInTheDocument()
+    expect(screen.getByText('到达时段有雨，建议家人在到达层室内等候。')).toHaveClass('ui-weather-brief__advisory')
+  })
+
+  it('keeps the weather band to one line when the sky needs no advisory', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['weather-card'] } },
+      components: [{
+        id: 'weather-card',
+        type: 'weather-card',
+        props: {
+          location: '家',
+          timeLabel: '现在',
+          temperatureC: 26.4,
+          condition: 'cloudy',
+          conditionLabel: '多云',
+          freshness: 'fixture',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(screen.getByText('现在 · 家')).toBeInTheDocument()
+    expect(screen.getByText('26°C')).toBeInTheDocument()
+    // No fabricated facts: absent wind/precipitation render nothing, and a calm
+    // sky earns no advisory row.
+    expect(document.querySelector('.ui-weather-brief__fact')).not.toBeInTheDocument()
+    expect(document.querySelector('.ui-weather-brief__advisory')).not.toBeInTheDocument()
+  })
+
+  it('lists the schedule answer with time, title, location, and the capped tail', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['schedule-card'] } },
+      components: [{
+        id: 'schedule-card',
+        type: 'schedule-card',
+        props: {
+          dateLabel: '今天',
+          events: [
+            { eventId: 'e-1', title: '豆豆的睡前故事', startAt: '2026-07-22T21:30:00+08:00', location: '家' },
+            { eventId: 'e-2', title: '家庭电话', startAt: '2026-07-22T22:00:00+08:00' },
+          ],
+          moreCount: 3,
+          freshness: 'fixture',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const list = screen.getByRole('list', { name: '今日日程列表' })
+    expect(list.textContent).toMatch(/21:30.*豆豆的睡前故事.*家.*22:00.*家庭电话/u)
+    expect(screen.getByText('还有 3 项')).toBeInTheDocument()
+    expect(document.querySelector('.ui-schedule-card__empty')).not.toBeInTheDocument()
+  })
+
+  it('answers an empty schedule with its copy instead of an empty list', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['schedule-card'] } },
+      components: [{
+        id: 'schedule-card',
+        type: 'schedule-card',
+        props: {
+          dateLabel: '今天',
+          events: [],
+          emptyCopy: '今天没有更多安排了',
+          freshness: 'fixture',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(screen.getByText('今天没有更多安排了')).toBeInTheDocument()
+    expect(screen.queryByRole('list', { name: '今日日程列表' })).not.toBeInTheDocument()
+  })
+
+  it('leads the departure answer with the clock time and states what it was worked back from', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['departure-plan'] } },
+      components: [{
+        id: 'departure-plan',
+        type: 'departure-plan',
+        props: {
+          departAtLabel: '20:10',
+          arrivalLabel: 'MU5102 20:40 落地',
+          driveMinutes: 20,
+          bufferMinutes: 10,
+          viaLabel: '直达虹桥机场 T2',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(document.querySelector('.ui-departure-plan__time')?.textContent).toBe('20:10')
+    expect(screen.getByText('MU5102 20:40 落地')).toBeInTheDocument()
+    expect(screen.getByText('路上 20 分钟')).toBeInTheDocument()
+    // The buffer is stated, never folded into the departure time.
+    expect(screen.getByText('提前 10 分钟到')).toBeInTheDocument()
+    expect(screen.getByText('直达虹桥机场 T2')).toBeInTheDocument()
+  })
+
+  it('omits the route line from the departure answer when there is none to name', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['departure-plan'] } },
+      components: [{
+        id: 'departure-plan',
+        type: 'departure-plan',
+        props: { departAtLabel: '20:10', arrivalLabel: 'MU5102 20:40 落地', driveMinutes: 20, bufferMinutes: 10 },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(document.querySelector('.ui-departure-plan__fact--via')).not.toBeInTheDocument()
+  })
+
   it('leads the charging card with the suggested duration when one is supplied', () => {
     const spec = baseSpec({
       layout: { type: 'stack', gap: 'md', slots: { main: ['charging'] } },
@@ -504,6 +649,74 @@ describe('UISpecRenderer', () => {
     expect(renderer.querySelector('.ui-cabin-brief__facts')).toHaveTextContent('温度')
     expect(renderer.querySelector('.ui-cabin-brief__facts')).not.toHaveTextContent('风量')
     expect(renderer.querySelector('.ui-cabin-brief__facts')).not.toHaveTextContent('媒体')
+  })
+
+  // `.ui-metric__value` is a tabular numeral face at a numeral size. The media title
+  // is the one metric value that is prose, and at the figure's size four CJK glyphs
+  // overrun the third of `.ui-cabin-grid` the metric gets and hit the ellipsis. The
+  // browser-side proof that it now fits lives in the e2e layout spec; this pins the
+  // structure that proof depends on — the text face reaches the media title and only
+  // the media title.
+  it('renders a prose metric value in the text face and leaves the figures on the numeral face', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['cabin'] } },
+      components: [{
+        id: 'cabin',
+        type: 'cabin-profile',
+        props: { zone: 'rear', temperatureC: 25, fanLevel: 2, mediaTitle: '豆豆故事', appliedFromMemory: true, reversible: true },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const renderer = screen.getByRole('region', { name: 'Generated task interface' })
+    const textValues = [...renderer.querySelectorAll('.ui-metric__value-text')]
+    expect(textValues.map((element) => element.textContent)).toEqual(['豆豆故事'])
+    // The figures stay bare inside their own leaf, so the numeral face still applies
+    // to them directly.
+    const metricValue = (label: string) => [...renderer.querySelectorAll('.ui-metric')]
+      .find((metric) => metric.querySelector('.ui-metric__label')?.textContent === label)
+      ?.querySelector('.ui-metric__value')
+    expect(metricValue('温度')).toHaveTextContent('25°C')
+    expect(metricValue('温度')?.querySelector('.ui-metric__value-text')).toBeNull()
+    expect(metricValue('风量')).toHaveTextContent('2 档')
+    expect(metricValue('风量')?.querySelector('.ui-metric__value-text')).toBeNull()
+    expect(metricValue('媒体')).toHaveTextContent('豆豆故事')
+  })
+
+  // The schema bounds a media title at one character and nothing more, so the length
+  // the demo's own preference domain happens to produce is not the length the
+  // renderer has to survive. Whether a longer or mixed-script title actually fits its
+  // column is a browser question and the e2e layout spec asks it there; what this
+  // pins is that the routing does not quietly depend on the title being short — every
+  // one of these reaches the text face, and the figures beside it never do.
+  it.each([
+    ['a longer CJK title', '豆豆的睡前故事'],
+    ['a mixed-script title', 'Peppa Pig 第 3 季'],
+    ['a title past one line', '小猪佩奇与恐龙世界大冒险'],
+    ['an all-Latin title', 'The Very Hungry Caterpillar'],
+  ])('routes %s through the prose face intact', (_name, mediaTitle) => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['cabin'] } },
+      components: [{
+        id: 'cabin',
+        type: 'cabin-profile',
+        props: { zone: 'rear', temperatureC: 25, fanLevel: 2, mediaTitle, appliedFromMemory: true, reversible: true },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const renderer = screen.getByRole('region', { name: 'Generated task interface' })
+    const textValues = [...renderer.querySelectorAll('.ui-metric__value-text')]
+    // Rendered whole, in one node: the fit is the stylesheet's job, and a renderer
+    // that truncated or split the string would take that decision away from it.
+    expect(textValues.map((element) => element.textContent)).toEqual([mediaTitle])
+    const metricValue = (label: string) => [...renderer.querySelectorAll('.ui-metric')]
+      .find((metric) => metric.querySelector('.ui-metric__label')?.textContent === label)
+      ?.querySelector('.ui-metric__value')
+    expect(metricValue('温度')?.querySelector('.ui-metric__value-text')).toBeNull()
+    expect(metricValue('风量')?.querySelector('.ui-metric__value-text')).toBeNull()
   })
 
   it('keeps a component action with its matching summary rather than the global action bar', () => {
@@ -983,6 +1196,31 @@ describe('UISpecRenderer route map panel', () => {
 
   const followProps = { destination: '虹桥机场 T2', mode: 'follow', routeSketch: { ...viaCharge, progress: 0.4 } }
 
+  /** The card that rides in the rail beside the map, on its own. */
+  function navigationCard(id = 'navigation'): ComponentSpec {
+    return {
+      id,
+      type: 'navigation-summary',
+      props: {
+        routeId: 'route-airport-via-charge-001',
+        destination: '虹桥机场 T2',
+        eta: '2026-07-22T20:37:00+08:00',
+        distanceKm: 38,
+        estimatedBatteryAtArrival: 55,
+      },
+    } as ComponentSpec
+  }
+
+  /** A legal state the density trim allows: a map beside two cards, not one. */
+  function railOfTwo(): UISpec {
+    const spec = splitSpec(followProps)
+    return {
+      ...spec,
+      layout: { type: 'split', ratio: [1.75, 1], slots: { primary: ['route-map'], secondary: ['navigation', 'second'] } },
+      components: [...spec.components, navigationCard('second')],
+    } as UISpec
+  }
+
   function renderer() {
     return screen.getByRole('region', { name: 'Generated task interface' })
   }
@@ -1008,6 +1246,16 @@ describe('UISpecRenderer route map panel', () => {
     expect(renderer().querySelector('.ui-route-sketch')).not.toBeInTheDocument()
   })
 
+  it('injects no map script and stays on the sketch when no AMap key is configured', () => {
+    // CI and the default local build carry no VITE_AMAP_JS_KEY, so the panel
+    // must render entirely from the offline sketch with the network untouched.
+    render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+    expect(panel()).toHaveAttribute('data-route-map-source', 'sketch')
+    expect(document.getElementById('amap-js-api')).toBeNull()
+    expect(panel()!.querySelector('.ui-route-map__basemap')).toHaveAttribute('data-active', 'false')
+  })
+
   it('marks the staged point as simulated progress, never as a live position', () => {
     render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
 
@@ -1028,15 +1276,15 @@ describe('UISpecRenderer route map panel', () => {
     expect(panel()!.querySelector('.ui-route-map__progress')).not.toBeInTheDocument()
   })
 
-  it('moves the marker only when a new spec carries a different authored value', () => {
+  it('holds the marker where the spec put it when no crawl is authored', () => {
     const { rerender } = render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
     const before = {
       path: panel()!.querySelector('.ui-route-map__line')!.getAttribute('d'),
       vehicle: panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform'),
     }
 
-    // Same geometry, same progress, new render: nothing in this component
-    // advances on its own, so the marker has not budged.
+    // Same geometry, same progress, no authored span, new render: there is
+    // nothing for the component to move between, so the marker has not budged.
     rerender(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
     expect(panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform')).toBe(before.vehicle)
 
@@ -1050,6 +1298,118 @@ describe('UISpecRenderer route map panel', () => {
     expect(panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform')).not.toBe(before.vehicle)
     expect(panel()!.querySelector('.ui-route-map__line')!.getAttribute('d')).toBe(before.path)
     expect(panel()!.querySelector('.ui-route-map__progress')).toHaveTextContent('模拟行程进度 72%')
+  })
+
+  /**
+   * The crawl, seen from the outside: what the driver actually reads.
+   *
+   * `crawl.test.ts` covers the interpolation itself. What matters here is that
+   * the marker and the percentage are one reading rather than two — a caption
+   * that lagged the dot would be the panel contradicting itself — and that the
+   * crawl stops at the authored bound instead of running to the destination.
+   *
+   * Frames are driven by hand through `requestAnimationFrame`, so no test waits
+   * on a real one and every assertion lands on an exact position.
+   */
+  describe('authored crawl', () => {
+    const crawlProps = {
+      destination: '虹桥机场 T2',
+      mode: 'follow',
+      routeSketch: { ...viaCharge, progress: 0.4, crawl: { toProgress: 0.6, durationSeconds: 10 } },
+    }
+
+    let frames: Array<(timestampMs: number) => void> = []
+
+    beforeEach(() => {
+      frames = []
+      now = 0
+      vi.stubGlobal('requestAnimationFrame', (callback: (timestampMs: number) => void) => {
+        frames.push(callback)
+        return frames.length
+      })
+      vi.stubGlobal('cancelAnimationFrame', (handle: number) => { frames[handle - 1] = () => {} })
+    })
+
+    afterEach(() => { vi.unstubAllGlobals() })
+
+    let now = 0
+
+    function step(timestampMs: number) {
+      now = timestampMs
+      const due = frames
+      frames = []
+      act(() => { for (const frame of due) frame(timestampMs) })
+    }
+
+    /**
+     * Delivers `durationMs` of frames the way a painting tab does, at 100ms each.
+     * The crawl counts the gap between frames rather than the time since it
+     * started — a gap wider than a slow frame is a tab that stopped painting, and
+     * spending the span through one would be the teleport it exists to avoid — so
+     * time only passes here in frames a tab could actually have delivered.
+     */
+    function advance(durationMs: number) {
+      const target = now + durationMs
+      while (now < target) step(Math.min(now + 100, target))
+    }
+
+    function reading() {
+      return {
+        vehicle: panel()!.querySelector('.ui-route-map__vehicle')!.getAttribute('transform'),
+        percent: panel()!.querySelector('.ui-route-map__progress')!.textContent,
+      }
+    }
+
+    it('moves the marker and the percentage as one reading', () => {
+      render(<UISpecRenderer spec={splitSpec(crawlProps)} onAction={vi.fn()} pending={false} />)
+
+      step(0)
+      const start = reading()
+      expect(start.percent).toBe('模拟行程进度 40%')
+
+      advance(5000)
+      const halfway = reading()
+      expect(halfway.percent).toBe('模拟行程进度 50%')
+      expect(halfway.vehicle).not.toBe(start.vehicle)
+    })
+
+    it('stops at the authored bound rather than at the destination', () => {
+      render(<UISpecRenderer spec={splitSpec(crawlProps)} onAction={vi.fn()} pending={false} />)
+
+      step(0)
+      advance(11_000)
+      expect(reading().percent).toBe('模拟行程进度 60%')
+
+      // The span is spent, so nothing further is scheduled and the marker holds
+      // well short of the 100% it would reach if this were a run to the end.
+      expect(frames).toHaveLength(0)
+      const settled = reading()
+      advance(5_000)
+      expect(reading()).toEqual(settled)
+    })
+
+    it('never schedules a frame for a spec that authored no crawl', () => {
+      render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+      expect(frames).toHaveLength(0)
+      expect(panel()!.querySelector('.ui-route-map__progress')).toHaveTextContent('模拟行程进度 40%')
+    })
+
+    it('restarts from the new authored value when a new spec arrives mid-crawl', () => {
+      const { rerender } = render(<UISpecRenderer spec={splitSpec(crawlProps)} onAction={vi.fn()} pending={false} />)
+      step(0)
+      advance(5000)
+      expect(reading().percent).toBe('模拟行程进度 50%')
+
+      // A new checkpoint is the truth; whatever the last span had crawled to is
+      // dropped rather than carried onto it.
+      rerender(<UISpecRenderer
+        spec={splitSpec({ ...crawlProps, routeSketch: { ...viaCharge, progress: 0.72 } })}
+        onAction={vi.fn()}
+        pending={false}
+      />)
+      expect(reading().percent).toBe('模拟行程进度 72%')
+    })
   })
 
   it('costs the panel its own slot when the geometry is unusable, and nothing else', () => {
@@ -1085,6 +1445,106 @@ describe('UISpecRenderer route map panel', () => {
     }
   })
 
+  /**
+   * The fold: the one thing on this surface the driver decides rather than the
+   * Agent.
+   *
+   * What the collapsed state actually looks like is the stylesheet's, and
+   * `glass-panel-scope.test.ts` holds it to the same single-card guard as the
+   * rest of the panel. What is pinned here is the contract the styles hang off:
+   * that the control exists only where a panel does, that `data-panel` reports
+   * the driver's choice, and that the choice survives the Agent replacing the
+   * spec underneath it.
+   */
+  describe('minimizing the floating panel', () => {
+    function brief() {
+      return renderer().querySelector('.ui-card--navigation-summary')
+    }
+
+    function fold() {
+      return screen.queryByRole('button', { name: /面板$/ })
+    }
+
+    it('offers the fold on the panel, and reports which way it is folded', async () => {
+      const user = userEvent.setup()
+      render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+      // Open is the state the Agent's spec arrives in; the driver opts out of it.
+      expect(brief()).toHaveAttribute('data-panel', 'expanded')
+      expect(fold()).toHaveAccessibleName('收起面板')
+      expect(fold()).toHaveAttribute('aria-expanded', 'true')
+
+      await user.click(fold()!)
+      expect(brief()).toHaveAttribute('data-panel', 'collapsed')
+      expect(fold()).toHaveAccessibleName('展开面板')
+      expect(fold()).toHaveAttribute('aria-expanded', 'false')
+
+      await user.click(fold()!)
+      expect(brief()).toHaveAttribute('data-panel', 'expanded')
+    })
+
+    it('names the region it folds away, so the state is not the button alone', () => {
+      render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+
+      const controls = fold()!.getAttribute('aria-controls')
+      expect(controls).toBeTruthy()
+      expect(document.getElementById(controls!)).toBeInTheDocument()
+    })
+
+    it('keeps the destination and the ETA in the DOM while folded', async () => {
+      const user = userEvent.setup()
+      render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+      await user.click(fold()!)
+
+      // The two answers a driver glances down for stay; only the detail region
+      // goes, and it goes to a stylesheet rule rather than to an unmount — a
+      // window narrowed below the panel's breakpoint has to show a whole card
+      // again, not a folded one with no control left to open it.
+      expect(brief()!.querySelector('.ui-navigation-brief__destination')).toHaveTextContent('虹桥机场 T2')
+      expect(brief()!.querySelector('.ui-navigation-eta')).toHaveTextContent('20:37')
+      expect(brief()!.querySelector('.ui-navigation-brief__detail')).toBeInTheDocument()
+    })
+
+    it('holds the fold across a new spec for the same trip', async () => {
+      const user = userEvent.setup()
+      const { rerender } = render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
+      await user.click(fold()!)
+
+      // A newer UISpec is newer trip facts, not a fresh opinion about how much of
+      // the panel the driver wanted to see.
+      rerender(<UISpecRenderer
+        spec={splitSpec({ ...followProps, routeSketch: { ...viaCharge, progress: 0.72 } })}
+        onAction={vi.fn()}
+        pending={false}
+      />)
+      expect(brief()).toHaveAttribute('data-panel', 'collapsed')
+    })
+
+    it('has no fold where the card is a column rather than a panel', () => {
+      // Nothing behind an ordinary card to uncover, so there is nothing to fold
+      // it away for. Each of these fails a different clause of the guard.
+      const notPanels: UISpec[] = [
+        // No map: the split is two ordinary columns.
+        baseSpec({
+          layout: { type: 'split', ratio: [1, 1], slots: { primary: ['navigation'], secondary: ['navigation'] } },
+          components: [navigationCard()],
+        }),
+        // A map whose geometry will not draw renders the fallback, which the
+        // stylesheet's `:has(.ui-card--route-map)` never matches.
+        splitSpec({ destination: '虹桥机场 T2', mode: 'follow', routeSketch: { ...viaCharge, polyline: [] } }),
+        // Two cards in the rail: the takeover is off, so the panel is off too.
+        railOfTwo(),
+      ]
+
+      for (const spec of notPanels) {
+        const { unmount } = render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+        expect(fold()).toBeNull()
+        expect(renderer().querySelector('[data-panel]')).toBeNull()
+        unmount()
+      }
+    })
+  })
+
   it('keeps route ids, fixture names, and prop names out of the panel', () => {
     render(<UISpecRenderer spec={splitSpec(followProps)} onAction={vi.fn()} pending={false} />)
 
@@ -1092,5 +1552,143 @@ describe('UISpecRenderer route map panel', () => {
       expect(renderer().textContent).not.toContain(internal)
     }
     expect(panel()!.textContent).not.toContain('undefined')
+  })
+})
+
+describe('UISpecRenderer flight choices board', () => {
+  const choices = [
+    {
+      flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled' as const,
+      statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'pick-MU5102',
+    },
+    {
+      flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed' as const,
+      statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', actionId: 'pick-MU5103',
+    },
+    {
+      flightNumber: 'CA1516', airlineName: '中国国际航空', originName: '广州白云', status: 'in-air' as const,
+      statusLabel: '飞行中', arrivalTimeLabel: '21:15', revisedTimeLabel: '预计 21:05', terminal: 'T1', actionId: 'pick-CA1516',
+    },
+  ]
+
+  function boardSpec(overrides: {
+    choices?: unknown
+    actionIds?: string[]
+    definedActionIds?: string[]
+  } = {}): UISpec {
+    // `in` rather than `??`: one of the broken cases is a board with no choices
+    // key at all, which a default would quietly repair.
+    const rows = 'choices' in overrides ? overrides.choices : choices
+    const declared = overrides.actionIds ?? choices.map((choice) => choice.actionId)
+    const defined = overrides.definedActionIds ?? declared
+    return baseSpec({
+      phase: 'collecting-information',
+      title: '选择航班',
+      layout: { type: 'stack', gap: 'md', slots: { main: ['flight-choices'] } },
+      components: [{
+        id: 'flight-choices',
+        type: 'flight-choices',
+        actions: declared,
+        props: { arrivalCityName: '上海', dateLabel: '今天', choices: rows, freshness: 'fixture' },
+      } as ComponentSpec],
+      actions: defined.map((actionId) => ({
+        id: actionId,
+        label: `选择 ${actionId}`,
+        style: 'secondary' as const,
+        event: { type: 'agent-message' as const, text: actionId },
+      })),
+    })
+  }
+
+  const renderer = () => screen.getByRole('region', { name: 'Generated task interface' })
+  const rows = () => Array.from(renderer().querySelectorAll<HTMLButtonElement>('.ui-flight-choices__row'))
+
+  it('numbers every arrival and shows what tells two of them apart', () => {
+    render(<UISpecRenderer spec={boardSpec()} onAction={vi.fn()} pending={false} />)
+
+    expect(rows()).toHaveLength(3)
+    const [first, second] = rows()
+    expect(first).toHaveAttribute('data-flight-number', 'MU5102')
+    expect(first!.querySelector('.ui-flight-choices__rank')).toHaveTextContent('1')
+    expect(first).toHaveTextContent('东方航空')
+    expect(first).toHaveTextContent('北京首都')
+    expect(first).toHaveTextContent('20:30')
+    expect(first).toHaveTextContent('T2')
+    // The two 20:30 arrivals are told apart by the revision, not the schedule.
+    expect(first!.querySelector('.ui-flight-choices__revised')).toBeNull()
+    expect(second!.querySelector('.ui-flight-choices__revised')).toHaveTextContent('预计 21:10')
+    expect(second!.querySelector('.ui-status--delayed')).toHaveTextContent('延误')
+  })
+
+  it('sends the picked row’s own action, dispatched from the board', async () => {
+    const onAction = vi.fn()
+    const user = userEvent.setup()
+    render(<UISpecRenderer spec={boardSpec()} onAction={onAction} pending={false} />)
+
+    await user.click(rows()[2]!)
+
+    expect(onAction).toHaveBeenCalledExactlyOnceWith('pick-CA1516', 'flight-choices')
+  })
+
+  it('draws each row’s action once, in the row, and never in the action bars', () => {
+    render(<UISpecRenderer spec={boardSpec()} onAction={vi.fn()} pending={false} />)
+
+    // The rows are the controls: no duplicate button group under the card, and
+    // nothing promoted into the task-wide bar either.
+    expect(renderer().querySelector('.ui-card__actions')).toBeNull()
+    expect(renderer().querySelector('.ui-actions')).toBeNull()
+    expect(renderer().querySelectorAll('[data-action-id="pick-MU5102"]')).toHaveLength(1)
+    // The actions are still on screen, so the surface must not read as actionless.
+    expect(renderer()).toHaveAttribute('data-has-actions', 'true')
+  })
+
+  it('keeps a row readable but unpressable when the spec never defined its action', () => {
+    render(<UISpecRenderer
+      spec={boardSpec({ definedActionIds: ['pick-MU5102', 'pick-CA1516'] })}
+      onAction={vi.fn()}
+      pending={false}
+    />)
+
+    const [first, second] = rows()
+    expect(second).toBeDisabled()
+    expect(second).toHaveTextContent('MU5103')
+    expect(second).toHaveTextContent('预计 21:10')
+    expect(first).toBeEnabled()
+  })
+
+  it('disables every row while a pick is in flight so a second cannot race it', () => {
+    render(<UISpecRenderer spec={boardSpec()} onAction={vi.fn()} pending />)
+
+    for (const row of rows()) expect(row).toBeDisabled()
+  })
+
+  it('degrades the board to a fallback when the choices are not a real list', () => {
+    const unusable: unknown[] = [
+      // Nothing to choose between, and one row was an answer rather than a choice.
+      [],
+      [choices[0]],
+      'not-a-list',
+      undefined,
+      // A row that names no action would be a choice the driver cannot make.
+      choices.map((choice) => ({ ...choice, actionId: undefined })),
+      // Six rows: past the point where a driver picks rather than reads.
+      [...choices, ...choices],
+    ]
+
+    for (const broken of unusable) {
+      const { unmount } = render(<UISpecRenderer spec={boardSpec({ choices: broken })} onAction={vi.fn()} pending={false} />)
+
+      expect(renderer().querySelector('.ui-flight-choices')).toBeNull()
+      expect(renderer().querySelector('.ui-card--fallback')).toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('keeps action ids and internal names out of what the driver reads', () => {
+    render(<UISpecRenderer spec={boardSpec()} onAction={vi.fn()} pending={false} />)
+
+    for (const internal of ['pick-MU5102', 'flight-choices', 'actionId', 'arrivalCityName', 'fixture', 'agent-message']) {
+      expect(renderer().textContent).not.toContain(internal)
+    }
   })
 })

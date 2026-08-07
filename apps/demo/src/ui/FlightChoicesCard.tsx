@@ -1,0 +1,82 @@
+import type { ComponentSpec } from '@canvasflow/schema'
+import { ArrowRightIcon } from './icons'
+import { ComponentSurface } from './ComponentSurface'
+
+/**
+ * The arrivals board, as a list the driver picks from.
+ *
+ * The row is the control. A card of rows with a separate stack of five buttons
+ * underneath makes the driver match label to row before they can choose, so each
+ * row is one large target that carries its own flight, and pressing it dispatches
+ * that row's action. Nothing here decides what the pick means: the row reports
+ * its action id, and the Agent's own action spec says what happens next.
+ *
+ * A row whose action the spec never defined stays readable but unpressable — the
+ * information is still true, and a button that cannot reach the Agent is worse
+ * than a plain row. The same applies while an action is in flight: every row
+ * disables so a second pick cannot race the first.
+ *
+ * Rows are numbered because the driver was offered a numbered list and may answer
+ * by voice ("第二个"); the ordinal is the shared handle between the two ways in.
+ */
+export function FlightChoicesCard({
+  component,
+  actionById,
+  pending,
+  onAction,
+}: {
+  component: Extract<ComponentSpec, { type: 'flight-choices' }>
+  /** Every action the spec carries, so a row can tell a defined id from a dangling one. */
+  actionById: Map<string, unknown>
+  pending: boolean
+  onAction: (actionId: string, componentId: string) => void
+}) {
+  const { props } = component
+  return (
+    <ComponentSurface component={component} className="ui-flight-choices">
+      <header className="ui-flight-choices__header">
+        <p className="ui-flight-choices__eyebrow">{props.dateLabel}到达 {props.arrivalCityName}</p>
+        <p className="ui-flight-choices__hint">选择要接的航班</p>
+      </header>
+      <ol className="ui-flight-choices__list" aria-label={`${props.arrivalCityName}到达航班`}>
+        {props.choices.map((choice, index) => {
+          const available = actionById.has(choice.actionId)
+          return (
+            <li className="ui-flight-choices__item" key={choice.flightNumber}>
+              <button
+                className="ui-flight-choices__row"
+                type="button"
+                data-action-id={choice.actionId}
+                data-flight-number={choice.flightNumber}
+                disabled={pending || !available}
+                onClick={() => onAction(choice.actionId, component.id)}
+              >
+                <span className="ui-flight-choices__rank" aria-hidden="true">{index + 1}</span>
+                <span className="ui-flight-choices__identity">
+                  <span className="ui-flight-choices__number">{choice.flightNumber}</span>
+                  <span className="ui-flight-choices__origin">{choice.airlineName} · {choice.originName}</span>
+                </span>
+                <span className="ui-flight-choices__timing">
+                  <span className="ui-flight-choices__time">{choice.arrivalTimeLabel}</span>
+                  {choice.revisedTimeLabel && (
+                    <span
+                      className="ui-flight-choices__revised"
+                      data-direction={choice.revisedDirection ?? 'later'}
+                    >
+                      {choice.revisedTimeLabel}
+                    </span>
+                  )}
+                </span>
+                <span className="ui-flight-choices__terminal">{choice.terminal}</span>
+                {/* Toned by the status value itself, the way every other card's
+                    pill is, so 延误 and 已取消 read the same colour everywhere. */}
+                <span className={`ui-status ui-status--${choice.status}`}>{choice.statusLabel}</span>
+                <span className="ui-flight-choices__pick" aria-hidden="true"><ArrowRightIcon size={18} /></span>
+              </button>
+            </li>
+          )
+        })}
+      </ol>
+    </ComponentSurface>
+  )
+}

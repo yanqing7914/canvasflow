@@ -1,7 +1,9 @@
 :root {
+  --font-body: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", sans-serif;
+  --focus-ring: #246bfd;
   color: #102033;
   background: #edf0f4;
-  font-family: "HarmonyOS Sans SC", "MiSans", "Microsoft YaHei UI", sans-serif;
+  font-family: var(--font-body);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
@@ -28,7 +30,7 @@ button:disabled { cursor: not-allowed; }
 
 button:focus-visible,
 a:focus-visible {
-  outline: 3px solid rgba(36, 107, 253, 0.45);
+  outline: 3px solid var(--focus-ring);
   outline-offset: 3px;
 }
 
@@ -53,14 +55,70 @@ a:focus-visible {
   --blue-pale: #edf3ff;
   --green: #2ead63;
   --green-pale: #edf9f1;
+  --green-edge: #b8e1c8;
+  --green-ink: #1d7b48;
   --amber: #c77a18;
   --amber-pale: #fff7e9;
+  --amber-edge: #e6d4b0;
   --red: #c74646;
   --red-pale: #fff0f0;
+  --red-edge: #eec2c2;
+  --action-primary: #246bfd;
+  --action-primary-hover: #1559e5;
+  --action-primary-ink: #ffffff;
+  --control: #ffffff;
+  --control-hover: #f7f9fc;
+  --control-off: #f2f4f6;
+  --control-selected: #eef1f5;
+  --composer: #fbfcfe;
+  /* Wide enough that 到达电量 and its figure never hit the ellipsis the metric
+     labels fall back to, narrow enough that the route still has most of the map
+     to itself. The lower bound is the content's, not the layout's: a percentage
+     alone squeezes the panel on the smaller screens this effect still runs on. */
+  --glass-rail: clamp(430px, 32%, 510px);
+  /* The full-strength effect, and the value that holds if the capability tier
+     never resolves — a server render, or a shell mounted without the hook. The
+     app overwrites both inline once it has read the device; see
+     `glass-capability.ts` for why an unknown device is treated as a capable one. */
+  --glass-blur: 28px;
+  --glass-saturate: 1.6;
   min-height: 100dvh;
   overflow: hidden;
   background: var(--cabin);
   color: var(--ink);
+}
+
+/* The Agent's theme applies to the whole driver-facing cockpit, not just the
+   generated cards. Leaving the shell white around a dark route creates the
+   brightest possible frame at the exact moment the cabin should dim. */
+.demo-shell[data-theme='dark'] {
+  --cabin: #0c1015;
+  --surface: #141a22;
+  --ink: #e8edf4;
+  --muted: #94a2b3;
+  --rule: #2a333f;
+  --quiet-rule: #1c232c;
+  --blue: #6ea2ff;
+  --blue-deep: #8fb7ff;
+  --blue-pale: #243d66;
+  --green: #59d18d;
+  --green-pale: #173323;
+  --green-edge: #3b7653;
+  --green-ink: #59d18d;
+  --amber: #e5a54a;
+  --amber-pale: #33280f;
+  --amber-edge: #6b5124;
+  --red: #f28b8b;
+  --red-pale: #351b1e;
+  --red-edge: #754144;
+  --action-primary: #1f5bb5;
+  --action-primary-hover: #17488f;
+  --control: #1b2431;
+  --control-hover: #232f3d;
+  --control-off: #1a212a;
+  --control-selected: #2a3848;
+  --composer: #171e27;
+  --focus-ring: #8fb7ff;
 }
 
 .cockpit-stage {
@@ -84,6 +142,10 @@ a:focus-visible {
   border-radius: 28px;
   background: var(--surface);
   box-shadow: 0 18px 46px rgba(16, 32, 51, 0.08);
+}
+
+.demo-shell[data-theme='dark'] .task-surface {
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.34);
 }
 
 .trip-brief__header {
@@ -139,7 +201,7 @@ a:focus-visible {
   border: 1px solid var(--rule);
   border-radius: 10px;
   padding: 0 13px;
-  background: #ffffff;
+  background: var(--control);
   color: var(--ink);
   font-size: 16px;
   font-weight: 650;
@@ -149,26 +211,26 @@ a:focus-visible {
 .mic-button:hover,
 .keyboard-toggle:hover,
 .control-toggle:hover {
-  border-color: #b8c4d2;
-  background: #f7f9fc;
+  border-color: var(--muted);
+  background: var(--control-hover);
 }
 
 /* Pressed state only, not a status colour: the keyboard is a utility, not a
    condition of the trip. */
 .keyboard-toggle--open {
-  border-color: #b8c4d2;
-  background: #eef1f5;
+  border-color: var(--muted);
+  background: var(--control-selected);
 }
 
 .keyboard-toggle:disabled {
-  background: #f5f7f9;
+  background: var(--control-off);
   color: var(--muted);
 }
 
 .mic-button.mic-listening {
-  border-color: #b8e1c8;
+  border-color: var(--green-edge);
   background: var(--green-pale);
-  color: #1d7b48;
+  color: var(--green-ink);
 }
 
 /* Awaiting confirmation and playback both read as "the assistant has the turn". */
@@ -180,19 +242,19 @@ a:focus-visible {
 }
 
 .mic-button.mic-submitting {
-  border-color: #e6d4b0;
+  border-color: var(--amber-edge);
   background: var(--amber-pale);
   color: var(--amber);
 }
 
 .mic-button.mic-error {
-  border-color: #eec2c2;
+  border-color: var(--red-edge);
   background: var(--red-pale);
   color: var(--red);
 }
 
 .mic-button.mic-unavailable {
-  background: #f5f7f9;
+  background: var(--control-off);
   color: var(--muted);
 }
 
@@ -209,6 +271,23 @@ a:focus-visible {
 
 .voice-status:empty { display: none; }
 
+/* Model provenance is a quiet, factual line: present only when the Agent reports
+   a validated model plan, and visually subordinate to the voice status above. */
+.model-provenance {
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 0 clamp(24px, 3vw, 52px);
+  color: var(--muted);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.model-provenance strong {
+  color: var(--ink);
+  font-weight: 650;
+}
+
 .voice-composer {
   display: flex;
   flex: 0 0 auto;
@@ -218,7 +297,7 @@ a:focus-visible {
   border: 1px solid var(--rule);
   border-radius: 12px;
   padding: 14px 16px;
-  background: #fbfcfe;
+  background: var(--composer);
 }
 
 /* Why the field opened is what it means, so the reason carries the colour. A
@@ -227,7 +306,7 @@ a:focus-visible {
    simply asked for stays neutral. */
 .voice-composer[data-composer-reason="error"],
 .voice-composer[data-composer-reason="unavailable"] {
-  border-color: #eec2c2;
+  border-color: var(--red-edge);
   background: var(--red-pale);
 }
 
@@ -237,7 +316,7 @@ a:focus-visible {
 }
 
 .voice-composer[data-composer-reason="transcript"][data-voice-state="submitting"] {
-  border-color: #e6d4b0;
+  border-color: var(--amber-edge);
   background: var(--amber-pale);
 }
 
@@ -262,7 +341,7 @@ a:focus-visible {
   border: 1px solid var(--rule);
   border-radius: 8px;
   padding: 0 14px;
-  background: #ffffff;
+  background: var(--control);
   color: var(--ink);
   font-size: 18px;
   font-weight: 600;
@@ -293,7 +372,7 @@ a:focus-visible {
 
 .voice-composer__send:disabled {
   border-color: var(--rule);
-  background: #f2f4f6;
+  background: var(--control-off);
   color: var(--muted);
 }
 
@@ -349,6 +428,138 @@ a:focus-visible {
   padding-top: 0;
   border-top: 0;
   animation: phase-settle 200ms cubic-bezier(0.22, 0.8, 0.28, 1) both;
+}
+
+/* The renderer's own surfaces, one set per theme.
+
+   `themeTokens()` in UISpecRenderer.tsx already sets `--surface`, `--cabin`,
+   `--ink`, `--muted`, and the two rules from the theme the Agent sent. Those
+   cover the frame; everything below covers what is painted inside it — panels,
+   markers, state colours, controls — which until now was written as light-only
+   hex literals and would have stayed daylight inside a dark cabin.
+
+   The state hues change with the theme rather than staying fixed. `--blue` at
+   #246bfd is 3.83:1 on the dark cabin and `--red` at #c74646 is 3.66:1: below AA
+   as text, on the one screen where a red means something. The night variants are
+   the same hues lifted until each clears 6:1 on its own panel, so blue still
+   means blue and red still means red — only their brightness moves.
+
+   `--knockout` is the colour that punches out of a filled shape: the hollow
+   centre of a route stop, the tick inside a completed step. It is the theme's
+   own darkest surface at night rather than white, so those shapes read as holes
+   in both cabins instead of as white dots on a dark map.
+
+   The `--glass-*` half of each block is the floating navigation panel, and the
+   comment that follows covers it separately because its numbers come from a
+   different argument — a contrast floor against an unknown backdrop rather than
+   against a surface this stylesheet owns. Both halves live in one block per
+   theme so the whole theme is one thing to read and one thing to keep in step.
+
+   Glassmorphism tokens, continued.
+
+   `--glass-fill` is the alpha of the panel's own layer, and it is a contrast
+   floor rather than a taste setting. Nothing in the app can know what colour the
+   basemap puts behind any given pixel, so the only guarantee available is the
+   worst case, and the worst case is not the same one in both themes:
+
+   - Light glass is white, so its darkest composite is over a black backdrop, at
+     the grey `alpha x 255`. Every lighter backdrop pushes it lighter.
+   - Dark glass inverts the whole argument. Its worst backdrop is *white* — the
+     more transparent it is, the brighter it composites and the closer its near
+     white text gets to its own surface. More alpha is more contrast in both
+     themes, but for opposite reasons.
+
+   `--glass-label` exists because `--muted` cannot carry the small type here: at
+   #667384 it needs a backdrop lighter than #f7f7f7 to reach even AA, which no
+   panel showing the map through it can offer. Both themes hold every text token
+   at WCAG AAA 7:1 against their own worst case rather than at the AA 4.5:1
+   floor, because a driver reads this at a glance, at arm's length, over a
+   basemap that is moving.
+
+   `--glass-fill-solid` is what the no-`backdrop-filter` and
+   reduced-transparency branches fall back to; it may never be more transparent
+   than the panel it replaces. glass-contrast.test.ts recomputes all of this from
+   these declarations, so weakening any of them fails the suite instead of
+   quietly making the panel unreadable. */
+.ui-spec-renderer[data-theme='light'] {
+  --panel: #f8fbff;
+  --panel-edge: #dce6f4;
+  --panel-warn: #fffaf0;
+  --panel-warn-edge: #ead7b1;
+  --panel-danger: #fff6f6;
+  --panel-danger-edge: #efc9c9;
+  --panel-fallback: #fbfcfd;
+  --panel-fallback-edge: #b9c5d3;
+  --knockout: #ffffff;
+  --filled-control-ink: #102033;
+  --step-edge: #aeb9c7;
+  --step-done: #207d49;
+  --state-ink: #506176;
+  --state-ink-positive: #20814a;
+  --state-ink-caution: #a6620e;
+  --compare-ink: #58677a;
+  --control: #ffffff;
+  --control-edge: #bac6d4;
+  --control-hover: #f5f8fb;
+  --control-off: #f2f4f6;
+  --map-caption-base: 237 240 244;
+  --map-caption-ink: #445469;
+  --glass-base: 255 255 255;
+  --glass-fill: 0.72;
+  --glass-fill-solid: 0.95;
+  --glass-ink: #102033;
+  --glass-label: #1e2634;
+  --glass-edge: rgba(255, 255, 255, 0.55);
+  --glass-highlight: rgba(255, 255, 255, 0.9);
+  --glass-shadow: rgba(16, 32, 51, 0.18);
+}
+
+.ui-spec-renderer[data-theme='dark'] {
+  --panel: #1b2431;
+  --panel-edge: #2e3d50;
+  --panel-warn: #2a2113;
+  --panel-warn-edge: #4d3c1c;
+  --panel-danger: #2b1618;
+  --panel-danger-edge: #52292c;
+  --panel-fallback: #171e27;
+  --panel-fallback-edge: #3b4653;
+  --knockout: #0e141b;
+  --filled-control-ink: #0e141b;
+  --step-edge: #55637a;
+  --step-done: #6bd79b;
+  --state-ink: #a9b6c6;
+  --state-ink-positive: #6bd79b;
+  --state-ink-caution: #f0b45c;
+  --compare-ink: #9fadbd;
+  --control: #1b2431;
+  --control-edge: #3b4a5c;
+  --control-hover: #232f3d;
+  --control-off: #1a212a;
+  --blue: #6ea2ff;
+  --blue-deep: #8fb7ff;
+  --blue-pale: #243d66;
+  --green: #59d18d;
+  --amber: #e5a54a;
+  --amber-pale: #33280f;
+  --red: #f28b8b;
+  --action-primary: #1f5bb5;
+  --action-primary-hover: #17488f;
+  --action-primary-ink: #ffffff;
+  --focus-ring: #8fb7ff;
+  --map-caption-base: 12 16 21;
+  --map-caption-ink: #a9b6c6;
+  --glass-base: 10 16 26;
+  --glass-fill: 0.78;
+  --glass-fill-solid: 0.96;
+  --glass-ink: #f2f6fb;
+  --glass-label: #dbe4ef;
+  /* The light theme's edge is a hairline of the panel's own light. At night the
+     same white would ring the panel in a bright frame, so the edge drops to a
+     trace and the depth cue moves into the shadow, which the dark basemap can
+     actually hold. */
+  --glass-edge: rgba(255, 255, 255, 0.14);
+  --glass-highlight: rgba(255, 255, 255, 0.1);
+  --glass-shadow: rgba(0, 0, 0, 0.55);
 }
 
 .ui-layout {
@@ -545,6 +756,18 @@ a:focus-visible {
 .ui-route-facts,
 .ui-cabin-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
+/* The cabin card carries one to three metrics depending on what the vehicle
+   actually applied, and three fixed tracks leave the unused ones standing empty —
+   room the metrics that are there could have had. The media title is the only
+   cabin value that is prose and so the first to run out of it: with a temperature
+   and a title alone, a third of the grid was going to a track with nothing in it
+   while the title ellipsised. The tracks follow the metric count instead. Below
+   the 680px breakpoint the two-column override wants the same thing for three
+   metrics, and these say nothing about that case. */
+.ui-cabin-grid:has(> .ui-metric:nth-child(2):last-child) { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+.ui-cabin-grid:has(> .ui-metric:first-child:last-child) { grid-template-columns: minmax(0, 1fr); }
+
 .ui-hero-metrics { grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.75fr); }
 
 .ui-card--pickup-overview .ui-route-facts { grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); }
@@ -587,6 +810,35 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+/* A metric whose value is prose, not a figure: the display face above is a tabular
+   numeral face at a numeral size, and four CJK glyphs at that size overrun the third
+   of `.ui-cabin-grid` the metric gets and ellipsise. Sizing in `em` off the figure
+   keeps this in step with every density and breakpoint override of the value size
+   without restating any of them, and the reciprocal line height holds the row at the
+   figure's own 1em so a text value and a numeric one in the same grid stay level.
+
+   The body face buys a short title room to fit on one line, not room for any title:
+   a media title is prose of no fixed length, and the demo's own 「豆豆故事」 filled
+   its column to the pixel. So prose wraps where a figure cannot — the reciprocal
+   line height makes each wrapped line exactly the figure's 1em, so a second line
+   grows the shared grid row and the metrics beside it stay top-aligned. Two lines is
+   the ceiling: past that the clamp ellipsises, which is the honest end of the road
+   for a title with more words than the column has pixels. `anywhere` is what lets a
+   long Latin word break at all — CJK breaks between glyphs on its own. */
+.ui-metric__value-text {
+  --metric-text-scale: 0.62;
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-family: var(--font-body);
+  font-size: calc(1em * var(--metric-text-scale));
+  letter-spacing: -0.01em;
+  line-height: calc(1 / var(--metric-text-scale));
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
 .ui-metric__detail {
   display: block;
   overflow: hidden;
@@ -600,7 +852,7 @@ a:focus-visible {
 
 .ui-metric--comparison { color: var(--muted); }
 
-.ui-metric--comparison .ui-metric__value { color: #58677a; }
+.ui-metric--comparison .ui-metric__value { color: var(--compare-ink); }
 
 .ui-card__status-line,
 .ui-detail-row {
@@ -617,7 +869,7 @@ a:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  color: #506176;
+  color: var(--state-ink);
   font-size: 18px;
   font-weight: 700;
   line-height: 1.25;
@@ -635,11 +887,11 @@ a:focus-visible {
 .ui-status--landed,
 .ui-status--sent,
 .ui-status--confirmed,
-.ui-status--confirmed-onboard { color: #20814a; }
+.ui-status--confirmed-onboard { color: var(--state-ink-positive); }
 
 .ui-status--delayed,
 .ui-status--waiting,
-.ui-status--sending { color: #a6620e; }
+.ui-status--sending { color: var(--state-ink-caution); }
 
 .ui-status--cancelled,
 .ui-status--failed { color: var(--red); }
@@ -737,6 +989,20 @@ a:focus-visible {
 }
 
 .ui-flight-brief__header .ui-status { margin-left: auto; }
+
+/* The two regions the fold puts away, grouped only so one `aria-controls` can
+   name them. `contents` keeps the wrapper out of every layout that places the
+   card's regions itself — the three-column band, the stacked rail — so the group
+   is a handle for the control and nothing else until it is hidden. */
+.ui-navigation-brief__detail { display: contents; }
+
+/* The fold is chrome for the floating panel and exists nowhere else. The
+   renderer only emits it over a drawn map, and below the panel's breakpoint that
+   map is a band above an ordinary card with nothing behind it to uncover — so
+   the control goes away there and, with it, every rule that acts on
+   `data-panel`. That pairing is what stops a window narrowed while collapsed
+   from stranding the driver with a folded card and no way to open it. */
+.ui-navigation-brief__fold { display: none; }
 
 .ui-flight-brief__arrival {
   display: grid;
@@ -860,9 +1126,9 @@ a:focus-visible {
   align-items: flex-start;
   justify-content: flex-start;
   gap: clamp(18px, 2vw, 30px);
-  border: 1px solid #dce6f4;
+  border: 1px solid var(--panel-edge);
   border-radius: 22px;
-  background: #f8fbff;
+  background: var(--panel);
 }
 
 .ui-status-card::before {
@@ -966,12 +1232,12 @@ a:focus-visible {
   height: 10px;
   border: 2px solid currentColor;
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--knockout);
 }
 
 .ui-navigation-brief__route-start { background: var(--blue); }
 
-.ui-navigation-brief__route-end { color: #b9c5d3; }
+.ui-navigation-brief__route-end { color: var(--panel-fallback-edge); }
 
 .ui-navigation-brief__route-rule[data-route-progress="unavailable"]
   .ui-navigation-brief__route-end { display: none; }
@@ -1023,7 +1289,7 @@ a:focus-visible {
 }
 
 .ui-route-sketch__marker {
-  fill: #ffffff;
+  fill: var(--knockout);
   stroke: var(--blue);
   stroke-width: 2.5;
 }
@@ -1045,7 +1311,7 @@ a:focus-visible {
 }
 
 .ui-route-sketch__vehicle-halo {
-  fill: #ffffff;
+  fill: var(--knockout);
   stroke: var(--blue-pale);
   stroke-width: 2;
 }
@@ -1115,6 +1381,20 @@ a:focus-visible {
   flex: 1 1 auto;
 }
 
+/* The real basemap fills the whole panel and sits above the sketch once AMap has
+   drawn the route; until then it is empty and hidden, so the sketch shows. The
+   caption keeps its own z-index above both. */
+.ui-route-map__basemap {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  /* Keep a measurable box while AMap initializes. `display: none` gives the
+     imperative map a zero-sized container, so use visibility for the fallback. */
+  visibility: hidden;
+}
+
+.ui-route-map__basemap[data-active="true"] { visibility: visible; }
+
 .ui-route-map__line {
   fill: none;
   stroke: var(--blue);
@@ -1124,7 +1404,7 @@ a:focus-visible {
 }
 
 .ui-route-map__marker {
-  fill: #ffffff;
+  fill: var(--knockout);
   stroke: var(--blue);
   stroke-width: 3;
 }
@@ -1158,7 +1438,7 @@ a:focus-visible {
 }
 
 .ui-route-map__vehicle-halo {
-  fill: #ffffff;
+  fill: var(--knockout);
   stroke: var(--blue-pale);
   stroke-width: 3;
 }
@@ -1172,14 +1452,22 @@ a:focus-visible {
   right: 0;
   bottom: 0;
   left: 0;
+  /* Above the basemap (z-index 1) so 模拟行程进度 stays legible over real tiles. */
+  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   justify-content: space-between;
   gap: 2px 18px;
   padding: 14px 20px;
-  background: linear-gradient(to top, rgba(237, 240, 244, 0.94), rgba(237, 240, 244, 0));
-  color: var(--muted);
+  background: linear-gradient(
+    to top,
+    rgb(var(--map-caption-base) / 0.96) 0%,
+    rgb(var(--map-caption-base) / 0.92) 58%,
+    rgb(var(--map-caption-base) / 0.92) 64%,
+    rgb(var(--map-caption-base) / 0) 100%
+  );
+  color: var(--map-caption-ink);
   font-size: 16px;
   line-height: 1.3;
 }
@@ -1187,6 +1475,330 @@ a:focus-visible {
 .ui-route-map__destination { color: var(--ink); }
 
 .ui-route-map__progress { font-variant-numeric: tabular-nums; }
+
+/* ---------------------------------------------------------------------------
+   Floating navigation panel (glassmorphism)
+
+   Only where there is a map to float over. Frosted glass needs colour and detail
+   behind it; on this demo's white cards over light grey it would read as a plain
+   grey box, so the treatment is scoped to the one screen that has a real basemap
+   underneath — `:has(.ui-card--route-map)` is the whole guard. Everywhere else
+   keeps the existing visual language untouched.
+
+   The two split slots collapse into one grid cell: the map takes the full task
+   surface and the navigation panel floats over its right side, inset from the
+   edges. The blue route keeps running underneath and comes through the panel
+   blurred — visible but not readable, which is the point of the effect.
+
+   Depth here is one layer, not a stack: a single panel lifted off a single
+   basemap. No gradient wash behind the glass, because the map already is the
+   coloured layer and anything painted over it would hide the thing the driver is
+   looking at.
+
+   Held to the breakpoint where the split is actually side by side. Below it the
+   map stacks above the cards, so there is nothing behind the panel to see and the
+   layout stays exactly as it was.
+   --------------------------------------------------------------------------- */
+@media (min-width: 1180px) {
+  /* Held to a rail carrying exactly one card, which the layout does not otherwise
+     guarantee: `withRouteMap` puts every non-map card into `secondary`, and the
+     density trim keeps states like `['navigation-summary', 'extra-1']` legal. Only
+     a card is painted as a panel below, so a second one would land in the same
+     narrow overlaid rail with none of that — transparent and square-cornered,
+     reading straight off the map. Where the rail carries more than one, leave the
+     ordinary side-by-side split alone: it already renders that state, and one
+     panel over one basemap is the whole idea. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    > .ui-slot {
+    grid-row: 1;
+    grid-column: 1;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    > .ui-slot--secondary {
+    width: var(--glass-rail);
+    /* Above the basemap and its caption, and inset so the panel reads as floating
+       over the map rather than as a column beside it. The gutter it leaves stays
+       transparent to the pointer, so the map underneath is still draggable. */
+    z-index: 3;
+    align-content: center;
+    justify-self: end;
+    padding: clamp(16px, 2.4vh, 30px) clamp(16px, 1.5vw, 30px);
+    pointer-events: none;
+  }
+
+  /* The pointer comes back at the component, not at the card: the renderer puts a
+     card's buttons in a `.ui-card__actions` that is the card's sibling, so `auto`
+     on the card alone would leave every button beside it dead while looking live.
+     The component box is the card plus those buttons and nothing else, so the
+     rail's padding stays transparent either way. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    > .ui-slot--secondary > .ui-component {
+    pointer-events: auto;
+    /* And the panel is exactly as tall as what is in it, said out loud rather
+       than left to the track to work out. `.ui-component` is a grid of
+       `minmax(0, 1fr) auto`, and how much an `fr` row contributes to its
+       container's intrinsic height is where the engines part company: Blink and
+       WebKit resolve the centred track to the card's full 318px, Gecko to 216px
+       — and the card hides its overflow, so on Firefox the fold and the top of
+       the header were clipped out of the card's own box and could not even be
+       clicked. `max-content` is the height all three already agree the contents
+       need, so it changes nothing where the effect was already right and repairs
+       it where it was not. */
+    height: max-content;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--weather-card,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--schedule-card,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--departure-plan {
+    height: auto;
+    padding: clamp(20px, 2.6vh, 32px) clamp(20px, 1.8vw, 32px);
+    /* A hairline of the panel's own light rather than a drawn outline: it catches
+       the edge where glass meets map, so the panel has a defined boundary without
+       a border reading as a frame. */
+    border: 1px solid var(--glass-edge);
+    border-radius: 20px;
+    background: rgb(var(--glass-base) / var(--glass-fill));
+    /* Saturation lifts the map's own blues and greens as they pass through, so
+       the panel looks like glass rather than like a translucent slab. Both
+       values are tiered: a `backdrop-filter` re-samples everything behind the
+       panel every frame the map moves, and what that costs depends on the
+       machine, not the browser. */
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    box-shadow:
+      inset 0 1px 0 var(--glass-highlight),
+      0 18px 44px var(--glass-shadow);
+    color: var(--glass-ink);
+  }
+
+  /* The card renders two facts, and `.ui-route-facts` lays out three tracks — off
+     the panel that is only an empty third of a wide row, but inside the rail the
+     two figures are squeezed into 2/3 of an already narrow card and 剩余里程's
+     figure ellipsizes. Match the track count to the fact count here.
+
+     Sized against the widest face the figure can resolve to, not the one this
+     machine happens to have: `.ui-metric__value` asks for Bahnschrift, then DIN
+     Alternate, then Cascadia Code, and a Linux CI runner has none of the three,
+     so it falls to generic monospace and every figure measures ~15% wider than
+     it does on macOS. At two tracks `32.0 km` needs 114px of a 163px box, which
+     holds either way; at three it had 99px and lost 15px to the ellipsis on CI
+     while passing locally. Widening `--glass-rail` is not the alternative fix:
+     at this width its 32% middle term governs, so raising the 510px cap does
+     nothing. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary .ui-route-facts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  /* The small labels ride on the glass, where `--muted` no longer clears AA — see
+     the token block for why it cannot be made to. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-navigation-brief__eyebrow,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-metric__label {
+    color: var(--glass-label);
+  }
+
+  /* The fold, only where there is a panel to fold. A 44px hit target at the top
+     right of the card, sized for a thumb on a moving car rather than a cursor.
+     `margin-left: auto` puts it at the far edge of the header, past the
+     destination, so it never sits between the glyph and the text it belongs to. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-navigation-brief__fold {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    align-self: start;
+    margin-left: auto;
+    padding: 0;
+    border: 1px solid var(--glass-edge);
+    border-radius: 12px;
+    /* The panel's own base at a lighter alpha: the control reads as cut into the
+       glass rather than as a chip laid on top of it, and it needs no backdrop
+       filter of its own because the panel behind it is already frosted. */
+    background: rgb(var(--glass-base) / 0.5);
+    color: var(--glass-ink);
+    place-items: center;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-navigation-brief__fold:hover {
+    background: rgb(var(--glass-base) / 0.78);
+  }
+
+  /* Collapsed, the chevron turns to point the way out — the same shape rotated,
+     so the control's two states cannot drift apart. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary[data-panel='collapsed'] .ui-navigation-brief__fold svg {
+    transform: rotate(180deg);
+  }
+
+  /* What folding away actually costs: the route band and the two figures. The
+     destination and the ETA stay, because those are the two answers a driver
+     glances down for, and a panel that hid them would be a panel worth closing
+     rather than collapsing. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary[data-panel='collapsed'] .ui-navigation-brief__detail {
+    display: none;
+  }
+
+  /* Collapsed the card is a header and a figure, so it stops filling the rail's
+     height and shrinks to what is left in it. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary[data-panel='collapsed'] {
+    grid-template-rows: auto auto;
+  }
+
+  /* Without the band and the facts under it the ETA no longer needs the room it
+     was given to balance them. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary[data-panel='collapsed'] .ui-navigation-eta {
+    font-size: clamp(72px, 5vw, 96px);
+  }
+
+  /* 模拟行程进度 sits at the right end of the caption, which the panel now covers.
+     Stop the caption where the panel starts so the progress figure stays read.
+     `--glass-rail` is the whole reservation and not a track plus a gutter: every
+     box here is `border-box`, so the rail's own padding is already inside that
+     width. Measured at 1920 the caption ends exactly on the rail's edge and 29px
+     short of the painted panel. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-route-map__caption {
+    right: var(--glass-rail);
+  }
+
+  /* The three query answers are bands on the full-width brief and cannot be bands
+     in the rail: every figure on them is `nowrap`, and the panel is a third of the
+     row. In here they stand up into short stacks instead — the header above the
+     reading, one item per line — which is the same content at the width it has,
+     not a smaller version of the band.
+
+     The dots and the connecting rules go with the row: they separated items along
+     a line, and a column separates them already. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--weather-card,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--schedule-card,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--departure-plan {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: clamp(10px, 1.6vh, 18px);
+    border-top: 0;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-weather-brief__reading {
+    flex-wrap: wrap;
+    row-gap: clamp(6px, 1vh, 12px);
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-weather-brief__advisory {
+    white-space: normal;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__list,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__facts {
+    width: 100%;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: clamp(6px, 1vh, 12px);
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__event {
+    width: 100%;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__event + .ui-schedule-card__event::before,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__fact + .ui-departure-plan__fact::before {
+    content: none;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__fact {
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Same reason the brief's own labels are re-toned in here: `--muted` does not
+     clear AA over the glass. See the token block. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-weather-brief__eyebrow,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-weather-brief__fact,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__eyebrow,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-schedule-card__location,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__eyebrow,
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-departure-plan__fact--via {
+    color: var(--glass-label);
+  }
+
+  /* Without `backdrop-filter` the panel would be a flat translucent wash with the
+     map legible straight through it — worse to read than no effect at all. Go
+     nearly opaque instead: the layering survives, the transparency does not. */
+  @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--navigation-summary,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--weather-card,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--schedule-card,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--departure-plan {
+      background: rgb(var(--glass-base) / var(--glass-fill-solid));
+    }
+  }
+
+  /* The same trade on a device that has `backdrop-filter` and cannot afford it.
+     A zero blur is not free — an identity filter still promotes the panel to its
+     own layer and still re-samples the map behind it every frame — so the lowest
+     tier drops the declaration rather than tuning it to nothing, and pays for the
+     lost separation in the opaque fill exactly as the unsupported branch does. */
+  .demo-shell[data-glass='none']
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary {
+    background: rgb(var(--glass-base) / var(--glass-fill-solid));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--navigation-summary,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--weather-card,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--schedule-card,
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+      .ui-card--departure-plan {
+      background: rgb(var(--glass-base));
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}
 
 .ui-card--navigation-summary .ui-route-facts {
   width: min(100%, 760px);
@@ -1337,9 +1949,9 @@ a:focus-visible {
   width: 18px;
   height: 18px;
   place-items: center;
-  border: 2px solid #aeb9c7;
+  border: 2px solid var(--step-edge);
   border-radius: 50%;
-  background: #ffffff;
+  background: var(--knockout);
   color: transparent;
   font-size: 0;
 }
@@ -1349,12 +1961,12 @@ a:focus-visible {
   height: 13px;
 }
 
-.ui-progress__step--completed { color: #207d49; }
+.ui-progress__step--completed { color: var(--step-done); }
 
 .ui-progress__step--completed .ui-progress__marker {
   border-color: var(--green);
   background: var(--green);
-  color: #ffffff;
+  color: var(--filled-control-ink);
 }
 
 .ui-progress__step--active {
@@ -1368,25 +1980,25 @@ a:focus-visible {
 }
 
 .ui-spec-renderer[data-phase="completed"] .ui-progress__step--active {
-  color: #207d49;
+  color: var(--step-done);
 }
 
 .ui-spec-renderer[data-phase="completed"] .ui-progress__step--active .ui-progress__marker {
   border-color: var(--green);
   background: var(--green);
-  color: #ffffff;
+  color: var(--filled-control-ink);
 }
 
 /* The renderer marks the actual terminal step. Keep its finish state distinct even without a following segment. */
 .ui-progress[data-terminal="true"] .ui-progress__step[data-terminal-step="true"] {
-  color: #207d49;
+  color: var(--step-done);
   font-weight: 700;
 }
 
 .ui-progress[data-terminal="true"] .ui-progress__step[data-terminal-step="true"] .ui-progress__marker {
   border-color: var(--green);
   background: var(--green);
-  color: #ffffff;
+  color: var(--filled-control-ink);
 }
 
 .ui-progress__empty {
@@ -1422,14 +2034,14 @@ a:focus-visible {
 }
 
 .ui-status-card[data-level="warning"] {
-  border-color: #ead7b1;
-  background: #fffaf0;
+  border-color: var(--panel-warn-edge);
+  background: var(--panel-warn);
 }
 
 .ui-status-card[data-level="error"],
 .ui-status-card[data-level="critical"] {
-  border-color: #efc9c9;
-  background: #fff6f6;
+  border-color: var(--panel-danger-edge);
+  background: var(--panel-danger);
 }
 
 .ui-status-card {
@@ -1455,9 +2067,9 @@ a:focus-visible {
   justify-content: flex-start;
   min-height: 0;
   padding: clamp(24px, 3.8vh, 44px);
-  border: 1px dashed #b9c5d3;
+  border: 1px dashed var(--panel-fallback-edge);
   border-radius: 16px;
-  background: #fbfcfd;
+  background: var(--panel-fallback);
 }
 
 .ui-card--empty {
@@ -1507,24 +2119,24 @@ a:focus-visible {
 
 .ui-action--primary,
 .advance-button {
-  background: var(--blue);
-  color: #ffffff;
+  background: var(--action-primary);
+  color: var(--action-primary-ink);
 }
 
 .ui-action--primary:hover,
-.advance-button:hover:not(:disabled) { background: var(--blue-deep); }
+.advance-button:hover:not(:disabled) { background: var(--action-primary-hover); }
 
 .ui-action--secondary {
-  border-color: #bac6d4;
-  background: #ffffff;
+  border-color: var(--control-edge);
+  background: var(--control);
   color: var(--ink);
 }
 
-.ui-action--secondary:hover { background: #f5f8fb; }
+.ui-action--secondary:hover { background: var(--control-hover); }
 
 .ui-action--unavailable {
   border-color: var(--rule);
-  background: #f2f4f6;
+  background: var(--control-off);
   color: var(--muted);
 }
 
@@ -1634,6 +2246,439 @@ a:focus-visible {
   font-size: 13px;
   white-space: nowrap;
 }
+
+/* The transient weather answer. It borrows the schedule strip's slot on a full
+   brief, so it keeps the same one-band posture: a single row where the advisory
+   is one more inline segment that gives up its tail before the band wraps. */
+.ui-card--weather-card {
+  flex-direction: row;
+  align-items: center;
+  gap: clamp(10px, 1.4vw, 24px);
+  border-top: 1px solid var(--quiet-rule);
+}
+
+.ui-weather-brief__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.ui-weather-brief__glyph { display: grid; place-items: center; color: var(--blue); }
+
+.ui-weather-brief__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.ui-weather-brief__reading {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: clamp(12px, 1.6vw, 28px);
+}
+
+.ui-weather-brief__condition {
+  color: var(--ink);
+  font-size: clamp(20px, 1.6vw, 26px);
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.ui-weather-brief__temperature {
+  color: var(--blue);
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: clamp(24px, 2vw, 34px);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  white-space: nowrap;
+}
+
+.ui-weather-brief__fact {
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ui-weather-brief__advisory {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--amber);
+  font-size: 15px;
+  font-weight: 620;
+  line-height: 1.4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Rain is the state the advisory exists for; let the band say so quietly. */
+.ui-card--weather-light-rain .ui-weather-brief__glyph,
+.ui-card--weather-heavy-rain .ui-weather-brief__glyph { color: var(--amber); }
+
+/* The transient schedule answer. Same one-band posture as the strip whose slot
+   it borrows: everything on one row, entries give up their tails before the
+   band ever wraps. */
+.ui-card--schedule-card {
+  flex-direction: row;
+  align-items: center;
+  gap: clamp(10px, 1.4vw, 24px);
+  border-top: 1px solid var(--quiet-rule);
+}
+
+.ui-schedule-card__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.ui-schedule-card__glyph { display: grid; place-items: center; color: var(--blue); }
+
+.ui-schedule-card__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.ui-schedule-card__list {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: clamp(14px, 1.8vw, 32px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+
+.ui-schedule-card__event {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ui-schedule-card__event + .ui-schedule-card__event::before {
+  content: '';
+  align-self: center;
+  width: clamp(12px, 1.4vw, 26px);
+  height: 1px;
+  background: var(--rule);
+  margin-right: clamp(6px, 0.8vw, 12px);
+}
+
+.ui-schedule-card__time {
+  font-size: 17px;
+  font-weight: 640;
+  font-variant-numeric: tabular-nums;
+  color: var(--blue);
+  white-space: nowrap;
+}
+
+.ui-schedule-card__title {
+  font-size: 16px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ui-schedule-card__location {
+  font-size: 15px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.ui-schedule-card__empty {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  color: var(--muted);
+  font-size: 16px;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.ui-schedule-card__more {
+  flex: none;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: var(--blue-pale);
+  color: var(--blue-deep);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+/* The transient departure answer. Borrows the same one-band slot as the schedule
+   answer, but inverts its emphasis: one clock time carries the card, and the
+   facts it was worked backwards from trail behind at reading weight. Dots, not
+   the timeline rules the schedule uses — the facts are not a sequence. */
+.ui-card--departure-plan {
+  flex-direction: row;
+  align-items: center;
+  gap: clamp(10px, 1.4vw, 24px);
+  border-top: 1px solid var(--quiet-rule);
+}
+
+.ui-departure-plan__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+
+.ui-departure-plan__glyph { display: grid; place-items: center; color: var(--blue); }
+
+.ui-departure-plan__eyebrow {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+/* The lead number. Sized to the band it borrows rather than to its own
+   importance: 24px is the largest the auxiliary slot can hold at 1920×720
+   without the frame growing, and against 15px facts it still reads as the one
+   figure the driver acts on. */
+.ui-departure-plan__time {
+  flex: none;
+  font-size: 24px;
+  font-weight: 660;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  color: var(--blue);
+}
+
+.ui-departure-plan__facts {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: baseline;
+  gap: clamp(8px, 1vw, 16px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow: hidden;
+}
+
+.ui-departure-plan__fact {
+  flex: none;
+  font-size: 15px;
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.ui-departure-plan__fact + .ui-departure-plan__fact::before {
+  content: '·';
+  margin-right: clamp(8px, 1vw, 16px);
+  color: var(--muted);
+}
+
+/* The route the drive time came from: true, but the last thing the driver needs
+   from this card, so it gives up its tail first. */
+.ui-departure-plan__fact--via {
+  flex: 0 1 auto;
+  min-width: 0;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The arrivals board. The driver is choosing, so the card gives its whole height
+   to rows and the row itself is the control: one full-width target per flight,
+   72px tall like every other action, laid out on one line so the eye reads down
+   a column of times rather than across five paragraphs. Five rows is the schema's
+   ceiling and the frame's: at 720px they fit without the surface ever scrolling. */
+.ui-card--flight-choices {
+  gap: clamp(10px, 1.6vh, 18px);
+}
+
+.ui-flight-choices__header {
+  display: flex;
+  flex: none;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ui-flight-choices__eyebrow {
+  margin: 0;
+  color: var(--muted);
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+
+.ui-flight-choices__hint {
+  margin: 0;
+  color: var(--ink);
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.ui-flight-choices__list {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: clamp(6px, 1vh, 12px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ui-flight-choices__item { display: flex; }
+
+.ui-flight-choices__row {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 72px;
+  align-items: center;
+  gap: clamp(12px, 1.6vw, 26px);
+  border: 1px solid var(--control-edge);
+  border-radius: 12px;
+  padding: 0 clamp(14px, 1.4vw, 22px);
+  background: var(--control);
+  color: var(--ink);
+  text-align: left;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.ui-flight-choices__row:hover:not(:disabled) {
+  background: var(--control-hover);
+  border-color: var(--blue);
+}
+
+/* A row with no action behind it, or one waiting on a pick already sent. It keeps
+   every fact it was carrying and only gives up the affordance. */
+.ui-flight-choices__row:disabled {
+  background: var(--control-off);
+  border-color: var(--rule);
+}
+
+.ui-flight-choices__rank {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--blue-pale);
+  color: var(--blue-deep);
+  font-size: 17px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-flight-choices__identity {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ui-flight-choices__number {
+  font-family: Bahnschrift, "DIN Alternate", "Cascadia Code", monospace;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.ui-flight-choices__origin {
+  /* The row's own state ink, not the page's `--muted`: these lines sit on the
+     control surfaces rather than the card, and `--muted` clears 4.5:1 on white
+     only — on a dimmed row it drops to 4.38:1. */
+  color: var(--state-ink);
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Fixed width, right aligned: the times differ in how much they have to say —
+   some rows carry a revised figure and some do not — and letting the column
+   breathe with the copy would ripple through the terminal, the status and the
+   arrow, leaving five ragged rows where the eye wants one straight edge. */
+.ui-flight-choices__timing {
+  display: flex;
+  flex: none;
+  width: clamp(80px, 6vw, 104px);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.ui-flight-choices__time {
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--blue);
+  white-space: nowrap;
+}
+
+/* Only present when the estimate has moved off the schedule, which is exactly
+   when the driver needs to see it beside the scheduled time rather than instead.
+   An arrival that moved earlier is plain news, so only a later one is toned. */
+.ui-flight-choices__revised {
+  color: var(--state-ink);
+  font-size: 14px;
+  font-weight: 620;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.ui-flight-choices__revised[data-direction="later"] { color: var(--state-ink-caution); }
+
+/* The dimmer surface costs the caution hue its 4.5:1, and a row nobody can press
+   has no delay for them to act on: it keeps the figure, not the warning colour. */
+.ui-flight-choices__row:disabled .ui-flight-choices__revised { color: var(--state-ink); }
+
+.ui-flight-choices__terminal {
+  flex: none;
+  min-width: 46px;
+  text-align: center;
+  padding: 3px 11px;
+  border-radius: 999px;
+  background: var(--control-selected);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 660;
+  white-space: nowrap;
+}
+
+/* Fixed width for the same reason as the timing column: 计划中 and 延误 are two
+   characters apart, and the arrow at the end of every row has to sit still. */
+.ui-flight-choices__row .ui-status {
+  flex: none;
+  width: clamp(76px, 5.4vw, 92px);
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.ui-flight-choices__pick {
+  display: grid;
+  flex: none;
+  place-items: center;
+  color: var(--blue);
+}
+
+.ui-flight-choices__row:disabled .ui-flight-choices__pick { color: var(--muted); }
 
 /* Four briefs only ever share the frame when the schedule strip joins the three
    preparing cards. The heroes each give back a notch of size and the stack a
@@ -1904,6 +2949,33 @@ a:focus-visible {
     padding-top: 0;
   }
 
+  /* The three-column band above assumes the card spans the task surface: its
+     200px + auto + 300px tracks need ~817px, so in the split layout's narrow
+     rail the facts overflowed the card and 到达电量 fell outside it entirely.
+     Beside a map the card is a tall rail, so stack the same regions instead of
+     banding them — no track floor, nothing to clip. */
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-card--navigation-summary {
+    align-content: center;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto auto;
+    row-gap: clamp(12px, 2vh, 22px);
+  }
+
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__header,
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__route-rule,
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__eta,
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__facts {
+    grid-row: auto;
+    grid-column: 1;
+    align-self: start;
+  }
+
+  /* The rules that separated the banded columns would now cut across the stack. */
+  .ui-spec-renderer[data-single-component="false"] .ui-slot--secondary .ui-navigation-brief__eta {
+    padding-inline: 0;
+    border-inline: 0;
+  }
+
   .ui-spec-renderer[data-single-component="false"] .ui-card--charging-recommendation {
     display: grid;
     align-items: center;
@@ -2014,6 +3086,17 @@ a:focus-visible {
 }
 
 .event-console {
+  --ink: #102033;
+  --muted: #667384;
+  --rule: #dde3ea;
+  --blue: #246bfd;
+  --action-primary: #246bfd;
+  --action-primary-hover: #1559e5;
+  --action-primary-ink: #ffffff;
+  --control: #ffffff;
+  --control-hover: #f7f9fc;
+  --control-off: #f2f4f6;
+  --focus-ring: #246bfd;
   position: fixed;
   z-index: 11;
   top: 18px;
@@ -2144,6 +3227,60 @@ a:focus-visible {
   line-height: 1.55;
 }
 
+.console-lighting {
+  margin-top: 22px;
+  border-top: 1px solid var(--rule);
+  padding-top: 22px;
+}
+
+.console-lighting__title {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.console-lighting__actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.lighting-button {
+  min-height: 56px;
+  border: 1px solid #bac6d4;
+  border-radius: 12px;
+  padding: 0 12px;
+  background: #ffffff;
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 600;
+  transition: background-color 180ms ease, border-color 180ms ease;
+}
+
+.lighting-button:hover { background: #f5f8fb; }
+
+/* The pressed state has to survive on its own, not lean on the hover cue: a
+   touchscreen never hovers, so this border is the only thing telling the driver
+   which light condition the car is currently reporting. */
+.lighting-button[aria-pressed='true'] {
+  border-color: var(--ink);
+  background: #eef3f9;
+}
+
+.lighting-button:disabled {
+  border-color: var(--rule);
+  background: #f2f4f6;
+  color: var(--muted);
+  cursor: not-allowed;
+}
+
+/* Locking the controls must not erase which condition was selected. */
+.lighting-button[aria-pressed='true']:disabled {
+  border-color: #8491a1;
+  background: #e4e9ef;
+  color: var(--ink);
+}
+
 .console-voice-fallback {
   margin-top: 22px;
   border-top: 1px solid var(--rule);
@@ -2213,6 +3350,24 @@ a:focus-visible {
   .ui-layout--split { grid-template-columns: minmax(0, 1.2fr) minmax(250px, 0.8fr); }
 
   .ui-navigation-eta { font-size: clamp(86px, 11vw, 126px); }
+
+  /* The band the departure answer borrows narrows faster than its own contents do,
+     and the frame here still forbids scrolling — so something has to leave rather
+     than be cut off mid-word. The route the drive time came from is the one line
+     the driver never acts on, so it goes first and whole, leaving the clock and
+     the three facts that explain it their full width. */
+  .ui-departure-plan__fact--via { display: none; }
+
+  /* And what stays gives up its own tail before it gives up its edge: at the bottom
+     of this range the three facts still come close to the width they have, and a
+     fact that ellipsises is one the driver can see is abbreviated. One that ran off
+     the card looks like it was never said. */
+  .ui-departure-plan__fact {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 }
 
 @media (max-width: 680px) {
@@ -2366,6 +3521,12 @@ a:focus-visible {
   .ui-cabin-grid,
   .ui-card--pickup-overview .ui-route-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
+  /* Two to a row is what the cabin grid wants here for two metrics or three, and
+     the rule above already says so. A lone metric is the case it does not cover,
+     and restating it inside the breakpoint is cheaper than asking a reader to work
+     out which of the two selectors is the more specific. */
+  .ui-cabin-grid:has(> .ui-metric:first-child:last-child) { grid-template-columns: minmax(0, 1fr); }
+
   .ui-metric:nth-child(odd) { border-left: 0; padding-left: 0; }
 
   .ui-metric:nth-child(even) { border-left: 1px solid var(--rule); }
@@ -2381,6 +3542,35 @@ a:focus-visible {
   .ui-card--flight-status .ui-metric--hero .ui-metric__value { font-size: clamp(44px, 12vw, 62px); }
 
   .ui-card--navigation-summary .ui-metric + .ui-metric { border-left: 1px solid var(--rule); }
+
+  /* Below the split the brief becomes a scrolling column, so the departure answer
+     can spend height instead of losing the ends of its facts: the row becomes a
+     column and the route comes back, because there is now room to say it. The dots
+     go with the row — they separated items along a line, and a column separates
+     them already. */
+  .ui-card--departure-plan {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .ui-departure-plan__facts {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    overflow: visible;
+  }
+
+  .ui-departure-plan__fact {
+    flex: none;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+  }
+
+  .ui-departure-plan__fact + .ui-departure-plan__fact::before { content: none; }
+
+  .ui-departure-plan__fact--via { display: block; }
 
   .ui-progress {
     margin-top: 32px;
@@ -2448,7 +3638,14 @@ a:focus-visible {
   font-size: 15px;
   line-height: 1.6;
   overflow-wrap: anywhere;
+  /* Exactly two lines, always. Receipts arrive over SSE while the drawer is
+     open; a line that grows or appears would move the advance button under
+     the user's pointer. Longer logs scroll inside the box instead. */
+  height: calc(2 * 1.6em);
+  overflow-y: auto;
 }
+
+.console-effects[data-empty] { color: var(--rule); }
 
 /*
  * A failed request is not a trip fact. It sits between the input and the journey

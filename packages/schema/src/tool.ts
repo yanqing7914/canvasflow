@@ -78,6 +78,43 @@ export const flightStatusOutputSchema = z.object({
   sourceUpdatedAt: z.iso.datetime({ offset: true }),
 })
 
+/**
+ * The arrivals board read: which flights are landing at a city, not the status
+ * of one the driver already named.
+ *
+ * `arrivalCityId` rather than a free-text city so the fixture stays keyed and a
+ * typo cannot silently return an empty board. `limit` is the caller's cap on how
+ * many rows it can present; the provider may return fewer.
+ */
+export const flightArrivalsInputSchema = z.object({
+  arrivalCityId: z.string().min(1),
+  date: z.iso.date(),
+  limit: z.number().int().min(1).max(10).optional(),
+})
+
+/**
+ * One row of the board. A subset of `flightStatusOutputSchema` plus the airline
+ * and origin a driver needs to tell two 20:30 arrivals apart — every row's
+ * `flightNumber` is also resolvable through `flight.get-status` for the same
+ * date, so picking a row can always be prepared into a trip.
+ */
+export const flightArrivalCandidateSchema = z.object({
+  flightNumber: z.string().min(1),
+  airlineName: z.string().min(1),
+  originName: z.string().min(1),
+  status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
+  scheduledArrival: z.iso.datetime({ offset: true }),
+  estimatedArrival: z.iso.datetime({ offset: true }),
+  terminal: z.string().min(1),
+})
+
+export const flightArrivalsOutputSchema = z.object({
+  arrivalCityId: z.string().min(1),
+  arrivalCityName: z.string().min(1),
+  arrivals: z.array(flightArrivalCandidateSchema),
+  sourceUpdatedAt: z.iso.datetime({ offset: true }),
+})
+
 export const routePlanInputSchema = z.object({
   origin: z.object({ latitude: z.number(), longitude: z.number() }),
   destination: z.object({ id: z.string().min(1), name: z.string().min(1) }),
@@ -147,6 +184,24 @@ export const listUpcomingEventsInputSchema = z.object({
 export const listUpcomingEventsOutputSchema = z.object({
   /** The requested day's remaining events, ordered by start time. */
   events: z.array(calendarEventSchema),
+})
+
+export const weatherConditionSchema = z.enum(['sunny', 'cloudy', 'overcast', 'light-rain', 'heavy-rain', 'fog'])
+
+export const weatherQueryInputSchema = z.object({
+  locationId: z.string().min(1),
+  /** Forecast point of interest; omitted means current conditions. */
+  at: z.iso.datetime({ offset: true }).optional(),
+})
+
+export const weatherOutputSchema = z.object({
+  locationId: z.string().min(1),
+  locationName: z.string().min(1),
+  temperatureC: z.number(),
+  condition: weatherConditionSchema,
+  windLevel: z.number().int().min(0).max(12).optional(),
+  precipitationChance: z.number().min(0).max(100).optional(),
+  observedAt: z.iso.datetime({ offset: true }),
 })
 
 export const vehicleStatusOutputSchema = z.object({
@@ -241,6 +296,12 @@ export const messagePrepareInputSchema = z.object({
   contactId: z.string().min(1),
   flightNumber: z.string().min(1),
   eta: z.string().optional(),
+  /**
+   * Which fixed template to prepare. An enum on purpose: neither the client
+   * nor a model may inject free-form message text — every sendable payload
+   * comes from a reviewed template. Absent means the landing notice.
+   */
+  kind: z.enum(['landing', 'weather-umbrella']).optional(),
 })
 
 export const messagePrepareOutputSchema = z.object({
@@ -339,6 +400,9 @@ export type GetPreferencesInput = z.infer<typeof getPreferencesInputSchema>
 export type GetPreferencesOutput = z.infer<typeof getPreferencesOutputSchema>
 export type FlightStatusInput = z.infer<typeof flightStatusInputSchema>
 export type FlightStatusOutput = z.infer<typeof flightStatusOutputSchema>
+export type FlightArrivalsInput = z.infer<typeof flightArrivalsInputSchema>
+export type FlightArrivalCandidate = z.infer<typeof flightArrivalCandidateSchema>
+export type FlightArrivalsOutput = z.infer<typeof flightArrivalsOutputSchema>
 export type RoutePlanInput = z.infer<typeof routePlanInputSchema>
 export type RoutePlanOutput = z.infer<typeof routePlanOutputSchema>
 export type ChargingRecommendationInput = z.infer<typeof chargingRecommendationInputSchema>
@@ -346,6 +410,9 @@ export type ChargingRecommendationOutput = z.infer<typeof chargingRecommendation
 export type CalendarEvent = z.infer<typeof calendarEventSchema>
 export type ListUpcomingEventsInput = z.infer<typeof listUpcomingEventsInputSchema>
 export type ListUpcomingEventsOutput = z.infer<typeof listUpcomingEventsOutputSchema>
+export type WeatherCondition = z.infer<typeof weatherConditionSchema>
+export type WeatherQueryInput = z.infer<typeof weatherQueryInputSchema>
+export type WeatherOutput = z.infer<typeof weatherOutputSchema>
 export type VehicleStatusOutput = z.infer<typeof vehicleStatusOutputSchema>
 export type NavigationStartInput = z.infer<typeof navigationStartInputSchema>
 export type NavigationStartOutput = z.infer<typeof navigationStartOutputSchema>

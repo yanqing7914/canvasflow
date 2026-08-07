@@ -4,7 +4,7 @@ import { listUpcomingEvents } from './calendar'
 import { getFixtureChargingRecommendation, getFixtureFlightStatus } from './compat'
 import { recommendCharging } from './charging'
 import { resolveMembers } from './family'
-import { getFlightStatus } from './flight'
+import { getFlightStatus, listFlightArrivals } from './flight'
 import { createSideEffectRuntime, type SideEffectRuntime } from './idempotency'
 import { createMediaPlayer } from './media'
 import { createPreferenceReader } from './memory'
@@ -13,6 +13,7 @@ import { createMessageAuthorizationRevoker, createMessageConfirmationRevoker, cr
 import { createNavigationSideEffects } from './navigation'
 import type { ToolContext } from './result'
 import { getVehicleStatus } from './vehicle'
+import { getWeather } from './weather'
 
 /** Risk levels and timeouts follow the P0 table in the tool contract. */
 export const toolDefinitions = {
@@ -55,6 +56,13 @@ export const toolDefinitions = {
     name: 'flight.get-status',
     version: '1.0',
     description: '查询航班状态、ETA 和航站楼',
+    riskLevel: 'read',
+    timeoutMs: 3000,
+  },
+  'flight.list-arrivals': {
+    name: 'flight.list-arrivals',
+    version: '1.0',
+    description: '列出某城市当天的到达航班供用户选择',
     riskLevel: 'read',
     timeoutMs: 3000,
   },
@@ -111,6 +119,13 @@ export const toolDefinitions = {
     name: 'calendar.list-upcoming',
     version: '1.0',
     description: '读取家庭日历当天的剩余日程',
+    riskLevel: 'read',
+    timeoutMs: 1000,
+  },
+  'weather.get-current': {
+    name: 'weather.get-current',
+    version: '1.0',
+    description: '读取指定地点的天气快照',
     riskLevel: 'read',
     timeoutMs: 1000,
   },
@@ -178,6 +193,7 @@ export function createProviderRegistry(
     'memory.confirm-update': memoryWrite.confirmMemoryUpdate,
     'memory.reject-update': memoryWrite.rejectMemoryUpdate,
     'flight.get-status': getFlightStatus,
+    'flight.list-arrivals': listFlightArrivals,
     'navigation.plan-route': navigation.planRoute,
     'navigation.start': navigation.startNavigation,
     'navigation.update-route': navigation.updateRoute,
@@ -186,6 +202,7 @@ export function createProviderRegistry(
     'vehicle.revert-cabin-profile': cabin.revertCabinProfile,
     'charging.recommend': recommendCharging,
     'calendar.list-upcoming': listUpcomingEvents,
+    'weather.get-current': getWeather,
     'media.play': playMedia,
     'message.prepare': prepareMessage,
     'message.send': sendMessage,

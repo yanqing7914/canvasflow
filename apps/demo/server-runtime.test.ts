@@ -7,9 +7,12 @@ import { tmpdir } from 'node:os'
 import { join, posix, win32 } from 'node:path'
 import { createSideEffectRuntime, issueAutoNotifyAuthorization } from '@canvasflow/tools'
 import type { VoiceTranscriptionHttpResponse } from '@canvasflow/schema'
+import { ServerResponse } from 'node:http'
 import {
   createAgentServer,
   resolveStaticPath,
+  resolveAMapServiceUrl,
+  proxyAMapService,
   createConfiguredAgentRuntime,
   createE2eProviderFactory,
   CANVASFLOW_E2E,
@@ -169,11 +172,8 @@ describe('agent server runtime', () => {
       expect(response.status).toBe(200)
       await expect(response.json()).resolves.toEqual({ ok: true })
     } finally {
-      if (previous === undefined) {
-        delete process.env.AGENT_VOICE_MODE
-      } else {
-        process.env.AGENT_VOICE_MODE = previous
-      }
+      if (previous === undefined) delete process.env.AGENT_VOICE_MODE
+      else process.env.AGENT_VOICE_MODE = previous
     }
   })
 
@@ -186,28 +186,22 @@ describe('agent server runtime', () => {
       const address = server.address()
       if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
       const baseUrl = `http://127.0.0.1:${address.port}`
-
       const transcription = await fetch(`${baseUrl}/v1/voice/transcriptions`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fixtureId: 'clear-airport-pickup' }),
       })
-
       expect(transcription.status).toBe(503)
       await expect(transcription.json()).resolves.toMatchObject({
         ok: false,
         error: { code: 'TRANSCRIPTION_FAILED', retryable: false },
       })
-
       const health = await fetch(`${baseUrl}/health`)
       expect(health.status).toBe(200)
       await expect(health.json()).resolves.toEqual({ ok: true })
     } finally {
-      if (previous === undefined) {
-        delete process.env.AGENT_VOICE_MODE
-      } else {
-        process.env.AGENT_VOICE_MODE = previous
-      }
+      if (previous === undefined) delete process.env.AGENT_VOICE_MODE
+      else process.env.AGENT_VOICE_MODE = previous
     }
   })
 
@@ -216,24 +210,17 @@ describe('agent server runtime', () => {
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
-
     const response = await fetch(`http://127.0.0.1:${address.port}/v1/voice/transcriptions`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-request-id': 'voice-json-001' },
       body: JSON.stringify({ fixtureId: 'clear-airport-pickup' }),
     })
     const body = await response.json() as VoiceTranscriptionHttpResponse
-
     expect(response.status).toBe(200)
     expect(response.headers.get('x-request-id')).toBe('voice-json-001')
     expect(body).toMatchObject({
-      requestId: 'voice-json-001',
-      ok: true,
-      result: {
-        transcript: '接妈妈和豆豆，航班 MU5102',
-        confidence: 0.96,
-        provider: 'fixture',
-      },
+      requestId: 'voice-json-001', ok: true,
+      result: { transcript: '接妈妈和豆豆，航班 MU5102', confidence: 0.96, provider: 'fixture' },
     })
   })
 
@@ -246,20 +233,13 @@ describe('agent server runtime', () => {
     const form = new FormData()
     form.set('audio', new File([wav], 'renamed.wav', { type: 'audio/wav' }))
     form.set('language', 'zh-CN')
-
     const response = await fetch(`http://127.0.0.1:${address.port}/v1/voice/transcriptions`, {
-      method: 'POST',
-      headers: { 'x-request-id': 'voice-upload-001' },
-      body: form,
+      method: 'POST', headers: { 'x-request-id': 'voice-upload-001' }, body: form,
     })
     expect(response.status).toBe(200)
     await expect(response.json()).resolves.toMatchObject({
-      requestId: 'voice-upload-001',
-      ok: true,
-      result: {
-        fixtureId: 'missing-flight-number',
-        transcript: '我现在要去机场接妈妈和豆豆',
-      },
+      requestId: 'voice-upload-001', ok: true,
+      result: { fixtureId: 'missing-flight-number', transcript: '我现在要去机场接妈妈和豆豆' },
     })
   })
 
@@ -272,11 +252,8 @@ describe('agent server runtime', () => {
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
-
     const response = await fetch(`http://127.0.0.1:${address.port}/v1/voice/transcriptions`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ fixtureId }),
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fixtureId }),
     })
     const body = await response.json() as VoiceTranscriptionHttpResponse
     expect(response.status).toBe(status)
@@ -293,31 +270,19 @@ describe('agent server runtime', () => {
     const address = server.address()
     if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
     const baseUrl = `http://127.0.0.1:${address.port}/v1/voice/transcriptions`
-
-    const unknown = await fetch(baseUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ fixtureId: 'missing-fixture' }),
-    })
+    const unknown = await fetch(baseUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fixtureId: 'missing-fixture' }) })
     expect(unknown.status).toBe(404)
-
     const invalidMime = new FormData()
     invalidMime.set('audio', new File(['not audio'], 'voice.txt', { type: 'text/plain' }))
     const invalidMimeResponse = await fetch(baseUrl, { method: 'POST', body: invalidMime })
     expect(invalidMimeResponse.status).toBe(415)
     await expect(invalidMimeResponse.json()).resolves.toMatchObject({ error: { code: 'UNSUPPORTED_AUDIO_FORMAT' } })
-
     const empty = new FormData()
     empty.set('audio', new File([], 'empty.wav', { type: 'audio/wav' }))
     const emptyResponse = await fetch(baseUrl, { method: 'POST', body: empty })
     expect(emptyResponse.status).toBe(400)
     await expect(emptyResponse.json()).resolves.toMatchObject({ error: { code: 'AUDIO_TOO_SHORT' } })
-
-    const oversizedResponse = await fetch(baseUrl, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ fixtureId: 'x'.repeat(20_000) }),
-    })
+    const oversizedResponse = await fetch(baseUrl, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ fixtureId: 'x'.repeat(20_000) }) })
     expect(oversizedResponse.status).toBe(413)
     await expect(oversizedResponse.json()).resolves.toMatchObject({ error: { code: 'AUDIO_TOO_LONG' } })
   })
@@ -380,5 +345,130 @@ describe('resolveStaticPath', () => {
   it('keeps sibling directories with a shared prefix out of bounds', () => {
     expect(resolveStaticPath('/srv/site', '../site-secrets/key', posix)).toBeNull()
     expect(resolveStaticPath('C:\\srv\\site', '..\\site-secrets\\key', win32)).toBeNull()
+  })
+})
+
+describe('resolveAMapServiceUrl', () => {
+  it('forwards a service path onto restapi.amap.com untouched when no jscode is set', () => {
+    expect(resolveAMapServiceUrl('/_AMapService/v3/direction/driving?origin=1,2&destination=3,4', {})).toBe(
+      'https://restapi.amap.com/v3/direction/driving?origin=1,2&destination=3,4',
+    )
+  })
+
+  it('appends the server-only jscode as the last query parameter', () => {
+    const url = resolveAMapServiceUrl('/_AMapService/v3/direction/driving?origin=1,2', {
+      AMAP_SECURITY_JS_CODE: 'secret-code',
+    })
+    expect(url).not.toBeNull()
+    const parsed = new URL(url!)
+    expect(parsed.host).toBe('restapi.amap.com')
+    expect(parsed.searchParams.get('jscode')).toBe('secret-code')
+  })
+
+  it('rejects requests outside the service prefix', () => {
+    expect(resolveAMapServiceUrl('/v3/direction/driving', {})).toBeNull()
+    expect(resolveAMapServiceUrl('/_AMapServiceX/foo', {})).toBeNull()
+  })
+
+  it('refuses a traversal segment rather than forwarding it', () => {
+    expect(resolveAMapServiceUrl('/_AMapService/../evil', {})).toBeNull()
+    expect(resolveAMapServiceUrl('/_AMapService/v3/../../evil', {})).toBeNull()
+    expect(resolveAMapServiceUrl('/_AMapService/v3/%2e%2e/evil', {})).toBeNull()
+  })
+
+  it('cannot be redirected off restapi.amap.com by a protocol-relative path', () => {
+    // A `//evil.com/...` request becomes part of restapi.amap.com's path, not a
+    // new authority — the pinned origin makes the host un-overridable.
+    const url = resolveAMapServiceUrl('/_AMapService//evil.com/steal', {})
+    expect(url).not.toBeNull()
+    expect(new URL(url!).host).toBe('restapi.amap.com')
+  })
+})
+
+describe('proxyAMapService', () => {
+  type Capture = { status?: number; headers?: Record<string, string>; body: string }
+
+  function fakeResponse(): { response: ServerResponse; capture: Capture } {
+    const capture: Capture = { body: '' }
+    const response = {
+      headersSent: false,
+      writableEnded: false,
+      writeHead(status: number, headers?: Record<string, string>) {
+        capture.status = status
+        capture.headers = headers
+        this.headersSent = true
+        return this
+      },
+      end(chunk?: Buffer | string) {
+        if (chunk) capture.body += chunk.toString()
+        this.writableEnded = true
+        return this
+      },
+    }
+    return { response: response as unknown as ServerResponse, capture }
+  }
+
+  it('streams the upstream body back and never echoes the jscode into the response', async () => {
+    let requestedUrl = ''
+    const fetchImpl = (async (url: string | URL) => {
+      requestedUrl = url.toString()
+      return new Response('{"route":"ok"}', {
+        status: 200,
+        headers: { 'content-type': 'application/json; charset=utf-8' },
+      })
+    }) as unknown as typeof fetch
+    const { response, capture } = fakeResponse()
+
+    await proxyAMapService('/_AMapService/v3/direction/driving?origin=1,2', response, {
+      AMAP_SECURITY_JS_CODE: 'secret-code',
+    }, fetchImpl)
+
+    expect(capture.status).toBe(200)
+    expect(capture.body).toBe('{"route":"ok"}')
+    // The code rides on the upstream URL only; the client never sees it.
+    expect(requestedUrl).toContain('jscode=secret-code')
+    expect(capture.body).not.toContain('secret-code')
+  })
+
+  it('passes through unchanged when no jscode is configured', async () => {
+    let requestedUrl = ''
+    const fetchImpl = (async (url: string | URL) => {
+      requestedUrl = url.toString()
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch
+    const { response } = fakeResponse()
+
+    await proxyAMapService('/_AMapService/v3/geocode?address=x', response, {}, fetchImpl)
+
+    expect(requestedUrl).toContain('restapi.amap.com/v3/geocode')
+    expect(requestedUrl).not.toContain('jscode')
+  })
+
+  it('answers a rejected target with 400 and does not call upstream', async () => {
+    let called = false
+    const fetchImpl = (async () => {
+      called = true
+      return new Response('', { status: 200 })
+    }) as unknown as typeof fetch
+    const { response, capture } = fakeResponse()
+
+    await proxyAMapService('/_AMapService/../evil', response, {}, fetchImpl)
+
+    expect(called).toBe(false)
+    expect(capture.status).toBe(400)
+  })
+
+  it('answers 502 without leaking anything when the upstream fetch throws', async () => {
+    const fetchImpl = (async () => {
+      throw new Error('network down')
+    }) as unknown as typeof fetch
+    const { response, capture } = fakeResponse()
+
+    await proxyAMapService('/_AMapService/v3/direction/driving', response, {
+      AMAP_SECURITY_JS_CODE: 'secret-code',
+    }, fetchImpl)
+
+    expect(capture.status).toBe(502)
+    expect(capture.body).not.toContain('secret-code')
   })
 })

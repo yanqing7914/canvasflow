@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { AgentGateway } from '@canvasflow/agent'
 import { createAgentHttpHandler, type AgentHttpGateway } from '@canvasflow/agent/http'
-import { ModelGateway, modelAdapterOptionsFromEnvironment } from '@canvasflow/agent'
+import { ModelGateway, larkCalendarAdapterFromEnvironment, modelAdapterOptionsFromEnvironment } from '@canvasflow/agent'
 import { messageSendInputSchema } from '@canvasflow/schema'
 import {
   PersistentAgentRuntime,
@@ -11,8 +11,8 @@ import {
   type ProviderFactory,
 } from '@canvasflow/agent/persistent'
 import { createProviderRegistry, errorResult } from '@canvasflow/tools'
-import { createConfiguredVoiceProvider, createVoiceHttpHandler } from './voice-http'
 import type { VoiceProvider } from '@canvasflow/tools'
+import { createConfiguredVoiceProvider, createVoiceHttpHandler } from './voice-http'
 
 export type AgentServerOptions = {
   staticDirectory?: string
@@ -27,6 +27,88 @@ export type ConfiguredAgentRuntimeOptions = {
 
 export const E2E_FAIL_AUTO_MESSAGE_SEND = 'AGENT_E2E_FAIL_AUTO_MESSAGE_SEND'
 export const CANVASFLOW_E2E = 'CANVASFLOW_E2E'
+
+/** Request prefix the client hits; forwarded to {@link AMAP_UPSTREAM_ORIGIN}. */
+export const AMAP_SERVICE_PREFIX = '/_AMapService'
+/** The one host this proxy will ever forward to. Whitelist, not blacklist. */
+export const AMAP_UPSTREAM_ORIGIN = 'https://restapi.amap.com'
+
+/**
+ * Map a `/_AMapService/...` request onto its restapi.amap.com URL, appending the
+ * server-only security code when configured, or null when the request is not a
+ * well-formed call to that prefix.
+ *
+ * The upstream host is pinned by constructing the URL from a fixed origin and
+ * only setting its path and query, so nothing in the request can redirect the
+ * proxy to another host — a protocol-relative `//evil.com` becomes part of
+ * restapi.amap.com's path, not a new authority. A `..` segment is rejected
+ * outright so the forwarded path is exactly what the client asked for. The
+ * jscode is added last and never comes from the request.
+ */
+export function resolveAMapServiceUrl(
+  requestUrl: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): string | null {
+  // WHATWG URL normalizes dot segments before exposing `pathname`, so inspect
+  // the raw request target first to catch both literal and percent-encoded `..`.
+  const rawPath = requestUrl.split(/[?#]/, 1)[0] ?? ''
+  if (rawPath.startsWith(`${AMAP_SERVICE_PREFIX}/`)) {
+    try {
+      if (decodeURIComponent(rawPath.slice(AMAP_SERVICE_PREFIX.length)).split('/').includes('..')) return null
+    } catch {
+      return null
+    }
+  }
+  let parsed: URL
+  try {
+    parsed = new URL(requestUrl, 'http://localhost')
+  } catch {
+    return null
+  }
+  if (parsed.pathname !== AMAP_SERVICE_PREFIX && !parsed.pathname.startsWith(`${AMAP_SERVICE_PREFIX}/`)) {
+    return null
+  }
+  const rest = parsed.pathname.slice(AMAP_SERVICE_PREFIX.length) || '/'
+  const upstream = new URL(AMAP_UPSTREAM_ORIGIN)
+  upstream.pathname = rest
+  upstream.search = parsed.search
+  // Belt and suspenders: setting pathname/search cannot move the host, but if a
+  // future edit ever let it, this refuses to forward off the whitelist.
+  if (upstream.protocol !== 'https:' || upstream.host !== 'restapi.amap.com') return null
+  const jscode = environment.AMAP_SECURITY_JS_CODE
+  if (jscode) upstream.searchParams.set('jscode', jscode)
+  return upstream.toString()
+}
+
+/**
+ * Forward an AMap service call and stream the response back. The upstream URL
+ * carries the jscode, so a failure is answered with a bare status and never
+ * echoes the URL, and the code is not logged. `fetchImpl` is injectable so the
+ * body-passthrough and no-leak behavior stay testable without a live upstream.
+ */
+export async function proxyAMapService(
+  requestUrl: string,
+  response: ServerResponse,
+  environment: NodeJS.ProcessEnv = process.env,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const upstream = resolveAMapServiceUrl(requestUrl, environment)
+  if (!upstream) {
+    response.writeHead(400).end()
+    return
+  }
+  try {
+    const result = await fetchImpl(upstream)
+    const body = Buffer.from(await result.arrayBuffer())
+    response.writeHead(result.status, {
+      'content-type': result.headers.get('content-type') ?? 'application/json; charset=utf-8',
+    })
+    response.end(body)
+  } catch {
+    if (!response.headersSent) response.writeHead(502)
+    if (!response.writableEnded) response.end()
+  }
+}
 
 export function createE2eProviderFactory(environment: NodeJS.ProcessEnv): ProviderFactory | undefined {
   if (environment[CANVASFLOW_E2E] !== '1' || environment[E2E_FAIL_AUTO_MESSAGE_SEND] !== '1') return undefined
@@ -69,6 +151,7 @@ export function createConfiguredAgentRuntime(options: ConfiguredAgentRuntimeOpti
     mode,
     providerFactory: options.providerFactory ?? createE2eProviderFactory(environment),
     modelGateway: new ModelGateway(modelAdapterOptionsFromEnvironment(environment)),
+    scheduleAdapter: larkCalendarAdapterFromEnvironment(environment),
   })
 }
 
@@ -88,6 +171,13 @@ export function createAgentServer(options: AgentServerOptions = {}) {
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end('{"ok":true}')
+      return
+    }
+    if (request.method === 'GET' && request.url?.startsWith(AMAP_SERVICE_PREFIX)) {
+      void proxyAMapService(request.url, response).catch(() => {
+        if (!response.headersSent) response.writeHead(502)
+        if (!response.writableEnded) response.end()
+      })
       return
     }
     if (request.url?.split('?', 1)[0] === '/v1/voice/transcriptions') {

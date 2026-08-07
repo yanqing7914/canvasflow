@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { createProviderRegistry, type ProviderRegistry } from '@canvasflow/tools'
+import { LarkCalendarAdapter } from './lark-calendar-adapter'
 import { ModelGateway } from './model-gateway'
 import { PersistentAgentRuntime, providerModeFromEnvironment } from './persistent'
 import type { Plan } from './planner'
@@ -196,7 +197,7 @@ describe('PersistentAgentRuntime', () => {
     expect(plan).not.toHaveBeenCalled()
   })
 
-  it('does not plan terminal or stale-timestamp user input with the model', async () => {
+  it('does not plan terminal user input with the model', async () => {
     const path = await databasePath()
     const plan = vi.fn()
     const agent = runtime(path, { modelGateway: { plan } })
@@ -218,23 +219,37 @@ describe('PersistentAgentRuntime', () => {
       },
     })
     expect(terminal.task).toEqual(cancelled.task)
+    expect(plan).not.toHaveBeenCalled()
+  })
 
-    const reset = agent.resetTask(created.task.taskId, {
-      clientRequestId: 'reset-stale-timestamp-task',
-      expectedTaskRevision: cancelled.task.taskRevision,
-    })
-    const stale = await agent.submitEventAsync(created.task.taskId, {
-      clientRequestId: 'stale-timestamp-input',
-      expectedTaskRevision: reset.task.taskRevision,
+  it('plans behind-clock user input with the model, matching the clamp that will apply it', async () => {
+    const path = await databasePath()
+    const fallbackPlan: Plan = {
+      intent: 'unknown', confidence: 0.2, slotUpdates: {}, missingSlots: ['passengers', 'flightNumber'], proposedEvents: [], assistantText: 'fallback',
+    }
+    const plan = vi.fn(async () => ({
+      source: 'fallback' as const,
+      plan: fallbackPlan,
+    }))
+    const agent = runtime(path, { modelGateway: { plan } })
+    const created = agent.createTask(createRequest('behind-clock-planning-task'))
+
+    // The gateway clamps occupant input forward instead of dropping it as
+    // stale, so an input stamped behind `updatedAt` is going to be applied —
+    // withholding it from the planner would leave it applied but unplanned.
+    const behindClock = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'behind-clock-planned-input',
+      expectedTaskRevision: created.task.taskRevision,
       event: {
-        eventId: 'stale-timestamp-input',
+        eventId: 'behind-clock-planned-input',
         type: 'user.input',
-        text: '把这段旧输入发给模型',
+        text: '完全未知的表达',
         timestamp: '2026-07-22T11:59:00+08:00',
       },
     })
-    expect(stale.task).toEqual(reset.task)
-    expect(plan).not.toHaveBeenCalled()
+
+    expect(plan).toHaveBeenCalledOnce()
+    expect(behindClock.task.phase).toBe(created.task.phase)
   })
 
   it('falls back unchanged when the model planner rejects an unknown event', async () => {
@@ -622,6 +637,37 @@ describe('PersistentAgentRuntime', () => {
     expect(startCalls).toBe(2)
   })
 
+  it('replays a side answer after restart and stops once the trip moves past it', async () => {
+    const path = await databasePath()
+    const firstRuntime = runtime(path)
+    const created = firstRuntime.createTask(createRequest())
+    const request = {
+      clientRequestId: 'weather-question', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'weather-question', type: 'user.input' as const, text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+    }
+    const asked = firstRuntime.submitEvent(created.task.taskId, request)
+    expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+    firstRuntime.close()
+
+    // The answer is transient — it is not in the persisted brief — so the retry
+    // getting its card back is the durable receipt doing the work, not the snapshot.
+    const restarted = runtime(path)
+    expect(restarted.getTask(created.task.taskId).ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+    const replayed = restarted.submitEvent(created.task.taskId, { ...request, clientRequestId: 'weather-question-retry' })
+    expect(replayed.ui).toEqual(asked.ui)
+    expect(replayed.assistant).toEqual(asked.assistant)
+
+    const started = restarted.submitAction(created.task.taskId, {
+      clientRequestId: 'start-after-restart', expectedTaskRevision: replayed.task.taskRevision,
+      expectedUiRevision: replayed.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'start-after-restart',
+    })
+    const late = restarted.submitEvent(created.task.taskId, {
+      ...request, clientRequestId: 'weather-question-late', expectedTaskRevision: started.task.taskRevision,
+    })
+    expect(late.ui.uiRevision).toBeGreaterThan(started.ui.uiRevision)
+  })
+
   it('rolls back task and side-effect state when persistence fails before commit', async () => {
     const path = await databasePath()
     const baseFactory = vi.fn((sideEffectRuntime, mode) => (
@@ -708,6 +754,167 @@ describe('PersistentAgentRuntime', () => {
 
     expect(created.meta).toMatchObject({ mode: 'live', fallbackUsed: true })
     expect(created.task.flight).toMatchObject({ flightNumber: 'MU5102', trusted: false })
+  })
+
+  describe('live schedule adapter prefetch', () => {
+    const scheduleQuery = (agent: PersistentAgentRuntime, taskRevision: number, taskId: string, eventId = 'live-schedule') =>
+      agent.submitEventAsync(taskId, {
+        clientRequestId: `client-${eventId}`,
+        expectedTaskRevision: taskRevision,
+        event: { eventId, type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+    it('carries events from later Lark pages onto the live schedule card', async () => {
+      // A real paginated adapter, not a stub: the runtime-level proof that the
+      // prefetch seam surfaces a multi-page day in one card.
+      const nowMs = Date.parse('2026-07-22T12:00:00+08:00')
+      const larkEvent = (id: string, title: string, hour: string) => ({
+        event_id: id,
+        summary: title,
+        status: 'confirmed',
+        start_time: { timestamp: String(Math.floor(Date.parse(`2026-07-22T${hour}:00+08:00`) / 1000)) },
+      })
+      const fetch = vi.fn<typeof globalThis.fetch>()
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ code: 0, msg: 'ok', tenant_access_token: 'token-1', expire: 7200 }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ))
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ code: 0, msg: 'ok', data: { items: [larkEvent('page1-event', '产品评审', '14:00')], has_more: true, page_token: 'page-2' } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ))
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ code: 0, msg: 'ok', data: { items: [larkEvent('page2-event', '晚间复盘', '21:00')], has_more: false } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ))
+      const adapter = new LarkCalendarAdapter({
+        allowedHosts: ['open.feishu.cn'],
+        appId: 'cli_app',
+        appSecret: 'secret-value',
+        calendarId: 'primary-calendar',
+        fetch: fetch as typeof globalThis.fetch,
+        now: () => nowMs,
+      })
+      const agent = runtime(':memory:', { scheduleAdapter: adapter })
+      const created = agent.createTask(createRequest('live-schedule-paged'))
+
+      const asked = await scheduleQuery(agent, created.task.taskRevision, created.task.taskId, 'paged-schedule')
+
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('live')
+      expect(card.props.events.map((event) => event.title)).toEqual(['产品评审', '晚间复盘'])
+    })
+
+    it('answers a schedule query from the adapter and marks the card live', async () => {
+      const listToday = vi.fn(async () => ({
+        events: [{
+          eventId: 'lark-event-1',
+          title: '产品评审',
+          startAt: '2026-07-22T21:00:00+08:00',
+          location: '会议室 A',
+        }],
+      }))
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-create'))
+
+      const asked = await scheduleQuery(agent, created.task.taskRevision, created.task.taskId)
+
+      expect(listToday).toHaveBeenCalledTimes(1)
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('live')
+      expect(card.props.events).toEqual([
+        expect.objectContaining({ title: '产品评审', location: '会议室 A' }),
+      ])
+      // Query contract is unchanged: no task fact moved, and the reading is
+      // transient — it lives in the published UI only.
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+    })
+
+    it('falls back to the fixture calendar when the adapter fails', async () => {
+      const listToday = vi.fn(async () => {
+        throw new Error('lark unreachable')
+      })
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-fallback'))
+
+      const asked = await scheduleQuery(agent, created.task.taskRevision, created.task.taskId, 'fallback-schedule')
+
+      expect(listToday).toHaveBeenCalledTimes(1)
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('fixture')
+      expect(card.props.events).toEqual([
+        expect.objectContaining({ title: '豆豆的睡前故事' }),
+      ])
+    })
+
+    it('never consults the adapter for non-schedule turns', async () => {
+      const listToday = vi.fn(async () => ({ events: [] }))
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-other'))
+
+      await agent.submitEventAsync(created.task.taskId, {
+        clientRequestId: 'client-not-schedule',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'not-schedule', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(listToday).not.toHaveBeenCalled()
+    })
+
+    it('leaves the synchronous entry point on the fixture path', () => {
+      const listToday = vi.fn(async () => ({ events: [] }))
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-sync'))
+
+      const asked = agent.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-sync-schedule',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'sync-schedule', type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(listToday).not.toHaveBeenCalled()
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('fixture')
+    })
+  })
+
+  it('rewrites a spoken ordinal before planning so the configured planner sees the flight number', async () => {
+    // The contract under test: the ordinal is resolved to its flight number
+    // BEFORE the pre-planning seam, so whatever planner the runtime is
+    // configured with — the model gateway here — interprets the rewritten
+    // words exactly as it would the typed number. Nothing about planning is
+    // bypassed; the ordinal is just a faster way to say the number.
+    const modelGateway = new ModelGateway({
+      adapter: { modelId: 'unused-model', plan: async () => { throw new Error('rules answer flight numbers; the model must not be called') } },
+    })
+    const plan = vi.spyOn(modelGateway, 'plan')
+    const agent = runtime(':memory:', { modelGateway })
+    const created = await agent.createTaskAsync({
+      ...createRequest('ordinal-model-create'),
+      input: { type: 'text', text: '我现在要去机场接妈妈和豆豆' },
+    })
+    const board = created.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices') throw new Error('expected a flight-choices board')
+    const thirdOnScreen = board.props.choices[2]!.flightNumber
+
+    const picked = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'client-ordinal-model',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'ordinal-model', type: 'user.input', text: '选第三个', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(picked.task.phase).toBe('preparing')
+    expect(picked.task.flight?.flightNumber).toBe(thirdOnScreen)
+    // The configured planner was consulted for the ordinal turn with the
+    // REWRITTEN text — the same words a typed pick would carry — never the
+    // raw ordinal, and rules recognized it so the adapter stayed cold.
+    expect(plan).toHaveBeenCalledTimes(2)
+    expect(plan.mock.calls[1]![0]).toMatchObject({ text: `航班号 ${thirdOnScreen}` })
+    expect(picked.meta.modelUsed).toBeUndefined()
   })
 })
 

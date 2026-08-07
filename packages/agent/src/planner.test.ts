@@ -191,6 +191,88 @@ describe('airport pickup Planner', () => {
     expect(second).toEqual(first)
   })
 
+  it.each(['看下天气', '天气怎么样', '到的时候天气怎么样'])('recognizes %s as a whole-utterance weather query', (text) => {
+    expect(planAirportPickup({ text, timestamp })).toMatchObject({
+      intent: 'check-weather',
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+    })
+  })
+
+  it('keeps the task meaning of a mixed sentence that also mentions weather', () => {
+    expect(planAirportPickup({ text: '接妈妈，顺便看下天气', timestamp }).intent).toBe('create-airport-pickup')
+  })
+
+  it.each(['看看我的日程', '今天有什么安排', '我的待办', '看看我的待办事项'])('recognizes %s as a whole-utterance schedule query', (text) => {
+    expect(planAirportPickup({ text, timestamp })).toMatchObject({
+      intent: 'check-schedule',
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+    })
+  })
+
+  it('keeps the task meaning of a mixed sentence that also mentions the schedule', () => {
+    expect(planAirportPickup({ text: '接妈妈，顺便看看日程', timestamp }).intent).toBe('create-airport-pickup')
+  })
+
+  it('does not consume schedule questions outside the fixed forms', () => {
+    expect(planAirportPickup({ text: '明天有什么安排', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '安排一下接机', timestamp }).intent).toBe('unknown')
+  })
+
+  it.each([
+    ['第三个', 3],
+    ['选第三个', 3],
+    ['第3个', 3],
+    ['要第一个', 1],
+    ['接第五班', 5],
+    ['第二个航班', 2],
+    ['就第四个吧', 4],
+  ] as const)('parses %s as a board pick of row %d', (text, ordinal) => {
+    expect(planAirportPickup({ text, timestamp })).toMatchObject({
+      intent: 'pick-flight-choice',
+      slotUpdates: { flightChoiceOrdinal: ordinal },
+      proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+    })
+  })
+
+  it('does not consume ordinals outside the pick forms', () => {
+    // Beyond the board's five rows, bare counts, and sentences that merely
+    // contain a rank all keep their own meaning.
+    expect(planAirportPickup({ text: '第六个', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '三个', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '第三个问题是什么', timestamp }).intent).toBe('unknown')
+  })
+
+  it.each(['什么时候出发', '几点出发比较好', '我该几点出发', '算下什么时候走', '现在要出发吗', '现在可以走了吗'])(
+    'recognizes %s as a whole-utterance departure-time query',
+    (text) => {
+      expect(planAirportPickup({ text, timestamp })).toMatchObject({
+        intent: 'check-departure-time',
+        slotUpdates: {},
+        missingSlots: [],
+        proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+      })
+    },
+  )
+
+  it('leaves a bare departure instruction alone rather than answering it with a card', () => {
+    // 现在出发 is a command. Consuming it as a question would swallow the order.
+    expect(planAirportPickup({ text: '现在出发', timestamp }).intent).not.toBe('check-departure-time')
+    expect(planAirportPickup({ text: '现在就走', timestamp }).intent).not.toBe('check-departure-time')
+  })
+
+  it('keeps 开始导航 ahead of the departure question', () => {
+    expect(planAirportPickup({ text: '开始导航', timestamp }).intent).toBe('start-navigation')
+  })
+
+  it('does not consume open-ended weather questions outside the fixed forms', () => {
+    expect(planAirportPickup({ text: '明天天气怎么样', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '天气预报', timestamp }).intent).toBe('unknown')
+  })
+
   it('does not invent an event for unsupported language', () => {
     expect(planAirportPickup({ text: '今天天气怎么样', timestamp })).toMatchObject({
       intent: 'unknown',
@@ -198,5 +280,27 @@ describe('airport pickup Planner', () => {
       slotUpdates: {},
       proposedEvents: [],
     })
+  })
+
+  it.each(['提醒乘客带伞', '帮我提醒她们带伞', '提醒妈妈带伞吧'])('recognizes %s as the umbrella reminder answer', (text) => {
+    expect(planAirportPickup({ text, timestamp })).toMatchObject({
+      intent: 'send-weather-reminder',
+      slotUpdates: {},
+      proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+    })
+  })
+
+  it.each(['暂不处理', '先不用', '不用提醒了'])('recognizes %s as dismissing the advisory', (text) => {
+    expect(planAirportPickup({ text, timestamp })).toMatchObject({
+      intent: 'dismiss-weather-advisory',
+      slotUpdates: {},
+      proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+    })
+  })
+
+  it('keeps advisory-shaped fragments and mixed sentences off the advisory intents', () => {
+    expect(planAirportPickup({ text: '带伞', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '提醒乘客', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '暂不处理这个问题', timestamp }).intent).toBe('unknown')
   })
 })

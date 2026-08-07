@@ -96,8 +96,10 @@ export function resolveLandingMessageRetry(
   const sendSucceeded = input.sendSucceeded ?? true
   const errorCode = input.errorCode ?? 'SEND_FAILED'
   const pending = task.pendingConfirmation
+  // 'failed' is the retry window; 'scheduled' is a prepared message (the
+  // proactive umbrella reminder) already waiting on this same confirmation.
   if (
-    task.message.status !== 'failed'
+    (task.message.status !== 'failed' && task.message.status !== 'scheduled')
     || !task.flight
     || pending?.action !== 'send-message'
     || pending.confirmationId !== confirmationId
@@ -114,6 +116,9 @@ export function resolveLandingMessageRetry(
         pendingConfirmation: undefined,
         message: {
           ...task.message,
+          // A rejected prepared message frees the slot entirely; a rejected
+          // retry keeps its failed status for the next retry offer.
+          ...(task.message.status === 'scheduled' ? { status: 'idle' as const, pendingContactId: undefined } : {}),
           pendingMessageId: undefined,
           pendingText: undefined,
           idempotencyKey: undefined,

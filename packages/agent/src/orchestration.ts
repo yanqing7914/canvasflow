@@ -1,5 +1,6 @@
 import {
   chargingRecommendationOutputSchema,
+  flightArrivalsOutputSchema,
   flightStatusOutputSchema,
   getPreferencesOutputSchema,
   listUpcomingEventsOutputSchema,
@@ -7,7 +8,9 @@ import {
   routePlanOutputSchema,
   toolResultSchema,
   vehicleStatusOutputSchema,
+  weatherOutputSchema,
   type ChargingRecommendationOutput,
+  type FlightArrivalsOutput,
   type FlightStatusOutput,
   type GetPreferencesOutput,
   type ListUpcomingEventsOutput,
@@ -16,8 +19,9 @@ import {
   type ToolResult,
   type VehicleContext,
   type VehicleStatusOutput,
+  type WeatherOutput,
 } from '@canvasflow/schema'
-import { createProviderRegistry, DEMO_ORIGIN, type ProviderRegistry, type ToolName } from '@canvasflow/tools'
+import { ARRIVAL_CITY, createProviderRegistry, DEMO_ORIGIN, type ProviderRegistry, type ToolName } from '@canvasflow/tools'
 
 type SuccessfulToolResult<T> = ToolResult<T> & { ok: true; data: T; error: null }
 
@@ -25,10 +29,31 @@ export type ReadToolResults = Partial<{
   'family.resolve-members': SuccessfulToolResult<ResolveMembersOutput>
   'memory.get-preferences': SuccessfulToolResult<GetPreferencesOutput>
   'flight.get-status': SuccessfulToolResult<FlightStatusOutput>
+  /**
+   * The arrivals board offered before the driver has named a flight. Read on the
+   * turns that still lack the slot and dropped once it is filled: a board kept
+   * around after the pick would keep offering a choice already made.
+   */
+  'flight.list-arrivals': SuccessfulToolResult<FlightArrivalsOutput>
   'navigation.plan-route': SuccessfulToolResult<RoutePlanOutput>
   'vehicle.get-status': SuccessfulToolResult<VehicleStatusOutput>
   'charging.recommend': SuccessfulToolResult<ChargingRecommendationOutput>
   'calendar.list-upcoming': SuccessfulToolResult<ListUpcomingEventsOutput>
+  /**
+   * The check-schedule query turn's own reading. A separate key on purpose:
+   * 'calendar.list-upcoming' persists across events to feed the schedule
+   * strip, while this key exists only in the one published snapshot that
+   * answers the query — the strip and the card must never fight over data.
+   */
+  'calendar.query': SuccessfulToolResult<ListUpcomingEventsOutput>
+  'weather.get-current': SuccessfulToolResult<WeatherOutput>
+  /**
+   * The proactive advisory's own persisted reading. A separate key on purpose:
+   * 'weather.get-current' is the transient query answer that must vanish on
+   * the next event, while this one must survive every recompose for as long
+   * as the advisory is active.
+   */
+  'weather.advisory': SuccessfulToolResult<WeatherOutput>
 }>
 
 export class ReadToolOrchestrationError extends Error {
@@ -72,6 +97,24 @@ export interface ReadToolOrchestration {
     destination?: { id: string; name: string }
   }): TripPreparationReads
   resolveReturnTripPreferences(taskId: string, requestId: string, memberIds: string[]): ReturnTripPreferenceReads
+  /**
+   * On-demand weather read for the check-weather query intent. Optional so
+   * test doubles built for the trip flow keep compiling; a gateway facing an
+   * orchestration without it degrades to the weather-unavailable reply.
+   */
+  resolveWeather?(taskId: string, requestId: string, input: { locationId: string; at?: string }): SuccessfulToolResult<WeatherOutput>
+  /**
+   * On-demand calendar read for the check-schedule query intent. Optional for
+   * the same reason as resolveWeather; a missing implementation degrades to
+   * the schedule-unavailable reply.
+   */
+  resolveSchedule?(taskId: string, requestId: string, input: { date: string }): SuccessfulToolResult<ListUpcomingEventsOutput>
+  /**
+   * The arrivals board for the demo's one pickup city, on the fixture date.
+   * Optional for the same reason as the two above; without it the Agent asks
+   * for the flight number instead of offering a list.
+   */
+  resolveArrivals?(taskId: string, requestId: string, input?: { limit?: number }): SuccessfulToolResult<FlightArrivalsOutput>
 }
 
 export class ReadToolOrchestrator implements ReadToolOrchestration {
@@ -208,6 +251,45 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       requestId,
       { memberIds, scopes: ['cabin', 'media', 'address'] },
       toolResultSchema(getPreferencesOutputSchema),
+    )
+  }
+
+  resolveWeather(taskId: string, requestId: string, input: { locationId: string; at?: string }): SuccessfulToolResult<WeatherOutput> {
+    return this.#call(
+      'weather.get-current',
+      taskId,
+      requestId,
+      input,
+      toolResultSchema(weatherOutputSchema),
+    )
+  }
+
+  resolveSchedule(taskId: string, requestId: string, input: { date: string }): SuccessfulToolResult<ListUpcomingEventsOutput> {
+    return this.#call(
+      'calendar.list-upcoming',
+      taskId,
+      requestId,
+      input,
+      toolResultSchema(listUpcomingEventsOutputSchema),
+    )
+  }
+
+  /**
+   * The city and the date are the orchestrator's own, not the caller's: the
+   * demo has one pickup city and one fixture day, and letting a caller pass
+   * either would invite a board for a date the flight lookups cannot match.
+   */
+  resolveArrivals(taskId: string, requestId: string, input: { limit?: number } = {}): SuccessfulToolResult<FlightArrivalsOutput> {
+    return this.#call(
+      'flight.list-arrivals',
+      taskId,
+      requestId,
+      {
+        arrivalCityId: ARRIVAL_CITY.id,
+        date: this.#fixtureDate,
+        ...(input.limit === undefined ? {} : { limit: input.limit }),
+      },
+      toolResultSchema(flightArrivalsOutputSchema),
     )
   }
 

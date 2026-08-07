@@ -112,6 +112,19 @@ export const airportPickupTaskStateSchema = z.object({
       expiresAt: z.iso.datetime({ offset: true }).optional(),
     })
     .optional(),
+  /**
+   * The one proactive weather prompt of the trip. Set by the gateway when a
+   * flight update en route finds rain over the arrival window; `active` keeps
+   * the advisory card on the driving rail, `dismissed` and `resolved` (the
+   * umbrella reminder was armed) both retire it for good — the trip never
+   * re-prompts.
+   */
+  weatherAdvisory: z
+    .object({
+      status: z.enum(['active', 'dismissed', 'resolved']),
+      advisedAt: z.iso.datetime({ offset: true }),
+    })
+    .optional(),
   processedEventIds: z.array(z.string()),
   updatedAt: z.iso.datetime({ offset: true }),
 })

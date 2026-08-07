@@ -35,6 +35,12 @@ npm run test:e2e
 
 The end-to-end suite needs a browser once per machine: `npx playwright install chromium`.
 
+CI runs Chromium only. To check the layout specs against the other two engines —
+worth doing for any change to the floating glass panel — install them and set the
+gate: `npx playwright install webkit firefox`, then
+`PLAYWRIGHT_CROSS_BROWSER=1 npm run test:e2e -- --grep @layout`. Without the
+variable those projects do not exist, so the default run matches CI.
+
 ## Development Flow
 
 1. Sync the latest `dev` branch from `origin`. Start from `main` only for an owner-managed release or hotfix.

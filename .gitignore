@@ -14,3 +14,9 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
+
+# Written into the workspace by the Codex review job, alongside the checkout it
+# describes. Ignored so a local reproduction of that step cannot be committed.
+.codex-review-prompt.md
+.codex-review-diff.patch
+.codex-review-files.txt

@@ -14,6 +14,7 @@ export * from './flight-number'
 export * from './passengers'
 export * from './composer'
 export * from './landing-message-retry'
+export * from './lark-calendar-adapter'
 export * from './model-gateway'
 export * from './openai-compatible-model-adapter'
 export * from './gateway'
@@ -86,7 +87,16 @@ export function applyEvent(
       break
     case 'flight.updated':
       next.flight = event.flight
-      if (next.phase === 'driving-to-airport' && event.flight.status === 'landed' && next.message.autoNotifyAuthorized && !next.message.landingNoticeSent && next.message.status === 'idle') {
+      if (
+        next.phase === 'driving-to-airport'
+        && event.flight.status === 'landed'
+        && next.message.autoNotifyAuthorized
+        && !next.message.landingNoticeSent
+        // A sent umbrella reminder must not block the landing notice — only a
+        // message still in flight (scheduled/failed with pending state) does.
+        && (next.message.status === 'idle' || next.message.status === 'sent')
+        && !next.message.pendingMessageId
+      ) {
         // Never enter scheduled without a currently authorized recipient — otherwise
         // planEffects/UI can trap the task in a high-priority notify state with no recovery.
         const contactId = resolveAuthorizedLandingContact(next.passengers.memberIds, preferences)
@@ -134,7 +144,9 @@ export function applyEvent(
     case 'message.sent':
       if (next.message.pendingMessageId === event.messageId) {
         next.message.status = 'sent'
-        next.message.landingNoticeSent = true
+        // Only the landing notice claims the landing bookkeeping: an umbrella
+        // reminder sent en route must not block the real landing notify later.
+        if (event.messageId.endsWith(':landing')) next.message.landingNoticeSent = true
         next.message.sentAt = event.timestamp
         next.message.pendingMessageId = undefined
         next.message.pendingText = undefined

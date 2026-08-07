@@ -1,4 +1,4 @@
-import { uiSpecSchema, type AirportPickupTaskState, type RouteSketch, type UISpec } from '@canvasflow/schema'
+import { listUpcomingEventsOutputSchema, uiSpecSchema, weatherOutputSchema, type AirportPickupTaskState, type ListUpcomingEventsOutput, type RouteSketch, type UISpec, type WeatherOutput } from '@canvasflow/schema'
 import {
   chargingDensityForSpeed,
   chargingStation,
@@ -72,7 +72,29 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
         ]
       : []
   }
-  else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
+  else if (task.message.status === 'scheduled') {
+    const awaitingConfirmation = task.pendingConfirmation?.action === 'send-message'
+    title = awaitingConfirmation ? '确认发送提醒' : '落地通知'
+    density = 'minimal'
+    priority = 'high'
+    components = [{
+      id: 'message-preview',
+      type: 'message-preview',
+      props: {
+        contactLabel: task.passengers.names[0] ?? '乘客',
+        textPreview: task.message.pendingText ?? '我已到达机场，正在接你们。',
+        status: 'scheduled',
+        cancellable: !awaitingConfirmation,
+      },
+      ...(awaitingConfirmation ? { actions: ['confirm-send-message', 'reject-send-message'] } : {}),
+    }]
+    actions = awaitingConfirmation
+      ? [
+          { id: 'confirm-send-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } },
+          { id: 'reject-send-message', label: '取消发送', style: 'secondary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'reject' } },
+        ]
+      : []
+  }
   else if (task.message.status === 'failed') {
     title = '落地通知失败'
     density = 'minimal'
@@ -195,21 +217,64 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   else if (task.navigation) {
     density = 'compact'
     const routeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
-    const underway = withRouteMap([{
-      id: 'navigation-summary',
-      type: 'navigation-summary',
-      props: {
-        routeId: task.navigation.routeId,
-        destination: task.navigation.destination,
-        eta: task.navigation.eta,
-        distanceKm: 32,
-        estimatedBatteryAtArrival: 27,
-      },
-    }], routeSketch, task.navigation.destination)
-    components = underway.components
-    layout = underway.layout
+    // Mirrors composeAgentSpec's advisory takeover; fixtures-conformance locks
+    // the two together. The reading rides toolResults['weather.advisory'].
+    const advisoryWeather = task.weatherAdvisory?.status === 'active'
+      ? successfulWeather(context.toolResults?.['weather.advisory'])
+      : undefined
+    if (advisoryWeather) {
+      const advisoryCard = {
+        ...weatherCard(task, advisoryWeather),
+        id: 'weather-advisory',
+        actions: ['send-umbrella-reminder', 'dismiss-weather-advisory'],
+      }
+      const underway = withRouteMap([advisoryCard], routeSketch, task.navigation.destination)
+      components = underway.components
+      layout = underway.layout
+      actions = [
+        { id: 'send-umbrella-reminder', label: '提醒乘客带伞', style: 'primary', event: { type: 'agent-message', text: '提醒乘客带伞' } },
+        { id: 'dismiss-weather-advisory', label: '暂不处理', style: 'secondary', event: { type: 'agent-message', text: '暂不处理' } },
+      ]
+    } else {
+      const underway = withRouteMap([{
+        id: 'navigation-summary',
+        type: 'navigation-summary',
+        props: {
+          routeId: task.navigation.routeId,
+          destination: task.navigation.destination,
+          eta: task.navigation.eta,
+          distanceKm: 32,
+          estimatedBatteryAtArrival: 27,
+        },
+      }], routeSketch, task.navigation.destination)
+      components = underway.components
+      layout = underway.layout
+    }
   }
   else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: flightStatusProps(task.flight) }] }
+  const weather = successfulWeather(context.toolResults?.['weather.get-current'])
+  const scheduleQuery = successfulCalendarQuery(context.toolResults?.['calendar.query'])
+  const queryAnswerable = task.phase !== 'collecting-information' && task.phase !== 'cancelled' && task.phase !== 'completed'
+  const queryCard = queryAnswerable
+    ? weather
+      ? weatherCard(task, weather)
+      : scheduleQuery
+        ? scheduleCard(scheduleQuery.data.events, scheduleQuery.meta.provider === 'live' ? 'live' : 'fixture')
+        : undefined
+    : undefined
+  if (queryCard) {
+    const stripIndex = components.findIndex((component) => component.id === 'schedule-strip')
+    if (stripIndex >= 0) {
+      // The query turn borrows the auxiliary band's slot on a brief already at
+      // its card budget; the reading is transient, so the strip returns next event.
+      components = components.map((component, index) => index === stripIndex ? queryCard : component)
+    } else {
+      components = [...components, queryCard]
+      if (layout?.type === 'split') {
+        layout = { ...layout, slots: { ...layout.slots, secondary: [...layout.slots.secondary, queryCard.id] } }
+      }
+    }
+  }
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId, taskRevision: task.taskRevision, uiRevision: nextUiRevision,
     phase: task.phase, title, presentation: { mode: 'replace', density, theme: 'dark', priority },
@@ -336,6 +401,92 @@ function finitePercent(value: unknown): number | undefined {
 
 function finiteNonNegative(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, value) : undefined
+}
+
+const weatherConditionLabels: Record<WeatherOutput['condition'], string> = {
+  sunny: '晴',
+  cloudy: '多云',
+  overcast: '阴',
+  'light-rain': '小雨',
+  'heavy-rain': '大雨',
+  fog: '有雾',
+}
+
+/** Validated weather.get-current data, or undefined for anything unusable. */
+function successfulWeather(value: unknown): WeatherOutput | undefined {
+  if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return undefined
+  const parsed = weatherOutputSchema.safeParse((value as { data?: unknown }).data)
+  return parsed.success ? parsed.data : undefined
+}
+
+/** Validated calendar.query result with its provider provenance, or undefined. */
+function successfulCalendarQuery(
+  value: unknown,
+): { data: ListUpcomingEventsOutput; meta: { provider: string } } | undefined {
+  if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return undefined
+  const parsed = listUpcomingEventsOutputSchema.safeParse((value as { data?: unknown }).data)
+  if (!parsed.success) return undefined
+  const meta = (value as { meta?: unknown }).meta
+  const provider = typeof meta === 'object' && meta !== null && typeof (meta as { provider?: unknown }).provider === 'string'
+    ? (meta as { provider: string }).provider
+    : 'fixture'
+  return { data: parsed.data, meta: { provider } }
+}
+
+/** Rows the schedule answer shows before handing the tail to moreCount. */
+const MAX_SCHEDULE_CARD_EVENTS = 4
+
+/** Mirrors composeAgentSpec's scheduleCardComponent; fixtures-conformance locks the two together. */
+function scheduleCard(
+  events: ListUpcomingEventsOutput['events'],
+  freshness: 'live' | 'cached' | 'fixture' = 'fixture',
+): UISpec['components'][number] {
+  const ordered = [...events].sort((left, right) => left.startAt.localeCompare(right.startAt))
+  const shown = ordered.slice(0, MAX_SCHEDULE_CARD_EVENTS)
+  const moreCount = ordered.length - shown.length
+  return {
+    id: 'schedule-card',
+    type: 'schedule-card',
+    props: {
+      dateLabel: '今天',
+      events: shown.map((event) => ({
+        eventId: event.eventId,
+        title: event.title,
+        startAt: event.startAt,
+        ...(event.endAt ? { endAt: event.endAt } : {}),
+        ...(event.location ? { location: event.location } : {}),
+      })),
+      ...(moreCount > 0 ? { moreCount } : {}),
+      ...(shown.length === 0 ? { emptyCopy: '今天没有更多安排了' } : {}),
+      freshness,
+    },
+  }
+}
+
+/** Mirrors composeAgentSpec's weatherCardComponent; fixtures-conformance locks the two together. */
+function weatherCard(task: AirportPickupTaskState, data: WeatherOutput): UISpec['components'][number] {
+  const arrivalAhead = !task.passengers.confirmedOnboard
+    && task.flight !== undefined
+    && task.flight.status !== 'landed'
+    && task.flight.status !== 'cancelled'
+  const arrivalClock = arrivalAhead ? task.flight!.estimatedArrival.match(/T(\d{2}:\d{2})/)?.[1] : undefined
+  const raining = data.condition === 'light-rain' || data.condition === 'heavy-rain'
+  const advising = raining && !task.passengers.confirmedOnboard
+  return {
+    id: 'weather-card',
+    type: 'weather-card',
+    props: {
+      location: data.locationName,
+      timeLabel: arrivalClock ? `${arrivalClock} 到达时` : '现在',
+      temperatureC: data.temperatureC,
+      condition: data.condition,
+      conditionLabel: weatherConditionLabels[data.condition],
+      ...(data.windLevel !== undefined ? { windLevel: data.windLevel } : {}),
+      ...(data.precipitationChance !== undefined ? { precipitationChance: data.precipitationChance } : {}),
+      ...(advising ? { advisory: '到达时段有雨，建议家人在到达层室内等候。' } : {}),
+      freshness: 'fixture',
+    },
+  }
 }
 
 /** Matches the memory.get-preferences output contract: any applicable cabin/media preference counts. */

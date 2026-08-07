@@ -1,4 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react'
+import { useState } from 'react'
 import {
   actionSpecSchema,
   componentSpecSchema,
@@ -10,6 +11,7 @@ import {
   AlertIcon,
   ArrowRightIcon,
   ChargingIcon,
+  ChevronUpIcon,
   ClockIcon,
   CompleteIcon,
   InfoIcon,
@@ -18,8 +20,10 @@ import {
   MessageIcon,
   NavigationIcon,
   SeatIcon,
+  WeatherIcon,
 } from './icons'
 import { ComponentSurface } from './ComponentSurface'
+import { FlightChoicesCard } from './FlightChoicesCard'
 import { RouteMapCard } from './RouteMapCard'
 import { ROUTE_MAP_DRAWING_OPTIONS, ROUTE_SKETCH_VIEWBOX, buildRouteSketchDrawing } from './route-sketch'
 
@@ -157,16 +161,23 @@ function Metric({
   value,
   detail,
   className = '',
+  valueKind = 'figure',
 }: {
   label: string
   value: ReactNode
   detail?: ReactNode
   className?: string
+  // `.ui-metric__value` is a tabular numeral face at a numeral size. A value that is
+  // prose rather than a figure asks for the body face at a reading size instead, or
+  // it runs out of its grid column and ellipsises.
+  valueKind?: 'figure' | 'text'
 }) {
   return (
     <div className={`ui-metric${className ? ` ${className}` : ''}`}>
       <span className="ui-metric__label">{label}</span>
-      <strong className="ui-metric__value">{value}</strong>
+      <strong className="ui-metric__value">
+        {valueKind === 'text' ? <span className="ui-metric__value-text">{value}</span> : value}
+      </strong>
       {detail !== undefined && <small className="ui-metric__detail">{detail}</small>}
     </div>
   )
@@ -227,25 +238,73 @@ function FlightStatusCard({ component }: { component: Extract<ComponentSpec, { t
   )
 }
 
-function NavigationSummaryCard({ component }: { component: Extract<ComponentSpec, { type: 'navigation-summary' }> }) {
+/**
+ * The trip's navigation brief, and — where it floats over a map — the one card
+ * the driver can put away.
+ *
+ * `floating` is the renderer's read of the same condition the stylesheet paints
+ * on: a split layout, a drawn map in it, and this card alone in the rail. Only
+ * there is there anything underneath worth uncovering, so only there does the
+ * control exist. Everywhere else the card renders exactly as it did.
+ *
+ * Collapsing hides the route band and the two figures and keeps the header and
+ * the ETA, because those are the answers a driver glances for — where am I going
+ * and when do I get there. Nothing is unmounted: the stylesheet hides the detail
+ * inside the same breakpoint that paints the panel, so a window narrowed below
+ * it shows the whole card again rather than stranding the driver with a
+ * collapsed card and no control to reopen it.
+ */
+function NavigationSummaryCard({
+  component,
+  floating,
+}: {
+  component: Extract<ComponentSpec, { type: 'navigation-summary' }>
+  floating: boolean
+}) {
   const { props } = component
+  // The driver's choice, not the Agent's: a new UISpec for the same trip leaves
+  // it alone, and it resets when the phase changes the screen out from under it.
+  const [collapsed, setCollapsed] = useState(false)
+  const detailId = `${component.id}-detail`
   return (
-    <ComponentSurface component={component} className="ui-navigation-brief">
+    <ComponentSurface
+      component={component}
+      className="ui-navigation-brief"
+      data={floating ? { 'data-panel': collapsed ? 'collapsed' : 'expanded' } : undefined}
+    >
       <header className="ui-navigation-brief__header">
         <span className="ui-navigation-brief__glyph" aria-hidden="true"><NavigationIcon /></span>
         <div>
           <p className="ui-navigation-brief__eyebrow">正在前往</p>
           <h2 className="ui-navigation-brief__destination">{props.destination}</h2>
         </div>
+        {floating && (
+          <button
+            className="ui-navigation-brief__fold"
+            type="button"
+            aria-controls={detailId}
+            aria-expanded={!collapsed}
+            onClick={() => setCollapsed((wasCollapsed) => !wasCollapsed)}
+          >
+            {/* A chevron and no visible label: the destination is already at the
+                width the rail can hold, and a labelled button beside it would
+                push it to an ellipsis. The label is the button's whole accessible
+                name, so nothing is lost to anyone reading by screen reader. */}
+            <span className="sr-only">{collapsed ? '展开面板' : '收起面板'}</span>
+            <ChevronUpIcon size={22} aria-hidden="true" />
+          </button>
+        )}
       </header>
       <section className="ui-navigation-brief__eta ui-navigation-hero" aria-label="预计到达">
         <span className="ui-metric__label">预计到达</span>
         <time className="ui-navigation-eta" dateTime={props.eta}>{formatTime(props.eta)}</time>
       </section>
-      <RouteSketchBand destination={props.destination} sketch={props.routeSketch} />
-      <div className="ui-navigation-brief__facts ui-route-facts">
-        <Metric label="剩余里程" value={formatDistance(props.distanceKm)} />
-        <Metric label="到达电量" value={formatPercent(props.estimatedBatteryAtArrival)} />
+      <div className="ui-navigation-brief__detail" id={detailId}>
+        <RouteSketchBand destination={props.destination} sketch={props.routeSketch} />
+        <div className="ui-navigation-brief__facts ui-route-facts">
+          <Metric label="剩余里程" value={formatDistance(props.distanceKm)} />
+          <Metric label="到达电量" value={formatPercent(props.estimatedBatteryAtArrival)} />
+        </div>
       </div>
     </ComponentSurface>
   )
@@ -432,7 +491,9 @@ function CabinProfileCard({ component }: { component: Extract<ComponentSpec, { t
       <div className="ui-cabin-brief__facts ui-cabin-grid">
         {props.temperatureC !== undefined && <Metric label="温度" value={`${props.temperatureC}°C`} />}
         {props.fanLevel !== undefined && <Metric label="风量" value={`${props.fanLevel} 档`} />}
-        {props.mediaTitle && <Metric label="媒体" value={props.mediaTitle} detail={<MediaIcon size={16} />} />}
+        {props.mediaTitle && (
+          <Metric label="媒体" value={props.mediaTitle} valueKind="text" detail={<MediaIcon size={16} />} />
+        )}
       </div>
       <div className="ui-cabin-brief__state ui-detail-row">
         <span>已应用</span>
@@ -559,6 +620,61 @@ function ScheduleStripCard({ component }: { component: Extract<ComponentSpec, { 
   )
 }
 
+/**
+ * The on-demand weather answer. One horizontal band — glyph, condition,
+ * temperature, facts, one advisory — sized like the schedule strip whose slot
+ * it borrows on a full brief, so the fixed frame never has to grow for it.
+ */
+function WeatherCard({ component }: { component: Extract<ComponentSpec, { type: 'weather-card' }> }) {
+  const { props } = component
+  return (
+    <ComponentSurface component={component} className={`ui-weather-brief ui-card--weather-${props.condition}`}>
+      <header className="ui-weather-brief__header">
+        <span className="ui-weather-brief__glyph" aria-hidden="true"><WeatherIcon size={18} /></span>
+        <p className="ui-weather-brief__eyebrow">{props.timeLabel} · {props.location}</p>
+      </header>
+      <div className="ui-weather-brief__reading">
+        <strong className="ui-weather-brief__condition">{props.conditionLabel}</strong>
+        <strong className="ui-weather-brief__temperature">{Math.round(props.temperatureC)}°C</strong>
+        {props.windLevel !== undefined && <span className="ui-weather-brief__fact">风力 {props.windLevel} 级</span>}
+        {props.precipitationChance !== undefined && <span className="ui-weather-brief__fact">降水 {Math.round(props.precipitationChance)}%</span>}
+      </div>
+      {props.advisory && <p className="ui-weather-brief__advisory">{props.advisory}</p>}
+    </ComponentSurface>
+  )
+}
+
+/**
+ * The on-demand schedule answer: the day's remaining events on one band, in
+ * the same single-row posture as the strip whose slot it borrows. Each entry
+ * is time + title (+ location); the tail beyond the cap collapses to a count.
+ */
+function ScheduleCard({ component }: { component: Extract<ComponentSpec, { type: 'schedule-card' }> }) {
+  const { props } = component
+  return (
+    <ComponentSurface component={component} className="ui-schedule-card">
+      <header className="ui-schedule-card__header">
+        <span className="ui-schedule-card__glyph" aria-hidden="true"><ClockIcon size={18} /></span>
+        <p className="ui-schedule-card__eyebrow">{props.dateLabel}的日程</p>
+      </header>
+      {props.events.length === 0 ? (
+        <p className="ui-schedule-card__empty">{props.emptyCopy ?? '今天没有更多安排了'}</p>
+      ) : (
+        <ol className="ui-schedule-card__list" aria-label="今日日程列表">
+          {props.events.map((event) => (
+            <li className="ui-schedule-card__event" key={event.eventId}>
+              <time className="ui-schedule-card__time" dateTime={event.startAt}>{formatTime(event.startAt)}</time>
+              <span className="ui-schedule-card__title">{event.title}</span>
+              {event.location && <span className="ui-schedule-card__location">{event.location}</span>}
+            </li>
+          ))}
+        </ol>
+      )}
+      {props.moreCount !== undefined && <span className="ui-schedule-card__more">还有 {props.moreCount} 项</span>}
+    </ComponentSurface>
+  )
+}
+
 function AlertCard({ component }: { component: Extract<ComponentSpec, { type: 'alert' }> }) {
   return (
     <ComponentSurface
@@ -632,10 +748,22 @@ function ComponentCard({
   component,
   slotId,
   phase,
+  theme,
+  actionById,
+  pending,
+  onAction,
+  floating,
 }: {
   component?: unknown
   slotId: string
   phase: UISpec['phase']
+  theme: UISpec['presentation']['theme']
+  /** Only cards whose own contents are the controls need these. */
+  actionById: Map<string, unknown>
+  pending: boolean
+  onAction: UISpecRendererProps['onAction']
+  /** True only for the one card the stylesheet floats over the map as a panel. */
+  floating: boolean
 }) {
   const result = componentSpecSchema.safeParse(component)
   if (!result.success) return <ComponentFallback component={component} slotId={slotId} />
@@ -643,14 +771,14 @@ function ComponentCard({
   switch (result.data.type) {
     case 'pickup-overview': return <PickupOverviewCard component={result.data} />
     case 'flight-status': return <FlightStatusCard component={result.data} />
-    case 'navigation-summary': return <NavigationSummaryCard component={result.data} />
+    case 'navigation-summary': return <NavigationSummaryCard component={result.data} floating={floating} />
     case 'route-map': {
       // Geometry that survived the schema can still be undrawable — every point on
       // one spot, say. A map with no line in it is an empty frame, so the slot goes
       // to the same fallback a malformed component would get.
       const drawing = buildRouteSketchDrawing(result.data.props.routeSketch, ROUTE_MAP_DRAWING_OPTIONS)
       return drawing
-        ? <RouteMapCard component={result.data} drawing={drawing} />
+        ? <RouteMapCard component={result.data} drawing={drawing} theme={theme} />
         : <ComponentFallback component={component} slotId={slotId} />
     }
     case 'charging-recommendation': return <ChargingRecommendationCard component={result.data} />
@@ -659,6 +787,18 @@ function ComponentCard({
     case 'cabin-profile': return <CabinProfileCard component={result.data} />
     case 'task-progress': return <TaskProgressCard component={result.data} phase={phase} />
     case 'schedule-strip': return <ScheduleStripCard component={result.data} />
+    case 'weather-card': return <WeatherCard component={result.data} />
+    case 'schedule-card': return <ScheduleCard component={result.data} />
+    case 'flight-choices':
+      return (
+        <FlightChoicesCard
+          component={result.data}
+          actionById={actionById}
+          pending={pending}
+          onAction={onAction}
+        />
+      )
+    case 'departure-plan': return <DeparturePlanCard component={result.data} />
     case 'alert': return <AlertCard component={result.data} />
     case 'status-banner': return <StatusBannerCard component={result.data} />
   }
@@ -706,6 +846,49 @@ function ActionButton({
 function componentActionIds(component: unknown): string[] {
   if (!isRecord(component) || !Array.isArray(component.actions)) return []
   return component.actions.filter((actionId): actionId is string => typeof actionId === 'string' && actionId.length > 0)
+}
+
+/**
+ * Action ids a card draws inside itself, so the slot's button group does not draw
+ * them a second time.
+ *
+ * The ids stay on the component's `actions` list either way — that list is what
+ * keeps them out of the global bar and what the on-screen action count reads — so
+ * this only answers who renders them, not who owns them.
+ */
+function cardOwnedActionIds(component: ComponentSpec): string[] {
+  return component.type === 'flight-choices'
+    ? component.props.choices.map((choice) => choice.actionId)
+    : []
+}
+
+/**
+ * The on-demand departure answer: one clock time, and the three facts it was
+ * worked backwards from.
+ *
+ * The time leads because it is the only thing the driver has to act on, and the
+ * facts follow because a recommendation nobody can check is one they have to take
+ * on faith. There is deliberately no "leave now" verdict — the demo's fixture
+ * timeline and the wall clock disagree, so the card gives the numbers and the
+ * driver keeps the decision.
+ */
+function DeparturePlanCard({ component }: { component: Extract<ComponentSpec, { type: 'departure-plan' }> }) {
+  const { props } = component
+  return (
+    <ComponentSurface component={component} className="ui-departure-plan">
+      <header className="ui-departure-plan__header">
+        <span className="ui-departure-plan__glyph" aria-hidden="true"><ClockIcon size={18} /></span>
+        <p className="ui-departure-plan__eyebrow">建议出发</p>
+      </header>
+      <strong className="ui-departure-plan__time">{props.departAtLabel}</strong>
+      <ul className="ui-departure-plan__facts">
+        <li className="ui-departure-plan__fact">{props.arrivalLabel}</li>
+        <li className="ui-departure-plan__fact">路上 {props.driveMinutes} 分钟</li>
+        <li className="ui-departure-plan__fact">提前 {props.bufferMinutes} 分钟到</li>
+        {props.viaLabel && <li className="ui-departure-plan__fact ui-departure-plan__fact--via">{props.viaLabel}</li>}
+      </ul>
+    </ComponentSurface>
+  )
 }
 
 function resolveLayout(spec: UISpec, runtimeComponents: unknown[]): {
@@ -781,6 +964,43 @@ function ActionGroup({
   )
 }
 
+/**
+ * The one card the stylesheet floats over the map, or `undefined` where nothing
+ * floats.
+ *
+ * This is the CSS guard read back in TypeScript: a split layout, a route map
+ * that actually drew, and a rail carrying exactly one card. It has to agree with
+ * the stylesheet because the fold control it gates only makes sense over a map —
+ * a card that is an ordinary column has nothing behind it to uncover.
+ *
+ * Only a navigation summary qualifies, which the stylesheet also assumes: it is
+ * the one card type painted as glass, and a fold control on an unpainted card in
+ * the rail would put a chrome button on plain text over a basemap.
+ *
+ * The breakpoint is deliberately not read here. The control renders into the DOM
+ * whatever the width and the stylesheet hides it, along with the collapse it
+ * drives, below the width where the panel exists — so a narrowed window shows
+ * the whole card again instead of a collapsed one with no way back.
+ */
+function floatingPanelId(
+  layout: { type: LayoutType; slots: Array<{ name: SlotName; ids: string[] }> },
+  componentById: Map<string, unknown>,
+): string | undefined {
+  if (layout.type !== 'split') return undefined
+  const rail = layout.slots.find((slot) => slot.name === 'secondary')?.ids ?? []
+  if (rail.length !== 1) return undefined
+  const drawsAMap = layout.slots.some((slot) => slot.ids.some((id) => {
+    const parsed = componentSpecSchema.safeParse(componentById.get(id))
+    if (!parsed.success || parsed.data.type !== 'route-map') return false
+    // An undrawable sketch renders the fallback instead, which the stylesheet's
+    // `:has(.ui-card--route-map)` does not match and no panel floats over.
+    return buildRouteSketchDrawing(parsed.data.props.routeSketch, ROUTE_MAP_DRAWING_OPTIONS) !== undefined
+  }))
+  if (!drawsAMap) return undefined
+  const parsedRail = componentSpecSchema.safeParse(componentById.get(rail[0]!))
+  return parsedRail.success && parsedRail.data.type === 'navigation-summary' ? rail[0] : undefined
+}
+
 export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRendererProps) {
   const runtimeComponents: unknown[] = Array.isArray(spec.components) ? spec.components : []
   const runtimeActions: unknown[] = Array.isArray(spec.actions) ? spec.actions : []
@@ -831,6 +1051,7 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
   const renderedActionCount = renderedComponentActionCount + globalActionIds.length
   const fillsTaskSurface = renderedComponentCount === 1
   const theme = spec.presentation?.theme ?? 'dark'
+  const panelId = floatingPanelId(layout, componentById)
 
   return (
     <section
@@ -856,10 +1077,22 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
             {slot.ids.map((componentId, index) => {
               const component = componentById.get(componentId)
               const parsedComponent = componentSpecSchema.safeParse(component)
-              const actionIds = parsedComponent.success ? componentActionIds(parsedComponent.data) : []
+              const ownedByCard = parsedComponent.success ? new Set(cardOwnedActionIds(parsedComponent.data)) : new Set<string>()
+              const actionIds = parsedComponent.success
+                ? componentActionIds(parsedComponent.data).filter((actionId) => !ownedByCard.has(actionId))
+                : []
               return (
                 <div className="ui-component" data-component-order={index} key={`${componentId}-${index}`}>
-                  <ComponentCard component={component} slotId={componentId} phase={spec.phase} />
+                  <ComponentCard
+                    component={component}
+                    slotId={componentId}
+                    phase={spec.phase}
+                    theme={theme}
+                    actionById={actionById}
+                    pending={pending}
+                    onAction={onAction}
+                    floating={componentId === panelId}
+                  />
                   <ActionGroup
                     className="ui-card__actions"
                     actionIds={actionIds}

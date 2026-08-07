@@ -49,9 +49,11 @@ const AGREE = [
   'flight-landed',
   'message-scheduled',
   'passengers-onboard',
+  'schedule-checked',
   'task-created',
   'trip-completed',
   'waiting-for-passengers',
+  'weather-checked',
 ] as const
 
 // Fixtures that capture composeFallbackSpec (a degraded template), NOT the normal
@@ -122,6 +124,6 @@ describe('composeAgentSpec fixture conformance', () => {
     const categorized = new Set<string>([...AGREE, ...DIVERGENT, ...FALLBACK])
     expect(files.filter((file) => !categorized.has(file))).toEqual([])
     expect(categorized.size).toBe(files.length)
-    expect(files).toHaveLength(16)
+    expect(files).toHaveLength(18)
   })
 })

@@ -16,9 +16,10 @@ import type {
 import type { SpeechControllerDeps } from '@canvasflow/voice'
 import { createBrowserRecognition, isRecognitionSupported, isSecureContextOk } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
-import { AgentApiClient, defaultDemoVehicleContext } from './agent-client'
+import { AgentApiClient, demoVehicleContext, isNightAt } from './agent-client'
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
+import { GLASS_TIERS, useGlassTier } from './ui/glass-capability'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 import {
   createFixtureRecognition,
@@ -118,7 +119,7 @@ export default function App({
   api = defaultClient,
   initialTask,
   composeContext = {},
-  initialVehicleContext = defaultDemoVehicleContext,
+  initialVehicleContext,
   voiceEnabled = true,
   speech,
   fixtureAudio,
@@ -135,12 +136,19 @@ export default function App({
   fixtureAudio?: FixtureAudioFactory
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
+  const startingVehicleContext = initialVehicleContext ?? demoVehicleContext()
   const [response, setResponse] = useState<AgentResponse>()
   const [text, setText] = useState('我现在要去机场接妈妈和豆豆')
   const [stepIndex, setStepIndex] = useState(0)
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
-  const [vehicleContext, setVehicleContext] = useState(initialVehicleContext)
+  const [vehicleContext, setVehicleContext] = useState(startingVehicleContext)
+  // Which light condition the car reports. `auto` is what a car does — read the
+  // world and say what it sees; the two pinned values exist so a walkthrough or
+  // a screenshot can show either cabin at any hour of the day.
+  const [lighting, setLighting] = useState<'auto' | 'day' | 'night'>(
+    initialVehicleContext ? (initialVehicleContext.isNight ? 'night' : 'day') : 'auto',
+  )
   const [controlsOpen, setControlsOpen] = useState(false)
   const [keyboardRequested, setKeyboardRequested] = useState(false)
   const pendingRef = useRef(false)
@@ -220,8 +228,13 @@ export default function App({
     const trimmed = value.trim()
     if (!trimmed || pendingRef.current) return { sent: false }
     if (!response && !localOnly) {
+      // Auto follows the clock at submission time, not at page-load time. A demo
+      // left open across the day/night boundary must report the current cabin.
+      const createVehicleContext = lighting === 'auto'
+        ? { ...vehicleContext, isNight: isNightAt(new Date()) }
+        : vehicleContext
       const created = await run(() => api.create(trimmed, {
-        vehicleContext,
+        vehicleContext: createVehicleContext,
         ...(meta ? { source: meta.source } : {}),
         ...(meta?.confidence === undefined ? {} : { confidence: meta.confidence }),
       }))
@@ -245,7 +258,7 @@ export default function App({
     const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
     const next = await run(() => api.event(response.task, { type: 'user.input', text: trimmed }))
     if (!next) return { sent: false }
-    if (nextTimelineIndex !== undefined) setStepIndex(nextTimelineIndex)
+    if (nextTimelineIndex !== undefined && movedTheTrip(response, next)) setStepIndex(nextTimelineIndex)
     setText('')
     setDraftProtected(false)
     return { sent: true, speak: spokenReply(next) }
@@ -431,6 +444,19 @@ export default function App({
     }
   }
 
+  /**
+   * Restate the car's light condition. The client only reports what the car
+   * senses — whether that becomes a dark cabin is the Agent's call, carried
+   * back in `presentation.theme`, so nothing here touches the rendered theme.
+   */
+  function selectLighting(next: 'auto' | 'day' | 'night') {
+    setLighting(next)
+    setVehicleContext((current) => ({
+      ...current,
+      isNight: next === 'auto' ? isNightAt(new Date()) : next === 'night',
+    }))
+  }
+
   function handleAction(actionId: string, componentId: string) {
     if (pendingRef.current) return
     if (!response) {
@@ -450,6 +476,16 @@ export default function App({
     const actionEvent = action?.event
     if (actionEvent?.type === 'confirmation') {
       void run(() => api.confirmation(response.task, actionEvent.confirmationId, actionEvent.decision))
+    } else if (actionEvent?.type === 'agent-message') {
+      // Pressing a row is the driver saying what it says. It travels as the same
+      // user input the composer sends, so the planner sees one kind of answer and
+      // a card can never set a slot that typing could not. The draft field is
+      // left alone: the pick is not the sentence they were writing.
+      const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
+      void run(() => api.event(response.task, { type: 'user.input', text: actionEvent.text })).then((next) => {
+        if (!next || nextTimelineIndex === undefined || !movedTheTrip(response, next)) return
+        setStepIndex(nextTimelineIndex)
+      })
     } else {
       const nextTimelineIndex = actionId === 'start-navigation'
         ? nextIndexForTimelineEvent('navigation.started')
@@ -459,6 +495,19 @@ export default function App({
         setStepIndex(consumeAdvisoryContext(nextTimelineIndex))
       })
     }
+  }
+
+  /**
+   * Whether a turn moved the trip, as opposed to answering a question about it.
+   * Asking for the weather or the day's schedule is answered on the spot and the
+   * task is deliberately left exactly as it was — same revision, nothing added to
+   * the processed events. The demo player's cursor tracks the fixture timeline, so
+   * a turn that did not move the trip must not move the cursor either: doing so
+   * would spend a step the timeline still owes and strand the rest of the drive.
+   */
+  function movedTheTrip(before: AgentResponse, after: AgentResponse): boolean {
+    return after.task.taskRevision !== before.task.taskRevision
+      || after.task.processedEventIds.length !== before.task.processedEventIds.length
   }
 
   function nextIndexForTimelineEvent(type: AirportPickupEvent['type']): number | undefined {
@@ -605,6 +654,16 @@ export default function App({
   const phaseIdentity = task ? phaseIdentityLabels[task.phase] : '等待创建任务'
   const tripTitleIsContextual = spec ? hasContextualTripTitle(spec) : false
   const tripTitle = spec?.title || '机场接人'
+  // Model provenance comes straight from the Agent's response envelope: it is only
+  // present when a validated model plan was actually applied, so showing it never
+  // overstates what the model did. Rules-only turns render nothing.
+  const modelUsed = response?.meta.modelUsed
+
+  // How expensive the floating panel's blur is allowed to be on this machine.
+  // Decided from what the device reports about itself rather than from which
+  // engine is running, so a capable browser is never punished for being the
+  // minority one — see `glass-capability.ts`.
+  const glassTier = useGlassTier()
 
   return (
     <main
@@ -614,6 +673,8 @@ export default function App({
       data-density={spec?.presentation.density}
       data-theme={spec?.presentation.theme}
       data-priority={spec?.presentation.priority}
+      data-glass={glassTier}
+      style={GLASS_TIERS[glassTier]}
     >
       <section className="cockpit-stage" aria-label="机场接人任务">
         <section
@@ -676,6 +737,16 @@ export default function App({
 
           {/* Rendered unconditionally so the region exists before the first announcement. */}
           <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
+
+          {/* Provenance is a task-level fact: the Agent persists the model ID with
+              the task snapshot once a validated model plan is applied, so this line
+              states participation, not per-turn authorship. Rules-only tasks leave
+              meta.modelUsed unset and this line off screen. */}
+          {modelUsed && (
+            <p className="model-provenance" data-model-used={modelUsed} aria-label="模型参与说明">
+              模型 <strong>{modelUsed}</strong> 参与了本任务的输入规范化
+            </p>
+          )}
 
           {composerReason ? (
             <form
@@ -776,6 +847,7 @@ export default function App({
               <div><dt>界面版本</dt><dd>{spec ? `uiRevision ${spec.uiRevision}` : '—'}</dd></div>
               <div><dt>信息密度</dt><dd>{spec?.presentation.density ?? '—'}</dd></div>
               <div><dt>优先级</dt><dd>{spec?.presentation.priority ?? '—'}</dd></div>
+              <div><dt>规划来源</dt><dd>{response ? (modelUsed ?? '规则') : '—'}</dd></div>
             </dl>
 
             <div
@@ -792,11 +864,40 @@ export default function App({
               </div>
             </div>
 
-            {effects.length > 0 && (
-              <p className="console-effects" aria-label="Effect receipts">
-                {effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ')}
+            {/* Always mounted with a fixed height: receipts stream in over SSE while
+                the drawer is open, and a conditionally inserted line here used to
+                shove the advance button mid-click — the demo player (and any human
+                aiming at it) then pressed empty space. */}
+            <p className="console-effects" aria-label="Effect receipts" data-empty={effects.length === 0 || undefined}>
+              {effects.length > 0 ? effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ') : '暂无回执'}
+            </p>
+
+            <div className="console-lighting" role="group" aria-label="车外光线">
+              <span className="console-lighting__title">车外光线</span>
+              <div className="console-lighting__actions">
+                {([
+                  { id: 'auto', label: '跟随时间' },
+                  { id: 'day', label: '白天' },
+                  { id: 'night', label: '夜间' },
+                ] as const).map((option) => (
+                  <button
+                    key={option.id}
+                    className="lighting-button"
+                    type="button"
+                    aria-pressed={lighting === option.id}
+                    disabled={pending || Boolean(task)}
+                    onClick={() => selectLighting(option.id)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="console-hint">
+                {task
+                  ? '光线条件已随任务固定。如需演示另一种光线，请重新开始任务。'
+                  : '选择创建任务时车辆上报的光线；界面明暗由 Agent 决定。'}
               </p>
-            )}
+            </div>
 
             <button
               className="advance-button"
