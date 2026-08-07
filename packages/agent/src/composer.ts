@@ -738,13 +738,25 @@ export function pickableArrivals(board: FlightArrivalsOutput): FlightArrivalsOut
     .slice(0, MAX_FLIGHT_CHOICES)
 }
 
+/**
+ * The rows the board actually renders, or undefined when it does not render at
+ * all: fewer than two pickable rows is not a choice, so the composer falls
+ * back to asking for the number. The gateway's ordinal resolution ("第三个")
+ * uses this same function, so a spoken rank can never select from a board the
+ * driver was never shown.
+ */
+export function renderedArrivalRows(board: FlightArrivalsOutput | undefined): FlightArrivalsOutput['arrivals'] | undefined {
+  if (!board) return undefined
+  const rows = pickableArrivals(board)
+  return rows.length >= 2 ? rows : undefined
+}
+
 function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
   component: UISpec['components'][number]
   actions: UISpec['actions']
 } | undefined {
-  if (!board) return undefined
-  const pickable = pickableArrivals(board)
-  if (pickable.length < 2) return undefined
+  const pickable = board ? renderedArrivalRows(board) : undefined
+  if (!board || !pickable) return undefined
   const rows = pickable.map((arrival) => ({
     arrival,
     actionId: `pick-${arrival.flightNumber}`,

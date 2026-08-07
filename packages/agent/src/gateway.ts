@@ -35,7 +35,7 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, pickableArrivals, weatherConditionLabels, type ComposeContext } from './composer'
+import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, renderedArrivalRows, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import { Planner, type Plan, type PlannerInput } from './planner'
@@ -527,8 +527,8 @@ export class AgentGateway {
       && current.task.phase === 'collecting-information'
       && !current.task.flight
     ) {
-      const board = this.#currentArrivalsBoard(taskId, request.clientRequestId, current)
-      const picked = board ? pickableArrivals(board)[plan.slotUpdates.flightChoiceOrdinal - 1] : undefined
+      const rows = this.#renderedArrivalRows(current)
+      const picked = rows?.[plan.slotUpdates.flightChoiceOrdinal - 1]
       if (picked) {
         request.event = { ...request.event, text: `航班号 ${picked.flightNumber}` }
         // Re-plan through the configured planner, same as any user input: the
@@ -2171,19 +2171,13 @@ export class AgentGateway {
   }
 
   /**
-   * The board the driver is currently looking at, for resolving a spoken
-   * ordinal. Persisted first — the same reading the composer rendered — and a
-   * fresh deterministic read only as the fallback: the ordinal must map onto
-   * the rows on screen, not onto a board the driver has never seen.
+   * The rows the driver is actually looking at, or undefined when no board was
+   * rendered. Persisted toolResults only — a fresh read here would resolve an
+   * ordinal from data the driver has never seen — gated on the composer's own
+   * renderability rule via the shared renderedArrivalRows.
    */
-  #currentArrivalsBoard(taskId: string, requestId: string, current: StoredTask) {
-    const persisted = current.toolResults?.['flight.list-arrivals']
-    if (persisted) return persisted.data
-    try {
-      return this.#orchestrator.resolveArrivals?.(taskId, `${requestId}:ordinal-arrivals`)?.data
-    } catch {
-      return undefined
-    }
+  #renderedArrivalRows(current: StoredTask) {
+    return renderedArrivalRows(current.toolResults?.['flight.list-arrivals']?.data)
   }
 
   #prepareTask(

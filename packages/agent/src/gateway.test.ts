@@ -3956,6 +3956,40 @@ describe('AgentGateway', () => {
       expect(asked.task.flight).toBeUndefined()
     })
 
+    it('does not resolve an ordinal from arrivals data the board never rendered', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      // One pickable row is not a choice: the composer falls back to asking for
+      // the number, so the arrivals data is persisted but no board is on
+      // screen. 第一个 must not silently pick the hidden row.
+      const single = orchestrator.resolveArrivals('probe', 'probe')
+      const onlyRow = single.data.arrivals[0]!
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => now,
+        createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+          resolveArrivals: (taskId, requestId) => {
+            const result = orchestrator.resolveArrivals(taskId, requestId)
+            return { ...result, data: { ...result.data, arrivals: [onlyRow] } }
+          },
+        },
+      })
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      expect(boardOf(created.ui)).toBeUndefined()
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-pick-hidden-board',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'pick-hidden-board', type: 'user.input', text: '第一个', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task.phase).toBe('collecting-information')
+      expect(asked.task.flight).toBeUndefined()
+    })
+
     it('leaves an ordinal alone once the flight is already chosen', () => {
       const gateway = createGateway()
       const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
