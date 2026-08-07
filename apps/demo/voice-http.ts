@@ -21,7 +21,8 @@ const DEFAULT_JSON_LIMIT_BYTES = 16 * 1024
 const VOICE_FIXTURE_DIRECTORY = resolve(process.cwd(), 'fixtures/airport-pickup/voice')
 
 export type VoiceHttpOptions = {
-  provider: VoiceProvider
+  provider?: VoiceProvider
+  createProvider?: () => VoiceProvider
   createRequestId?: () => string
   audioLimitBytes?: number
   jsonLimitBytes?: number
@@ -60,6 +61,7 @@ export function createVoiceHttpHandler(options: VoiceHttpOptions) {
         return
       }
 
+      const provider = resolveProvider(options)
       const contentType = singleHeader(request.headers['content-type'])
       const input = contentType?.toLowerCase().startsWith('application/json')
         ? await fixtureInput(request, jsonLimitBytes)
@@ -67,7 +69,7 @@ export function createVoiceHttpHandler(options: VoiceHttpOptions) {
           ? await multipartInput(request, audioLimitBytes)
           : (() => { throw httpError(415, 'UNSUPPORTED_AUDIO_FORMAT', 'Content-Type 必须是 application/json 或 multipart/form-data', false) })()
 
-      const result = await options.provider.transcribe({ requestId }, input)
+      const result = await provider.transcribe({ requestId }, input)
       const body = voiceTranscriptionHttpResponseSchema.parse({ requestId, ...result })
       writeJson(response, transcriptionStatus(body), body)
     } catch (error) {
@@ -75,6 +77,17 @@ export function createVoiceHttpHandler(options: VoiceHttpOptions) {
       writeJson(response, known.status, failure(requestId, known.code, known.message, known.retryable))
     }
   }
+}
+
+function resolveProvider(options: VoiceHttpOptions): VoiceProvider {
+  if (options.provider) return options.provider
+  try {
+    const provider = options.createProvider?.()
+    if (provider) return provider
+  } catch {
+    // Provider configuration is deployment state, so do not expose its details.
+  }
+  throw httpError(503, 'TRANSCRIPTION_FAILED', '语音转写服务尚未配置', false)
 }
 
 async function fixtureInput(request: IncomingMessage, limitBytes: number) {

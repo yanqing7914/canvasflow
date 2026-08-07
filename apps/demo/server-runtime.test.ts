@@ -177,6 +177,40 @@ describe('agent server runtime', () => {
     }
   })
 
+  it('fails closed when live transcription has no injected provider without stopping the server', async () => {
+    const previous = process.env.AGENT_VOICE_MODE
+    process.env.AGENT_VOICE_MODE = 'live'
+    try {
+      server = createAgentServer()
+      await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
+      const baseUrl = `http://127.0.0.1:${address.port}`
+
+      const transcription = await fetch(`${baseUrl}/v1/voice/transcriptions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ fixtureId: 'clear-airport-pickup' }),
+      })
+
+      expect(transcription.status).toBe(503)
+      await expect(transcription.json()).resolves.toMatchObject({
+        ok: false,
+        error: { code: 'TRANSCRIPTION_FAILED', retryable: false },
+      })
+
+      const health = await fetch(`${baseUrl}/health`)
+      expect(health.status).toBe(200)
+      await expect(health.json()).resolves.toEqual({ ok: true })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.AGENT_VOICE_MODE
+      } else {
+        process.env.AGENT_VOICE_MODE = previous
+      }
+    }
+  })
+
   it('transcribes a reviewed fixture through the JSON voice API', async () => {
     server = createAgentServer()
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))

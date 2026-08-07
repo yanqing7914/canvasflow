@@ -12,11 +12,12 @@ import {
 } from '@canvasflow/agent/persistent'
 import { createProviderRegistry, errorResult } from '@canvasflow/tools'
 import { createConfiguredVoiceProvider, createVoiceHttpHandler } from './voice-http'
+import type { VoiceProvider } from '@canvasflow/tools'
 
 export type AgentServerOptions = {
   staticDirectory?: string
   gateway?: AgentHttpGateway
-  voiceProvider?: ReturnType<typeof createConfiguredVoiceProvider>
+  voiceProvider?: VoiceProvider
 }
 
 export type ConfiguredAgentRuntimeOptions = {
@@ -77,7 +78,10 @@ export function createAgentServer(options: AgentServerOptions = {}) {
   const agentHandler = createAgentHttpHandler(gateway)
   let voiceHandler: ReturnType<typeof createVoiceHttpHandler> | undefined
   const getVoiceHandler = () => {
-    voiceHandler ??= createVoiceHttpHandler({ provider: options.voiceProvider ?? createConfiguredVoiceProvider() })
+    voiceHandler ??= createVoiceHttpHandler({
+      provider: options.voiceProvider,
+      createProvider: createConfiguredVoiceProvider,
+    })
     return voiceHandler
   }
   return createServer((request, response) => {
