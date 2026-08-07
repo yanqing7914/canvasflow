@@ -35,10 +35,10 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, weatherConditionLabels, type ComposeContext } from './composer'
+import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, pickableArrivals, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
-import { Planner, type Plan, type PlannerInput } from './planner'
+import { Planner, planAirportPickup, type Plan, type PlannerInput } from './planner'
 import {
   armLandingMessageRetry,
   resolveLandingMeetingEta,
@@ -511,9 +511,37 @@ export class AgentGateway {
       if (deferredCleanup) return deferredCleanup
     }
 
-    const plan = request.event.type === 'user.input'
+    let plan = request.event.type === 'user.input'
       ? this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
       : undefined
+    // A spoken ordinal ("第三个") is a faster way to say a flight number, never
+    // a second way to set the slot. Resolve it against the same pickable rows
+    // the composer rendered, rewrite the event into the number's own words, and
+    // fall through to the ordinary flight-number turn. No board, or a rank the
+    // board does not have, keeps the original text and lands on the unknown
+    // reply — the reducer treats unparseable input as a no-op.
+    if (
+      request.event.type === 'user.input'
+      && plan?.intent === 'pick-flight-choice'
+      && plan.slotUpdates.flightChoiceOrdinal !== undefined
+      && current.task.phase === 'collecting-information'
+      && !current.task.flight
+    ) {
+      const board = this.#currentArrivalsBoard(taskId, request.clientRequestId, current)
+      const picked = board ? pickableArrivals(board)[plan.slotUpdates.flightChoiceOrdinal - 1] : undefined
+      if (picked) {
+        request.event = { ...request.event, text: `航班号 ${picked.flightNumber}` }
+        // Re-plan with the rules directly, not this.#planner: the persistent
+        // runtime injects a stub planner frozen on the ORIGINAL text's plan,
+        // which would answer pick-flight-choice again and never fill the slot.
+        plan = planAirportPickup({
+          text: request.event.text,
+          state: current.task,
+          eventId: request.event.eventId,
+          timestamp: request.event.timestamp,
+        })
+      }
+    }
     if (
       request.event.type === 'user.input'
       && (plan?.intent === 'check-weather' || plan?.intent === 'check-schedule' || plan?.intent === 'check-departure-time')
@@ -2143,6 +2171,22 @@ export class AgentGateway {
       return board ? { ...carried, 'flight.list-arrivals': board } : carried
     } catch {
       return carried
+    }
+  }
+
+  /**
+   * The board the driver is currently looking at, for resolving a spoken
+   * ordinal. Persisted first — the same reading the composer rendered — and a
+   * fresh deterministic read only as the fallback: the ordinal must map onto
+   * the rows on screen, not onto a board the driver has never seen.
+   */
+  #currentArrivalsBoard(taskId: string, requestId: string, current: StoredTask) {
+    const persisted = current.toolResults?.['flight.list-arrivals']
+    if (persisted) return persisted.data
+    try {
+      return this.#orchestrator.resolveArrivals?.(taskId, `${requestId}:ordinal-arrivals`)?.data
+    } catch {
+      return undefined
     }
   }
 

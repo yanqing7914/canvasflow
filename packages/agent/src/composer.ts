@@ -727,14 +727,25 @@ export const flightStatusLabels: Record<FlightArrivalCandidate['status'], string
  * pick travels the same planner path as typing it. The board is a faster way to
  * say the number, never a second way to set the slot.
  */
+/**
+ * The rows a driver can actually pick, in the order the board presents them.
+ * Shared with the gateway's ordinal resolution ("第三个") so a spoken index and
+ * the rendered row can never disagree about which flight is third.
+ */
+export function pickableArrivals(board: FlightArrivalsOutput): FlightArrivalsOutput['arrivals'] {
+  return board.arrivals
+    .filter((arrival) => arrival.status !== 'cancelled')
+    .slice(0, MAX_FLIGHT_CHOICES)
+}
+
 function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
   component: UISpec['components'][number]
   actions: UISpec['actions']
 } | undefined {
   if (!board) return undefined
-  const pickable = board.arrivals.filter((arrival) => arrival.status !== 'cancelled')
+  const pickable = pickableArrivals(board)
   if (pickable.length < 2) return undefined
-  const rows = pickable.slice(0, MAX_FLIGHT_CHOICES).map((arrival) => ({
+  const rows = pickable.map((arrival) => ({
     arrival,
     actionId: `pick-${arrival.flightNumber}`,
   }))
