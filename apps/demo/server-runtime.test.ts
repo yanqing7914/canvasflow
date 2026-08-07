@@ -157,6 +157,26 @@ describe('agent server runtime', () => {
     await expect(response.json()).resolves.toEqual({ ok: true })
   })
 
+  it('does not require a live voice provider to boot the server', async () => {
+    const previous = process.env.AGENT_VOICE_MODE
+    process.env.AGENT_VOICE_MODE = 'live'
+    try {
+      server = createAgentServer()
+      await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+      const address = server.address()
+      if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
+      const response = await fetch(`http://127.0.0.1:${address.port}/health`)
+      expect(response.status).toBe(200)
+      await expect(response.json()).resolves.toEqual({ ok: true })
+    } finally {
+      if (previous === undefined) {
+        delete process.env.AGENT_VOICE_MODE
+      } else {
+        process.env.AGENT_VOICE_MODE = previous
+      }
+    }
+  })
+
   it('transcribes a reviewed fixture through the JSON voice API', async () => {
     server = createAgentServer()
     await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))

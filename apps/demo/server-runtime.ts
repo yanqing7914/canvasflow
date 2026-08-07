@@ -75,7 +75,11 @@ export function createAgentServer(options: AgentServerOptions = {}) {
   const staticDirectory = options.staticDirectory ? resolve(options.staticDirectory) : undefined
   const gateway = options.gateway ?? new AgentGateway()
   const agentHandler = createAgentHttpHandler(gateway)
-  const voiceHandler = createVoiceHttpHandler({ provider: options.voiceProvider ?? createConfiguredVoiceProvider() })
+  let voiceHandler: ReturnType<typeof createVoiceHttpHandler> | undefined
+  const getVoiceHandler = () => {
+    voiceHandler ??= createVoiceHttpHandler({ provider: options.voiceProvider ?? createConfiguredVoiceProvider() })
+    return voiceHandler
+  }
   return createServer((request, response) => {
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, { 'content-type': 'application/json' })
@@ -83,7 +87,7 @@ export function createAgentServer(options: AgentServerOptions = {}) {
       return
     }
     if (request.url?.split('?', 1)[0] === '/v1/voice/transcriptions') {
-      void voiceHandler(request, response)
+      void getVoiceHandler()(request, response)
       return
     }
     if (staticDirectory && request.method === 'GET' && !request.url?.startsWith('/v1/')) {
