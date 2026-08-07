@@ -573,6 +573,20 @@ export class AgentGateway {
           ? this.#submitScheduleQuery(taskId, current, request, startedAt)
           : this.#submitDepartureQuery(taskId, current, request, startedAt)
     }
+    // The two answers to the proactive weather advisory. Only an active
+    // advisory gives these words their meaning; anywhere else they stay on the
+    // ordinary unknown path and the reducer treats them as a no-op.
+    if (
+      request.event.type === 'user.input'
+      && (plan?.intent === 'send-weather-reminder' || plan?.intent === 'dismiss-weather-advisory')
+      && current.task.weatherAdvisory?.status === 'active'
+      && current.task.phase !== 'completed'
+      && current.task.phase !== 'cancelled'
+    ) {
+      return plan.intent === 'send-weather-reminder'
+        ? this.#submitWeatherReminder(taskId, current, request, startedAt)
+        : this.#dismissWeatherAdvisory(taskId, current, request, startedAt)
+    }
     let next = applyEvent(
       current.task,
       request.event,
@@ -987,7 +1001,39 @@ export class AgentGateway {
         text: `我已到达机场接机点，航班 ${request.event.flight.flightNumber}，预计 ${next.navigation?.eta ?? request.event.flight.estimatedArrival} 会合。`,
       })
     }
-    let toolResults = current.toolResults
+    // The one proactive weather prompt of the trip. A flight update while
+    // driving is the moment the arrival window firms up, so that is when the
+    // forecast is checked — a condition, not a timer. Rain over the arrival
+    // sets the advisory once; dismissed or resolved it never returns, and a
+    // failed read costs the driver a prompt, never the turn. The reading is
+    // PERSISTED (unlike the transient query card) — the advisory card must
+    // survive every recompose until the driver answers it.
+    let advisoryWeather: ReadToolResults['weather.advisory']
+    if (
+      request.event.type === 'flight.updated'
+      && next.phase === 'driving-to-airport'
+      && next.weatherAdvisory === undefined
+      && next.flight
+      && next.flight.status !== 'cancelled'
+      && next !== current.task
+    ) {
+      try {
+        const reading = this.#orchestrator.resolveWeather?.(taskId, `${request.clientRequestId}:advisory`, {
+          locationId: current.requestContext?.destination.id ?? 'destination-hongqiao-t2',
+          at: next.flight.estimatedArrival,
+        })
+        const raining = reading?.data.condition === 'light-rain' || reading?.data.condition === 'heavy-rain'
+        if (raining) {
+          next = { ...next, weatherAdvisory: { status: 'active', advisedAt: this.#now() } }
+          advisoryWeather = reading
+        }
+      } catch {
+        // A weather provider failure must never take down the flight update.
+      }
+    }
+    let toolResults = advisoryWeather
+      ? { ...current.toolResults, 'weather.advisory': advisoryWeather }
+      : current.toolResults
     const flightNumber = plan?.slotUpdates.flightNumber
     const parsedPassengers = plan?.slotUpdates.passengers
     try {
@@ -2499,6 +2545,101 @@ export class AgentGateway {
     }
     this.#recordSideAnswer(taskId, request.event.eventId, published, assistant)
     return this.#response(request.clientRequestId, published, [], performance.now() - startedAt, assistant)
+  }
+
+  /**
+   * 提醒乘客带伞 while the advisory is active: prepare the umbrella reminder
+   * with the same provider and confirmation machinery as the landing retry,
+   * arm the confirm-then-send window (message scheduled + pendingText +
+   * pendingConfirmation), and retire the advisory as resolved. The reminder
+   * itself still goes out only after the driver confirms the preview.
+   */
+  #submitWeatherReminder(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const replayed = this.#store.getEventResult(taskId, request.event.eventId)
+    if (replayed) return this.#response(request.clientRequestId, replayed.stored, replayed.effects, performance.now() - startedAt)
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+
+    const contactId = resolveAuthorizedLandingContact(current.task.passengers.memberIds, this.#preferences)
+    if (!contactId) {
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects: [] })
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: '没有已授权的提醒联系人，暂时无法发送。',
+        shouldSpeak: supportsTts,
+      })
+    }
+
+    const execution = this.#effectExecutor.prepareWeatherReminder({
+      task: current.task,
+      contactId,
+      idempotencyKey: `${request.event.eventId}:umbrella`,
+      effectId: `${request.event.eventId}:effect:0`,
+    })
+    if (!execution.succeeded || !execution.prepared) {
+      const effects = [execution.effect]
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored: current, effects })
+      return this.#response(request.clientRequestId, current, effects, performance.now() - startedAt, {
+        text: '提醒暂时没能准备好，稍后可以再试。',
+        shouldSpeak: supportsTts,
+      })
+    }
+
+    const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const armed: AirportPickupTaskState = {
+      ...current.task,
+      taskRevision: current.task.taskRevision + 1,
+      weatherAdvisory: { status: 'resolved', advisedAt: current.task.weatherAdvisory!.advisedAt },
+      message: {
+        ...current.task.message,
+        status: 'scheduled',
+        pendingMessageId: execution.prepared.messageId,
+        pendingContactId: execution.prepared.contactId,
+        pendingText: execution.prepared.text,
+        idempotencyKey: execution.prepared.messageId,
+        scheduledAt: timestamp,
+      },
+      pendingConfirmation: {
+        confirmationId: execution.prepared.confirmationId,
+        action: 'send-message',
+      },
+      updatedAt: timestamp,
+    }
+    const stored = this.#store.save(this.#publish(armed, current.toolResults, current.requestContext, current.effectReceipts))
+    const effects = [execution.effect]
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects })
+    return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt, {
+      text: '带伞提醒已准备好，请确认后发送。',
+      shouldSpeak: supportsTts,
+    })
+  }
+
+  /** 暂不处理: retire the advisory for good — the trip never re-prompts. */
+  #dismissWeatherAdvisory(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const replayed = this.#store.getEventResult(taskId, request.event.eventId)
+    if (replayed) return this.#response(request.clientRequestId, replayed.stored, replayed.effects, performance.now() - startedAt)
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const dismissed: AirportPickupTaskState = {
+      ...current.task,
+      taskRevision: current.task.taskRevision + 1,
+      weatherAdvisory: { status: 'dismissed', advisedAt: current.task.weatherAdvisory!.advisedAt },
+      updatedAt: timestamp,
+    }
+    const stored = this.#store.save(this.#publish(dismissed, current.toolResults, current.requestContext, current.effectReceipts))
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+      text: '好的，先不处理。',
+      shouldSpeak: supportsTts,
+    })
   }
 
   #response(

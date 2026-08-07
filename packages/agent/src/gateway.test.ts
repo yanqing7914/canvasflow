@@ -4007,6 +4007,211 @@ describe('AgentGateway', () => {
       expect(asked.task.taskRevision).toBe(created.task.taskRevision)
     })
   })
+
+  describe('proactive weather advisory and the umbrella reminder', () => {
+    /** Create → start navigation → the driving brief, ready for en-route events. */
+    function drivingTask(gateway: AgentGateway) {
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      return gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'advisory-helper-start', expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation',
+        componentId: 'navigation-plan', idempotencyKey: 'advisory-helper-start',
+      })
+    }
+
+    function inAirUpdate(taskRevision: number, eventId = 'advisory-in-air') {
+      return {
+        clientRequestId: `client-${eventId}`, expectedTaskRevision: taskRevision,
+        event: {
+          eventId, type: 'flight.updated' as const,
+          flight: {
+            flightNumber: 'MU5102', status: 'in-air' as const,
+            scheduledArrival: '2026-07-22T20:30:00+08:00',
+            estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+          },
+          timestamp: '2026-07-22T19:10:00+08:00',
+        },
+      }
+    }
+
+    it('raises the advisory once when a flight update finds rain over the arrival', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+
+      const updated = gateway.submitEvent(driving.task.taskId, inAirUpdate(driving.task.taskRevision))
+
+      expect(updated.task.weatherAdvisory).toMatchObject({ status: 'active' })
+      const card = updated.ui.components.find((component) => component.id === 'weather-advisory')
+      if (card?.type !== 'weather-card') throw new Error('expected the advisory weather card')
+      expect(card.props.condition).toBe('light-rain')
+      expect(card.actions).toEqual(['send-umbrella-reminder', 'dismiss-weather-advisory'])
+      expect(updated.ui.actions.map((action) => action.id)).toEqual(['send-umbrella-reminder', 'dismiss-weather-advisory'])
+
+      // The advisory survives an unrelated recompose: it is persisted, not a
+      // transient query answer.
+      const moving = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-advisory-moving', expectedTaskRevision: updated.task.taskRevision,
+        event: { eventId: 'advisory-moving', type: 'vehicle.moving', speedKph: 60, timestamp: '2026-07-22T19:11:00+08:00' },
+      })
+      expect(moving.ui.components.some((component) => component.id === 'weather-advisory')).toBe(true)
+    })
+
+    it('arms the umbrella reminder for confirmation and sends it only on accept', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+      const updated = gateway.submitEvent(driving.task.taskId, inAirUpdate(driving.task.taskRevision))
+
+      const armed = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-umbrella', expectedTaskRevision: updated.task.taskRevision,
+        event: { eventId: 'umbrella-ask', type: 'user.input', text: '提醒乘客带伞', timestamp: '2026-07-22T19:12:00+08:00' },
+      })
+
+      expect(armed.task.weatherAdvisory).toMatchObject({ status: 'resolved' })
+      expect(armed.task.message).toMatchObject({ status: 'scheduled' })
+      expect(armed.task.message.pendingText).toContain('带伞')
+      expect(armed.task.pendingConfirmation).toMatchObject({ action: 'send-message' })
+      expect(armed.effects).toEqual([expect.objectContaining({ type: 'message.prepare', status: 'pending-confirmation' })])
+      // The scheduled message takes the brief; the advisory card has retired.
+      expect(armed.ui.components.some((component) => component.type === 'message-preview')).toBe(true)
+      expect(armed.ui.components.some((component) => component.id === 'weather-advisory')).toBe(false)
+
+      const confirmed = gateway.submitConfirmation(driving.task.taskId, armed.task.pendingConfirmation!.confirmationId, {
+        clientRequestId: 'client-umbrella-confirm',
+        expectedTaskRevision: armed.task.taskRevision,
+        decision: 'accept',
+        idempotencyKey: 'umbrella-confirm',
+      })
+
+      expect(confirmed.task.message.status).toBe('sent')
+      // The umbrella reminder must not claim the landing notice bookkeeping.
+      expect(confirmed.task.message.landingNoticeSent).toBe(false)
+      expect(confirmed.effects).toContainEqual(expect.objectContaining({ type: 'message.send', status: 'succeeded' }))
+    })
+
+    it('still schedules the landing notice after the umbrella reminder was sent', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+      const updated = gateway.submitEvent(driving.task.taskId, inAirUpdate(driving.task.taskRevision))
+      const armed = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-umbrella-2', expectedTaskRevision: updated.task.taskRevision,
+        event: { eventId: 'umbrella-ask-2', type: 'user.input', text: '提醒乘客带伞', timestamp: '2026-07-22T19:12:00+08:00' },
+      })
+      const confirmed = gateway.submitConfirmation(driving.task.taskId, armed.task.pendingConfirmation!.confirmationId, {
+        clientRequestId: 'client-umbrella-confirm-2',
+        expectedTaskRevision: armed.task.taskRevision,
+        decision: 'accept',
+        idempotencyKey: 'umbrella-confirm-2',
+      })
+
+      const landed = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-advisory-landed', expectedTaskRevision: confirmed.task.taskRevision,
+        event: {
+          eventId: 'advisory-landed', type: 'flight.updated',
+          flight: {
+            flightNumber: 'MU5102', status: 'landed',
+            scheduledArrival: '2026-07-22T20:30:00+08:00',
+            estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+          },
+          timestamp: '2026-07-22T20:40:00+08:00',
+        },
+      })
+
+      expect(landed.task.message).toMatchObject({ status: 'scheduled', pendingMessageId: 'MU5102:landing' })
+    })
+
+    it('rejecting the preview revokes the reminder without sending', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+      const updated = gateway.submitEvent(driving.task.taskId, inAirUpdate(driving.task.taskRevision))
+      const armed = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-umbrella-3', expectedTaskRevision: updated.task.taskRevision,
+        event: { eventId: 'umbrella-ask-3', type: 'user.input', text: '提醒乘客带伞', timestamp: '2026-07-22T19:12:00+08:00' },
+      })
+
+      const rejected = gateway.submitConfirmation(driving.task.taskId, armed.task.pendingConfirmation!.confirmationId, {
+        clientRequestId: 'client-umbrella-reject',
+        expectedTaskRevision: armed.task.taskRevision,
+        decision: 'reject',
+        idempotencyKey: 'umbrella-reject',
+      })
+
+      expect(rejected.task.pendingConfirmation).toBeUndefined()
+      expect(rejected.task.message.status).not.toBe('sent')
+      // The advisory stays resolved: rejecting the preview is an answer too.
+      expect(rejected.task.weatherAdvisory).toMatchObject({ status: 'resolved' })
+    })
+
+    it('dismisses the advisory for good and returns the rail to the navigation brief', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+      const updated = gateway.submitEvent(driving.task.taskId, inAirUpdate(driving.task.taskRevision))
+
+      const dismissed = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-advisory-dismiss', expectedTaskRevision: updated.task.taskRevision,
+        event: { eventId: 'advisory-dismiss', type: 'user.input', text: '暂不处理', timestamp: '2026-07-22T19:12:00+08:00' },
+      })
+
+      expect(dismissed.task.weatherAdvisory).toMatchObject({ status: 'dismissed' })
+      expect(dismissed.ui.components.some((component) => component.id === 'weather-advisory')).toBe(false)
+      expect(dismissed.ui.components.some((component) => component.type === 'navigation-summary')).toBe(true)
+
+      // Retired for good: the next flight update must not re-raise it.
+      const again = gateway.submitEvent(driving.task.taskId, inAirUpdate(dismissed.task.taskRevision, 'advisory-in-air-again'))
+      expect(again.task.weatherAdvisory).toMatchObject({ status: 'dismissed' })
+    })
+
+    it('replays advisory answers idempotently', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+      const updated = gateway.submitEvent(driving.task.taskId, inAirUpdate(driving.task.taskRevision))
+      const request = {
+        clientRequestId: 'client-umbrella-replay', expectedTaskRevision: updated.task.taskRevision,
+        event: { eventId: 'umbrella-replay', type: 'user.input' as const, text: '提醒乘客带伞', timestamp: '2026-07-22T19:12:00+08:00' },
+      }
+
+      const first = gateway.submitEvent(driving.task.taskId, request)
+      const second = gateway.submitEvent(driving.task.taskId, request)
+
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+    })
+
+    it('leaves advisory words on the unknown path when no advisory is active', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+
+      const asked = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-umbrella-none', expectedTaskRevision: driving.task.taskRevision,
+        event: { eventId: 'umbrella-none', type: 'user.input', text: '提醒乘客带伞', timestamp: '2026-07-22T19:12:00+08:00' },
+      })
+
+      expect(asked.task.message.status).toBe('idle')
+      expect(asked.task.pendingConfirmation).toBeUndefined()
+      expect(asked.task.taskRevision).toBe(driving.task.taskRevision)
+    })
+
+    it('does not raise the advisory when the weather read is unavailable', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => now,
+        createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+          resolveArrivals: orchestrator.resolveArrivals.bind(orchestrator),
+        },
+      })
+      const driving = drivingTask(gateway)
+
+      const updated = gateway.submitEvent(driving.task.taskId, inAirUpdate(driving.task.taskRevision))
+
+      // No weather read, no prompt — and the flight update itself is untouched.
+      expect(updated.task.weatherAdvisory).toBeUndefined()
+      expect(updated.task.flight?.status).toBe('in-air')
+    })
+  })
 })
 
 function returningTask(gateway: AgentGateway) {

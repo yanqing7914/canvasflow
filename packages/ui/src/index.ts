@@ -72,7 +72,29 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
         ]
       : []
   }
-  else if (task.message.status === 'scheduled') { title = '落地通知'; density = 'minimal'; priority = 'high'; components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true } }] }
+  else if (task.message.status === 'scheduled') {
+    const awaitingConfirmation = task.pendingConfirmation?.action === 'send-message'
+    title = awaitingConfirmation ? '确认发送提醒' : '落地通知'
+    density = 'minimal'
+    priority = 'high'
+    components = [{
+      id: 'message-preview',
+      type: 'message-preview',
+      props: {
+        contactLabel: task.passengers.names[0] ?? '乘客',
+        textPreview: task.message.pendingText ?? '我已到达机场，正在接你们。',
+        status: 'scheduled',
+        cancellable: !awaitingConfirmation,
+      },
+      ...(awaitingConfirmation ? { actions: ['confirm-send-message', 'reject-send-message'] } : {}),
+    }]
+    actions = awaitingConfirmation
+      ? [
+          { id: 'confirm-send-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } },
+          { id: 'reject-send-message', label: '取消发送', style: 'secondary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'reject' } },
+        ]
+      : []
+  }
   else if (task.message.status === 'failed') {
     title = '落地通知失败'
     density = 'minimal'
@@ -195,19 +217,39 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   else if (task.navigation) {
     density = 'compact'
     const routeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
-    const underway = withRouteMap([{
-      id: 'navigation-summary',
-      type: 'navigation-summary',
-      props: {
-        routeId: task.navigation.routeId,
-        destination: task.navigation.destination,
-        eta: task.navigation.eta,
-        distanceKm: 32,
-        estimatedBatteryAtArrival: 27,
-      },
-    }], routeSketch, task.navigation.destination)
-    components = underway.components
-    layout = underway.layout
+    // Mirrors composeAgentSpec's advisory takeover; fixtures-conformance locks
+    // the two together. The reading rides toolResults['weather.advisory'].
+    const advisoryWeather = task.weatherAdvisory?.status === 'active'
+      ? successfulWeather(context.toolResults?.['weather.advisory'])
+      : undefined
+    if (advisoryWeather) {
+      const advisoryCard = {
+        ...weatherCard(task, advisoryWeather),
+        id: 'weather-advisory',
+        actions: ['send-umbrella-reminder', 'dismiss-weather-advisory'],
+      }
+      const underway = withRouteMap([advisoryCard], routeSketch, task.navigation.destination)
+      components = underway.components
+      layout = underway.layout
+      actions = [
+        { id: 'send-umbrella-reminder', label: '提醒乘客带伞', style: 'primary', event: { type: 'agent-message', text: '提醒乘客带伞' } },
+        { id: 'dismiss-weather-advisory', label: '暂不处理', style: 'secondary', event: { type: 'agent-message', text: '暂不处理' } },
+      ]
+    } else {
+      const underway = withRouteMap([{
+        id: 'navigation-summary',
+        type: 'navigation-summary',
+        props: {
+          routeId: task.navigation.routeId,
+          destination: task.navigation.destination,
+          eta: task.navigation.eta,
+          distanceKm: 32,
+          estimatedBatteryAtArrival: 27,
+        },
+      }], routeSketch, task.navigation.destination)
+      components = underway.components
+      layout = underway.layout
+    }
   }
   else if (task.flight) { density = 'compact'; components = [{ id: 'flight-status', type: 'flight-status', props: flightStatusProps(task.flight) }] }
   const weather = successfulWeather(context.toolResults?.['weather.get-current'])

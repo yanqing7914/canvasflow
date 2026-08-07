@@ -38,6 +38,16 @@ HTTP API. Do not call reducers or tool providers from browser developer tools.
    publishes the driving state only after the policy gate and Provider result
    succeed.
 5. Use `推进下一事件` to show flight and charging updates.
+6. **The proactive rain beat** (the third memorable moment): the in-air flight
+   update firms up the arrival window, the Agent checks the forecast, finds
+   rain, and the advisory card takes the rail on its own — a condition raised
+   it, not a timer, and nobody asked a question. Say the boundary out loud:
+   the trip never re-prompts (dismissed or answered, the advisory is retired).
+7. Press `提醒乘客带伞` (or speak it). The exact provider-prepared message
+   appears for review — nothing has been sent. Press `确认发送` and point to
+   the `message.send:succeeded` receipt: a real side effect behind a real
+   confirmation, and the drive takes the screen back. `暂不处理` is the other
+   branch for the backup recording.
 
 ## 1:45 - 2:35: Arrival And Authorized Message
 

@@ -281,4 +281,26 @@ describe('airport pickup Planner', () => {
       proposedEvents: [],
     })
   })
+
+  it.each(['提醒乘客带伞', '帮我提醒她们带伞', '提醒妈妈带伞吧'])('recognizes %s as the umbrella reminder answer', (text) => {
+    expect(planAirportPickup({ text, timestamp })).toMatchObject({
+      intent: 'send-weather-reminder',
+      slotUpdates: {},
+      proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+    })
+  })
+
+  it.each(['暂不处理', '先不用', '不用提醒了'])('recognizes %s as dismissing the advisory', (text) => {
+    expect(planAirportPickup({ text, timestamp })).toMatchObject({
+      intent: 'dismiss-weather-advisory',
+      slotUpdates: {},
+      proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+    })
+  })
+
+  it('keeps advisory-shaped fragments and mixed sentences off the advisory intents', () => {
+    expect(planAirportPickup({ text: '带伞', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '提醒乘客', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '暂不处理这个问题', timestamp }).intent).toBe('unknown')
+  })
 })

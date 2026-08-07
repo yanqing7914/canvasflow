@@ -296,6 +296,12 @@ export const messagePrepareInputSchema = z.object({
   contactId: z.string().min(1),
   flightNumber: z.string().min(1),
   eta: z.string().optional(),
+  /**
+   * Which fixed template to prepare. An enum on purpose: neither the client
+   * nor a model may inject free-form message text — every sendable payload
+   * comes from a reviewed template. Absent means the landing notice.
+   */
+  kind: z.enum(['landing', 'weather-umbrella']).optional(),
 })
 
 export const messagePrepareOutputSchema = z.object({
