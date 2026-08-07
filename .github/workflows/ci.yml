@@ -82,15 +82,23 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          # The browser set is part of what is cached, so it is part of the key:
+          # a cache written when only chromium was installed must not satisfy a
+          # run that also needs webkit and firefox.
+          key: playwright-${{ runner.os }}-chromium-webkit-firefox-${{ hashFiles('package-lock.json') }}
 
-      - name: Install Playwright browser
+      # Three engines rather than one because the floating panel is built on
+      # `:has()`, `display: contents`, and `backdrop-filter` — each an engine
+      # decision, each failing visually rather than loudly. The `@glass` project
+      # pair in playwright.config.ts is what runs on the extra two; the wider
+      # cross-browser sweep is still opt-in and does not run here.
+      - name: Install Playwright browsers
         if: steps.playwright-cache.outputs.cache-hit != 'true'
-        run: npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium webkit firefox
 
       - name: Install Playwright system dependencies
         if: steps.playwright-cache.outputs.cache-hit == 'true'
-        run: npx playwright install-deps chromium
+        run: npx playwright install-deps chromium webkit firefox
 
       - name: Run end-to-end tests
         run: npm run test:e2e

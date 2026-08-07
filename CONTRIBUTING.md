@@ -45,27 +45,34 @@ npm run build
 npm run test:e2e
 ```
 
-The end-to-end suite needs a browser once per machine:
+The end-to-end suite needs three browsers once per machine:
 
 ```bash
-npx playwright install chromium
+npx playwright install chromium webkit firefox
 ```
 
-CI runs Chromium only. The layout specs can also be run against WebKit and
-Gecko, which is where the floating glass panel is actually worth checking —
-`:has()`, `backdrop-filter`, and `display: contents` each behave a little
-differently per engine, and the failures are visual rather than assertable from
-the unit suite. Install the two extra browsers and set the gate:
+CI runs all three, but not the same specs on each. The floating glass panel is
+the one part of the demo whose correctness is an engine question rather than a
+code question — `:has()` decides whether the panel exists, `display: contents`
+decides whether folding hides anything, `backdrop-filter` decides whether the
+result is legible, and every failure is visual rather than assertable from the
+unit suite. So the panel's own behaviour lives in one spec tagged `@glass`, and
+the `webkit-glass` and `firefox-glass` projects run it on every PR. That tag
+earned its keep immediately: Gecko sized the panel 100px shorter than its
+contents, and the card hides its overflow, so the fold button was clipped out of
+the card and unclickable on Firefox alone.
+
+The wider `@layout` sweep on the extra engines stays opt-in:
 
 ```bash
-npx playwright install webkit firefox
 PLAYWRIGHT_CROSS_BROWSER=1 npm run test:e2e -- --grep @layout
 ```
 
-Without the variable the two projects do not exist, so the default run stays on
-the browser CI has.
+Without the variable those two projects do not exist, so the default run is the
+three CI has.
 
-Two `@layout` specs fail on the extra engines today, and both are known:
+It is opt-in rather than required because two of its specs fail on the extra
+engines today, and both are known:
 
 - **Gecko, four specs, `expectNoScroll`.** The voice composer is on screen from
   the first frame in Firefox — `SpeechRecognition` is unimplemented, so the
@@ -80,9 +87,12 @@ Two `@layout` specs fail on the extra engines today, and both are known:
   browser preferences rather than app defects, so the fix belongs in the spec's
   expectations rather than in the app.
 
-Neither is caused by the glass panel: the takeover, the crawl, the fold, and the
-tiered blur were each checked directly on all three engines and behave
-identically.
+Neither is caused by the glass panel, and neither blocks it: the `@glass` spec
+asserts the panel's behaviour and deliberately not the frame, so it is clear of
+the Gecko composer issue above and can be required on all three engines without
+gating every PR on an unrelated known failure. One consequence of that composer
+issue is visible in the panel on Firefox — the shorter map leaves the panel
+overhanging its lower edge — and it resolves when the composer does.
 
 ## Shared repository setup
 

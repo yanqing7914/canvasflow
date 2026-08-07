@@ -1539,6 +1539,17 @@ a:focus-visible {
   .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
     > .ui-slot--secondary > .ui-component {
     pointer-events: auto;
+    /* And the panel is exactly as tall as what is in it, said out loud rather
+       than left to the track to work out. `.ui-component` is a grid of
+       `minmax(0, 1fr) auto`, and how much an `fr` row contributes to its
+       container's intrinsic height is where the engines part company: Blink and
+       WebKit resolve the centred track to the card's full 318px, Gecko to 216px
+       — and the card hides its overflow, so on Firefox the fold and the top of
+       the header were clipped out of the card's own box and could not even be
+       clicked. `max-content` is the height all three already agree the contents
+       need, so it changes nothing where the effect was already right and repairs
+       it where it was not. */
+    height: max-content;
   }
 
   .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
