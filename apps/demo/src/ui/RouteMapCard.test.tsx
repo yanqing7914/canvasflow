@@ -66,6 +66,7 @@ describe('a basemap that finishes loading after the crawl has moved', () => {
 
   beforeEach(() => {
     frames = []
+    now = 0
     stub.setProgress.mockClear()
     stub.load = new Promise((resolve) => { releaseLoad = () => resolve({}) })
     vi.stubGlobal('requestAnimationFrame', (callback: (timestampMs: number) => void) => {
@@ -80,10 +81,24 @@ describe('a basemap that finishes loading after the crawl has moved', () => {
     vi.unstubAllGlobals()
   })
 
+  let now = 0
+
   function step(timestampMs: number) {
+    now = timestampMs
     const due = frames
     frames = []
     act(() => { for (const frame of due) frame(timestampMs) })
+  }
+
+  /**
+   * Delivers `durationMs` of frames at 100ms each, the way a painting tab does.
+   * The crawl counts the gap between frames rather than the time since it began,
+   * so a single distant timestamp is a tab that stopped painting and buys almost
+   * no movement — time has to arrive in frames to be spent.
+   */
+  function advance(durationMs: number) {
+    const target = now + durationMs
+    while (now < target) step(Math.min(now + 100, target))
   }
 
   /** Lets the load promise and the render promise inside it both settle. */
@@ -97,7 +112,7 @@ describe('a basemap that finishes loading after the crawl has moved', () => {
     render(card({ ...sketch, progress: 0.4, crawl: { toProgress: 0.6, durationSeconds: 10 } }))
 
     step(0)
-    step(5000)
+    advance(5000)
     expect(stub.setProgress).not.toHaveBeenCalled()
 
     await letTheMapArrive()
@@ -110,7 +125,7 @@ describe('a basemap that finishes loading after the crawl has moved', () => {
     render(card({ ...sketch, progress: 0.4, crawl: { toProgress: 0.6, durationSeconds: 10 } }))
 
     step(0)
-    step(60_000)
+    advance(11_000)
     // The span is over: nothing further is scheduled, so this is the last chance
     // to get the map right.
     expect(frames).toHaveLength(0)

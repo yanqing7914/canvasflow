@@ -51,6 +51,21 @@ function stubReducedMotion(matches: boolean) {
 describe('startCrawl', () => {
   const span = { toProgress: 0.34, durationSeconds: 10 }
 
+  /**
+   * Fires a run of frames at a steady rate, the way a painting tab delivers
+   * them. Each gap is inside the clamp, so a run of them is elapsed time.
+   * Timestamps continue from `since`, and the last one is returned so the next
+   * run — or a deliberate gap — can carry on from it.
+   */
+  function runFrames(clock: ReturnType<typeof manualScheduler>, since: number, count: number, stepMs = 100) {
+    let at = since
+    for (let frame = 1; frame <= count; frame += 1) {
+      at = since + frame * stepMs
+      clock.step(at)
+    }
+    return at
+  }
+
   it('interpolates from the authored start towards the authored bound', () => {
     const clock = manualScheduler()
     const { seen, onProgress } = recorder()
@@ -60,11 +75,12 @@ describe('startCrawl', () => {
     clock.step(1000)
     expect(seen).toEqual([0.08])
 
-    clock.step(3500)
-    expect(seen[1]).toBeCloseTo(0.08 + 0.26 * 0.25, 10)
+    // A quarter of the span is 25 frames of the 100ms the run below delivers.
+    const quarter = runFrames(clock, 1000, 25)
+    expect(seen.at(-1)).toBeCloseTo(0.08 + 0.26 * 0.25, 10)
 
-    clock.step(6000)
-    expect(seen[2]).toBeCloseTo(0.08 + 0.26 * 0.5, 10)
+    runFrames(clock, quarter, 25)
+    expect(seen.at(-1)).toBeCloseTo(0.08 + 0.26 * 0.5, 10)
   })
 
   it('lands exactly on the bound and stops there', () => {
@@ -73,12 +89,41 @@ describe('startCrawl', () => {
     startCrawl({ from: 0.08, span, onProgress, scheduler: clock.scheduler })
 
     clock.step(0)
-    // Deliberately overshooting: a frame that lands late must not report a
-    // position past the bound, which is the fixture's own authored limit.
-    clock.step(14_000)
+    // Deliberately overshooting: the last frame carries the span past its end,
+    // and the reported position must be the fixture's authored limit rather
+    // than wherever the arithmetic landed.
+    runFrames(clock, 0, 101)
 
     expect(seen.at(-1)).toBe(0.34)
     expect(clock.pendingCount).toBe(0)
+  })
+
+  /**
+   * A background tab stops delivering frames entirely, so the gap between the
+   * last frame before it left and the first frame after it returns is the whole
+   * time it was away. Counting that as elapsed would spend the span while nobody
+   * was watching and snap the marker to the bound on the driver's return — the
+   * teleport this animation exists to avoid.
+   */
+  it('does not spend the span while the frame loop is not running', () => {
+    const clock = manualScheduler()
+    const { seen, onProgress } = recorder()
+    startCrawl({ from: 0.08, span, onProgress, scheduler: clock.scheduler })
+
+    clock.step(0)
+    const hidAt = runFrames(clock, 0, 10) // A second of crawling, then the tab leaves.
+    expect(seen.at(-1)).toBeCloseTo(0.08 + 0.26 * 0.1, 10)
+
+    // Thirty seconds later, three times the whole span, one frame arrives.
+    clock.step(hidAt + 30_000)
+    // It counts for one slow frame, not for thirty seconds: the marker resumes
+    // from where the driver left it rather than at the bound.
+    expect(seen.at(-1)).toBeCloseTo(0.08 + 0.26 * 0.12, 10)
+    expect(clock.pendingCount).toBe(1)
+
+    // And the rest of the span is still there to be walked.
+    runFrames(clock, hidAt + 30_000, 100)
+    expect(seen.at(-1)).toBe(0.34)
   })
 
   it('reports nothing further once stopped', () => {

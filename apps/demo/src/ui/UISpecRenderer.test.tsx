@@ -1322,6 +1322,7 @@ describe('UISpecRenderer route map panel', () => {
 
     beforeEach(() => {
       frames = []
+      now = 0
       vi.stubGlobal('requestAnimationFrame', (callback: (timestampMs: number) => void) => {
         frames.push(callback)
         return frames.length
@@ -1331,10 +1332,25 @@ describe('UISpecRenderer route map panel', () => {
 
     afterEach(() => { vi.unstubAllGlobals() })
 
+    let now = 0
+
     function step(timestampMs: number) {
+      now = timestampMs
       const due = frames
       frames = []
       act(() => { for (const frame of due) frame(timestampMs) })
+    }
+
+    /**
+     * Delivers `durationMs` of frames the way a painting tab does, at 100ms each.
+     * The crawl counts the gap between frames rather than the time since it
+     * started — a gap wider than a slow frame is a tab that stopped painting, and
+     * spending the span through one would be the teleport it exists to avoid — so
+     * time only passes here in frames a tab could actually have delivered.
+     */
+    function advance(durationMs: number) {
+      const target = now + durationMs
+      while (now < target) step(Math.min(now + 100, target))
     }
 
     function reading() {
@@ -1351,7 +1367,7 @@ describe('UISpecRenderer route map panel', () => {
       const start = reading()
       expect(start.percent).toBe('模拟行程进度 40%')
 
-      step(5000)
+      advance(5000)
       const halfway = reading()
       expect(halfway.percent).toBe('模拟行程进度 50%')
       expect(halfway.vehicle).not.toBe(start.vehicle)
@@ -1361,14 +1377,14 @@ describe('UISpecRenderer route map panel', () => {
       render(<UISpecRenderer spec={splitSpec(crawlProps)} onAction={vi.fn()} pending={false} />)
 
       step(0)
-      step(60_000)
+      advance(11_000)
       expect(reading().percent).toBe('模拟行程进度 60%')
 
       // The span is spent, so nothing further is scheduled and the marker holds
       // well short of the 100% it would reach if this were a run to the end.
       expect(frames).toHaveLength(0)
       const settled = reading()
-      step(120_000)
+      advance(5_000)
       expect(reading()).toEqual(settled)
     })
 
@@ -1382,7 +1398,7 @@ describe('UISpecRenderer route map panel', () => {
     it('restarts from the new authored value when a new spec arrives mid-crawl', () => {
       const { rerender } = render(<UISpecRenderer spec={splitSpec(crawlProps)} onAction={vi.fn()} pending={false} />)
       step(0)
-      step(5000)
+      advance(5000)
       expect(reading().percent).toBe('模拟行程进度 50%')
 
       // A new checkpoint is the truth; whatever the last span had crawled to is

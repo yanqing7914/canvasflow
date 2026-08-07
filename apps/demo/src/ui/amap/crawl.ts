@@ -62,6 +62,26 @@ export function prefersReducedMotion(): boolean {
 }
 
 /**
+ * The largest gap between two frames the crawl will treat as elapsed time.
+ *
+ * A frame loop that stops delivering frames looks exactly like a slow one: the
+ * next callback simply carries a later timestamp. The difference matters here
+ * because the two readings mean opposite things. Sixteen milliseconds late is a
+ * busy machine, and the span should absorb it. Thirty seconds late is a tab that
+ * was in the background, and treating that as elapsed would have the marker
+ * consume the whole span while nobody was looking and snap to the bound on the
+ * driver's return — inventing the one thing this animation exists to avoid, a
+ * car that teleports between authored checkpoints.
+ *
+ * So a gap wider than this counts for this much and no more. 200ms is five
+ * frames per second: below anything a painting tab produces, above the longest
+ * stall a busy one plausibly has. The cost of the clamp is that a genuinely slow
+ * machine walks the span a little slower than the fixture authored, which is the
+ * right way round — the span is a distance the car covers, not a countdown.
+ */
+const MAX_FRAME_GAP_MS = 200
+
+/**
  * Starts a crawl and returns a handle that stops it.
  *
  * Returns `null` when there is nothing to animate — no span, a bound already
@@ -77,16 +97,20 @@ export function startCrawl(options: CrawlOptions): CrawlHandle | null {
   if (prefersReducedMotion()) return null
 
   const durationMs = span.durationSeconds * 1000
-  let startedAt: number | undefined
+  let lastAt: number | undefined
+  let elapsed = 0
   let handle: number | undefined
   let stopped = false
 
   const tick = (timestampMs: number) => {
     if (stopped) return
-    // The first callback establishes the origin rather than a separate clock
-    // read, so a scheduler that fires late does not lose the elapsed time.
-    if (startedAt === undefined) startedAt = timestampMs
-    const elapsed = timestampMs - startedAt
+    // Time is accumulated frame by frame rather than measured from an origin,
+    // because only the per-frame gap says whether the loop was running. The
+    // first callback establishes the previous timestamp and contributes nothing,
+    // so a scheduler that starts late does not start the span already advanced.
+    const sinceLastFrame = lastAt === undefined ? 0 : timestampMs - lastAt
+    lastAt = timestampMs
+    elapsed += Math.min(Math.max(sinceLastFrame, 0), MAX_FRAME_GAP_MS)
     const fraction = elapsed / durationMs
 
     if (fraction >= 1) {
