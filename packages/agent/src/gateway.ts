@@ -62,6 +62,17 @@ const returnTripPolicyErrorCodes = new Set([
   'VEHICLE_MOVING',
 ])
 
+/**
+ * The operation side answers are replayed under.
+ *
+ * Deliberately the idempotency keyspace rather than the event one: an ordinary
+ * event replay is keyed by the client's own event id, so any key derived from
+ * that id and stored beside it could be spelled by a client. Operations are
+ * minted here — `task:reset`, `action:…`, `confirmation:…`, and this one — and
+ * are not part of the request surface, so a caller cannot land in this row.
+ */
+const SIDE_ANSWER_OPERATION = 'event:side-answer'
+
 function enforceGatewayProviderMode(registry: ProviderRegistry, mode: ProviderMode): ProviderRegistry {
   return Object.fromEntries(
     Object.entries(registry).map(([name, provider]) => [
@@ -2234,7 +2245,7 @@ export class AgentGateway {
    * that response back whole: same snapshot, same spoken line, no second bump.
    */
   #freshSideAnswer(taskId: string, current: StoredTask, eventId: string): StoredEventResult | undefined {
-    const previous = this.#store.getEventResult(taskId, sideAnswerKey(eventId))
+    const previous = this.#store.getIdempotencyResult(taskId, SIDE_ANSWER_OPERATION, eventId)
     if (!previous) return undefined
     const fresh = previous.stored.task.taskRevision === current.task.taskRevision
       && previous.stored.ui.uiRevision === current.ui.uiRevision
@@ -2247,7 +2258,7 @@ export class AgentGateway {
     stored: StoredTask,
     assistant: { text: string; shouldSpeak: boolean },
   ): void {
-    this.#store.recordEventResult(taskId, sideAnswerKey(eventId), { stored, effects: [], assistant })
+    this.#store.recordIdempotencyResult(taskId, SIDE_ANSWER_OPERATION, eventId, { stored, effects: [], assistant })
   }
 
   /**
@@ -2467,7 +2478,6 @@ function weatherSpokenSummary(data: WeatherOutput, forArrival: boolean, returnin
 /** The demo calendar's fixture day; the shipped fixture data lives on it. */
 const FIXTURE_CALENDAR_DATE = '2026-07-22'
 
-/** One short spoken answer; the card lists the entries. */
 /**
  * Whether the car has already left for the airport.
  *
@@ -2476,16 +2486,6 @@ const FIXTURE_CALENDAR_DATE = '2026-07-22'
  * question belongs. What marks the crossing is navigation going active, which is
  * what `start-navigation` does and what every later phase inherits.
  */
-/**
- * The keyspace side answers are replayed from, held apart from the one ordinary
- * events use so the two replay rules never meet. A real event would have to be
- * named after this prefix plus another event's id to collide, and event ids are
- * minted per utterance.
- */
-function sideAnswerKey(eventId: string): string {
-  return `side-answer:${eventId}`
-}
-
 function hasDeparted(task: AirportPickupTaskState): boolean {
   return task.navigation?.status === 'active'
     || task.phase === 'driving-to-airport'

@@ -3217,6 +3217,26 @@ describe('AgentGateway', () => {
       expect(second.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
     })
 
+    it('lets an ordinary event through even when its id is spelled like a side-answer key', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-keyspace', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-keyspace', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+      expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+
+      // Side answers live in the gateway's own operation keyspace, so no event id a
+      // client can spell reaches them. This one is named after the recorded answer
+      // on purpose and is still executed as the event it is.
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-collision', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'side-answer:weather-keyspace', type: 'provider.timeout', provider: 'flight.get-status', timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(moved.task.processedEventIds).toContain('side-answer:weather-keyspace')
+      expect(moved.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+    })
+
     it('answers a duplicate afresh once another side answer has published over it', () => {
       const gateway = createGateway()
       const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
