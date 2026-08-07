@@ -9,6 +9,8 @@ const MAX_TIMEOUT_MS = 30_000
 const MAX_RESPONSE_BYTES = 1024 * 1024
 /** Refresh the tenant token this long before Lark says it expires. */
 const TOKEN_REFRESH_MARGIN_SECONDS = 300
+/** Pages the events read will follow before calling the day incomplete. */
+const MAX_EVENT_PAGES = 10
 /** Every calendar value the demo renders is expressed in this offset. */
 const CALENDAR_UTC_OFFSET = '+08:00'
 const CALENDAR_UTC_OFFSET_MS = 8 * 60 * 60 * 1000
@@ -85,21 +87,41 @@ export class LarkCalendarAdapter implements ScheduleAdapter {
     const nowMs = this.#now()
     const startOfDayMs = startOfCalendarDayMs(nowMs)
     const endOfDayMs = startOfDayMs + 24 * 60 * 60 * 1000
-    const url = new URL(
-      `/open-apis/calendar/v4/calendars/${encodeURIComponent(this.#calendarId)}/events`,
-      this.#endpoint,
-    )
-    url.searchParams.set('start_time', String(Math.floor(Math.max(nowMs, startOfDayMs) / 1000)))
-    url.searchParams.set('end_time', String(Math.floor(endOfDayMs / 1000)))
 
-    const payload = await this.#requestJson(url.href, {
-      method: 'GET',
-      headers: { authorization: `Bearer ${token}` },
-    })
-    if (!isRecord(payload) || payload.code !== 0 || !isRecord(payload.data)) {
-      throw new LarkCalendarError('CALENDAR_RESPONSE_INVALID')
+    // The events endpoint is paginated: follow page_token until has_more goes
+    // false. A day that still reports more pages past the cap is treated as an
+    // invalid read rather than silently truncated — a card that presents part
+    // of the day as the whole day is worse than the fixture fallback.
+    const items: unknown[] = []
+    let pageToken: string | undefined
+    for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
+      const url = new URL(
+        `/open-apis/calendar/v4/calendars/${encodeURIComponent(this.#calendarId)}/events`,
+        this.#endpoint,
+      )
+      url.searchParams.set('start_time', String(Math.floor(Math.max(nowMs, startOfDayMs) / 1000)))
+      url.searchParams.set('end_time', String(Math.floor(endOfDayMs / 1000)))
+      if (pageToken) url.searchParams.set('page_token', pageToken)
+
+      const payload = await this.#requestJson(url.href, {
+        method: 'GET',
+        headers: { authorization: `Bearer ${token}` },
+      })
+      if (!isRecord(payload) || payload.code !== 0 || !isRecord(payload.data)) {
+        throw new LarkCalendarError('CALENDAR_RESPONSE_INVALID')
+      }
+      if (Array.isArray(payload.data.items)) items.push(...payload.data.items)
+      const hasMore = payload.data.has_more === true
+      const nextToken = typeof payload.data.page_token === 'string' && payload.data.page_token
+        ? payload.data.page_token
+        : undefined
+      if (!hasMore) break
+      if (!nextToken || page === MAX_EVENT_PAGES - 1) {
+        throw new LarkCalendarError('CALENDAR_RESPONSE_INVALID')
+      }
+      pageToken = nextToken
     }
-    const items = Array.isArray(payload.data.items) ? payload.data.items : []
+
     const events = items
       .flatMap((item) => {
         const event = mapLarkEvent(item)

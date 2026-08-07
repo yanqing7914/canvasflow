@@ -24,6 +24,14 @@ function eventsPayload(items: unknown[]) {
   return { code: 0, msg: 'ok', data: { items, has_more: false } }
 }
 
+function eventsPage(items: unknown[], pageToken?: string) {
+  return {
+    code: 0,
+    msg: 'ok',
+    data: { items, has_more: pageToken !== undefined, ...(pageToken ? { page_token: pageToken } : {}) },
+  }
+}
+
 function larkEvent(overrides: Record<string, unknown> = {}) {
   return {
     event_id: 'lark-event-1',
@@ -93,6 +101,52 @@ describe('LarkCalendarAdapter', () => {
     nowMs += (7200 - 200) * 1000
     await adapter.listToday()
     expect(tokenExchanges).toBe(2)
+  })
+
+  it('follows pagination and merges every page into one ordered reading', async () => {
+    const later = larkEvent({
+      event_id: 'lark-event-2',
+      summary: '晚间复盘',
+      start_time: { timestamp: String(Math.floor(Date.parse('2026-07-22T22:30:00+08:00') / 1000)) },
+      end_time: { timestamp: String(Math.floor(Date.parse('2026-07-22T23:00:00+08:00') / 1000)) },
+      location: undefined,
+    })
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(jsonResponse(tokenPayload()))
+      // Later event arrives on the FIRST page, earlier on the second: the merge
+      // must re-sort across pages, not just concatenate.
+      .mockResolvedValueOnce(jsonResponse(eventsPage([later], 'page-2')))
+      .mockResolvedValueOnce(jsonResponse(eventsPage([larkEvent()])))
+    const adapter = adapterWith(fetch as typeof globalThis.fetch)
+
+    const result = await adapter.listToday()
+
+    expect(result.events.map((event) => event.eventId)).toEqual(['lark-event-1', 'lark-event-2'])
+    const pagedCall = fetch.mock.calls[2]!
+    expect(new URL(String(pagedCall[0])).searchParams.get('page_token')).toBe('page-2')
+  })
+
+  it('treats a has_more page without a page token as an invalid reading', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(jsonResponse(tokenPayload()))
+      .mockResolvedValueOnce(jsonResponse({ code: 0, msg: 'ok', data: { items: [larkEvent()], has_more: true } }))
+    const adapter = adapterWith(fetch as typeof globalThis.fetch)
+
+    // Presenting part of the day as the whole day is worse than the fixture
+    // fallback, so an unfollowable pagination chain must throw.
+    await expect(adapter.listToday()).rejects.toMatchObject({ code: 'CALENDAR_RESPONSE_INVALID' })
+  })
+
+  it('refuses a pagination chain longer than the page cap instead of truncating it', async () => {
+    let pages = 0
+    const fetch = vi.fn<typeof globalThis.fetch>((url) => {
+      if (String(url).includes('tenant_access_token')) return Promise.resolve(jsonResponse(tokenPayload()))
+      pages += 1
+      return Promise.resolve(jsonResponse(eventsPage([larkEvent()], `page-${pages}`)))
+    })
+    const adapter = adapterWith(fetch as typeof globalThis.fetch)
+
+    await expect(adapter.listToday()).rejects.toMatchObject({ code: 'CALENDAR_RESPONSE_INVALID' })
   })
 
   it('drops cancelled and unmappable events instead of failing the reading', async () => {
