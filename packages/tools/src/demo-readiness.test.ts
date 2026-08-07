@@ -200,12 +200,17 @@ function executeReadTool(
 describe('voice fallback fixtures', () => {
   const manifest = voiceFallbackManifest
 
-  it('ships canonical task, flight-number, and low-confidence samples', () => {
+  it('ships the canonical main-flow and low-confidence samples', () => {
     expect(manifest).toMatchObject({ version: '1.0', language: 'zh-CN', sampleRateHz: 16000, channels: 1 })
     expect(manifest.samples.map((sample) => sample.id)).toEqual([
       'create-airport-pickup',
+      'select-first-flight',
       'flight-number',
       'noisy-create',
+      'check-weather',
+      'start-navigation',
+      'send-weather-reminder',
+      'dismiss-weather-advisory',
     ])
     expect(manifest.samples.find((sample) => sample.id === 'noisy-create')).toMatchObject({
       requiresConfirmation: true,
@@ -225,6 +230,7 @@ describe('voice fallback fixtures', () => {
         sampleRateHz: manifest.sampleRateHz,
         bitsPerSample: 16,
       })
+      expect(readFileSync(resolve(VOICE_DIR, sample.file)).length).toBeLessThan(10 * manifest.sampleRateHz * manifest.channels * 2 + 1024)
     }
   })
 

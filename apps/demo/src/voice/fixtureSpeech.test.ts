@@ -60,7 +60,16 @@ const microtasks = () => new Promise<void>((resolve) => { setTimeout(resolve, 0)
 describe('voiceFixtureSamples', () => {
   it('exposes every sample from transcripts.json with a label and an audio URL', () => {
     expect(voiceFixtureSamples.map((entry) => entry.id))
-      .toEqual(['create-airport-pickup', 'flight-number', 'noisy-create'])
+      .toEqual([
+        'create-airport-pickup',
+        'select-first-flight',
+        'flight-number',
+        'noisy-create',
+        'check-weather',
+        'start-navigation',
+        'send-weather-reminder',
+        'dismiss-weather-advisory',
+      ])
     for (const entry of voiceFixtureSamples) {
       expect(entry.label).not.toBe('')
       expect(entry.audioUrl).not.toBe('')
@@ -133,13 +142,13 @@ describe('playFixtureSampleAudio', () => {
   it('plays the sample and swallows playback failures', () => {
     const audio = new FakeFixtureAudio()
     audio.playRejects = true
-    expect(() => playFixtureSampleAudio(sample, () => audio)).not.toThrow()
+    expect(playFixtureSampleAudio(sample, () => audio)).toBe(audio)
     expect(audio.played).toBe(1)
   })
 
   it('does nothing when the factory yields no element', () => {
     const factory = vi.fn().mockReturnValue(null)
-    expect(() => playFixtureSampleAudio(sample, factory)).not.toThrow()
+    expect(playFixtureSampleAudio(sample, factory)).toBeNull()
     expect(factory).toHaveBeenCalledWith(sample.audioUrl)
   })
 })

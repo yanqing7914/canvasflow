@@ -1179,6 +1179,83 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   await readControls(page, 'collecting-information')
 })
 
+test('covers the main trip beats with state-bound WAV fallbacks', async ({ page }) => {
+  // Force the deterministic degraded path: the WAV is presentation, while its
+  // canonical transcript remains the input payload under test.
+  await page.addInitScript(() => {
+    const scope = window as unknown as Record<string, unknown>
+    delete scope.SpeechRecognition
+    delete scope.webkitSpeechRecognition
+  })
+  await page.goto('/')
+
+  async function replay(label: string, expectedText: string) {
+    await page.getByRole('button', { name: '打开演示控制' }).click()
+    await page.getByRole('dialog', { name: '演示控制' }).getByRole('button', { name: label }).click()
+    const input = page.getByLabel('任务输入')
+    await expect(input).toHaveValue(expectedText, { timeout: 15_000 })
+    await page.getByRole('button', { name: '发送' }).click()
+  }
+
+  await replay('接机指令', '我现在要去机场接妈妈和豆豆')
+  await expect(page.getByText('选择要接的航班')).toBeVisible()
+
+  await replay('选择第一个航班', '选第一个')
+  await expect(page.getByText('准备出发')).toBeVisible()
+
+  await replay('查询到达天气', '到的时候天气怎么样')
+  await expect(page.locator('.ui-card--weather-card')).toBeVisible()
+
+  await replay('语音回放：开始导航', '开始导航')
+  await expect(page.getByText('途中')).toBeVisible()
+
+  await advanceFlow(page) // charging.started
+  await advanceFlow(page) // flight.updated in-air -> advisory
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
+
+  await replay('语音回放：提醒带伞', '提醒乘客带伞')
+  await expect(page.getByRole('button', { name: '确认发送' })).toBeVisible()
+  await page.getByRole('button', { name: '确认发送' }).click()
+  await expect(page.locator('.ui-card--message-preview')).toHaveCount(0)
+
+  // The side-action voice turn must not consume the next authored timeline row.
+  const next = await advanceFlow(page)
+  expect(next.task.processedEventIds).toContain('event-charging-completed')
+})
+
+test('replays the direct flight-number and advisory-dismiss WAV branches', async ({ page }) => {
+  await page.addInitScript(() => {
+    const scope = window as unknown as Record<string, unknown>
+    delete scope.SpeechRecognition
+    delete scope.webkitSpeechRecognition
+  })
+  await page.goto('/')
+
+  async function replay(label: string, expectedText: string) {
+    await page.getByRole('button', { name: '打开演示控制' }).click()
+    await page.getByRole('dialog', { name: '演示控制' }).getByRole('button', { name: label }).click()
+    const input = page.getByLabel('任务输入')
+    await expect(input).toHaveValue(expectedText, { timeout: 15_000 })
+    await page.getByRole('button', { name: '发送' }).click()
+  }
+
+  await replay('接机指令', '我现在要去机场接妈妈和豆豆')
+  await replay('补充航班号', '航班 MU5102')
+  await expect(page.getByText('准备出发')).toBeVisible()
+  await replay('语音回放：开始导航', '开始导航')
+
+  await advanceFlow(page) // charging.started
+  await advanceFlow(page) // flight.updated in-air -> advisory
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
+
+  await replay('语音回放：暂不处理', '暂不处理')
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toHaveCount(0)
+  await expect(page.locator('[data-component-type="navigation-summary"]')).toBeVisible()
+
+  const next = await advanceFlow(page)
+  expect(next.task.processedEventIds).toContain('event-charging-completed')
+})
+
 test('applies an out-of-band task update through the durable SSE stream', async ({ page }) => {
   await page.goto('/')
   const createResponsePromise = page.waitForResponse((response) => (

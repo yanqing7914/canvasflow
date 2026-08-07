@@ -85,6 +85,58 @@ function hasContextualTripTitle(spec: UISpec): boolean {
   return spec.components.some((component) => conclusionComponentTypes.has(component.type))
 }
 
+function isDrivingVehicle(vehicle: VehicleContext): boolean {
+  return vehicle.speedKph > 0 || vehicle.gear !== 'P'
+}
+
+function visibleComponent(
+  spec: UISpec,
+  componentId: string,
+  driving: boolean,
+): UISpec['components'][number] | undefined {
+  const laidOutIds = new Set(Object.values(spec.layout.slots).flat())
+  const component = spec.components.find((candidate) => candidate.id === componentId)
+  if (!component || !laidOutIds.has(component.id)) return undefined
+  if (component.visibility === 'driving-only' && !driving) return undefined
+  if (component.visibility === 'parked-only' && driving) return undefined
+  return component
+}
+
+function registeredAction(spec: UISpec, actionId: string): UISpec['actions'][number] | undefined {
+  // The renderer's action map is first-wins for duplicate ids; capability
+  // checks must resolve the same action the visible button would dispatch.
+  return spec.actions.find((action) => action.id === actionId)
+}
+
+function hasStartNavigationCapability(spec: UISpec, driving: boolean): boolean {
+  const component = visibleComponent(spec, 'navigation-plan', driving)
+  if (component?.type !== 'navigation-summary' || !component.actions?.includes('start-navigation')) return false
+  const action = registeredAction(spec, 'start-navigation')
+  return action?.event.type === 'tool-request' && action.event.actionToken === 'start-navigation'
+}
+
+function hasFlightChoiceCapability(spec: UISpec, driving: boolean): boolean {
+  const component = visibleComponent(spec, 'flight-choices', driving)
+  if (component?.type !== 'flight-choices') return false
+  const firstChoice = component.props.choices[0]
+  if (!firstChoice) return false
+  const action = registeredAction(spec, firstChoice.actionId)
+  return action?.event.type === 'agent-message'
+    && action.event.text.replace(/\s+/g, '') === `航班号${firstChoice.flightNumber}`
+}
+
+function hasWeatherAdvisoryCapability(
+  spec: UISpec,
+  driving: boolean,
+  actionId: 'send-umbrella-reminder' | 'dismiss-weather-advisory',
+  expectedText: string,
+): boolean {
+  const component = visibleComponent(spec, 'weather-advisory', driving)
+  if (component?.type !== 'weather-card' || !component.actions?.includes(actionId)) return false
+  const action = registeredAction(spec, actionId)
+  return action?.event.type === 'agent-message' && action.event.text === expectedText
+}
+
 /** Whether the Gateway accepted the input, plus any reply worth speaking. */
 type InputOutcome = { sent: boolean; speak?: string }
 
@@ -255,9 +307,27 @@ export default function App({
       setDraftProtected(false)
       return { sent: true }
     }
-    const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
+    const registeredStartNavigation = hasStartNavigationCapability(
+      response.ui,
+      isDrivingVehicle(vehicleContext),
+    )
+    if (/^开始导航[。！!]?$/.test(trimmed.replace(/\s+/g, '')) && registeredStartNavigation) {
+      const nextTimelineIndex = nextIndexForTimelineEvent('navigation.started')
+      const next = await run(() => api.action(response, 'start-navigation', 'navigation-plan'))
+      if (!next) return { sent: false }
+      if (nextTimelineIndex !== undefined && navigationStarted(response, next)) {
+        setStepIndex(consumeAdvisoryContext(nextTimelineIndex))
+      }
+      setText('')
+      setDraftProtected(false)
+      return { sent: true, speak: spokenReply(next) }
+    }
+    let nextTimelineIndex = timelineIndexForInput(trimmed)
     const next = await run(() => api.event(response.task, { type: 'user.input', text: trimmed }))
     if (!next) return { sent: false }
+    if (nextTimelineIndex === undefined && attachedFlight(response, next)) {
+      nextTimelineIndex = nextIndexForTimelineEvent('user.input')
+    }
     if (nextTimelineIndex !== undefined && movedTheTrip(response, next)) setStepIndex(nextTimelineIndex)
     setText('')
     setDraftProtected(false)
@@ -282,7 +352,19 @@ export default function App({
   // falls back to the real engine on its own.
   const armedFixtureRef = useRef<VoiceFixtureSample | null>(null)
   const fixtureAudioRef = useRef(fixtureAudio)
+  const degradedFixtureAudioRef = useRef<ReturnType<typeof playFixtureSampleAudio>>(null)
   fixtureAudioRef.current = fixtureAudio
+
+  function stopDegradedFixtureAudio() {
+    try {
+      degradedFixtureAudioRef.current?.pause()
+    } catch {
+      // Presentation audio may already have been released by the browser.
+    }
+    degradedFixtureAudioRef.current = null
+  }
+
+  useEffect(() => () => { stopDegradedFixtureAudio() }, [])
 
   // Voice runs when the browser has a real engine or a test injected one; a
   // browser with neither keeps today's disabled entry, and fixture replay
@@ -378,6 +460,37 @@ export default function App({
   const voiceFixtureReady = !pending && !draftBlocksReplay
     && (!voice.available || voice.state === 'idle' || voice.state === 'error' || voice.state === 'speaking')
 
+  function isVoiceFixtureAvailable(sample: VoiceFixtureSample): boolean {
+    if (!voiceFixtureReady) return false
+    if (sample.id === 'create-airport-pickup' || sample.id === 'noisy-create') return !task
+    if (!response || !spec) return false
+    const driving = isDrivingVehicle(vehicleContext)
+    if (sample.id === 'select-first-flight') {
+      return hasFlightChoiceCapability(spec, driving)
+    }
+    if (sample.id === 'flight-number') {
+      return response.task.phase === 'collecting-information' && response.task.flight === undefined
+    }
+    if (sample.id === 'check-weather') {
+      return response.task.flight !== undefined
+        && response.task.phase !== 'collecting-information'
+        && response.task.phase !== 'completed'
+        && response.task.phase !== 'cancelled'
+    }
+    if (sample.id === 'start-navigation') {
+      return hasStartNavigationCapability(spec, driving)
+    }
+    if (sample.id === 'send-weather-reminder') {
+      return response.task.weatherAdvisory?.status === 'active'
+        && hasWeatherAdvisoryCapability(spec, driving, 'send-umbrella-reminder', sample.text)
+    }
+    if (sample.id === 'dismiss-weather-advisory') {
+      return response.task.weatherAdvisory?.status === 'active'
+        && hasWeatherAdvisoryCapability(spec, driving, 'dismiss-weather-advisory', sample.text)
+    }
+    return false
+  }
+
   /**
    * The offline voice fallback (see fixtures/airport-pickup/voice): plays the
    * recorded utterance and delivers its canonical transcript. With a live voice
@@ -388,15 +501,17 @@ export default function App({
    * nothing auto-submits: every transcript waits for 发送.
    */
   function replayVoiceFixture(sample: VoiceFixtureSample) {
-    if (!voiceFixtureReady) return
+    if (!isVoiceFixtureAvailable(sample)) return
     closeControls()
     if (voice.available) {
+      stopDegradedFixtureAudio()
       setKeyboardRequested(false)
       armedFixtureRef.current = sample
       voice.press()
       return
     }
-    playFixtureSampleAudio(sample, fixtureAudioRef.current ?? undefined)
+    stopDegradedFixtureAudio()
+    degradedFixtureAudioRef.current = playFixtureSampleAudio(sample, fixtureAudioRef.current ?? undefined)
     setText(sample.text)
     setDraftProtected(true)
     setKeyboardRequested(true)
@@ -481,7 +596,7 @@ export default function App({
       // user input the composer sends, so the planner sees one kind of answer and
       // a card can never set a slot that typing could not. The draft field is
       // left alone: the pick is not the sentence they were writing.
-      const nextTimelineIndex = nextIndexForTimelineEvent('user.input')
+      const nextTimelineIndex = timelineIndexForInput(actionEvent.text)
       void run(() => api.event(response.task, { type: 'user.input', text: actionEvent.text })).then((next) => {
         if (!next || nextTimelineIndex === undefined || !movedTheTrip(response, next)) return
         setStepIndex(nextTimelineIndex)
@@ -491,7 +606,7 @@ export default function App({
         ? nextIndexForTimelineEvent('navigation.started')
         : undefined
       void run(() => api.action(response, actionId, componentId)).then((next) => {
-        if (!next || nextTimelineIndex === undefined) return
+        if (!next || nextTimelineIndex === undefined || !navigationStarted(response, next)) return
         setStepIndex(consumeAdvisoryContext(nextTimelineIndex))
       })
     }
@@ -510,11 +625,49 @@ export default function App({
       || after.task.processedEventIds.length !== before.task.processedEventIds.length
   }
 
+  function navigationStarted(before: AgentResponse, after: AgentResponse): boolean {
+    return movedTheTrip(before, after)
+      && after.task.phase === 'driving-to-airport'
+      && after.task.navigation?.status === 'active'
+  }
+
+  function attachedFlight(before: AgentResponse, after: AgentResponse): boolean {
+    return before.task.phase === 'collecting-information'
+      && before.task.flight === undefined
+      && after.task.phase === 'preparing'
+      && after.task.flight !== undefined
+  }
+
   function nextIndexForTimelineEvent(type: AirportPickupEvent['type']): number | undefined {
     const index = mainFlowTimeline.steps.findIndex((step, candidateIndex) =>
       candidateIndex >= stepIndex && !step.advisory && step.event.type === type,
     )
     return index === -1 ? undefined : index + 1
+  }
+
+  function timelineIndexForInput(value: string): number | undefined {
+    const compact = value.replace(/\s+/g, '')
+    const choosingFlight = response?.task.phase === 'collecting-information'
+      && response.task.flight === undefined
+    if (
+      choosingFlight
+      && /^(?:请|麻烦)?(?:帮我)?(?:选|要|接|就)?(?:选)?第(?:一|二|两|三|四|五|1|2|3|4|5)(?:个|班|条|架)?(?:航班|飞机)?(?:吧|好了)?[?？。！!]?$/.test(compact)
+    ) {
+      return nextIndexForTimelineEvent('user.input')
+    }
+    if (choosingFlight && /^(?:航班(?:号)?)?[A-Z]{2}\d{4}[。！!]?$/.test(compact.toUpperCase())) {
+      return nextIndexForTimelineEvent('user.input')
+    }
+    if (
+      response?.task.phase === 'waiting-for-passengers'
+      && /已经接到她们|接到她们了|家人(?:已经)?上车|她们(?:已经)?上车/.test(compact)
+    ) {
+      return nextIndexForTimelineEvent('user.confirmed-passengers-onboard')
+    }
+    if (response?.task.phase === 'returning-home' && /应用家庭座舱偏好/.test(compact)) {
+      return nextIndexForTimelineEvent('user.input')
+    }
+    return undefined
   }
 
   function toggleKeyboard() {
@@ -792,7 +945,7 @@ export default function App({
             </header>
             {spec && task
               ? <UISpecRenderer
-                driving={vehicleContext.speedKph > 0 || vehicleContext.gear !== 'P'}
+                driving={isDrivingVehicle(vehicleContext)}
                 onAction={handleAction}
                 pending={pending}
                 spec={spec}
@@ -913,15 +1066,27 @@ export default function App({
               <span className="console-voice-fallback__title">语音兜底回放</span>
               <div className="console-voice-fallback__actions">
                 {voiceFixtureSamples.map((sample) => (
-                  <button
-                    key={sample.id}
-                    className="voice-fallback-button"
-                    type="button"
-                    disabled={!voiceFixtureReady}
-                    onClick={() => replayVoiceFixture(sample)}
-                  >
-                    {sample.label}
-                  </button>
+                  (() => {
+                    const available = isVoiceFixtureAvailable(sample)
+                    const hintId = `${sample.id}-availability-hint`
+                    return (
+                      <span key={sample.id}>
+                        <button
+                          className="voice-fallback-button"
+                          type="button"
+                          disabled={!available}
+                          aria-describedby={!available && sample.unavailableHint ? hintId : undefined}
+                          title={available ? undefined : sample.unavailableHint}
+                          onClick={() => replayVoiceFixture(sample)}
+                        >
+                          {sample.label}
+                        </button>
+                        {!available && sample.unavailableHint
+                          ? <span id={hintId} className="sr-only">{sample.unavailableHint}</span>
+                          : null}
+                      </span>
+                    )
+                  })()
                 ))}
               </div>
               <p className="console-hint">
