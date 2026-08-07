@@ -366,7 +366,7 @@ export function composeAgentSpec(
       : weather
         ? weatherCardComponent(task, weather.data)
         : scheduleQuery
-          ? scheduleCardComponent(scheduleQuery.data.events)
+          ? scheduleCardComponent(scheduleQuery.data.events, scheduleQuery.meta.provider === 'live' ? 'live' : 'fixture')
           : undefined
     : undefined
   if (queryCard) {

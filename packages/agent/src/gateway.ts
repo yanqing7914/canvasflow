@@ -115,6 +115,14 @@ export type AgentGatewayOptions = {
   planner?: Pick<Planner, 'plan'>
   /** Trusted model provenance supplied by the persistent runtime for this operation. */
   modelUsed?: string
+  /**
+   * A live schedule reading the persistent runtime prefetched OUTSIDE the
+   * SQLite transaction (the gateway itself must never await). When the turn is
+   * a check-schedule query it answers from this instead of the fixture
+   * calendar; absent — not configured, prefetch failed — the fixture path is
+   * the fallback.
+   */
+  prefetchedSchedule?: ReadToolResults['calendar.query']
   mode?: ProviderMode
   /**
    * Side-effect runtime for opaque confirmations and preference-backed notify.
@@ -142,11 +150,13 @@ export class AgentGateway {
   readonly #preferences: Record<string, MemberPreferenceRecord>
   readonly #mode: ProviderMode
   readonly #modelUsed: string | undefined
+  readonly #prefetchedSchedule: ReadToolResults['calendar.query']
 
   constructor(options: AgentGatewayOptions = {}) {
     this.#store = options.store ?? new MemoryTaskStore()
     this.#mode = options.mode ?? 'fixture'
     this.#modelUsed = options.modelUsed
+    this.#prefetchedSchedule = options.prefetchedSchedule
     this.#now = options.now ?? (() => new Date().toISOString())
     this.#createId = options.createId ?? (() => crypto.randomUUID())
     const runtime = options.runtime ?? createSideEffectRuntime()
@@ -2338,14 +2348,20 @@ export class AgentGateway {
     startedAt: number,
   ): AgentResponse {
     const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
-    let schedule: ReadToolResults['calendar.query']
-    try {
-      schedule = this.#orchestrator.resolveSchedule?.(taskId, request.clientRequestId, {
-        date: FIXTURE_CALENDAR_DATE,
-      })
-    } catch (error) {
-      if (!(error instanceof ReadToolOrchestrationError)) this.#throwProviderError(error, current)
-      schedule = undefined
+    // A prefetched live reading wins; the deterministic fixture calendar is
+    // the fallback for every other case (not configured, prefetch failed, or
+    // the synchronous entry point that cannot prefetch at all). The composer
+    // reads the provenance off meta.provider, so nothing more is threaded.
+    let schedule: ReadToolResults['calendar.query'] = this.#prefetchedSchedule
+    if (!schedule) {
+      try {
+        schedule = this.#orchestrator.resolveSchedule?.(taskId, request.clientRequestId, {
+          date: FIXTURE_CALENDAR_DATE,
+        })
+      } catch (error) {
+        if (!(error instanceof ReadToolOrchestrationError)) this.#throwProviderError(error, current)
+        schedule = undefined
+      }
     }
 
     // Same as the weather notice: not recorded, so a retry actually retries.

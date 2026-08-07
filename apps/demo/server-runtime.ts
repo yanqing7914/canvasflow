@@ -3,7 +3,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { AgentGateway } from '@canvasflow/agent'
 import { createAgentHttpHandler, type AgentHttpGateway } from '@canvasflow/agent/http'
-import { ModelGateway, modelAdapterOptionsFromEnvironment } from '@canvasflow/agent'
+import { ModelGateway, larkCalendarAdapterFromEnvironment, modelAdapterOptionsFromEnvironment } from '@canvasflow/agent'
 import { messageSendInputSchema } from '@canvasflow/schema'
 import {
   PersistentAgentRuntime,
@@ -148,6 +148,7 @@ export function createConfiguredAgentRuntime(options: ConfiguredAgentRuntimeOpti
     mode,
     providerFactory: options.providerFactory ?? createE2eProviderFactory(environment),
     modelGateway: new ModelGateway(modelAdapterOptionsFromEnvironment(environment)),
+    scheduleAdapter: larkCalendarAdapterFromEnvironment(environment),
   })
 }
 

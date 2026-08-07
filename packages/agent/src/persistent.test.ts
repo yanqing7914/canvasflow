@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { createProviderRegistry, type ProviderRegistry } from '@canvasflow/tools'
+import { LarkCalendarAdapter } from './lark-calendar-adapter'
 import { ModelGateway } from './model-gateway'
 import { PersistentAgentRuntime, providerModeFromEnvironment } from './persistent'
 import type { Plan } from './planner'
@@ -753,6 +754,132 @@ describe('PersistentAgentRuntime', () => {
 
     expect(created.meta).toMatchObject({ mode: 'live', fallbackUsed: true })
     expect(created.task.flight).toMatchObject({ flightNumber: 'MU5102', trusted: false })
+  })
+
+  describe('live schedule adapter prefetch', () => {
+    const scheduleQuery = (agent: PersistentAgentRuntime, taskRevision: number, taskId: string, eventId = 'live-schedule') =>
+      agent.submitEventAsync(taskId, {
+        clientRequestId: `client-${eventId}`,
+        expectedTaskRevision: taskRevision,
+        event: { eventId, type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+    it('carries events from later Lark pages onto the live schedule card', async () => {
+      // A real paginated adapter, not a stub: the runtime-level proof that the
+      // prefetch seam surfaces a multi-page day in one card.
+      const nowMs = Date.parse('2026-07-22T12:00:00+08:00')
+      const larkEvent = (id: string, title: string, hour: string) => ({
+        event_id: id,
+        summary: title,
+        status: 'confirmed',
+        start_time: { timestamp: String(Math.floor(Date.parse(`2026-07-22T${hour}:00+08:00`) / 1000)) },
+      })
+      const fetch = vi.fn<typeof globalThis.fetch>()
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ code: 0, msg: 'ok', tenant_access_token: 'token-1', expire: 7200 }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ))
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ code: 0, msg: 'ok', data: { items: [larkEvent('page1-event', '产品评审', '14:00')], has_more: true, page_token: 'page-2' } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ))
+        .mockResolvedValueOnce(new Response(
+          JSON.stringify({ code: 0, msg: 'ok', data: { items: [larkEvent('page2-event', '晚间复盘', '21:00')], has_more: false } }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ))
+      const adapter = new LarkCalendarAdapter({
+        allowedHosts: ['open.feishu.cn'],
+        appId: 'cli_app',
+        appSecret: 'secret-value',
+        calendarId: 'primary-calendar',
+        fetch: fetch as typeof globalThis.fetch,
+        now: () => nowMs,
+      })
+      const agent = runtime(':memory:', { scheduleAdapter: adapter })
+      const created = agent.createTask(createRequest('live-schedule-paged'))
+
+      const asked = await scheduleQuery(agent, created.task.taskRevision, created.task.taskId, 'paged-schedule')
+
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('live')
+      expect(card.props.events.map((event) => event.title)).toEqual(['产品评审', '晚间复盘'])
+    })
+
+    it('answers a schedule query from the adapter and marks the card live', async () => {
+      const listToday = vi.fn(async () => ({
+        events: [{
+          eventId: 'lark-event-1',
+          title: '产品评审',
+          startAt: '2026-07-22T21:00:00+08:00',
+          location: '会议室 A',
+        }],
+      }))
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-create'))
+
+      const asked = await scheduleQuery(agent, created.task.taskRevision, created.task.taskId)
+
+      expect(listToday).toHaveBeenCalledTimes(1)
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('live')
+      expect(card.props.events).toEqual([
+        expect.objectContaining({ title: '产品评审', location: '会议室 A' }),
+      ])
+      // Query contract is unchanged: no task fact moved, and the reading is
+      // transient — it lives in the published UI only.
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+    })
+
+    it('falls back to the fixture calendar when the adapter fails', async () => {
+      const listToday = vi.fn(async () => {
+        throw new Error('lark unreachable')
+      })
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-fallback'))
+
+      const asked = await scheduleQuery(agent, created.task.taskRevision, created.task.taskId, 'fallback-schedule')
+
+      expect(listToday).toHaveBeenCalledTimes(1)
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('fixture')
+      expect(card.props.events).toEqual([
+        expect.objectContaining({ title: '豆豆的睡前故事' }),
+      ])
+    })
+
+    it('never consults the adapter for non-schedule turns', async () => {
+      const listToday = vi.fn(async () => ({ events: [] }))
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-other'))
+
+      await agent.submitEventAsync(created.task.taskId, {
+        clientRequestId: 'client-not-schedule',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'not-schedule', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(listToday).not.toHaveBeenCalled()
+    })
+
+    it('leaves the synchronous entry point on the fixture path', () => {
+      const listToday = vi.fn(async () => ({ events: [] }))
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-sync'))
+
+      const asked = agent.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-sync-schedule',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'sync-schedule', type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(listToday).not.toHaveBeenCalled()
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('fixture')
+    })
   })
 })
 

@@ -101,9 +101,18 @@ Mutation requests use client or operation idempotency keys. SSE clients receive 
 | `AGENT_MODEL_API_KEY` | unset | Deployment-injected credential for the model adapter; required only when model planning is enabled and must never be committed. |
 | `AGENT_MODEL_ID` | unset | Model identifier reported as `meta.modelUsed` only when a validated model plan is applied. |
 | `AGENT_MODEL_TIMEOUT_MS` | `5000` | Optional model request timeout in milliseconds, from 1 through 30000. |
+| `AGENT_CALENDAR_MODE` | unset | Live calendar mode for check-schedule queries. Leave unset or set `disabled` for the fixture calendar; `lark` enables the Lark (飞书) calendar adapter. |
+| `AGENT_CALENDAR_APP_ID` | unset | Lark self-built app id; required only when `AGENT_CALENDAR_MODE=lark`. |
+| `AGENT_CALENDAR_APP_SECRET` | unset | Lark app secret used to exchange tenant access tokens; required only in lark mode and must never be committed. |
+| `AGENT_CALENDAR_CALENDAR_ID` | unset | The Lark calendar to read. The calendar must be visible to the app (shared with it, or app-owned). |
+| `AGENT_CALENDAR_ALLOWED_HOSTS` | unset | Comma-separated allowlist for the Lark endpoint host; required only in lark mode. |
+| `AGENT_CALENDAR_ENDPOINT` | `https://open.feishu.cn` | Optional HTTPS Lark open-platform origin; its host must be on the allowlist. |
+| `AGENT_CALENDAR_TIMEOUT_MS` | `5000` | Optional calendar request timeout in milliseconds, from 1 through 30000. |
 | `DEMO_STATIC_DIR` | unset | Static directory served by the Agent server. The preview launcher sets it to `apps/demo/dist`. |
 
 `fixture` and `mock` use the built-in deterministic Provider registry. `live` is intentionally fail-closed: the runtime requires an explicitly injected provider factory that guarantees durable external idempotency. Model planning is independently configured: rules remain the first path, and the model can only supply validated canonicalization for otherwise unknown supported input. Missing, failed, timed-out, low-confidence, stale, terminal, or idempotent-replay inputs do not call the model and retain the deterministic behavior. Successful model plans persist their model ID in the task snapshot and return it as `meta.modelUsed`; rules and deterministic fallbacks omit that field.
+
+The live calendar follows the same shape: the adapter is consulted outside the SQLite transaction, only for turns the deterministic planner classifies as schedule queries, and any failure falls back to the fixture calendar — the schedule card labels its provenance (`live` or `fixture`) truthfully.
 
 Never commit credentials or `.env` files. Live Provider credentials must be supplied by the deployment environment.
 
