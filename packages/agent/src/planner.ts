@@ -5,6 +5,7 @@ import { parsePassengers, stripPassengerPhonePhrases } from './passengers'
 export type PlannerIntent =
   | 'create-airport-pickup'
   | 'provide-flight-number'
+  | 'pick-flight-choice'
   | 'start-navigation'
   | 'plan-charging'
   | 'confirm-passengers-onboard'
@@ -24,6 +25,8 @@ export type PlannerSlotUpdates = {
   charging?: Pick<AirportPickupTaskState['charging'], 'recommended' | 'accepted' | 'status'>
   passengersOnboard?: boolean
   cancelled?: boolean
+  /** 1-based row on the arrivals board; the gateway resolves it to a flight. */
+  flightChoiceOrdinal?: number
 }
 
 export type Plan = {
@@ -131,6 +134,20 @@ export function planAirportPickup(input: PlannerInput): Plan {
       missingSlots: [],
       proposedEvents: [{ ...eventBase, type: 'user.input', text }],
       assistantText: '好的，已准备应用已授权的座舱偏好。',
+    }
+  }
+
+  const flightChoiceOrdinal = parseFlightChoiceOrdinal(compactText)
+  if (flightChoiceOrdinal !== undefined) {
+    // Meaningful only while a board is on screen; the gateway checks that and
+    // falls back to the ordinary unknown reply when there is nothing to pick.
+    return {
+      intent: 'pick-flight-choice',
+      confidence: 0.97,
+      slotUpdates: { flightChoiceOrdinal },
+      missingSlots: pickupMissingSlots(state, passengers, flightNumber),
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: `好的，选第 ${flightChoiceOrdinal} 个航班。`,
     }
   }
 
@@ -245,6 +262,24 @@ function isWeatherQuery(text: string): boolean {
  */
 function isScheduleQuery(text: string): boolean {
   return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:我)?(?:今天)?(?:的)?(?:还)?有?(?:什么|哪些)?(?:日程|待办|安排|行程安排)(?:事项)?(?:怎么样|有哪些|有什么)?[?？。！!]?$/.test(text)
+}
+
+const CHINESE_ORDINAL_DIGITS: Record<string, number> = {
+  一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
+  '1': 1, '2': 2, '3': 3, '4': 4, '5': 5,
+}
+
+/**
+ * A whole-utterance pick of an arrivals-board row: 第三个 / 选第三个 / 第3个航班.
+ * Anchored so a sentence that happens to contain a rank keeps its own meaning,
+ * and capped at five because the board never shows more rows than that. The
+ * ordinal is 1-based and means nothing outside the board the driver is looking
+ * at — the gateway resolves it against the same rows the composer rendered.
+ */
+function parseFlightChoiceOrdinal(text: string): number | undefined {
+  const match = /^(?:请|麻烦)?(?:帮我)?(?:选|要|接|就)?(?:选)?第([一二两三四五12345])(?:个|班|条|架)?(?:航班|飞机)?(?:吧|好了)?[?？。！!]?$/.exec(text)
+  if (!match) return undefined
+  return CHINESE_ORDINAL_DIGITS[match[1]!]
 }
 
 /**

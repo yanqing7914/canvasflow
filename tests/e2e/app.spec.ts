@@ -928,6 +928,23 @@ test('prepares the trip from a flight picked off the arrivals board', async ({ p
   await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
 })
 
+test('prepares the trip from a spoken ordinal against the rendered board', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await readControls(page, 'collecting-information')
+
+  // 第三个 must mean the third row the driver is looking at — read it off the
+  // rendered board rather than assuming fixture order.
+  const rows = page.locator('.ui-flight-choices__row')
+  const thirdOnScreen = (await rows.nth(2).textContent())?.match(/[A-Z]{2}\d{4}/)?.[0]
+  expect(thirdOnScreen).toBeTruthy()
+
+  await sendText(page, '选第三个')
+  await readControls(page, 'preparing')
+  await expect(page.locator('.ui-card--flight-status')).toContainText(thirdOnScreen!)
+  await expect(page.locator('.ui-flight-choices')).toHaveCount(0)
+})
+
 /**
  * The whole scenario in one pass, driver-side only: the trip is asked for in
  * words, the flight is picked off a board, the departure time is asked about, the

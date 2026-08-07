@@ -881,6 +881,41 @@ describe('PersistentAgentRuntime', () => {
       expect(card.props.freshness).toBe('fixture')
     })
   })
+
+  it('rewrites a spoken ordinal before planning so the configured planner sees the flight number', async () => {
+    // The contract under test: the ordinal is resolved to its flight number
+    // BEFORE the pre-planning seam, so whatever planner the runtime is
+    // configured with — the model gateway here — interprets the rewritten
+    // words exactly as it would the typed number. Nothing about planning is
+    // bypassed; the ordinal is just a faster way to say the number.
+    const modelGateway = new ModelGateway({
+      adapter: { modelId: 'unused-model', plan: async () => { throw new Error('rules answer flight numbers; the model must not be called') } },
+    })
+    const plan = vi.spyOn(modelGateway, 'plan')
+    const agent = runtime(':memory:', { modelGateway })
+    const created = await agent.createTaskAsync({
+      ...createRequest('ordinal-model-create'),
+      input: { type: 'text', text: '我现在要去机场接妈妈和豆豆' },
+    })
+    const board = created.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices') throw new Error('expected a flight-choices board')
+    const thirdOnScreen = board.props.choices[2]!.flightNumber
+
+    const picked = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'client-ordinal-model',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'ordinal-model', type: 'user.input', text: '选第三个', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(picked.task.phase).toBe('preparing')
+    expect(picked.task.flight?.flightNumber).toBe(thirdOnScreen)
+    // The configured planner was consulted for the ordinal turn with the
+    // REWRITTEN text — the same words a typed pick would carry — never the
+    // raw ordinal, and rules recognized it so the adapter stayed cold.
+    expect(plan).toHaveBeenCalledTimes(2)
+    expect(plan.mock.calls[1]![0]).toMatchObject({ text: `航班号 ${thirdOnScreen}` })
+    expect(picked.meta.modelUsed).toBeUndefined()
+  })
 })
 
 function returningTask(agent: PersistentAgentRuntime) {

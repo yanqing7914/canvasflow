@@ -222,6 +222,30 @@ describe('airport pickup Planner', () => {
     expect(planAirportPickup({ text: '安排一下接机', timestamp }).intent).toBe('unknown')
   })
 
+  it.each([
+    ['第三个', 3],
+    ['选第三个', 3],
+    ['第3个', 3],
+    ['要第一个', 1],
+    ['接第五班', 5],
+    ['第二个航班', 2],
+    ['就第四个吧', 4],
+  ] as const)('parses %s as a board pick of row %d', (text, ordinal) => {
+    expect(planAirportPickup({ text, timestamp })).toMatchObject({
+      intent: 'pick-flight-choice',
+      slotUpdates: { flightChoiceOrdinal: ordinal },
+      proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+    })
+  })
+
+  it('does not consume ordinals outside the pick forms', () => {
+    // Beyond the board's five rows, bare counts, and sentences that merely
+    // contain a rank all keep their own meaning.
+    expect(planAirportPickup({ text: '第六个', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '三个', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '第三个问题是什么', timestamp }).intent).toBe('unknown')
+  })
+
   it.each(['什么时候出发', '几点出发比较好', '我该几点出发', '算下什么时候走', '现在要出发吗', '现在可以走了吗'])(
     'recognizes %s as a whole-utterance departure-time query',
     (text) => {

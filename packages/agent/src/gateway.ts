@@ -35,10 +35,10 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, weatherConditionLabels, type ComposeContext } from './composer'
+import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, renderedArrivalRows, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
-import { Planner, type Plan, type PlannerInput } from './planner'
+import { Planner, planAirportPickup, type Plan, type PlannerInput } from './planner'
 import {
   armLandingMessageRetry,
   resolveLandingMeetingEta,
@@ -281,6 +281,27 @@ export class AgentGateway {
     return current.task
   }
 
+  /**
+   * Pre-transaction ordinal resolution for the persistent runtime: when this
+   * user input is a whole-utterance board pick (第三个) and a board is on
+   * screen, returns the flight-number text the ordinal means. The runtime
+   * rewrites the request BEFORE planning, so the configured planner — model
+   * seam included — interprets the rewritten words exactly as it would the
+   * typed number; nothing about planning is bypassed. Returns undefined for
+   * every other input, including replays this gateway resolves internally.
+   */
+  ordinalRewriteText(taskId: string, input: SubmitEventRequest): string | undefined {
+    const request = submitEventRequestSchema.parse(input)
+    if (request.event.type !== 'user.input') return undefined
+    const current = this.#requireTask(taskId)
+    if (this.#store.getEventResult(taskId, request.event.eventId)) return undefined
+    if (current.task.phase !== 'collecting-information' || current.task.flight) return undefined
+    const plan = planAirportPickup({ text: request.event.text })
+    if (plan.intent !== 'pick-flight-choice' || plan.slotUpdates.flightChoiceOrdinal === undefined) return undefined
+    const picked = this.#renderedArrivalRows(current)?.[plan.slotUpdates.flightChoiceOrdinal - 1]
+    return picked ? `航班号 ${picked.flightNumber}` : undefined
+  }
+
   cancelTask(taskId: string, input: CancelTaskRequest): AgentResponse {
     const request = cancelTaskRequestSchema.parse(input)
     const current = this.#requireTask(taskId)
@@ -511,9 +532,33 @@ export class AgentGateway {
       if (deferredCleanup) return deferredCleanup
     }
 
-    const plan = request.event.type === 'user.input'
+    let plan = request.event.type === 'user.input'
       ? this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
       : undefined
+    // A spoken ordinal ("第三个") is a faster way to say a flight number, never
+    // a second way to set the slot. Resolve it against the same pickable rows
+    // the composer rendered, rewrite the event into the number's own words, and
+    // fall through to the ordinary flight-number turn. No board, or a rank the
+    // board does not have, keeps the original text and lands on the unknown
+    // reply — the reducer treats unparseable input as a no-op.
+    if (
+      request.event.type === 'user.input'
+      && plan?.intent === 'pick-flight-choice'
+      && plan.slotUpdates.flightChoiceOrdinal !== undefined
+      && current.task.phase === 'collecting-information'
+      && !current.task.flight
+    ) {
+      const rows = this.#renderedArrivalRows(current)
+      const picked = rows?.[plan.slotUpdates.flightChoiceOrdinal - 1]
+      if (picked) {
+        request.event = { ...request.event, text: `航班号 ${picked.flightNumber}` }
+        // Re-plan through the configured planner, same as any user input: the
+        // persistent runtime's plan stub recognizes rewritten text and falls
+        // through to the rules, so a custom or model-backed planner keeps
+        // interpreting ordinals exactly as it would the typed number.
+        plan = this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
+      }
+    }
     if (
       request.event.type === 'user.input'
       && (plan?.intent === 'check-weather' || plan?.intent === 'check-schedule' || plan?.intent === 'check-departure-time')
@@ -2144,6 +2189,16 @@ export class AgentGateway {
     } catch {
       return carried
     }
+  }
+
+  /**
+   * The rows the driver is actually looking at, or undefined when no board was
+   * rendered. Persisted toolResults only — a fresh read here would resolve an
+   * ordinal from data the driver has never seen — gated on the composer's own
+   * renderability rule via the shared renderedArrivalRows.
+   */
+  #renderedArrivalRows(current: StoredTask) {
+    return renderedArrivalRows(current.toolResults?.['flight.list-arrivals']?.data)
   }
 
   #prepareTask(

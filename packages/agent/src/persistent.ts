@@ -345,10 +345,17 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       return existing.then(() => this.#run((gateway) => gateway.submitEvent(taskId, request)))
     }
     const pending = (async () => {
-      const planned = await this.#planEvent(taskId, request)
-      const prefetchedSchedule = await this.#prefetchSchedule(taskId, request, planned?.plan)
+      // A board ordinal (第三个) is rewritten into the flight number's own
+      // words BEFORE planning, so the configured planner — model seam included
+      // — interprets the rewritten turn exactly as it would the typed number.
+      const rewriteText = this.#read((gateway) => gateway.ordinalRewriteText(taskId, request))
+      const effective = rewriteText !== undefined && request.event.type === 'user.input'
+        ? { ...request, event: { ...request.event, text: rewriteText } }
+        : request
+      const planned = await this.#planEvent(taskId, effective)
+      const prefetchedSchedule = await this.#prefetchSchedule(taskId, effective, planned?.plan)
       return this.#run(
-        (gateway) => gateway.submitEvent(taskId, request),
+        (gateway) => gateway.submitEvent(taskId, effective),
         planned?.plan,
         planned?.source === 'model' ? planned.modelUsed : undefined,
         prefetchedSchedule,
