@@ -598,12 +598,17 @@ test('fits longer and mixed-script media titles in the cabin metric @layout', as
 })
 
 /**
- * The route panel is a drawing of the UISpec the Agent sent, and its marker moves
- * only because a newer spec carried a newer authored progress value — nothing on
- * the page animates or advances a position of its own. The renderer unit tests pin
- * the geometry maths; only a real browser shows the drawing is actually painted,
- * given a column of its own with height in it, and still inside the fixed frame at
- * the demo resolution.
+ * The route panel is a drawing of the UISpec the Agent sent. Two things move it,
+ * and the difference between them is the point of this test: a newer spec carries
+ * a newer authored progress value, and within one spec the marker crawls between
+ * the two ends the fixture authored, at the rate the fixture authored, and stops
+ * at the near end of the next stage. Nothing advances past a value the Agent has
+ * not sent — a checkpoint with no crawl leaves the marker exactly where it landed.
+ *
+ * The renderer unit tests pin the geometry maths and drive the crawl frame by
+ * frame; only a real browser shows the drawing is actually painted, given a column
+ * of its own with height in it, foldable where it floats, and still inside the
+ * fixed frame at the demo resolution.
  */
 test('draws the offline route panel and steps its marker on authored progress @layout', async ({ page }) => {
   await page.goto('/')
@@ -633,7 +638,20 @@ test('draws the offline route panel and steps its marker on authored progress @l
   // The panel is drawn offline from fixture points, never from a map SDK.
   await expect(panel).toHaveAttribute('data-route-map-source', 'sketch')
   await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
-  await expect(progress).toHaveText('模拟行程进度 8%')
+  // The departed checkpoint authors a crawl from 8% to 34%, so there is no single
+  // number to assert: by the time the browser has painted, some of the span has
+  // already been covered. What the fixture does promise is the two ends, so the
+  // reading has to start inside them — a marker that jumped to the destination, or
+  // one the renderer had not placed at all, fails here.
+  const percentage = async () => Number(/(\d+)%/.exec((await progress.textContent()) ?? '')?.[1])
+  const departedPercent = await percentage()
+  expect(departedPercent).toBeGreaterThanOrEqual(8)
+  expect(departedPercent).toBeLessThanOrEqual(34)
+  // And it has to actually move, which is the whole reason the crawl exists: a car
+  // under way and frozen until the next event reads as a broken demo. One authored
+  // percent takes about 3.5s at the fixture's rate.
+  await expect.poll(percentage, { timeout: 15_000 }).toBeGreaterThan(departedPercent)
+  expect(await percentage()).toBeLessThanOrEqual(34)
   // The map has a column to itself, so the split really did survive to the DOM.
   await expect(page.locator('.ui-layout--split')).toBeVisible()
   // Visible is not enough for an SVG: a canvas collapsed to zero height would
@@ -664,37 +682,45 @@ test('draws the offline route panel and steps its marker on authored progress @l
   expect(captionEnd).not.toBeNull()
   expect(captionEnd!.x + captionEnd!.width).toBeLessThanOrEqual(glassBox!.x)
 
-  // The rail turns pointer events off so the map behind it stays draggable, and
-  // the panel has to take them back — at the component, because a card's buttons
-  // render in a sibling of the card. Ask the browser what a click at the panel's
-  // own centre would land on: anything under the glass means the panel is inert.
-  const hitsPanel = await page.evaluate(() => {
-    const card = document.querySelector('.ui-slot--secondary .ui-card--navigation-summary')
-    if (!card) return 'no panel'
-    const box = card.getBoundingClientRect()
-    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
-    if (!hit) return 'nothing'
-    return hit.closest('.ui-slot--secondary') ? 'panel' : hit.tagName.toLowerCase()
-  })
-  expect(hitsPanel).toBe('panel')
+  // What folding does is asserted in the `@glass` spec below, on all three
+  // engines. What only this spec can ask is whether each of its states fits the
+  // frame — so the fold is driven here for the frame's sake alone.
+  const fold = glass.getByRole('button', { name: '收起面板' })
+  await fold.click()
+  await expect(glass).toHaveAttribute('data-panel', 'collapsed')
+  // Less panel cannot mean more page.
+  await expectNoScroll(page)
+
+  await page.setViewportSize({ width: 1024, height: 720 })
+  await expect(page.locator('.ui-navigation-brief__fold')).toBeHidden()
+  await expectNoScroll(page)
+
+  await page.setViewportSize({ width: 1920, height: 720 })
+  await glass.getByRole('button', { name: '展开面板' }).click()
+  await expect(glass).toHaveAttribute('data-panel', 'expanded')
+  await expectNoScroll(page)
 
   const departedLine = await line.getAttribute('d')
   const departedAt = await vehicle.getAttribute('transform')
   await expectNoScroll(page)
 
   // One advance of the shared timeline, one newer authored value: the marker steps
-  // along the same drawn route instead of drifting forward on a timer.
+  // along the same drawn route. This checkpoint authors no crawl — the car has
+  // stopped to charge — so unlike the departed one it is a single exact number.
   await advanceFlow(page) // charging.started
   await expect(progress).toHaveText('模拟行程进度 40%')
   expect(await vehicle.getAttribute('transform')).not.toBe(departedAt)
   expect(await line.getAttribute('d')).toBe(departedLine)
   await expectNoScroll(page)
 
-  // No spec, no movement: waiting on a still page leaves the marker exactly where
-  // the last spec put it.
+  // No authored span, no movement: waiting on a still page leaves the marker
+  // exactly where the last spec put it. This is what keeps the crawl a reading of
+  // the fixture rather than a timer of its own — a driver watching a charging car
+  // creep down the route would be watching the UI invent a position.
   const steppedAt = await vehicle.getAttribute('transform')
   await page.waitForTimeout(1200)
   expect(await vehicle.getAttribute('transform')).toBe(steppedAt)
+  await expect(progress).toHaveText('模拟行程进度 40%')
 
   // A simulated drawing says so: no copy claims a live position, and no internal
   // route identifier reaches the brief.
@@ -718,6 +744,121 @@ test('draws the offline route panel and steps its marker on authored progress @l
   await expect(page.getByText(/补能完成/)).toBeVisible()
   await expect(panel).toHaveCount(0)
   await expectNoScroll(page)
+})
+
+/**
+ * The panel over the map, on every engine CI can install.
+ *
+ * Everything asserted here is a browser question rather than a code question:
+ * whether `:has()` matched and turned the split into a takeover, whether the
+ * `display: contents` group the fold controls actually disappears, whether the
+ * rail's `pointer-events: none` is taken back by the panel, and whether the
+ * tier tokens the blur reads reach the shell. A unit test can assert the markup
+ * for all four and be wrong about every one of them.
+ *
+ * Held apart from the `@layout` walk on purpose. That spec asks the harder and
+ * broader question — does the whole brief fit a 1920x720 frame — and Gecko
+ * answers no today for a reason that predates the panel: with no
+ * `SpeechRecognition` the composer is on screen from the first frame and its
+ * ~140px is not in the frame's budget (CONTRIBUTING.md records it). Gating the
+ * panel on that spec would mean gating it on an unrelated known failure, so the
+ * engine-sensitive assertions get a spec of their own and the frame assertions
+ * stay where they are.
+ */
+test('floats, folds, and tiers the panel the same way on every engine @glass', async ({ page }) => {
+  // Set here rather than left to the project so the three engines are compared
+  // at one width, and so this spec means the same thing in every project it runs in.
+  await page.setViewportSize({ width: 1920, height: 720 })
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+
+  const map = page.locator('.ui-card--route-map')
+  const glass = page.locator('.ui-slot--secondary .ui-card--navigation-summary')
+  await expect(map).toBeVisible()
+  await expect(glass).toBeVisible()
+
+  // The takeover is a `:has()` match. An engine that did not make it leaves an
+  // ordinary two-column split, where the panel sits beside the map instead of
+  // inside its bounds — which is what these two assertions tell apart.
+  const glassBox = await glass.boundingBox()
+  const mapBox = await map.boundingBox()
+  expect(glassBox).not.toBeNull()
+  expect(mapBox).not.toBeNull()
+  expect(glassBox!.x).toBeGreaterThan(mapBox!.x)
+  expect(glassBox!.x + glassBox!.width).toBeLessThanOrEqual(mapBox!.x + mapBox!.width)
+
+  // The rail turns pointer events off so the map behind stays draggable, and the
+  // panel takes them back. Ask the browser what a click at the panel's own centre
+  // would land on: anything under the glass means the panel is inert.
+  const hit = await page.evaluate(() => {
+    const card = document.querySelector('.ui-slot--secondary .ui-card--navigation-summary')
+    if (!card) return 'no panel'
+    const box = card.getBoundingClientRect()
+    const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+    return target?.closest('.ui-slot--secondary') ? 'panel' : (target?.tagName.toLowerCase() ?? 'nothing')
+  })
+  expect(hit).toBe('panel')
+
+  const fold = glass.getByRole('button', { name: '收起面板' })
+  const band = glass.locator('.ui-navigation-brief__route-rule')
+  const facts = glass.locator('.ui-navigation-brief__facts')
+  const eta = glass.locator('.ui-navigation-eta')
+  await expect(fold).toBeVisible()
+  // The card hides its own overflow, so a card given less height than its
+  // contents does not scroll — it silently cuts them off, and the first thing off
+  // the top is the header the fold lives in. Gecko sized it that way until the
+  // panel started asking for `max-content`: the fold was drawn 30px above the
+  // card's own box, clipped out of it, and unclickable while still looking fine
+  // in a screenshot. Nothing visible can be outside the box it is painted in.
+  expect(await glass.evaluate((card) => card.scrollHeight - card.clientHeight)).toBe(0)
+  // 44px is the touch target this is drawn to; a control the driver has to aim
+  // at is not a control in a moving car. Rounded because the engines disagree in
+  // the last decimal — WebKit lays the same 44px box out as 43.99998 — and a
+  // hundredth of a pixel is not a thumb missing a button.
+  const foldBox = await fold.boundingBox()
+  expect(Math.round(foldBox?.width ?? 0)).toBeGreaterThanOrEqual(44)
+  expect(Math.round(foldBox?.height ?? 0)).toBeGreaterThanOrEqual(44)
+
+  await fold.click()
+  await expect(glass).toHaveAttribute('data-panel', 'collapsed')
+  // The hidden group has `display: contents` and so no box of its own for an
+  // engine to call visible; its two children are what the driver sees go away.
+  await expect(band).toBeHidden()
+  await expect(facts).toBeHidden()
+  await expect(eta).toBeVisible()
+  await expect(glass).toContainText('虹桥机场 T2')
+  const foldedBox = await glass.boundingBox()
+  expect(foldedBox!.height).toBeLessThan(glassBox!.height)
+
+  // Folded, then narrowed below the width where the panel exists at all. The fold
+  // goes with it, so the card has to come back whole rather than stranding the
+  // driver with a collapsed card and no control to reopen it.
+  await page.setViewportSize({ width: 1024, height: 720 })
+  await expect(page.locator('.ui-navigation-brief__fold')).toBeHidden()
+  await expect(band).toBeVisible()
+  await expect(facts).toBeVisible()
+
+  await page.setViewportSize({ width: 1920, height: 720 })
+  await expect(glass).toHaveAttribute('data-panel', 'collapsed')
+  await glass.getByRole('button', { name: '展开面板' }).click()
+  await expect(glass).toHaveAttribute('data-panel', 'expanded')
+  await expect(band).toBeVisible()
+  await expect(facts).toBeVisible()
+
+  // The tier is decided from what the device reports, so the value differs by
+  // machine and only the contract is assertable: one of the three tiers is on the
+  // shell, and the two custom properties the blur reads resolve to something.
+  const tier = await page.locator('.demo-shell').getAttribute('data-glass')
+  expect(['full', 'reduced', 'none']).toContain(tier)
+  const tokens = await page.locator('.demo-shell').evaluate((shell) => {
+    const styles = getComputedStyle(shell)
+    return { blur: styles.getPropertyValue('--glass-blur').trim(), saturate: styles.getPropertyValue('--glass-saturate').trim() }
+  })
+  expect(tokens.blur).toMatch(/^\d+px$/)
+  expect(tokens.saturate).not.toBe('')
 })
 
 test('completes the airport pickup flow through the Agent API', async ({ page }) => {

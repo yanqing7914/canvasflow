@@ -1,9 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ComponentSpec } from '@canvasflow/schema'
 import { ComponentSurface } from './ComponentSurface'
-import { ROUTE_MAP_VIEWBOX, type RouteSketchDrawing } from './route-sketch'
+import {
+  ROUTE_MAP_DRAWING_OPTIONS,
+  ROUTE_MAP_VIEWBOX,
+  buildRouteSketchDrawing,
+  type RouteSketchDrawing,
+} from './route-sketch'
 import { loadAMap } from './amap/loader'
-import { renderAMapRoute } from './amap/render'
+import { startCrawl } from './amap/crawl'
+import { renderAMapRoute, type AMapRouteHandle } from './amap/render'
 
 /**
  * The route as a panel of its own rather than a rule inside the navigation card.
@@ -16,11 +22,20 @@ import { renderAMapRoute } from './amap/render'
  * `sketch` to `amap`. With no key, or on any load or routing failure, the map
  * layer never appears and the sketch is what shows — the demo's default state.
  *
- * Nothing here is live positioning. The caption says 模拟行程进度 and never
- * claims a current location; the marker — sketch or basemap — moves only when a
- * new UISpec arrives. There is deliberately no timer, no animation loop, and no
- * request made per frame: this component cannot advance the trip, only draw
- * where the task says it is.
+ * None of this is live positioning. The caption says 模拟行程进度 throughout and
+ * never claims a current location. Where the spec's sketch carries a `crawl`, the
+ * marker moves between two points the fixture authored, at a rate the fixture
+ * authored, and stops at the far end; where it does not, the marker holds until a
+ * new UISpec arrives. The component cannot choose either end of that span, cannot
+ * extend it, and makes no request per frame. What moves is a staged figure, not a
+ * measurement.
+ *
+ * The sketch marker, the basemap marker, and the percentage in the caption all
+ * read the same crawled value, so the three never disagree about where the car
+ * is. The basemap one is moved imperatively through the render handle because the
+ * map owns its own overlays; the other two are ordinary React state. A basemap
+ * that arrives late is caught up to the current reading the moment it exists,
+ * rather than waiting for the next frame it may never get.
  *
  * `mode` is the composer's read of what the driver needs to see — the whole trip
  * or the part they are on. The sketch reflects the intent in
@@ -42,11 +57,23 @@ export function RouteMapCard({
 }) {
   const { props } = component
   const mapContainer = useRef<HTMLDivElement>(null)
+  const mapHandle = useRef<AMapRouteHandle | null>(null)
   const [source, setSource] = useState<'sketch' | 'amap'>('sketch')
+  /** Where the crawl has reached, or `undefined` while the marker holds. */
+  const [crawled, setCrawled] = useState<number | undefined>(undefined)
+  /**
+   * The same reading, for the map effect to catch up from.
+   *
+   * The map is drawn once per sketch and moved imperatively after that, so its
+   * effect cannot depend on `crawled` — it would tear the map down and rebuild it
+   * every frame. A ref lets the load resolve at any point in the span and still
+   * find where the crawl has got to, which a stale closure over the state could
+   * not.
+   */
+  const crawledRef = useRef<number | undefined>(undefined)
 
   useEffect(() => {
     let cancelled = false
-    let handle: { destroy: () => void } | null = null
     const container = mapContainer.current
     if (!container) return
 
@@ -62,7 +89,13 @@ export function RouteMapCard({
           return
         }
         if (rendered) {
-          handle = rendered
+          mapHandle.current = rendered
+          // AMap may have finished loading part-way through the span, or after it
+          // ended. The route was drawn from the sketch's authored progress, so
+          // without this the basemap marker would sit at the start while the
+          // sketch and the caption read further along — and if the span were
+          // already spent, no further frame would ever correct it.
+          if (crawledRef.current !== undefined) rendered.setProgress(crawledRef.current)
           setSource('amap')
         }
       })
@@ -70,12 +103,48 @@ export function RouteMapCard({
 
     return () => {
       cancelled = true
-      handle?.destroy()
+      mapHandle.current?.destroy()
+      mapHandle.current = null
       setSource('sketch')
     }
     // Re-run when the drawn route, the camera intent, or the theme changes, so a
     // new spec redraws on the basemap instead of leaving a stale route behind.
   }, [props.routeSketch, props.mode, theme])
+
+  useEffect(() => {
+    // A new sketch is a new authored position: drop whatever the last one had
+    // crawled to rather than carrying it onto different geometry.
+    setCrawled(undefined)
+    crawledRef.current = undefined
+
+    const { progress, crawl } = props.routeSketch
+    if (progress === undefined || !crawl) return
+
+    const handle = startCrawl({
+      from: progress,
+      span: crawl,
+      onProgress: (next) => {
+        setCrawled(next)
+        crawledRef.current = next
+        // The map may still be loading, or may never load at all; the sketch
+        // below it moves either way.
+        mapHandle.current?.setProgress(next)
+      },
+    })
+    // A background tab stops delivering frames, so the crawl pauses with it and
+    // resumes from where it stopped — the span is a distance, not a wall clock.
+    return () => handle?.stop()
+  }, [props.routeSketch])
+
+  // Rebuilt only while crawling, so a spec with no crawl renders from exactly the
+  // drawing the renderer already built for it.
+  const shown = useMemo(() => {
+    if (crawled === undefined) return drawing
+    return buildRouteSketchDrawing(
+      { ...props.routeSketch, progress: crawled },
+      ROUTE_MAP_DRAWING_OPTIONS,
+    ) ?? drawing
+  }, [crawled, drawing, props.routeSketch])
 
   return (
     <ComponentSurface
@@ -86,7 +155,7 @@ export function RouteMapCard({
         // the real basemap once AMap has loaded and drawn the route.
         'data-route-map-source': source,
         'data-route-map-mode': props.mode,
-        'data-route-progress': drawing.vehicle ? 'simulated' : 'route-only',
+        'data-route-progress': shown.vehicle ? 'simulated' : 'route-only',
       }}
     >
       {/* The basemap draws into this layer; it sits empty (and hidden) until the
@@ -106,15 +175,15 @@ export function RouteMapCard({
         role="img"
         aria-label={`前往${props.destination}的路线示意`}
       >
-        <path className="ui-route-map__line" d={drawing.path} />
-        {drawing.markers.map((marker) => (
+        <path className="ui-route-map__line" d={shown.path} />
+        {shown.markers.map((marker) => (
           <g key={marker.key} className="ui-route-map__stop" data-role={marker.role}>
             <circle className="ui-route-map__marker" cx={marker.x} cy={marker.y} r={marker.role === 'via' ? 5 : 7} />
             <text className="ui-route-map__label" x={marker.x} y={marker.y - 15} textAnchor="middle">{marker.name}</text>
           </g>
         ))}
-        {drawing.vehicle && (
-          <g className="ui-route-map__vehicle" transform={`translate(${drawing.vehicle.x} ${drawing.vehicle.y})`}>
+        {shown.vehicle && (
+          <g className="ui-route-map__vehicle" transform={`translate(${shown.vehicle.x} ${shown.vehicle.y})`}>
             <circle className="ui-route-map__vehicle-halo" r={14} />
             <circle className="ui-route-map__vehicle-dot" r={6.5} />
           </g>
@@ -122,8 +191,8 @@ export function RouteMapCard({
       </svg>
       <p className="ui-route-map__caption">
         <span className="ui-route-map__destination">前往 {props.destination}</span>
-        {drawing.progressPercent !== undefined && (
-          <span className="ui-route-map__progress">模拟行程进度 {drawing.progressPercent}%</span>
+        {shown.progressPercent !== undefined && (
+          <span className="ui-route-map__progress">模拟行程进度 {shown.progressPercent}%</span>
         )}
       </p>
     </ComponentSurface>

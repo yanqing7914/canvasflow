@@ -76,6 +76,12 @@ a:focus-visible {
      to itself. The lower bound is the content's, not the layout's: a percentage
      alone squeezes the panel on the smaller screens this effect still runs on. */
   --glass-rail: clamp(430px, 32%, 510px);
+  /* The full-strength effect, and the value that holds if the capability tier
+     never resolves — a server render, or a shell mounted without the hook. The
+     app overwrites both inline once it has read the device; see
+     `glass-capability.ts` for why an unknown device is treated as a capable one. */
+  --glass-blur: 28px;
+  --glass-saturate: 1.6;
   min-height: 100dvh;
   overflow: hidden;
   background: var(--cabin);
@@ -984,6 +990,20 @@ a:focus-visible {
 
 .ui-flight-brief__header .ui-status { margin-left: auto; }
 
+/* The two regions the fold puts away, grouped only so one `aria-controls` can
+   name them. `contents` keeps the wrapper out of every layout that places the
+   card's regions itself — the three-column band, the stacked rail — so the group
+   is a handle for the control and nothing else until it is hidden. */
+.ui-navigation-brief__detail { display: contents; }
+
+/* The fold is chrome for the floating panel and exists nowhere else. The
+   renderer only emits it over a drawn map, and below the panel's breakpoint that
+   map is a band above an ordinary card with nothing behind it to uncover — so
+   the control goes away there and, with it, every rule that acts on
+   `data-panel`. That pairing is what stops a window narrowed while collapsed
+   from stranding the driver with a folded card and no way to open it. */
+.ui-navigation-brief__fold { display: none; }
+
 .ui-flight-brief__arrival {
   display: grid;
   gap: 8px;
@@ -1519,6 +1539,17 @@ a:focus-visible {
   .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
     > .ui-slot--secondary > .ui-component {
     pointer-events: auto;
+    /* And the panel is exactly as tall as what is in it, said out loud rather
+       than left to the track to work out. `.ui-component` is a grid of
+       `minmax(0, 1fr) auto`, and how much an `fr` row contributes to its
+       container's intrinsic height is where the engines part company: Blink and
+       WebKit resolve the centred track to the card's full 318px, Gecko to 216px
+       — and the card hides its overflow, so on Firefox the fold and the top of
+       the header were clipped out of the card's own box and could not even be
+       clicked. `max-content` is the height all three already agree the contents
+       need, so it changes nothing where the effect was already right and repairs
+       it where it was not. */
+    height: max-content;
   }
 
   .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
@@ -1538,9 +1569,12 @@ a:focus-visible {
     border-radius: 20px;
     background: rgb(var(--glass-base) / var(--glass-fill));
     /* Saturation lifts the map's own blues and greens as they pass through, so
-       the panel looks like glass rather than like a translucent slab. */
-    -webkit-backdrop-filter: blur(28px) saturate(1.6);
-    backdrop-filter: blur(28px) saturate(1.6);
+       the panel looks like glass rather than like a translucent slab. Both
+       values are tiered: a `backdrop-filter` re-samples everything behind the
+       panel every frame the map moves, and what that costs depends on the
+       machine, not the browser. */
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     box-shadow:
       inset 0 1px 0 var(--glass-highlight),
       0 18px 44px var(--glass-shadow);
@@ -1573,6 +1607,64 @@ a:focus-visible {
   .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
     .ui-metric__label {
     color: var(--glass-label);
+  }
+
+  /* The fold, only where there is a panel to fold. A 44px hit target at the top
+     right of the card, sized for a thumb on a moving car rather than a cursor.
+     `margin-left: auto` puts it at the far edge of the header, past the
+     destination, so it never sits between the glyph and the text it belongs to. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-navigation-brief__fold {
+    display: grid;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    align-self: start;
+    margin-left: auto;
+    padding: 0;
+    border: 1px solid var(--glass-edge);
+    border-radius: 12px;
+    /* The panel's own base at a lighter alpha: the control reads as cut into the
+       glass rather than as a chip laid on top of it, and it needs no backdrop
+       filter of its own because the panel behind it is already frosted. */
+    background: rgb(var(--glass-base) / 0.5);
+    color: var(--glass-ink);
+    place-items: center;
+  }
+
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-navigation-brief__fold:hover {
+    background: rgb(var(--glass-base) / 0.78);
+  }
+
+  /* Collapsed, the chevron turns to point the way out — the same shape rotated,
+     so the control's two states cannot drift apart. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary[data-panel='collapsed'] .ui-navigation-brief__fold svg {
+    transform: rotate(180deg);
+  }
+
+  /* What folding away actually costs: the route band and the two figures. The
+     destination and the ETA stay, because those are the two answers a driver
+     glances down for, and a panel that hid them would be a panel worth closing
+     rather than collapsing. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary[data-panel='collapsed'] .ui-navigation-brief__detail {
+    display: none;
+  }
+
+  /* Collapsed the card is a header and a figure, so it stops filling the rail's
+     height and shrinks to what is left in it. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary[data-panel='collapsed'] {
+    grid-template-rows: auto auto;
+  }
+
+  /* Without the band and the facts under it the ETA no longer needs the room it
+     was given to balance them. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary[data-panel='collapsed'] .ui-navigation-eta {
+    font-size: clamp(72px, 5vw, 96px);
   }
 
   /* 模拟行程进度 sits at the right end of the caption, which the panel now covers.
@@ -1677,6 +1769,19 @@ a:focus-visible {
       .ui-card--departure-plan {
       background: rgb(var(--glass-base) / var(--glass-fill-solid));
     }
+  }
+
+  /* The same trade on a device that has `backdrop-filter` and cannot afford it.
+     A zero blur is not free — an identity filter still promotes the panel to its
+     own layer and still re-samples the map behind it every frame — so the lowest
+     tier drops the declaration rather than tuning it to nothing, and pays for the
+     lost separation in the opaque fill exactly as the unsupported branch does. */
+  .demo-shell[data-glass='none']
+    .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-card--navigation-summary {
+    background: rgb(var(--glass-base) / var(--glass-fill-solid));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
   }
 
   @media (prefers-reduced-transparency: reduce) {

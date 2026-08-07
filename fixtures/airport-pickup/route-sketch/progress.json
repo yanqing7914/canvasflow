@@ -1,54 +1,61 @@
 {
   "id": "route-progress",
   "version": "1.0",
-  "description": "Discrete simulated trip progress for the offline route sketch. Every value is authored here: the UI reads one checkpoint per rendered UISpec and never accumulates, animates, or times its own advance. 0 is the start of the sketch polyline, 1 the end. These are staged demo values, not measured positions.",
+  "description": "Simulated trip progress for the route sketch and the basemap marker. Every value is authored here: the UI reads one checkpoint per rendered UISpec and never invents a position. 0 is the start of the sketch polyline, 1 the end. A checkpoint may also author a crawl span, and where it does the marker moves between the two authored ends at the authored rate and stops. These are staged demo values, not measured positions.",
   "matching": "Checkpoints are listed in trip order and matched against task state; the last matching entry wins, so a later, more specific stage overrides an earlier one. A task state that matches nothing has no progress at all, which the renderer shows as a route with no vehicle marker.",
+  "crawling": "A car that is under way and perfectly still until the next event reads as a frozen demo, so a driving checkpoint authors `crawl`. `toProgress` is the far end of the span and `durationSeconds` is how long the whole span takes, so the fixture owns the distance and the rate, and the UI only interpolates between them. Every bound stops short of the next stage's authored progress, so a crawl can never present a stage the Agent has not sent. Parked, charging, and arrived checkpoints author no crawl and the marker holds.",
   "checkpoints": [
     {
       "id": "outbound-departed",
       "progress": 0.08,
+      "crawl": { "toProgress": 0.34, "durationSeconds": 90 },
       "when": { "phase": "driving-to-airport" },
-      "note": "Navigation just started; the marker sits near the origin."
+      "note": "Navigation just started; the marker sits near the origin and crawls out. The bound stops short of the 0.4 charging stage."
     },
     {
       "id": "outbound-charging-under-way",
       "progress": 0.4,
       "when": { "phase": "driving-to-airport", "chargingStatus": "active" },
-      "note": "Charging accepted while under way. Staged position only: it is not claimed to coincide with the charging stop on the supercharger route variant."
+      "note": "Charging accepted while under way, so the car is stopped and the marker holds. Staged position only: it is not claimed to coincide with the charging stop on the supercharger route variant."
     },
     {
       "id": "outbound-charged",
       "progress": 0.52,
+      "crawl": { "toProgress": 0.68, "durationSeconds": 55 },
       "when": { "phase": "driving-to-airport", "chargingStatus": "completed" },
-      "note": "Charging finished, airport leg resumed."
+      "note": "Charging finished, airport leg resumed. The bound stops short of the 0.72 flight-landed stage."
     },
     {
       "id": "outbound-flight-landed",
       "progress": 0.72,
+      "crawl": { "toProgress": 0.88, "durationSeconds": 55 },
       "when": { "phase": "driving-to-airport", "flightStatus": "landed" },
-      "note": "Flight on the ground while still driving."
+      "note": "Flight on the ground while still driving. The bound stops short of the 0.92 approach stage."
     },
     {
       "id": "airport-approach",
       "progress": 0.92,
+      "crawl": { "toProgress": 0.99, "durationSeconds": 25 },
       "when": { "phase": "approaching-airport" },
-      "note": "Inside the airport geofence."
+      "note": "Inside the airport geofence, still rolling. The bound stops short of 1, which is the parked stage."
     },
     {
       "id": "airport-parked",
       "progress": 1,
       "when": { "phase": "waiting-for-passengers" },
-      "note": "Parked at the pickup point: end of the outbound sketch."
+      "note": "Parked at the pickup point: end of the outbound sketch, and the marker holds."
     },
     {
       "id": "return-departed",
       "progress": 0.08,
+      "crawl": { "toProgress": 0.28, "durationSeconds": 70 },
       "when": { "phase": "returning-home" },
-      "note": "Return route selected; the sketch is now the home route, so progress restarts near its origin."
+      "note": "Return route selected; the sketch is now the home route, so progress restarts near its origin. The bound stops short of the 0.3 cabin-ready stage."
     },
     {
       "id": "return-cabin-ready",
       "progress": 0.3,
+      "crawl": { "toProgress": 0.62, "durationSeconds": 110 },
       "when": { "phase": "returning-home", "returnCabinApplied": true },
       "note": "Rear cabin preferences applied on the way home."
     },
@@ -56,7 +63,7 @@
       "id": "home-arrived",
       "progress": 1,
       "when": { "phase": "completed" },
-      "note": "Home: end of the return sketch."
+      "note": "Home: end of the return sketch, and the marker holds."
     }
   ]
 }

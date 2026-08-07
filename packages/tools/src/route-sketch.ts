@@ -29,12 +29,25 @@ const routeProgressFixtureSchema = z.object({
   version: z.literal('1.0'),
   description: z.string().min(1),
   matching: z.string().min(1),
+  crawling: z.string().min(1),
   checkpoints: z.array(z.object({
     id: z.string().min(1),
     progress: z.number().min(0).max(1),
+    /**
+     * The authored span the marker may crawl across while this checkpoint holds.
+     * Parsed here rather than trusted, because a bound at or behind `progress`
+     * would send the car backwards and a zero duration would divide by nothing.
+     */
+    crawl: z.object({
+      toProgress: z.number().min(0).max(1),
+      durationSeconds: z.number().positive(),
+    }).optional(),
     when: routeProgressConditionSchema,
     note: z.string().min(1).optional(),
-  })).min(1),
+  }).refine(
+    (checkpoint) => checkpoint.crawl === undefined || checkpoint.crawl.toProgress > checkpoint.progress,
+    { message: 'crawl.toProgress must be beyond the checkpoint progress', path: ['crawl', 'toProgress'] },
+  )).min(1),
 })
 
 export type RouteProgressCheckpoint = z.infer<typeof routeProgressFixtureSchema>['checkpoints'][number]
@@ -53,16 +66,27 @@ function matchesTask(when: RouteProgressCheckpoint['when'], task: AirportPickupT
 }
 
 /**
- * Simulated progress for the current task state, or `undefined` when no
- * checkpoint applies (a planned-but-not-started trip, for instance). Later
- * matches win because the fixture lists checkpoints in trip order.
+ * The authored checkpoint for the current task state, or `undefined` when none
+ * applies (a planned-but-not-started trip, for instance). Later matches win
+ * because the fixture lists checkpoints in trip order.
+ */
+export function routeSketchCheckpoint(
+  task: AirportPickupTaskState,
+): RouteProgressCheckpoint | undefined {
+  let match: RouteProgressCheckpoint | undefined
+  for (const checkpoint of routeProgressCheckpoints) {
+    if (matchesTask(checkpoint.when, task)) match = checkpoint
+  }
+  return match
+}
+
+/**
+ * Simulated progress for the current task state. Where the checkpoint authors a
+ * crawl this is the near end of its span rather than a fixed point; see
+ * {@link routeSketchCheckpoint} for the span itself.
  */
 export function routeSketchProgress(task: AirportPickupTaskState): number | undefined {
-  let progress: number | undefined
-  for (const checkpoint of routeProgressCheckpoints) {
-    if (matchesTask(checkpoint.when, task)) progress = checkpoint.progress
-  }
-  return progress
+  return routeSketchCheckpoint(task)?.progress
 }
 
 /** Sketch geometry of a fixture route, looked up by the route the task is on. */
@@ -102,6 +126,13 @@ export function routeSketchFor(
 ): RouteSketch | undefined {
   const geometry = sketchGeometryOf(route) ?? routeSketchGeometry(route.routeId)
   if (!geometry) return undefined
-  const progress = routeSketchProgress(task)
-  return { ...geometry, ...(progress !== undefined ? { progress } : {}) }
+  const checkpoint = routeSketchCheckpoint(task)
+  if (!checkpoint) return geometry
+  return {
+    ...geometry,
+    progress: checkpoint.progress,
+    // Only a checkpoint that authored one; the sketch carries no crawl otherwise
+    // and the marker holds where the task state put it.
+    ...(checkpoint.crawl ? { crawl: checkpoint.crawl } : {}),
+  }
 }

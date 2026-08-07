@@ -11,8 +11,13 @@ import type { AMapApi, AMapDriving, AMapMap, AMapOverlay } from './loader'
  * road geometry `AMap.Driving` returns for the fixture's start, waypoints, and
  * end. The vehicle is placed on that returned geometry by the same arc-length
  * math the sketch uses, from the spec's authored progress; it is a simulated
- * position, not a GPS fix, and it moves only when a new spec arrives. There is no
- * timer and no animation.
+ * position, not a GPS fix.
+ *
+ * The marker can move without a new spec, through `setProgress` on the returned
+ * handle, and that is the only way it moves: this module runs no clock of its
+ * own and decides no position. The caller drives it between the two points the
+ * fixture authored — see `crawl.ts` — so the geometry here stays a pure function
+ * of a progress value handed in.
  *
  * The basemap style follows the theme the Agent sent. A daylight basemap under a
  * dark cabin would be the one surface still lit at night, and it is also the one
@@ -23,7 +28,15 @@ import type { AMapApi, AMapDriving, AMapMap, AMapOverlay } from './loader'
  * shows the sketch, so the map never half-renders.
  */
 
-export type AMapRouteHandle = { destroy: () => void }
+export type AMapRouteHandle = {
+  /**
+   * Moves the vehicle marker and the traversed tail to a new point on the road
+   * geometry already drawn. A no-op where the route carries no marker, so the
+   * caller does not have to know whether the spec authored a progress value.
+   */
+  setProgress: (progress: number) => void
+  destroy: () => void
+}
 
 export type AMapRouteOptions = {
   sketch: RouteSketch
@@ -160,27 +173,37 @@ function drawRoute(
 
   const progress = normalizedProgress(options.sketch.progress)
   let vehicle: LngLatPoint | undefined
+  /** Set only where a marker was drawn, and the only thing `setProgress` moves. */
+  let moveTo: ((progress: number) => void) | undefined
+
   if (progress !== undefined) {
     const asXy = path.map((point) => ({ x: point.lng, y: point.lat }))
     const lengths = segmentLengths(asXy)
     if (lengths.some((length) => length > 0)) {
       const at = pointAtProgress(asXy, lengths, progress)
       vehicle = { lng: at.x, lat: at.y }
-      const traversed = traversedPath(asXy, lengths, progress)
-      if (traversed.length >= 2) {
-        const tail = new amap.Polyline({
-          path: traversed.map((point) => [point.x, point.y]),
-          strokeColor: palette.traversed,
-          strokeWeight: 6,
-          strokeOpacity: 0.9,
-          zIndex: 60,
-        })
-        map.add(tail)
-        overlays.push(tail)
-      }
+      // Created whatever the starting progress, because the crawl can grow the
+      // traversed stretch from nothing: a tail added later would sit above the
+      // marker in z-order and would not be in `overlays` for teardown.
+      const tail = new amap.Polyline({
+        path: traversedPath(asXy, lengths, progress).map((point) => [point.x, point.y]),
+        strokeColor: palette.traversed,
+        strokeWeight: 6,
+        strokeOpacity: 0.9,
+        zIndex: 60,
+      })
+      map.add(tail)
+      overlays.push(tail)
+
       const marker = new amap.Marker({ position: [vehicle.lng, vehicle.lat], zIndex: 70 })
       map.add(marker)
       overlays.push(marker)
+
+      moveTo = (next: number) => {
+        const point = pointAtProgress(asXy, lengths, next)
+        marker.setPosition([point.x, point.y])
+        tail.setPath(traversedPath(asXy, lengths, next).map((covered) => [covered.x, covered.y]))
+      }
     }
   }
 
@@ -191,6 +214,17 @@ function drawRoute(
   }
 
   return {
+    setProgress: (next: number) => {
+      const clamped = normalizedProgress(next)
+      if (clamped === undefined || !moveTo) return
+      try {
+        moveTo(clamped)
+      } catch {
+        // A repositioning that fails mid-crawl leaves the marker where it was,
+        // which is a stale simulated point rather than a wrong one. Tearing the
+        // map down over it would be the worse outcome.
+      }
+    },
     destroy: () => {
       try {
         map.remove(overlays)

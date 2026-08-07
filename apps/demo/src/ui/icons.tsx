@@ -194,5 +194,16 @@ export function CloseIcon(props: IconProps) {
   )
 }
 
+/* Drawn pointing up, and rotated by the caller for the other direction, so an
+   expand and the collapse it undoes are one shape turned over rather than two
+   paths that could drift apart. */
+export function ChevronUpIcon(props: IconProps) {
+  return (
+    <LineIcon {...props}>
+      <path d="m6 14.5 6-6 6 6" />
+    </LineIcon>
+  )
+}
+
 // Short alias for callers that use the compact control-bar name.
 export const MicIcon = MicrophoneIcon
