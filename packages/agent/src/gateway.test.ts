@@ -3217,6 +3217,34 @@ describe('AgentGateway', () => {
       expect(second.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
     })
 
+    it('answers a duplicate afresh once another side answer has published over it', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const weather = {
+        clientRequestId: 'client-weather-then-schedule', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-then-schedule', type: 'user.input' as const, text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+      const asked = gateway.submitEvent(created.task.taskId, weather)
+      expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+
+      const schedule = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule-after-weather', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'schedule-after-weather', type: 'user.input', text: '看看日程', timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(schedule.ui.components.some((component) => component.type === 'schedule-card')).toBe(true)
+
+      // A side answer leaves the task revision alone, so only the UI revision says
+      // the weather card has been published over. Replaying it here would hand the
+      // client a snapshot older than the one it is already showing.
+      const retry = { ...weather, expectedTaskRevision: schedule.task.taskRevision }
+      expect(gateway.userInputPlanningState(created.task.taskId, retry)).toBeDefined()
+
+      const late = gateway.submitEvent(created.task.taskId, retry)
+      expect(late.ui.uiRevision).toBeGreaterThan(schedule.ui.uiRevision)
+      expect(late.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(late.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+    })
+
     it('degrades to a spoken notice on the unchanged snapshot when the weather read fails', () => {
       const orchestrator = new ReadToolOrchestrator()
       const failing: ReadToolOrchestration = {

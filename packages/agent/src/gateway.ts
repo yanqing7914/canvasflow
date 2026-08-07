@@ -2226,16 +2226,19 @@ export class AgentGateway {
 
   /**
    * The recorded side answer for this event id, if replaying it would still be
-   * telling the truth. The trip moving is what makes an answer stale, and the task
-   * revision is what says the trip moved. A retry that lands within the same
-   * revision is the client asking again for a response it lost, and gets that
-   * response back whole — same snapshot, same spoken line, no second bump of the
-   * revision.
+   * telling the truth. Two things can make it untrue. The trip can move, and the
+   * task revision says that. Or another turn can publish over it — including
+   * another side answer, which leaves the task revision alone and moves only the
+   * UI revision — and the UI revision the brief was left at says that. A retry
+   * that matches both is the client asking again for a response it lost, and gets
+   * that response back whole: same snapshot, same spoken line, no second bump.
    */
   #freshSideAnswer(taskId: string, current: StoredTask, eventId: string): StoredEventResult | undefined {
     const previous = this.#store.getEventResult(taskId, sideAnswerKey(eventId))
     if (!previous) return undefined
-    return previous.stored.task.taskRevision === current.task.taskRevision ? previous : undefined
+    const fresh = previous.stored.task.taskRevision === current.task.taskRevision
+      && previous.stored.ui.uiRevision === current.ui.uiRevision
+    return fresh ? previous : undefined
   }
 
   #recordSideAnswer(
