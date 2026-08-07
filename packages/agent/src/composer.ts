@@ -5,6 +5,7 @@ import {
   estimateFinalBatteryPercent,
   memberPreferences,
   recommendedMeetingPoints,
+  resolveAuthorizedLandingContact,
   routeSketchFor,
   vehicleSnapshots,
   type MemberPreferenceRecord,
@@ -50,6 +51,9 @@ const EN_ROUTE_QUERY_ACTIONS: UISpec['actions'] = [
   { id: ASK_WEATHER_ACTION_ID, label: '看下天气', style: 'secondary', event: { type: 'agent-message', text: '看下天气' } },
   { id: ASK_SCHEDULE_ACTION_ID, label: '看看日程', style: 'secondary', event: { type: 'agent-message', text: '看看日程' } },
 ]
+
+export const SEND_UMBRELLA_REMINDER_ACTION_ID = 'send-umbrella-reminder'
+export const DISMISS_WEATHER_ADVISORY_ACTION_ID = 'dismiss-weather-advisory'
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息',
@@ -230,10 +234,30 @@ export function composeAgentSpec(
       if (strip) components.push(strip)
     }
   } else if (task.message.status === 'scheduled') {
-    title = '落地通知'
+    const awaitingConfirmation = task.pendingConfirmation?.action === 'send-message'
+    title = awaitingConfirmation ? '确认发送提醒' : '落地通知'
     density = 'minimal'
     priority = 'high'
-    components = [{ id: 'message-preview', type: 'message-preview', props: { contactLabel: task.passengers.names[0] ?? '乘客', textPreview: '我已到达机场，正在接你们。', status: 'scheduled', cancellable: true, scheduledAt: task.message.scheduledAt } }]
+    components = [{
+      id: 'message-preview',
+      type: 'message-preview',
+      props: {
+        contactLabel: task.passengers.names[0] ?? '乘客',
+        // The exact provider-prepared payload when one is armed; the canned
+        // landing line otherwise (the auto-notify path never sets pendingText).
+        textPreview: task.message.pendingText ?? '我已到达机场，正在接你们。',
+        status: 'scheduled',
+        cancellable: !awaitingConfirmation,
+        scheduledAt: task.message.scheduledAt,
+      },
+      ...(awaitingConfirmation ? { actions: ['confirm-send-message', 'reject-send-message'] } : {}),
+    }]
+    actions = awaitingConfirmation
+      ? [
+          { id: 'confirm-send-message', label: '确认发送', style: 'primary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'accept' } },
+          { id: 'reject-send-message', label: '取消发送', style: 'secondary', event: { type: 'confirmation', confirmationId: task.pendingConfirmation!.confirmationId, decision: 'reject' } },
+        ]
+      : []
   } else if (task.message.status === 'failed') {
     title = '落地通知失败'
     density = 'minimal'
@@ -332,22 +356,53 @@ export function composeAgentSpec(
   } else if (task.navigation) {
     density = 'compact'
     const activeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
-    const underway = withRouteMap(
-      [{
-        id: 'navigation-summary',
-        type: 'navigation-summary',
-        props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 },
-        // The drive is where the side scenes belong: the driver is committed to a
-        // destination and is now asking about what happens around it. They sit on
-        // the brief that carries the ETA — the number both answers are relative to.
-        actions: [ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID],
-      }],
-      activeSketch,
-      task.navigation.destination,
-    )
-    components = underway.components
-    layout = underway.layout
-    actions = EN_ROUTE_QUERY_ACTIONS
+    // The proactive advisory owns the rail while it is active: the one thing
+    // the driver needs from the screen is the rain and its two answers. Its
+    // weather reading rides the persisted toolResults, so the card survives
+    // every recompose until the driver answers it.
+    const advisoryWeather = task.weatherAdvisory?.status === 'active'
+      ? toolResults['weather.advisory']
+      : undefined
+    const advisoryContactAvailable = task.weatherAdvisory?.status === 'active'
+      && resolveAuthorizedLandingContact(task.passengers.memberIds, resolvedPreferences) !== undefined
+    if (advisoryWeather && task.weatherAdvisory?.status === 'active') {
+      const advisoryCard = {
+        ...weatherCardComponent(task, advisoryWeather.data),
+        // Its own id: a transient weather QUERY during an active advisory would
+        // otherwise mint a second 'weather-card' and break id uniqueness.
+        id: 'weather-advisory',
+        actions: [
+          ...(advisoryContactAvailable ? [SEND_UMBRELLA_REMINDER_ACTION_ID] : []),
+          DISMISS_WEATHER_ADVISORY_ACTION_ID,
+        ],
+      }
+      const underway = withRouteMap([advisoryCard], activeSketch, task.navigation.destination)
+      components = underway.components
+      layout = underway.layout
+      actions = [
+        ...(advisoryContactAvailable
+          ? [{ id: SEND_UMBRELLA_REMINDER_ACTION_ID, label: '提醒乘客带伞', style: 'primary' as const, event: { type: 'agent-message' as const, text: '提醒乘客带伞' } }]
+          : []),
+        { id: DISMISS_WEATHER_ADVISORY_ACTION_ID, label: '暂不处理', style: 'secondary' as const, event: { type: 'agent-message' as const, text: '暂不处理' } },
+      ]
+    } else {
+      const underway = withRouteMap(
+        [{
+          id: 'navigation-summary',
+          type: 'navigation-summary',
+          props: { routeId: task.navigation.routeId, destination: task.navigation.destination, eta: task.navigation.eta, distanceKm: 32, estimatedBatteryAtArrival: 27 },
+          // The drive is where the side scenes belong: the driver is committed to a
+          // destination and is now asking about what happens around it. They sit on
+          // the brief that carries the ETA — the number both answers are relative to.
+          actions: [ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID],
+        }],
+        activeSketch,
+        task.navigation.destination,
+      )
+      components = underway.components
+      layout = underway.layout
+      actions = EN_ROUTE_QUERY_ACTIONS
+    }
   } else if (task.flight && task.flight.trusted === false) {
     components = [{ id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '航班号已收到', message: '航班信息正在确认中。' } }]
   } else if (task.flight) {

@@ -47,6 +47,13 @@ export type ReadToolResults = Partial<{
    */
   'calendar.query': SuccessfulToolResult<ListUpcomingEventsOutput>
   'weather.get-current': SuccessfulToolResult<WeatherOutput>
+  /**
+   * The proactive advisory's own persisted reading. A separate key on purpose:
+   * 'weather.get-current' is the transient query answer that must vanish on
+   * the next event, while this one must survive every recompose for as long
+   * as the advisory is active.
+   */
+  'weather.advisory': SuccessfulToolResult<WeatherOutput>
 }>
 
 export class ReadToolOrchestrationError extends Error {

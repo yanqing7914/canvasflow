@@ -13,6 +13,8 @@ export type PlannerIntent =
   | 'check-weather'
   | 'check-schedule'
   | 'check-departure-time'
+  | 'send-weather-reminder'
+  | 'dismiss-weather-advisory'
   | 'cancel-task'
   | 'unknown'
 
@@ -181,6 +183,31 @@ export function planAirportPickup(input: PlannerInput): Plan {
       missingSlots: [],
       proposedEvents: [{ ...eventBase, type: 'user.input', text }],
       assistantText: '好的，正在算建议的出发时间。',
+    }
+  }
+
+  // The two answers to the proactive weather advisory. Meaningful only while
+  // an advisory is active; the gateway checks that and leaves the words on
+  // the ordinary unknown path otherwise.
+  if (/^(?:请|麻烦)?(?:帮我)?提醒(?:乘客|她们|他们|家人|妈妈|爸爸)?带伞(?:吧|好了)?[?？。！!]?$/.test(compactText)) {
+    return {
+      intent: 'send-weather-reminder',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，准备好带伞提醒，发送前请确认。',
+    }
+  }
+
+  if (/^(?:暂不处理|先不用|不用提醒(?:了)?|不用了|先这样)(?:吧|好了)?[。！!]?$/.test(compactText)) {
+    return {
+      intent: 'dismiss-weather-advisory',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，先不处理。',
     }
   }
 

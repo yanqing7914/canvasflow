@@ -376,6 +376,74 @@ test('surfaces a transient schedule card on demand without growing the preparing
   await expectNoScroll(page)
 })
 
+test('raises the rain advisory en route and sends the umbrella reminder through confirmation @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+
+  // The in-air flight update is the moment the arrival window firms up; the
+  // forecast finds rain and the advisory takes the rail — a condition raised
+  // the prompt, not a timer, and no one asked a question. (vehicle.moving is
+  // an advisory timeline step consumed by 开始导航 itself.)
+  await advanceFlow(page) // charging.started
+  await advanceFlow(page) // flight.updated in-air → advisory
+  const advisory = page.locator('[data-component-id="weather-advisory"]')
+  await expect(advisory).toBeVisible()
+  await expect(advisory).toContainText('小雨')
+  await expect(page.getByRole('button', { name: '提醒乘客带伞' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '暂不处理' })).toBeVisible()
+  await expectNoScroll(page)
+
+  // 提醒乘客带伞 arms the confirm-then-send window: the exact provider-prepared
+  // text is on screen, and nothing has been sent yet.
+  const prepared = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/events$/.test(new URL(response.url()).pathname)
+  ))
+  await page.getByRole('button', { name: '提醒乘客带伞' }).click()
+  expect((await prepared).ok()).toBe(true)
+  await expect(page.locator('.ui-card--message-preview')).toBeVisible()
+  await expect(page.locator('.ui-card--message-preview')).toContainText('带伞')
+  await expectNoScroll(page)
+
+  // Confirming goes through the real confirmation API and reports the send.
+  const confirmed = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/confirmations\//.test(new URL(response.url()).pathname)
+  ))
+  await page.getByRole('button', { name: '确认发送' }).click()
+  const confirmation = await confirmed
+  expect(confirmation.ok()).toBe(true)
+  const result = await confirmation.json()
+  expect(result.task.message.status).toBe('sent')
+  expect(result.effects).toContainEqual(expect.objectContaining({ type: 'message.send', status: 'succeeded' }))
+
+  // The advisory retired with the answer: the drive is back, and the next
+  // trip event does not re-raise it.
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toHaveCount(0)
+  await advanceFlow(page) // charging.completed
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toHaveCount(0)
+  await expectNoScroll(page)
+})
+
+test('dismissing the rain advisory returns the drive and never re-prompts @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await advanceFlow(page) // charging.started
+  await advanceFlow(page) // flight.updated in-air → advisory
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
+
+  await page.getByRole('button', { name: '暂不处理' }).click()
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toHaveCount(0)
+  await expect(page.locator('.ui-card--navigation-summary')).toBeVisible()
+  await expectNoScroll(page)
+})
+
 test('answers when to leave from the button on the brief without growing the frame @layout', async ({ page }) => {
   await page.goto('/')
   await sendText(page)

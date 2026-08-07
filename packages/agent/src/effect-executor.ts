@@ -17,7 +17,7 @@ import {
   type EffectRecord,
   type VehicleContext,
 } from '@canvasflow/schema'
-import { buildLandingNotifyContent, type ProviderRegistry } from '@canvasflow/tools'
+import { buildLandingNotifyContent, buildWeatherUmbrellaContent, type ProviderRegistry } from '@canvasflow/tools'
 
 const NAVIGATION_START = 'navigation.start'
 
@@ -31,6 +31,11 @@ export interface PolicyGate {
   authorizeCabinRevert(task: AirportPickupTaskState, vehicle?: VehicleContext): PolicyDecision
   authorizeLandingMessage(task: AirportPickupTaskState): PolicyDecision
   authorizeLandingMessageRetry(task: AirportPickupTaskState, confirmationId?: string): PolicyDecision
+  /**
+   * Optional so policy doubles built before the proactive weather advisory
+   * keep compiling; an absent implementation denies the reminder.
+   */
+  authorizeWeatherReminder?(task: AirportPickupTaskState): PolicyDecision
 }
 
 export class DefaultPolicyGate implements PolicyGate {
@@ -94,12 +99,33 @@ export class DefaultPolicyGate implements PolicyGate {
 
   authorizeLandingMessageRetry(task: AirportPickupTaskState, confirmationId?: string): PolicyDecision {
     if (task.phase === 'completed' || task.phase === 'cancelled') return { allowed: false, errorCode: 'TASK_TERMINAL' }
-    if (task.message.status !== 'failed' || !task.flight) return { allowed: false, errorCode: 'INVALID_TASK_STATE' }
+    // 'failed' is the retry window; a confirmation may also send a message
+    // still 'scheduled' — the confirm-then-send window a prepared message
+    // (retry arm, or the proactive umbrella reminder) is already in.
+    const confirmable = task.message.status === 'failed'
+      || (confirmationId !== undefined && task.message.status === 'scheduled')
+    if (!confirmable || !task.flight) return { allowed: false, errorCode: 'INVALID_TASK_STATE' }
     if (task.flight.status === 'cancelled') return { allowed: false, errorCode: 'FLIGHT_CANCELLED' }
     if (confirmationId !== undefined && (
       task.pendingConfirmation?.action !== 'send-message'
       || task.pendingConfirmation.confirmationId !== confirmationId
     )) return { allowed: false, errorCode: 'AUTHORIZATION_REQUIRED' }
+    return { allowed: true }
+  }
+
+  /**
+   * The proactive umbrella reminder may only be prepared while the trip is
+   * still en route, the advisory is active, and no other message occupies the
+   * one pending-message slot the task carries.
+   */
+  authorizeWeatherReminder(task: AirportPickupTaskState): PolicyDecision {
+    if (task.phase === 'completed' || task.phase === 'cancelled') return { allowed: false, errorCode: 'TASK_TERMINAL' }
+    if (task.phase !== 'driving-to-airport') return { allowed: false, errorCode: 'INVALID_TASK_PHASE' }
+    if (!task.flight || task.flight.status === 'cancelled') return { allowed: false, errorCode: 'FLIGHT_CANCELLED' }
+    if (task.weatherAdvisory?.status !== 'active') return { allowed: false, errorCode: 'INVALID_TASK_STATE' }
+    if (task.message.status !== 'idle' || task.message.pendingMessageId || task.pendingConfirmation) {
+      return { allowed: false, errorCode: 'INVALID_TASK_STATE' }
+    }
     return { allowed: true }
   }
 }
@@ -317,6 +343,57 @@ export class EffectExecutor {
     effectId: string
     eta?: string
   }): LandingMessagePrepareExecution {
+    const policy = this.#policy.authorizeLandingMessageRetry(input.task)
+    const eta = input.eta ?? resolveLandingMeetingEta(input.task)
+    return this.#prepareMessage({
+      ...input,
+      policy,
+      expected: buildLandingNotifyContent(
+        input.task.taskId, input.contactId, input.task.flight!.flightNumber, eta ?? '即将到达',
+      ),
+      providerInput: {
+        contactId: input.contactId,
+        flightNumber: input.task.flight!.flightNumber,
+        ...(eta !== undefined ? { eta } : {}),
+      },
+    })
+  }
+
+  /**
+   * Prepare the proactive umbrella reminder for the confirm-then-send window.
+   * The same provider and confirmation machinery as the landing retry; only
+   * the policy and the template differ.
+   */
+  prepareWeatherReminder(input: {
+    task: AirportPickupTaskState
+    contactId: string
+    idempotencyKey: string
+    effectId: string
+  }): LandingMessagePrepareExecution {
+    const policy = this.#policy.authorizeWeatherReminder?.(input.task)
+      ?? { allowed: false as const, errorCode: 'AUTHORIZATION_REQUIRED' }
+    return this.#prepareMessage({
+      ...input,
+      policy,
+      expected: buildWeatherUmbrellaContent(
+        input.task.taskId, input.contactId, input.task.flight!.flightNumber,
+      ),
+      providerInput: {
+        contactId: input.contactId,
+        flightNumber: input.task.flight!.flightNumber,
+        kind: 'weather-umbrella',
+      },
+    })
+  }
+
+  #prepareMessage(input: {
+    task: AirportPickupTaskState
+    idempotencyKey: string
+    effectId: string
+    policy: PolicyDecision
+    expected: { contactId: string; messageId: string; text: string }
+    providerInput: Record<string, unknown>
+  }): LandingMessagePrepareExecution {
     const effect = (status: EffectRecord['status'], errorCode?: string): EffectRecord => ({
       effectId: input.effectId,
       type: 'message.prepare',
@@ -324,23 +401,15 @@ export class EffectExecutor {
       tool: 'message.prepare',
       ...(errorCode ? { errorCode } : {}),
     })
-    const policy = this.#policy.authorizeLandingMessageRetry(input.task)
-    if (!policy.allowed) return { succeeded: false, effect: effect('failed', policy.errorCode) }
+    if (!input.policy.allowed) return { succeeded: false, effect: effect('failed', input.policy.errorCode) }
+    const expected = input.expected
 
-    const eta = input.eta ?? resolveLandingMeetingEta(input.task)
-    const expected = buildLandingNotifyContent(
-      input.task.taskId, input.contactId, input.task.flight!.flightNumber, eta ?? '即将到达',
-    )
     const providerRequestId = `${input.task.taskId}:message.prepare:${input.idempotencyKey}`
     let raw: unknown
     try {
       raw = this.#registry['message.prepare'](
         { taskId: input.task.taskId, requestId: providerRequestId },
-        {
-          contactId: input.contactId,
-          flightNumber: input.task.flight!.flightNumber,
-          ...(eta !== undefined ? { eta } : {}),
-        },
+        input.providerInput,
       )
     } catch (error) {
       return { succeeded: false, effect: effect('failed', providerErrorCode(error)) }
