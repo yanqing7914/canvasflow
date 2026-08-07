@@ -217,7 +217,7 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     ? weather
       ? weatherCard(task, weather)
       : scheduleQuery
-        ? scheduleCard(scheduleQuery.events)
+        ? scheduleCard(scheduleQuery.data.events, scheduleQuery.meta.provider === 'live' ? 'live' : 'fixture')
         : undefined
     : undefined
   if (queryCard) {
@@ -377,18 +377,28 @@ function successfulWeather(value: unknown): WeatherOutput | undefined {
   return parsed.success ? parsed.data : undefined
 }
 
-/** Validated calendar.query data, or undefined for anything unusable. */
-function successfulCalendarQuery(value: unknown): ListUpcomingEventsOutput | undefined {
+/** Validated calendar.query result with its provider provenance, or undefined. */
+function successfulCalendarQuery(
+  value: unknown,
+): { data: ListUpcomingEventsOutput; meta: { provider: string } } | undefined {
   if (typeof value !== 'object' || value === null || (value as { ok?: unknown }).ok !== true) return undefined
   const parsed = listUpcomingEventsOutputSchema.safeParse((value as { data?: unknown }).data)
-  return parsed.success ? parsed.data : undefined
+  if (!parsed.success) return undefined
+  const meta = (value as { meta?: unknown }).meta
+  const provider = typeof meta === 'object' && meta !== null && typeof (meta as { provider?: unknown }).provider === 'string'
+    ? (meta as { provider: string }).provider
+    : 'fixture'
+  return { data: parsed.data, meta: { provider } }
 }
 
 /** Rows the schedule answer shows before handing the tail to moreCount. */
 const MAX_SCHEDULE_CARD_EVENTS = 4
 
 /** Mirrors composeAgentSpec's scheduleCardComponent; fixtures-conformance locks the two together. */
-function scheduleCard(events: ListUpcomingEventsOutput['events']): UISpec['components'][number] {
+function scheduleCard(
+  events: ListUpcomingEventsOutput['events'],
+  freshness: 'live' | 'cached' | 'fixture' = 'fixture',
+): UISpec['components'][number] {
   const ordered = [...events].sort((left, right) => left.startAt.localeCompare(right.startAt))
   const shown = ordered.slice(0, MAX_SCHEDULE_CARD_EVENTS)
   const moreCount = ordered.length - shown.length
@@ -406,7 +416,7 @@ function scheduleCard(events: ListUpcomingEventsOutput['events']): UISpec['compo
       })),
       ...(moreCount > 0 ? { moreCount } : {}),
       ...(shown.length === 0 ? { emptyCopy: '今天没有更多安排了' } : {}),
-      freshness: 'fixture',
+      freshness,
     },
   }
 }

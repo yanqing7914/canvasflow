@@ -754,6 +754,90 @@ describe('PersistentAgentRuntime', () => {
     expect(created.meta).toMatchObject({ mode: 'live', fallbackUsed: true })
     expect(created.task.flight).toMatchObject({ flightNumber: 'MU5102', trusted: false })
   })
+
+  describe('live schedule adapter prefetch', () => {
+    const scheduleQuery = (agent: PersistentAgentRuntime, taskRevision: number, taskId: string, eventId = 'live-schedule') =>
+      agent.submitEventAsync(taskId, {
+        clientRequestId: `client-${eventId}`,
+        expectedTaskRevision: taskRevision,
+        event: { eventId, type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+    it('answers a schedule query from the adapter and marks the card live', async () => {
+      const listToday = vi.fn(async () => ({
+        events: [{
+          eventId: 'lark-event-1',
+          title: '产品评审',
+          startAt: '2026-07-22T21:00:00+08:00',
+          location: '会议室 A',
+        }],
+      }))
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-create'))
+
+      const asked = await scheduleQuery(agent, created.task.taskRevision, created.task.taskId)
+
+      expect(listToday).toHaveBeenCalledTimes(1)
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('live')
+      expect(card.props.events).toEqual([
+        expect.objectContaining({ title: '产品评审', location: '会议室 A' }),
+      ])
+      // Query contract is unchanged: no task fact moved, and the reading is
+      // transient — it lives in the published UI only.
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+    })
+
+    it('falls back to the fixture calendar when the adapter fails', async () => {
+      const listToday = vi.fn(async () => {
+        throw new Error('lark unreachable')
+      })
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-fallback'))
+
+      const asked = await scheduleQuery(agent, created.task.taskRevision, created.task.taskId, 'fallback-schedule')
+
+      expect(listToday).toHaveBeenCalledTimes(1)
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('fixture')
+      expect(card.props.events).toEqual([
+        expect.objectContaining({ title: '豆豆的睡前故事' }),
+      ])
+    })
+
+    it('never consults the adapter for non-schedule turns', async () => {
+      const listToday = vi.fn(async () => ({ events: [] }))
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-other'))
+
+      await agent.submitEventAsync(created.task.taskId, {
+        clientRequestId: 'client-not-schedule',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'not-schedule', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(listToday).not.toHaveBeenCalled()
+    })
+
+    it('leaves the synchronous entry point on the fixture path', () => {
+      const listToday = vi.fn(async () => ({ events: [] }))
+      const agent = runtime(':memory:', { scheduleAdapter: { listToday } })
+      const created = agent.createTask(createRequest('live-schedule-sync'))
+
+      const asked = agent.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-sync-schedule',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'sync-schedule', type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(listToday).not.toHaveBeenCalled()
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.freshness).toBe('fixture')
+    })
+  })
 })
 
 function returningTask(agent: PersistentAgentRuntime) {
