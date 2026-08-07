@@ -27,7 +27,7 @@ import type { AgentHttpGateway } from './http'
 import type { ScheduleAdapter } from './lark-calendar-adapter'
 import { ModelGateway, type ModelGatewayResult } from './model-gateway'
 import type { ReadToolResults } from './orchestration'
-import { planAirportPickup, type Plan, type PlannerInput } from './planner'
+import { Planner, planAirportPickup, type Plan, type PlannerInput } from './planner'
 import type { StoredEventResult, StoredIdempotencyResult, StoredTask, TaskStore, TaskUpdateRead } from './store'
 import { createTaskUpdate } from './task-updates'
 
@@ -322,7 +322,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       return this.#run((gateway) => {
         const replay = gateway.hasCreateResult(request.clientRequestId)
         return { response: gateway.createTask(request), replay }
-      }, planned?.plan, planned?.source === 'model' ? planned.modelUsed : undefined)
+      }, planned?.plan, planned?.source === 'model' ? planned.modelUsed : undefined, undefined, request.input.text)
     })().finally(() => this.#inFlightOperations.delete(key))
     this.#inFlightOperations.set(key, pending)
     return pending
@@ -352,6 +352,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
         planned?.plan,
         planned?.source === 'model' ? planned.modelUsed : undefined,
         prefetchedSchedule,
+        request.event.type === 'user.input' ? request.event.text : undefined,
       )
     })().finally(() => this.#inFlightOperations.delete(key))
     this.#inFlightOperations.set(key, pending)
@@ -389,6 +390,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     plannedInput?: Plan,
     modelUsed?: string,
     prefetchedSchedule?: PrefetchedScheduleResult,
+    plannedForText?: string,
   ): T {
     this.#assertOpen()
     // Serializes Gateway calls across processes sharing this SQLite file.
@@ -409,7 +411,19 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
         policyGate: this.#options.policyGate,
         modelUsed,
         ...(prefetchedSchedule ? { prefetchedSchedule } : {}),
-        ...(plannedInput ? { planner: { plan: () => plannedInput } } : {}),
+        // The precomputed plan is an answer to ONE question — the text it was
+        // planned for. A gateway-side rewrite (an ordinal resolved to a flight
+        // number) asks a new question mid-turn, and pinning the old answer to
+        // it would swallow the rewrite; unknown text falls through to the rules.
+        ...(plannedInput ? {
+          planner: {
+            plan: (input: string | PlannerInput, state?: Parameters<Planner['plan']>[1]) => {
+              const text = typeof input === 'string' ? input : input.text
+              if (plannedForText === undefined || text === plannedForText) return plannedInput
+              return new Planner().plan(input as PlannerInput, state)
+            },
+          },
+        } : {}),
       })
       const result = operation(gateway)
       this.#persistRuntime(runtime)

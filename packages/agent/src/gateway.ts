@@ -38,7 +38,7 @@ import { mergePassengers } from './passengers'
 import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, pickableArrivals, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
-import { Planner, planAirportPickup, type Plan, type PlannerInput } from './planner'
+import { Planner, type Plan, type PlannerInput } from './planner'
 import {
   armLandingMessageRetry,
   resolveLandingMeetingEta,
@@ -531,15 +531,11 @@ export class AgentGateway {
       const picked = board ? pickableArrivals(board)[plan.slotUpdates.flightChoiceOrdinal - 1] : undefined
       if (picked) {
         request.event = { ...request.event, text: `航班号 ${picked.flightNumber}` }
-        // Re-plan with the rules directly, not this.#planner: the persistent
-        // runtime injects a stub planner frozen on the ORIGINAL text's plan,
-        // which would answer pick-flight-choice again and never fill the slot.
-        plan = planAirportPickup({
-          text: request.event.text,
-          state: current.task,
-          eventId: request.event.eventId,
-          timestamp: request.event.timestamp,
-        })
+        // Re-plan through the configured planner, same as any user input: the
+        // persistent runtime's plan stub recognizes rewritten text and falls
+        // through to the rules, so a custom or model-backed planner keeps
+        // interpreting ordinals exactly as it would the typed number.
+        plan = this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
       }
     }
     if (

@@ -881,6 +881,40 @@ describe('PersistentAgentRuntime', () => {
       expect(card.props.freshness).toBe('fixture')
     })
   })
+
+  it('resolves a spoken ordinal through the model-planning seam without pinning the stale plan', async () => {
+    // The contract under test: the runtime pre-plans the ORIGINAL text (the
+    // model seam) and pins that plan into the transaction. When the gateway
+    // rewrites an ordinal into a flight number mid-turn, the pinned plan must
+    // yield to the configured planner for the rewritten text — otherwise the
+    // ordinal answers pick-flight-choice twice and the slot never fills.
+    const modelGateway = new ModelGateway({
+      adapter: { modelId: 'unused-model', plan: async () => { throw new Error('rules answer ordinals; the model must not be called') } },
+    })
+    const plan = vi.spyOn(modelGateway, 'plan')
+    const agent = runtime(':memory:', { modelGateway })
+    const created = await agent.createTaskAsync({
+      ...createRequest('ordinal-model-create'),
+      input: { type: 'text', text: '我现在要去机场接妈妈和豆豆' },
+    })
+    const board = created.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices') throw new Error('expected a flight-choices board')
+    const thirdOnScreen = board.props.choices[2]!.flightNumber
+
+    const picked = await agent.submitEventAsync(created.task.taskId, {
+      clientRequestId: 'client-ordinal-model',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'ordinal-model', type: 'user.input', text: '选第三个', timestamp: '2026-07-22T12:01:00+08:00' },
+    })
+
+    expect(picked.task.phase).toBe('preparing')
+    expect(picked.task.flight?.flightNumber).toBe(thirdOnScreen)
+    // Both turns consulted the model seam and both were rules-recognized, so
+    // the adapter behind it was never reached; the pinned rules plan still
+    // yielded to the rewrite.
+    expect(plan).toHaveBeenCalledTimes(2)
+    expect(picked.meta.modelUsed).toBeUndefined()
+  })
 })
 
 function returningTask(agent: PersistentAgentRuntime) {
