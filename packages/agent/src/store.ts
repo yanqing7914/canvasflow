@@ -39,6 +39,12 @@ export type StoredTask = {
 export type StoredEventResult = {
   stored: StoredTask
   effects: EffectRecord[]
+  /**
+   * The spoken line the response carried, kept only where replaying an answer
+   * means replaying what was said. Ordinary events derive their line from the
+   * snapshot they produced, so they leave this unset.
+   */
+  assistant?: { text: string; shouldSpeak: boolean }
 }
 
 export type StoredIdempotencyResult = StoredEventResult
