@@ -52,7 +52,7 @@ import {
   type ReadToolOrchestration,
   type ReadToolResults,
 } from './orchestration'
-import { MemoryTaskStore, type StoredTask, type TaskStore, type TaskUpdateRead } from './store'
+import { MemoryTaskStore, type StoredEventResult, type StoredTask, type TaskStore, type TaskUpdateRead } from './store'
 
 const returnTripPolicyErrorCodes = new Set([
   'TASK_TERMINAL',
@@ -250,6 +250,9 @@ export class AgentGateway {
     const current = this.#requireTask(taskId)
     if (this.#store.getEventResult(taskId, request.event.eventId)) return undefined
     if (request.expectedTaskRevision !== current.task.taskRevision) return undefined
+    // A side answer that is still true is resolved from the store too, so planning
+    // it would disclose the caller's text for a turn submitEvent never sends out.
+    if (this.#freshSideAnswer(taskId, current, request.event.eventId)) return undefined
     if (current.task.phase === 'completed' || current.task.phase === 'cancelled') return undefined
     // No timestamp staleness check here: submitEvent clamps user input forward
     // (occupant intent is never stale), so gating planning on the raw client
@@ -2210,13 +2213,8 @@ export class AgentGateway {
     request: SubmitEventRequest,
     startedAt: number,
   ): AgentResponse | undefined {
-    const previous = this.#store.getEventResult(taskId, sideAnswerKey(request.event.eventId))
+    const previous = this.#freshSideAnswer(taskId, current, request.event.eventId)
     if (!previous) return undefined
-    // The trip moving is what makes an answer stale, and the task revision is what
-    // says the trip moved. A retry that lands within the same revision is the
-    // client asking again for a response it lost, and gets that response back
-    // whole — same snapshot, same spoken line, no second bump of the revision.
-    if (previous.stored.task.taskRevision !== current.task.taskRevision) return undefined
     return this.#response(
       request.clientRequestId,
       previous.stored,
@@ -2224,6 +2222,20 @@ export class AgentGateway {
       performance.now() - startedAt,
       previous.assistant,
     )
+  }
+
+  /**
+   * The recorded side answer for this event id, if replaying it would still be
+   * telling the truth. The trip moving is what makes an answer stale, and the task
+   * revision is what says the trip moved. A retry that lands within the same
+   * revision is the client asking again for a response it lost, and gets that
+   * response back whole — same snapshot, same spoken line, no second bump of the
+   * revision.
+   */
+  #freshSideAnswer(taskId: string, current: StoredTask, eventId: string): StoredEventResult | undefined {
+    const previous = this.#store.getEventResult(taskId, sideAnswerKey(eventId))
+    if (!previous) return undefined
+    return previous.stored.task.taskRevision === current.task.taskRevision ? previous : undefined
   }
 
   #recordSideAnswer(

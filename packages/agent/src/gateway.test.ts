@@ -3561,6 +3561,37 @@ describe('AgentGateway', () => {
       expect(second.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
     })
 
+    it('keeps a replayable side answer away from the model planner', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-departure-planning', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-planning', type: 'user.input' as const, text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+      expect(gateway.userInputPlanningState(created.task.taskId, request)).toBeDefined()
+
+      const asked = gateway.submitEvent(created.task.taskId, request)
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
+
+      // submitEvent would answer this retry from the store, so the planner boundary
+      // has no reason to send the text out to a provider.
+      expect(gateway.userInputPlanningState(created.task.taskId, request)).toBeUndefined()
+
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-after-planning-question',
+        expectedTaskRevision: asked.task.taskRevision,
+        expectedUiRevision: asked.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-after-planning-question',
+      })
+
+      // Once the trip moves the recorded answer stops being true, so the same
+      // duplicate is a real turn again and planning it is back on the table.
+      const late = { ...request, expectedTaskRevision: driving.task.taskRevision }
+      expect(gateway.userInputPlanningState(created.task.taskId, late)).toBeDefined()
+    })
+
     it('answers a duplicate afresh once the trip has moved past the answer it replayed', () => {
       const gateway = createGateway()
       const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
