@@ -109,9 +109,10 @@ async function expectNoHorizontalOverflow(page: Page) {
  * genuinely fit rather than merely be unscrollable. `.demo-shell` sets
  * `overflow: hidden`, which clamps `document.scrollHeight` to the viewport: a brief
  * taller than the fold is silently clipped instead of scrollable, so asserting on
- * page scroll height alone can never fail. What is checkable is the three ways the
+ * page scroll height alone can never fail. What is checkable is the four ways the
  * rule can actually break — a clipped scroll container, a box clipped across its
- * own width, or the brief's own box extending past the fold.
+ * own width, a line of text ellipsized inside a box that itself fits, or the
+ * brief's own box extending past the fold.
  *
  * The cards are measured alongside the containers because that is where clipping
  * actually lands: `.ui-card` hides its own overflow, so a card starved of height by
@@ -225,16 +226,21 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     const surface = page.getByRole('region', { name: 'Generated task interface' })
     await expect(surface).toBeVisible()
     await expect(surface).toHaveAttribute('data-layout', 'stack')
-    await expect(surface.locator('[data-component-type="status-banner"]')).toBeVisible()
+    // The opening screen offers the arrivals board rather than asking for a number.
+    const board = surface.locator('[data-component-type="flight-choices"]')
+    await expect(board).toBeVisible()
+    await expect(board.getByRole('listitem')).toHaveCount(5)
     // The composer is open-ended content between header and journey, so a phase
     // holding one is where the fixed frame is most likely to be pushed past the fold.
     await expectNoScroll(page)
 
-    // The keyboard left with its words, so it is out of the tab order too: this
-    // phase only asks a question, so the header is the whole of it.
+    // The keyboard left with its words, so it is out of the tab order too. What
+    // follows the header is the board itself: a choice offered on screen has to be
+    // reachable without touching it.
     await controls.focus()
     await page.keyboard.press('Tab')
     await expect(page.getByLabel('任务输入')).toHaveCount(0)
+    await expect(board.getByRole('button').first()).toBeFocused()
 
     await sendText(page, 'MU5102')
     // The demo player lives in the drawer, so tabbing on from the header reaches
@@ -314,6 +320,171 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
   await page.getByRole('button', { name: '保存本次偏好' }).click()
   await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
   await expectNoScroll(page)
+})
+
+test('surfaces a transient weather card on demand without growing the preparing frame @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await expect(page.locator('.ui-card--schedule-strip')).toBeVisible()
+  const cardCountBefore = await page.locator('.ui-card').count()
+
+  // A whole-utterance weather question is a query turn: it answers on the brief
+  // without touching the trip. On the four-card preparing frame the card borrows
+  // the schedule strip's slot, so the count must not grow.
+  await sendText(page, '到的时候天气怎么样')
+  const weatherCard = page.locator('.ui-card--weather-card')
+  await expect(weatherCard).toBeVisible()
+  await expect(weatherCard).toContainText('虹桥机场 T2')
+  await expect(weatherCard).toContainText('小雨')
+  await expect(weatherCard).toContainText('室内等候')
+  await expect(page.locator('.ui-card--schedule-strip')).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // The reading is transient: the next trip event recomposes without it and the
+  // schedule strip takes its slot back.
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.locator('.ui-card--weather-card')).toHaveCount(0)
+  await expectNoScroll(page)
+})
+
+test('surfaces a transient schedule card on demand without growing the preparing frame @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await expect(page.locator('.ui-card--schedule-strip')).toBeVisible()
+  const cardCountBefore = await page.locator('.ui-card').count()
+
+  // The second query domain rides the same turn contract as the weather card:
+  // it answers on the brief, borrows the strip's slot, and touches no trip fact.
+  await sendText(page, '看看我的日程')
+  const scheduleCard = page.locator('.ui-card--schedule-card')
+  await expect(scheduleCard).toBeVisible()
+  await expect(scheduleCard).toContainText('今天的日程')
+  await expect(scheduleCard).toContainText('豆豆的睡前故事')
+  await expect(scheduleCard).toContainText('21:30')
+  await expect(page.locator('.ui-card--schedule-strip')).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // Transient: the next trip event recomposes without it and the strip returns.
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.locator('.ui-card--schedule-card')).toHaveCount(0)
+  await expectNoScroll(page)
+})
+
+test('answers when to leave from the button on the brief without growing the frame @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await expect(page.locator('.ui-card--schedule-strip')).toBeVisible()
+  const cardCountBefore = await page.locator('.ui-card').count()
+
+  // The question sits with the card that carries the ETA, beside the number it is
+  // about, and travels as ordinary user input — so the button reaches the same
+  // planner branch the spoken sentence does. (The card's controls are a sibling
+  // of the card surface, so scope to the component wrapper, not the article.)
+  const plan = page.locator('.ui-component:has([data-component-id="navigation-plan"])')
+  await plan.getByRole('button', { name: '什么时候出发' }).click()
+
+  const departureCard = page.locator('.ui-card--departure-plan')
+  await expect(departureCard).toBeVisible()
+  await expect(departureCard).toContainText('建议出发')
+  await expect(departureCard).toContainText('20:10')
+  await expect(departureCard).toContainText('MU5102 20:40 落地')
+  await expect(departureCard).toContainText('路上 20 分钟')
+  await expect(departureCard).toContainText('提前 10 分钟到')
+  await expect(page.locator('.ui-card--schedule-strip')).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // Same transient contract as the other query answers, and leaving still leads:
+  // 开始导航 remains the primary control on the card that hosts the question.
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.locator('.ui-card--departure-plan')).toHaveCount(0)
+  await expectNoScroll(page)
+})
+
+test('reflows the departure answer at phone width instead of cutting its facts off @layout', async ({ page }, testInfo) => {
+  // The card is one horizontal band at the demo resolution, which is a shape that
+  // only works while there is width to hold it. The 1920x720 project cannot see the
+  // other end of that range at all, so it sits this one out rather than repeating
+  // the desktop assertion above.
+  test.skip(testInfo.project.name === 'chromium-1920x720', 'this spec is about the narrow end of the range')
+  await page.setViewportSize({ width: 375, height: 812 })
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  const plan = page.locator('.ui-component:has([data-component-id="navigation-plan"])')
+  await plan.getByRole('button', { name: '什么时候出发' }).click()
+
+  const departureCard = page.locator('.ui-card--departure-plan')
+  await expect(departureCard).toBeVisible()
+  // Every fact the recommendation was worked backwards from is still readable —
+  // including the route, which the middle of the range drops and this end can afford.
+  await expect(departureCard).toContainText('20:10')
+  await expect(departureCard).toContainText('MU5102 20:40 落地')
+  await expect(departureCard).toContainText('路上 20 分钟')
+  await expect(departureCard).toContainText('提前 10 分钟到')
+  await expect(departureCard).toContainText('直达虹桥机场 T2')
+
+  // `.ui-card` hides its overflow, so containing the text is not the same as showing
+  // it: a fact laid out past the card's right edge reads as absent. Measured on the
+  // leaves, where the truncation would happen.
+  const clipped = await departureCard.evaluate((card) => [...card.querySelectorAll('.ui-departure-plan__fact, .ui-departure-plan__time')]
+    .map((element) => ({
+      text: (element.textContent ?? '').slice(0, 24),
+      clippedWidthBy: element.scrollWidth - element.clientWidth,
+    }))
+    .filter((box) => box.clippedWidthBy > 1))
+  expect(clipped).toEqual([])
+  // The phone brief is allowed to scroll, so the frame rule is not the check here;
+  // what must not happen is the document growing sideways.
+  await expectNoHorizontalOverflow(page)
+})
+
+test('answers weather and the calendar from the driving brief without breaking the frame @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expectNoScroll(page)
+
+  const summary = page.locator('.ui-component:has([data-component-id="navigation-summary"])')
+  const cardCountBefore = await page.locator('.ui-card').count()
+
+  // Mid-drive, the side scenes are offered on the brief that carries the ETA —
+  // the number both answers are relative to. Underway the rail beside the map
+  // holds exactly one card, so the answer takes the brief's place for the turn
+  // instead of crowding in next to it: same card count, ETA back on the next
+  // trip event.
+  await summary.getByRole('button', { name: '看下天气' }).click()
+  const weatherCard = page.locator('.ui-card--weather-card')
+  await expect(weatherCard).toBeVisible()
+  await expect(weatherCard).toContainText('虹桥机场 T2')
+  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  await expect(summary).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // Reading one answer must not cost the driver the way back to the other: the
+  // answer inherits the buttons from the brief it replaced.
+  const weatherComponent = page.locator('.ui-component:has(.ui-card--weather-card)')
+  await weatherComponent.getByRole('button', { name: '看看日程' }).click()
+  const scheduleCard = page.locator('.ui-card--schedule-card')
+  await expect(scheduleCard).toBeVisible()
+  await expect(scheduleCard).toContainText('豆豆的睡前故事')
+  await expect(page.locator('.ui-card--weather-card')).toHaveCount(0)
+  expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
+  await expectNoScroll(page)
+
+  // And the drive itself is still there to go back to.
+  await expect(page.locator('.ui-card--route-map')).toBeVisible()
 })
 
 /**
@@ -470,6 +641,43 @@ test('draws the offline route panel and steps its marker on authored progress @l
   // to be taller than the 72px band it replaced to be worth its column.
   const canvas = await panel.locator('.ui-route-map__canvas').boundingBox()
   expect(canvas?.height ?? 0).toBeGreaterThan(120)
+
+  // Above the breakpoint the brief stops being a column beside the map and
+  // becomes a panel floating over it, which is a failure mode `expectNoScroll`
+  // cannot see: it measures clipping and overflow, and one box laid over another
+  // overflows nothing. 模拟行程进度 sits at the right end of the map's caption,
+  // exactly where the panel lands, so measure the gap between them directly.
+  const glass = page.locator('.ui-slot--secondary .ui-card--navigation-summary')
+  await expect(glass).toBeVisible()
+  const glassBox = await glass.boundingBox()
+  const mapBox = await panel.boundingBox()
+  expect(glassBox).not.toBeNull()
+  expect(mapBox).not.toBeNull()
+  // First that the takeover happened at all. It is guarded on the rail holding a
+  // single card, and a guard that quietly stops matching would leave an ordinary
+  // two-column split — which still fits the frame and still clears the caption,
+  // so every other assertion here would go on passing over a silent revert.
+  expect(glassBox!.x).toBeGreaterThan(mapBox!.x)
+  expect(glassBox!.x + glassBox!.width).toBeLessThanOrEqual(mapBox!.x + mapBox!.width)
+
+  const captionEnd = await progress.boundingBox()
+  expect(captionEnd).not.toBeNull()
+  expect(captionEnd!.x + captionEnd!.width).toBeLessThanOrEqual(glassBox!.x)
+
+  // The rail turns pointer events off so the map behind it stays draggable, and
+  // the panel has to take them back — at the component, because a card's buttons
+  // render in a sibling of the card. Ask the browser what a click at the panel's
+  // own centre would land on: anything under the glass means the panel is inert.
+  const hitsPanel = await page.evaluate(() => {
+    const card = document.querySelector('.ui-slot--secondary .ui-card--navigation-summary')
+    if (!card) return 'no panel'
+    const box = card.getBoundingClientRect()
+    const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
+    if (!hit) return 'nothing'
+    return hit.closest('.ui-slot--secondary') ? 'panel' : hit.tagName.toLowerCase()
+  })
+  expect(hitsPanel).toBe('panel')
+
   const departedLine = await line.getAttribute('d')
   const departedAt = await vehicle.getAttribute('transform')
   await expectNoScroll(page)
@@ -558,6 +766,116 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await page.getByRole('button', { name: '保存本次偏好' }).click()
   await readControls(page, 'memory.confirm-update:succeeded')
   await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
+})
+
+test('prepares the trip from a flight picked off the arrivals board', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await readControls(page, 'collecting-information')
+
+  // The board is the Agent's answer to a pickup with no flight number yet, and
+  // every row it offers has to be one the trip can actually be prepared from.
+  const row = page.locator('.ui-flight-choices__row', { hasText: 'CA1516' })
+  await expect(row).toBeEnabled()
+  await row.click()
+
+  await readControls(page, 'preparing')
+  const flightCard = page.locator('.ui-card--flight-status')
+  await expect(flightCard).toContainText('CA1516')
+  // The choice has been made, so the offer is gone rather than sitting under the brief.
+  await expect(page.locator('.ui-flight-choices')).toHaveCount(0)
+  await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
+})
+
+/**
+ * The whole scenario in one pass, driver-side only: the trip is asked for in
+ * words, the flight is picked off a board, the departure time is asked about, the
+ * drive begins, two side scenes are read on the way, and the airport is reached.
+ * Every other e2e here enters somewhere in the middle with the flight number
+ * already typed; this is the only one that walks the arc a driver actually walks,
+ * and its job is to catch a seam between two steps that each pass alone.
+ *
+ * It measures the frame at every generative screen, because the sequence is where
+ * a layout regression hides: a card composed correctly on its own can still be the
+ * second card in a slot that only holds one.
+ */
+test('walks the pickup scenario from the arrivals board to the airport @layout', async ({ page }) => {
+  await page.goto('/')
+
+  // 1 — the intent, in words. No flight number yet, on purpose.
+  await sendText(page)
+  await readControls(page, 'collecting-information')
+  await expectNoScroll(page)
+
+  // 2 — the Agent answers with the arrivals it can actually prepare a trip from,
+  // as a board rather than a question.
+  const board = page.locator('.ui-card--flight-choices')
+  await expect(board).toBeVisible()
+  const rows = page.locator('.ui-flight-choices__row')
+  expect(await rows.count()).toBeGreaterThan(1)
+  await expectNoScroll(page)
+
+  // 3 — the driver picks one, tapped off the board rather than typed. It is the
+  // demo's own flight because the rest of the arc is the timeline authored for it;
+  // that a different row prepares just as well is what the arrivals-board test
+  // above is for.
+  await page.locator('.ui-flight-choices__row', { hasText: 'MU5102' }).click()
+  await readControls(page, 'preparing')
+  await expect(page.locator('.ui-card--flight-status')).toContainText('MU5102')
+  await expect(board).toHaveCount(0)
+  await expectNoScroll(page)
+
+  // 4 — before leaving, the one question the brief cannot answer by itself.
+  await page
+    .locator('.ui-component:has([data-component-id="navigation-plan"])')
+    .getByRole('button', { name: '什么时候出发' })
+    .click()
+  const departure = page.locator('.ui-card--departure-plan')
+  await expect(departure).toBeVisible()
+  await expect(departure).toContainText('落地')
+  await expectNoScroll(page)
+
+  // 5 — and then the drive, which is where the generative screen becomes a cockpit.
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  // The question was transient: it left with the turn, unasked-for state and all.
+  await expect(departure).toHaveCount(0)
+  await expectNoScroll(page)
+
+  // 6 and 7 — the side scenes, read off the brief without leaving the drive.
+  const summary = page.locator('.ui-component:has([data-component-id="navigation-summary"])')
+  await summary.getByRole('button', { name: '看下天气' }).click()
+  await expect(page.locator('.ui-card--weather-card')).toBeVisible()
+  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  await expectNoScroll(page)
+
+  await page
+    .locator('.ui-component:has(.ui-card--weather-card)')
+    .getByRole('button', { name: '看看日程' })
+    .click()
+  await expect(page.locator('.ui-card--schedule-card')).toBeVisible()
+  await expectNoScroll(page)
+
+  // 8 — the trip carries on from where it was. Asking wrote nothing, so the next
+  // real event restores the brief and the arc continues to the airport.
+  await advanceFlow(page) // charging.started
+  await expect(summary).toHaveCount(1)
+  await expect(page.locator('.ui-card--schedule-card')).toHaveCount(0)
+  await advanceFlow(page) // flight in-air
+  await advanceFlow(page) // charging.completed
+  await advanceFlow(page) // flight landed
+  await advanceFlow(page) // message.sent
+  await advanceFlow(page) // airport geofence
+  await readControls(page, 'approaching-airport')
+  await expectNoScroll(page)
+  await advanceFlow(page) // parked
+  await readControls(page, 'waiting-for-passengers')
+  await expectNoScroll(page)
+
+  // Nothing internal reached the driver anywhere along the way.
+  await expect(page.locator('.task-surface')).not.toContainText('route-airport')
+  await expect(page.locator('.task-surface')).not.toContainText('flight.list-arrivals')
 })
 
 test('keeps the task usable around a voice attempt', async ({ page }) => {

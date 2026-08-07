@@ -636,6 +636,37 @@ describe('PersistentAgentRuntime', () => {
     expect(startCalls).toBe(2)
   })
 
+  it('replays a side answer after restart and stops once the trip moves past it', async () => {
+    const path = await databasePath()
+    const firstRuntime = runtime(path)
+    const created = firstRuntime.createTask(createRequest())
+    const request = {
+      clientRequestId: 'weather-question', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'weather-question', type: 'user.input' as const, text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+    }
+    const asked = firstRuntime.submitEvent(created.task.taskId, request)
+    expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+    firstRuntime.close()
+
+    // The answer is transient — it is not in the persisted brief — so the retry
+    // getting its card back is the durable receipt doing the work, not the snapshot.
+    const restarted = runtime(path)
+    expect(restarted.getTask(created.task.taskId).ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+    const replayed = restarted.submitEvent(created.task.taskId, { ...request, clientRequestId: 'weather-question-retry' })
+    expect(replayed.ui).toEqual(asked.ui)
+    expect(replayed.assistant).toEqual(asked.assistant)
+
+    const started = restarted.submitAction(created.task.taskId, {
+      clientRequestId: 'start-after-restart', expectedTaskRevision: replayed.task.taskRevision,
+      expectedUiRevision: replayed.ui.uiRevision, actionId: 'start-navigation', componentId: 'navigation-plan',
+      idempotencyKey: 'start-after-restart',
+    })
+    const late = restarted.submitEvent(created.task.taskId, {
+      ...request, clientRequestId: 'weather-question-late', expectedTaskRevision: started.task.taskRevision,
+    })
+    expect(late.ui.uiRevision).toBeGreaterThan(started.ui.uiRevision)
+  })
+
   it('rolls back task and side-effect state when persistence fails before commit', async () => {
     const path = await databasePath()
     const baseFactory = vi.fn((sideEffectRuntime, mode) => (

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { UISpec } from '@canvasflow/schema'
 import { createProviderRegistry, createSideEffectRuntime } from '@canvasflow/tools'
 import { AgentGateway, AgentGatewayError } from './gateway'
-import { ReadToolOrchestrationError, ReadToolOrchestrator } from './orchestration'
+import { ReadToolOrchestrationError, ReadToolOrchestrator, type ReadToolOrchestration } from './orchestration'
 import { Planner } from './planner'
 import { MemoryTaskStore } from './store'
 
@@ -1044,7 +1045,11 @@ describe('AgentGateway', () => {
       id: 'start-navigation',
       event: { type: 'tool-request', actionToken: 'start-navigation' },
     }))
-    expect(prepared.ui.components).toContainEqual(expect.objectContaining({ id: 'navigation-plan', actions: ['start-navigation'] }))
+    // Leaving leads the card; the pre-departure question follows it.
+    expect(prepared.ui.components).toContainEqual(expect.objectContaining({
+      id: 'navigation-plan',
+      actions: ['start-navigation', 'ask-departure-time'],
+    }))
 
     const request = {
       clientRequestId: 'client-start-navigation',
@@ -3128,6 +3133,782 @@ describe('AgentGateway', () => {
         message: '没有已授权的落地通知联系人',
       },
     }))
+  })
+
+  describe('check-weather query turn', () => {
+    it('answers with a transient weather card that yields the surface on the next event', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      expect(created.task.phase).toBe('preparing')
+      expect(created.ui.components.some((component) => component.type === 'schedule-strip')).toBe(true)
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-1', type: 'user.input', text: '到的时候天气怎么样', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // The query changed no task fact, only the composed surface.
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+      expect(asked.task.processedEventIds).not.toContain('weather-1')
+      expect(asked.ui.uiRevision).toBeGreaterThan(created.ui.uiRevision)
+      const card = asked.ui.components.find((component) => component.type === 'weather-card')
+      expect(card).toMatchObject({
+        props: expect.objectContaining({ location: '虹桥机场 T2', condition: 'light-rain' }),
+      })
+      // preparing already runs at the four-card budget: the strip yields its slot.
+      expect(asked.ui.components.some((component) => component.type === 'schedule-strip')).toBe(false)
+      expect(asked.ui.components).toHaveLength(created.ui.components.length)
+      expect(asked.assistant).toMatchObject({ shouldSpeak: true })
+      expect(asked.assistant?.text).toContain('虹桥机场')
+
+      // The next accepted event recomposes without the reading: the card is gone
+      // and the schedule strip returns.
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-after-weather', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'moving-after-weather', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(moved.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+      expect(moved.ui.components.some((component) => component.type === 'schedule-strip')).toBe(true)
+    })
+
+    it('moves the turn forward on the update stream without leaving the reading on it', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const before = gateway.getTaskUpdates(created.task.taskId).latestCursor
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-sse', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-sse', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // The turn happened, so the stream moves: the revision the asking client is
+      // now holding is the revision the stream reports, and its next action lines
+      // up with the store.
+      const read = gateway.getTaskUpdates(created.task.taskId, before)
+      expect(read.updates.length).toBeGreaterThan(0)
+      const latest = read.updates.at(-1)?.snapshot
+      expect(latest?.ui.uiRevision).toBe(asked.ui.uiRevision)
+
+      // But the reading itself is not trip state, and the durable snapshot is what
+      // a reconnect and a replayed no-op event both read. Leaving the card there
+      // means a driver who comes back an hour later is shown an hour-old sky. The
+      // answer rides the response that was asked for; the stream keeps the trip.
+      expect(latest?.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+      expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+    })
+
+    it('replays an identical weather event id idempotently', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-weather-replay', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-replay', type: 'user.input' as const, text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+
+      const first = gateway.submitEvent(created.task.taskId, request)
+      const second = gateway.submitEvent(created.task.taskId, request)
+
+      // A retry that lands while the trip is where it was gets the response it
+      // lost, whole — snapshot, card, and spoken line — and does not move the
+      // revision a second time.
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+      expect(second.assistant).toEqual(first.assistant)
+      expect(second.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+    })
+
+    it('lets an ordinary event through even when its id is spelled like a side-answer key', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-keyspace', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-keyspace', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+      expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+
+      // Side answers live in the gateway's own operation keyspace, so no event id a
+      // client can spell reaches them. This one is named after the recorded answer
+      // on purpose and is still executed as the event it is.
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-collision', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'side-answer:weather-keyspace', type: 'provider.timeout', provider: 'flight.get-status', timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(moved.task.processedEventIds).toContain('side-answer:weather-keyspace')
+      expect(moved.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+    })
+
+    it('answers a duplicate afresh once another side answer has published over it', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const weather = {
+        clientRequestId: 'client-weather-then-schedule', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-then-schedule', type: 'user.input' as const, text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+      const asked = gateway.submitEvent(created.task.taskId, weather)
+      expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+
+      const schedule = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule-after-weather', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'schedule-after-weather', type: 'user.input', text: '看看日程', timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(schedule.ui.components.some((component) => component.type === 'schedule-card')).toBe(true)
+
+      // A side answer leaves the task revision alone, so only the UI revision says
+      // the weather card has been published over. Replaying it here would hand the
+      // client a snapshot older than the one it is already showing.
+      const retry = { ...weather, expectedTaskRevision: schedule.task.taskRevision }
+      expect(gateway.userInputPlanningState(created.task.taskId, retry)).toBeDefined()
+
+      const late = gateway.submitEvent(created.task.taskId, retry)
+      expect(late.ui.uiRevision).toBeGreaterThan(schedule.ui.uiRevision)
+      expect(late.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(late.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+    })
+
+    it('degrades to a spoken notice on the unchanged snapshot when the weather read fails', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const failing: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveWeather: () => {
+          throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'weather provider timed out', true)
+        },
+      }
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator: failing,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-fail', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-fail', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task).toEqual(created.task)
+      expect(asked.ui.uiRevision).toBe(created.ui.uiRevision)
+      expect(asked.ui.meta.generatedBy).not.toBe('fallback')
+      expect(asked.assistant?.text).toContain('天气服务暂时不可用')
+    })
+
+    it('degrades the same way when the orchestration offers no weather read at all', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const withoutWeather: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+      }
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator: withoutWeather,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-none', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'weather-none', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task).toEqual(created.task)
+      expect(asked.assistant?.text).toContain('天气服务暂时不可用')
+    })
+
+    it('leaves terminal tasks on the ordinary event path', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const cancelled = gateway.cancelTask(created.task.taskId, {
+        clientRequestId: 'client-cancel-for-weather', expectedTaskRevision: created.task.taskRevision,
+        eventId: 'cancel-for-weather',
+      })
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-terminal', expectedTaskRevision: cancelled.task.taskRevision,
+        event: { eventId: 'weather-terminal', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T12:10:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+      expect(asked.task.phase).toBe('cancelled')
+    })
+
+    it('asks about home, in the present tense, once the passengers are onboard', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const started = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'weather-home-start', expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation',
+        componentId: 'navigation-plan', idempotencyKey: 'weather-home-start',
+      })
+      const approaching = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'weather-home-geofence', expectedTaskRevision: started.task.taskRevision,
+        event: { eventId: 'weather-home-geofence', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T20:50:00+08:00' },
+      })
+      const waiting = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'weather-home-parked', expectedTaskRevision: approaching.task.taskRevision,
+        event: { eventId: 'weather-home-parked', type: 'vehicle.parked', timestamp: '2026-07-22T20:52:00+08:00' },
+      })
+      const returning = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'weather-home-onboard', expectedTaskRevision: waiting.task.taskRevision,
+        event: { eventId: 'weather-home-onboard', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T20:54:00+08:00' },
+      })
+      expect(returning.task.passengers.confirmedOnboard).toBe(true)
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-home', expectedTaskRevision: returning.task.taskRevision,
+        event: { eventId: 'weather-home', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T20:55:00+08:00' },
+      })
+
+      // The trip is routing home now: the airport stored at create time is the
+      // wrong place, the landed flight's arrival the wrong moment, and the
+      // wait-indoors advisory the wrong advice with everyone already in the car.
+      const card = asked.ui.components.find((component) => component.type === 'weather-card')
+      if (card?.type !== 'weather-card') throw new Error('expected a weather-card component')
+      expect(card.props.location).toBe('家')
+      expect(card.props.timeLabel).toBe('现在')
+      expect(card.props.advisory).toBeUndefined()
+      expect(asked.assistant?.text).toContain('家')
+      expect(asked.task.taskRevision).toBe(returning.task.taskRevision)
+    })
+
+    it('resolves the weather for a non-default home destination on the return trip', () => {
+      // The fixture route table only knows the default home, so the non-default
+      // destination is injected as stored task state: what is under test is that
+      // the weather query reads the return trip's own destination, not how that
+      // destination got there.
+      const store = new MemoryTaskStore()
+      const orchestrator = new ReadToolOrchestrator()
+      const weatherInputs: Array<{ locationId: string; at?: string }> = []
+      const stubbed: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveWeather: (taskId, requestId, input) => {
+          weatherInputs.push(input)
+          return orchestrator.resolveWeather(taskId, requestId, { locationId: 'destination-home' })
+        },
+      }
+      const gateway = new AgentGateway({
+        store, now: () => now, createId: () => '001', orchestrator: stubbed,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const stored = store.get(created.task.taskId)!
+      store.save({
+        ...stored,
+        task: {
+          ...stored.task,
+          phase: 'returning-home',
+          passengers: { ...stored.task.passengers, confirmedOnboard: true },
+          returnTrip: {
+            workflowId: 'wf-grandma',
+            homeDestinationId: 'destination-grandma',
+            route: { status: 'succeeded', routeId: 'route-grandma', eta: '2026-07-22T21:20:00+08:00' },
+            cabin: { status: 'skipped' },
+            media: { status: 'skipped' },
+          },
+          navigation: { routeId: 'route-grandma', destination: '外婆家', eta: '2026-07-22T21:20:00+08:00', status: 'active' },
+        },
+      })
+
+      gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-weather-grandma',
+        expectedTaskRevision: stored.task.taskRevision,
+        event: { eventId: 'weather-grandma', type: 'user.input', text: '看下天气', timestamp: '2026-07-22T20:55:00+08:00' },
+      })
+
+      expect(weatherInputs).toEqual([{ locationId: 'destination-grandma' }])
+    })
+  })
+
+  describe('check-schedule query turn', () => {
+    it('answers with a transient schedule card that yields the surface on the next event', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      expect(created.ui.components.some((component) => component.type === 'schedule-strip')).toBe(true)
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'schedule-1', type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // The query changed no task fact, only the composed surface.
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+      expect(asked.task.processedEventIds).not.toContain('schedule-1')
+      expect(asked.ui.uiRevision).toBeGreaterThan(created.ui.uiRevision)
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.events).toEqual([
+        expect.objectContaining({ title: '豆豆的睡前故事', startAt: '2026-07-22T21:30:00+08:00' }),
+      ])
+      expect(card.props.freshness).toBe('fixture')
+      // The strip's slot is borrowed, not joined: the count must not grow.
+      expect(asked.ui.components.some((component) => component.type === 'schedule-strip')).toBe(false)
+      expect(asked.ui.components).toHaveLength(created.ui.components.length)
+      expect(asked.assistant?.text).toContain('1 项安排')
+      expect(asked.assistant?.text).toContain('21:30')
+
+      // Transience: the next accepted event recomposes without the reading.
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-after-schedule', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'moving-after-schedule', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(moved.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(moved.ui.components.some((component) => component.type === 'schedule-strip')).toBe(true)
+    })
+
+    it('replays an identical schedule event id idempotently', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-schedule-replay', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'schedule-replay', type: 'user.input' as const, text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+
+      const first = gateway.submitEvent(created.task.taskId, request)
+      const second = gateway.submitEvent(created.task.taskId, request)
+
+      // A retry that lands while the trip is where it was gets the response it
+      // lost, whole — snapshot, card, and spoken line — and does not move the
+      // revision a second time.
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+      expect(second.assistant).toEqual(first.assistant)
+      expect(second.ui.components.some((component) => component.type === 'schedule-card')).toBe(true)
+    })
+
+    it('degrades to a spoken notice on the unchanged snapshot when the calendar read fails', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const failing: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveSchedule: () => {
+          throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'calendar provider timed out', true)
+        },
+      }
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator: failing,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule-fail', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'schedule-fail', type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task).toEqual(created.task)
+      expect(asked.ui.uiRevision).toBe(created.ui.uiRevision)
+      expect(asked.ui.meta.generatedBy).not.toBe('fallback')
+      expect(asked.assistant?.text).toContain('日程服务暂时不可用')
+    })
+
+    it('answers an empty day with the empty card, not silence', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const empty: ReadToolOrchestration = {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        // A calendar day with nothing left is a successful read of zero events.
+        resolveSchedule: (taskId, requestId) => orchestrator.resolveSchedule!(taskId, requestId, { date: '2026-07-24' }),
+      }
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001', orchestrator: empty,
+      })
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule-empty', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'schedule-empty', type: 'user.input', text: '今天有什么安排', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      const card = asked.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.events).toEqual([])
+      expect(card.props.emptyCopy).toBe('今天没有更多安排了')
+      expect(asked.assistant?.text).toContain('没有更多安排')
+    })
+
+    it('leaves terminal tasks on the ordinary event path', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const cancelled = gateway.cancelTask(created.task.taskId, {
+        clientRequestId: 'client-cancel-for-schedule', expectedTaskRevision: created.task.taskRevision,
+        eventId: 'cancel-for-schedule',
+      })
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-schedule-terminal', expectedTaskRevision: cancelled.task.taskRevision,
+        event: { eventId: 'schedule-terminal', type: 'user.input', text: '看看我的日程', timestamp: '2026-07-22T12:10:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(asked.task.phase).toBe('cancelled')
+    })
+  })
+
+  describe('check-departure-time query turn', () => {
+    it('answers with a transient departure card that yields the surface on the next event', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      expect(created.task.phase).toBe('preparing')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-1', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // Arithmetic over facts the trip already has: no task fact changes.
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+      expect(asked.task.processedEventIds).not.toContain('departure-1')
+      expect(asked.ui.uiRevision).toBeGreaterThan(created.ui.uiRevision)
+      expect(asked.ui.components).toContainEqual(expect.objectContaining({
+        type: 'departure-plan',
+        props: expect.objectContaining({
+          departAtLabel: '20:10', arrivalLabel: 'MU5102 20:40 落地', driveMinutes: 20, bufferMinutes: 10,
+        }),
+      }))
+      expect(asked.ui.components).toHaveLength(created.ui.components.length)
+      expect(asked.assistant).toMatchObject({ shouldSpeak: true })
+      expect(asked.assistant?.text).toContain('建议 20:10 出发')
+
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-after-departure', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'moving-after-departure', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(moved.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
+    })
+
+    it('answers the same question when the button asks it', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const action = created.ui.actions.find((candidate) => candidate.id === 'ask-departure-time')
+      if (action?.event.type !== 'agent-message') throw new Error('expected an agent-message action')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-button', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-button', type: 'user.input', text: action.event.text, timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
+    })
+
+    it('replays an identical departure event id idempotently', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-departure-replay', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-replay', type: 'user.input' as const, text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+
+      const first = gateway.submitEvent(created.task.taskId, request)
+      const second = gateway.submitEvent(created.task.taskId, request)
+
+      // A retry that lands while the trip is where it was gets the response it
+      // lost, whole — snapshot, card, and spoken line — and does not move the
+      // revision a second time.
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+      expect(second.assistant).toEqual(first.assistant)
+      expect(second.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
+    })
+
+    it('keeps a replayable side answer away from the model planner', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-departure-planning', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-planning', type: 'user.input' as const, text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+      expect(gateway.userInputPlanningState(created.task.taskId, request)).toBeDefined()
+
+      const asked = gateway.submitEvent(created.task.taskId, request)
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
+
+      // submitEvent would answer this retry from the store, so the planner boundary
+      // has no reason to send the text out to a provider.
+      expect(gateway.userInputPlanningState(created.task.taskId, request)).toBeUndefined()
+
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-after-planning-question',
+        expectedTaskRevision: asked.task.taskRevision,
+        expectedUiRevision: asked.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-after-planning-question',
+      })
+
+      // Once the trip moves the recorded answer stops being true, so the same
+      // duplicate is a real turn again and planning it is back on the table.
+      const late = { ...request, expectedTaskRevision: driving.task.taskRevision }
+      expect(gateway.userInputPlanningState(created.task.taskId, late)).toBeDefined()
+    })
+
+    it('answers a duplicate afresh once the trip has moved past the answer it replayed', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-departure-stale', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-stale', type: 'user.input' as const, text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+      const asked = gateway.submitEvent(created.task.taskId, request)
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(true)
+
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-after-stale-question',
+        expectedTaskRevision: asked.task.taskRevision,
+        expectedUiRevision: asked.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-after-stale-question',
+      })
+      expect(driving.task.phase).toBe('driving-to-airport')
+
+      // The same eventId, arriving late. Replaying the recommendation here would
+      // put advice about a departure back on screen after the car made it, so the
+      // duplicate is answered from where the car is instead.
+      const late = gateway.submitEvent(created.task.taskId, { ...request, expectedTaskRevision: driving.task.taskRevision })
+      expect(late.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
+      expect(late.assistant?.text).toContain('已经在路上了')
+      expect(late.task.taskRevision).toBe(driving.task.taskRevision)
+    })
+
+    it('says so instead of inventing a time when there is nothing to work backwards from', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('去机场接妈妈'))
+      expect(created.task.phase).toBe('collecting-information')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-empty', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-empty', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task).toEqual(created.task)
+      expect(asked.ui.uiRevision).toBe(created.ui.uiRevision)
+      // A missing side answer is not a broken trip.
+      expect(asked.ui.meta.generatedBy).not.toBe('fallback')
+      expect(asked.assistant?.text).toContain('还没有航班和路线')
+    })
+
+    it('answers with where the car is heading once it has already left', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-before-departure-question',
+        expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-before-departure-question',
+      })
+      expect(driving.task.phase).toBe('driving-to-airport')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-underway', expectedTaskRevision: driving.task.taskRevision,
+        event: { eventId: 'departure-underway', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:05:00+08:00' },
+      })
+
+      // The recommendation was worked backwards from the landing, so repeating it
+      // underway would be advice about a departure that already happened. What the
+      // driver is really asking about now is the arrival, so answer that.
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
+      expect(asked.assistant?.text).not.toContain('建议')
+      expect(asked.assistant?.text).toContain('已经在路上了')
+      // And asking changed nothing about the drive.
+      expect(asked.task).toEqual(driving.task)
+      expect(asked.ui.uiRevision).toBe(driving.ui.uiRevision)
+    })
+
+    it('answers the same way on the way home, where there is no departure left to plan', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-before-returning-question',
+        expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-before-returning-question',
+      })
+      const approaching = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-geofence-before-returning', expectedTaskRevision: driving.task.taskRevision,
+        event: { eventId: 'geofence-before-returning', type: 'vehicle.entered-airport-geofence', timestamp: '2026-07-22T12:30:00+08:00' },
+      })
+      const waiting = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-parked-before-returning', expectedTaskRevision: approaching.task.taskRevision,
+        event: { eventId: 'parked-before-returning', type: 'vehicle.parked', timestamp: '2026-07-22T12:35:00+08:00' },
+      })
+      const returning = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-onboard-before-returning', expectedTaskRevision: waiting.task.taskRevision,
+        event: { eventId: 'onboard-before-returning', type: 'user.confirmed-passengers-onboard', timestamp: '2026-07-22T12:50:00+08:00' },
+      })
+      expect(returning.task.phase).toBe('returning-home')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-returning', expectedTaskRevision: returning.task.taskRevision,
+        event: { eventId: 'departure-returning', type: 'user.input', text: '几点出发比较好', timestamp: '2026-07-22T13:00:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
+      expect(asked.assistant?.text).not.toContain('建议')
+      expect(asked.task).toEqual(returning.task)
+    })
+
+    it('leaves terminal tasks on the ordinary event path', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const cancelled = gateway.cancelTask(created.task.taskId, {
+        clientRequestId: 'client-cancel-for-departure', expectedTaskRevision: created.task.taskRevision,
+        eventId: 'cancel-for-departure',
+      })
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-terminal', expectedTaskRevision: cancelled.task.taskRevision,
+        event: { eventId: 'departure-terminal', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:10:00+08:00' },
+      })
+
+      expect(asked.ui.components.some((component) => component.type === 'departure-plan')).toBe(false)
+      expect(asked.task.phase).toBe('cancelled')
+    })
+  })
+
+  describe('en-route side scenes', () => {
+    function drivingTask() {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-for-side-scenes',
+        expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-for-side-scenes',
+      })
+      expect(driving.task.phase).toBe('driving-to-airport')
+      return { gateway, driving }
+    }
+
+    it('offers both side scenes on the driving brief and answers each from its own label', () => {
+      const { gateway, driving } = drivingTask()
+      const offered = driving.ui.actions.filter((action) => action.id === 'ask-weather' || action.id === 'ask-schedule')
+      expect(offered).toHaveLength(2)
+
+      for (const [index, action] of offered.entries()) {
+        if (action.event.type !== 'agent-message') throw new Error('expected an agent-message action')
+        const asked = gateway.submitEvent(driving.task.taskId, {
+          clientRequestId: `client-side-scene-${index}`,
+          expectedTaskRevision: driving.task.taskRevision,
+          event: { eventId: `side-scene-${index}`, type: 'user.input', text: action.event.text, timestamp: '2026-07-22T12:05:00+08:00' },
+        })
+
+        // Answered mid-drive, and the drive is untouched by the answering.
+        expect(asked.task.phase).toBe('driving-to-airport')
+        expect(asked.task.taskRevision).toBe(driving.task.taskRevision)
+        expect(asked.ui.components.some((component) => (
+          component.type === 'weather-card' || component.type === 'schedule-card'
+        ))).toBe(true)
+        // Reading one must not cost the driver the way back to the other.
+        expect(asked.ui.actions.map((candidate) => candidate.id)).toEqual(
+          expect.arrayContaining(['ask-weather', 'ask-schedule']),
+        )
+      }
+    })
+
+    it('gives the brief back on the next real trip event', () => {
+      const { gateway, driving } = drivingTask()
+      const asked = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-side-scene-transient',
+        expectedTaskRevision: driving.task.taskRevision,
+        event: { eventId: 'side-scene-transient', type: 'user.input', text: '看看日程', timestamp: '2026-07-22T12:05:00+08:00' },
+      })
+      expect(asked.ui.components.some((component) => component.type === 'schedule-card')).toBe(true)
+
+      // The answer rode one snapshot. The next thing that actually happens on the
+      // trip recomposes without it, and the ETA is back where it was.
+      const charging = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-side-scene-after',
+        expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'side-scene-after', type: 'charging.started', stationId: 'station-hongqiao-01', timestamp: '2026-07-22T12:06:00+08:00' },
+      })
+      expect(charging.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(charging.ui.components.some((component) => component.id === 'navigation-summary')).toBe(true)
+    })
+
+    it('refuses the side-scene ids on the action path, which is not where they travel', () => {
+      const { gateway, driving } = drivingTask()
+
+      expect(() => gateway.submitAction(driving.task.taskId, {
+        clientRequestId: 'client-side-scene-action',
+        expectedTaskRevision: driving.task.taskRevision,
+        expectedUiRevision: driving.ui.uiRevision,
+        actionId: 'ask-weather',
+        componentId: 'navigation-summary',
+        idempotencyKey: 'side-scene-action',
+      })).toThrow(/Action is not registered/)
+    })
+  })
+
+  describe('arrivals board turn', () => {
+    function boardOf(ui: UISpec) {
+      const component = ui.components.find((candidate) => candidate.type === 'flight-choices')
+      if (!component || component.type !== 'flight-choices') return undefined
+      return component
+    }
+
+    it('offers the arrivals board while the flight number is still missing', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+
+      const board = boardOf(created.ui)
+      expect(created.task.phase).toBe('collecting-information')
+      expect(board?.props.choices.length).toBeGreaterThanOrEqual(2)
+      // Every offered row is pressable: the ids the card declares are exactly the
+      // actions the spec defines.
+      expect(created.ui.actions.map((action) => action.id)).toEqual(board?.actions)
+    })
+
+    it('prepares the trip from a picked row and retires the board', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      const pick = created.ui.actions.find((action) => action.id === 'pick-CA1516')
+      expect(pick?.event).toEqual({ type: 'agent-message', text: '航班号 CA1516' })
+
+      // The client replays the action's own text as user input, which is the only
+      // path a picked row takes into the Agent.
+      const picked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-pick-row',
+        expectedTaskRevision: created.task.taskRevision,
+        event: {
+          eventId: 'pick-row',
+          type: 'user.input',
+          text: pick!.event.type === 'agent-message' ? pick!.event.text : '',
+          timestamp: '2026-07-22T12:01:00+08:00',
+        },
+      })
+
+      expect(picked.task.phase).toBe('preparing')
+      expect(picked.task.flight?.flightNumber).toBe('CA1516')
+      // The choice has been made, so the offer goes away rather than following the
+      // driver into the brief.
+      expect(boardOf(picked.ui)).toBeUndefined()
+      expect(picked.ui.components.map((component) => component.type)).toContain('flight-status')
+    })
+
+    it('asks for the number when the orchestration cannot offer a board', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => now,
+        createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        },
+      })
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+
+      expect(boardOf(created.ui)).toBeUndefined()
+      expect(created.ui.components).toEqual([
+        { id: 'status-banner', type: 'status-banner', props: { level: 'info', title: '请补充航班号' } },
+      ])
+    })
   })
 })
 

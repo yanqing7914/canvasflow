@@ -20,6 +20,7 @@ import {
   type EffectRecord,
   type UISpec,
   type ProviderMode,
+  type WeatherOutput,
 } from '@canvasflow/schema'
 import {
   buildLandingNotifyContent,
@@ -34,7 +35,7 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, composeAgentSpec, composeFallbackSpec } from './composer'
+import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import { Planner, type Plan, type PlannerInput } from './planner'
@@ -51,7 +52,7 @@ import {
   type ReadToolOrchestration,
   type ReadToolResults,
 } from './orchestration'
-import { MemoryTaskStore, type StoredTask, type TaskStore, type TaskUpdateRead } from './store'
+import { MemoryTaskStore, type StoredEventResult, type StoredTask, type TaskStore, type TaskUpdateRead } from './store'
 
 const returnTripPolicyErrorCodes = new Set([
   'TASK_TERMINAL',
@@ -60,6 +61,17 @@ const returnTripPolicyErrorCodes = new Set([
   'VEHICLE_CONTEXT_REQUIRED',
   'VEHICLE_MOVING',
 ])
+
+/**
+ * The operation side answers are replayed under.
+ *
+ * Deliberately the idempotency keyspace rather than the event one: an ordinary
+ * event replay is keyed by the client's own event id, so any key derived from
+ * that id and stored beside it could be spelled by a client. Operations are
+ * minted here — `task:reset`, `action:…`, `confirmation:…`, and this one — and
+ * are not part of the request surface, so a caller cannot land in this row.
+ */
+const SIDE_ANSWER_OPERATION = 'event:side-answer'
 
 function enforceGatewayProviderMode(registry: ProviderRegistry, mode: ProviderMode): ProviderRegistry {
   return Object.fromEntries(
@@ -95,7 +107,7 @@ export type AgentGatewayOptions = {
     task: AirportPickupTaskState,
     toolResults?: ReadToolResults,
     preferences?: Record<string, MemberPreferenceRecord>,
-    privateContext?: { cabinRevertActionToken?: string },
+    composeContext?: ComposeContext,
   ) => UISpec
   orchestrator?: ReadToolOrchestration
   providers?: ProviderRegistry
@@ -121,7 +133,7 @@ export class AgentGateway {
     task: AirportPickupTaskState,
     toolResults?: ReadToolResults,
     preferences?: Record<string, MemberPreferenceRecord>,
-    privateContext?: { cabinRevertActionToken?: string },
+    composeContext?: ComposeContext,
   ) => UISpec
   readonly #orchestrator: ReadToolOrchestration
   readonly #effectExecutor: EffectExecutor
@@ -208,6 +220,7 @@ export class AgentGateway {
         task = prepared.task
         toolResults = { ...toolResults, ...prepared.toolResults }
       }
+      toolResults = this.#withArrivalsBoard(taskId, request.clientRequestId, task, toolResults)
       const stored = this.#store.create(this.#publish(task, toolResults, requestContext), request.clientRequestId)
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
     } catch (error) {
@@ -248,6 +261,9 @@ export class AgentGateway {
     const current = this.#requireTask(taskId)
     if (this.#store.getEventResult(taskId, request.event.eventId)) return undefined
     if (request.expectedTaskRevision !== current.task.taskRevision) return undefined
+    // A side answer that is still true is resolved from the store too, so planning
+    // it would disclose the caller's text for a turn submitEvent never sends out.
+    if (this.#freshSideAnswer(taskId, current, request.event.eventId)) return undefined
     if (current.task.phase === 'completed' || current.task.phase === 'cancelled') return undefined
     // No timestamp staleness check here: submitEvent clamps user input forward
     // (occupant intent is never stale), so gating planning on the raw client
@@ -488,6 +504,20 @@ export class AgentGateway {
     const plan = request.event.type === 'user.input'
       ? this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
       : undefined
+    if (
+      request.event.type === 'user.input'
+      && (plan?.intent === 'check-weather' || plan?.intent === 'check-schedule' || plan?.intent === 'check-departure-time')
+      && current.task.phase !== 'completed'
+      && current.task.phase !== 'cancelled'
+    ) {
+      const replayed = this.#replaySideAnswer(taskId, current, request, startedAt)
+      if (replayed) return replayed
+      return plan.intent === 'check-weather'
+        ? this.#submitWeatherQuery(taskId, current, request, startedAt)
+        : plan.intent === 'check-schedule'
+          ? this.#submitScheduleQuery(taskId, current, request, startedAt)
+          : this.#submitDepartureQuery(taskId, current, request, startedAt)
+    }
     let next = applyEvent(
       current.task,
       request.event,
@@ -939,6 +969,7 @@ export class AgentGateway {
       }
       this.#throwProviderError(error, current)
     }
+    toolResults = this.#withArrivalsBoard(taskId, request.clientRequestId, next, toolResults)
     const shouldPrepare = request.event.type === 'user.input'
       && next !== current.task
       && next.phase === 'preparing'
@@ -970,6 +1001,7 @@ export class AgentGateway {
         this.#throwProviderError(error, current)
       }
     }
+    toolResults = this.#withArrivalsBoard(taskId, request.clientRequestId, next, toolResults)
     if (
       request.event.type === 'user.confirmed-passengers-onboard'
       && (current.task.phase === 'waiting-for-passengers' || current.task.phase === 'returning-home')
@@ -1821,6 +1853,11 @@ export class AgentGateway {
     toolResults?: ReadToolResults,
     requestContext?: StoredTask['requestContext'],
     effectReceipts?: StoredTask['effectReceipts'],
+    /**
+     * Whether this turn asked when to leave. Not derivable from the snapshot —
+     * the answer changes nothing about the task — so the asking turn says so.
+     */
+    departureAnswer?: true,
   ): StoredTask {
     // A terminal transition may defer a parked-only cabin cleanup. Keep only
     // that private receipt so a later parked event can safely finish it.
@@ -1838,7 +1875,12 @@ export class AgentGateway {
       task,
       toolResults,
       this.#preferences,
-      cabinRevertActionToken ? { cabinRevertActionToken } : undefined,
+      cabinRevertActionToken || departureAnswer
+        ? {
+            ...(cabinRevertActionToken ? { cabinRevertActionToken } : {}),
+            ...(departureAnswer ? { departureAnswer } : {}),
+          }
+        : undefined,
     ), requestContext)
     const uiWithoutStartNavigation = {
       ...ui,
@@ -1861,8 +1903,10 @@ export class AgentGateway {
     const publishedUi = canStartNavigation
       ? {
           ...uiWithoutStartNavigation,
+          // Prepended, not appended: the card can carry the pre-departure question
+          // as well, and the control that leaves has to lead the one that asks.
           components: uiWithoutStartNavigation.components.map((component) => component.id === 'navigation-plan'
-            ? { ...component, actions: [...(component.actions ?? []), 'start-navigation'] }
+            ? { ...component, actions: ['start-navigation', ...(component.actions ?? [])] }
             : component),
           actions: [
             ...uiWithoutStartNavigation.actions,
@@ -2061,6 +2105,37 @@ export class AgentGateway {
       || event.type === 'charging.completed'
   }
 
+  /**
+   * Adds or retires the arrivals board for a task snapshot.
+   *
+   * The board only exists while the flight number is still missing: carried past
+   * the pick it would keep offering a choice the driver already made, so a task
+   * that has one — or has left the collecting phase — drops the key outright.
+   *
+   * Reading it is best-effort. A board is a shortcut for saying the number, not
+   * the way to say it, so a provider failure leaves the plain ask standing
+   * instead of taking the whole snapshot to the provider fallback.
+   */
+  #withArrivalsBoard(
+    taskId: string,
+    requestId: string,
+    task: AirportPickupTaskState,
+    toolResults: ReadToolResults | undefined,
+  ): ReadToolResults {
+    const carried: ReadToolResults = { ...toolResults }
+    if (task.phase !== 'collecting-information' || task.flight) {
+      delete carried['flight.list-arrivals']
+      return carried
+    }
+    if (carried['flight.list-arrivals']) return carried
+    try {
+      const board = this.#orchestrator.resolveArrivals?.(taskId, `${requestId}:arrivals`)
+      return board ? { ...carried, 'flight.list-arrivals': board } : carried
+    } catch {
+      return carried
+    }
+  }
+
   #prepareTask(
     task: AirportPickupTaskState,
     requestId: string,
@@ -2116,13 +2191,253 @@ export class AgentGateway {
     return this.#planner.plan(input)
   }
 
+  /**
+   * Persists the one snapshot a side answer rides on.
+   *
+   * A side answer changes nothing about the trip, so what stays in the store is
+   * the brief that was already there — carrying the answer's revision, so the
+   * next compose still moves forward and the client's optimistic concurrency
+   * still lines up. The answer itself lives only in the response that carries it:
+   * a reconnect, a stream replay, or an event that turns out to be a no-op all
+   * show the trip, not yesterday's reading of the weather.
+   *
+   * Replay for a question is a different animal from replay for an event, so it
+   * is kept in its own keyspace and answered by the two helpers below rather than
+   * by the general check at the top of `submitEvent`. An event is replayed to
+   * avoid applying it twice, which is true forever. A question is replayed to
+   * finish a delivery that was interrupted — and that is only true while the trip
+   * has not moved since. Past that, the same eventId is answered again from where
+   * the car actually is, because the reading it would otherwise replay describes
+   * a state that is over: a departure recommendation for a departure already made.
+   */
+  #persistBriefBehind(published: StoredTask, current: StoredTask): StoredTask {
+    return this.#store.save({
+      ...current,
+      task: { ...current.task, uiRevision: published.task.uiRevision },
+      ui: { ...current.ui, uiRevision: published.ui.uiRevision },
+    })
+  }
+
+  #replaySideAnswer(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse | undefined {
+    const previous = this.#freshSideAnswer(taskId, current, request.event.eventId)
+    if (!previous) return undefined
+    return this.#response(
+      request.clientRequestId,
+      previous.stored,
+      [],
+      performance.now() - startedAt,
+      previous.assistant,
+    )
+  }
+
+  /**
+   * The recorded side answer for this event id, if replaying it would still be
+   * telling the truth. Two things can make it untrue. The trip can move, and the
+   * task revision says that. Or another turn can publish over it — including
+   * another side answer, which leaves the task revision alone and moves only the
+   * UI revision — and the UI revision the brief was left at says that. A retry
+   * that matches both is the client asking again for a response it lost, and gets
+   * that response back whole: same snapshot, same spoken line, no second bump.
+   */
+  #freshSideAnswer(taskId: string, current: StoredTask, eventId: string): StoredEventResult | undefined {
+    const previous = this.#store.getIdempotencyResult(taskId, SIDE_ANSWER_OPERATION, eventId)
+    if (!previous) return undefined
+    const fresh = previous.stored.task.taskRevision === current.task.taskRevision
+      && previous.stored.ui.uiRevision === current.ui.uiRevision
+    return fresh ? previous : undefined
+  }
+
+  #recordSideAnswer(
+    taskId: string,
+    eventId: string,
+    stored: StoredTask,
+    assistant: { text: string; shouldSpeak: boolean },
+  ): void {
+    this.#store.recordIdempotencyResult(taskId, SIDE_ANSWER_OPERATION, eventId, { stored, effects: [], assistant })
+  }
+
+  /**
+   * The check-weather query turn. A query mutates nothing: the task state,
+   * revision, and processed-event bookkeeping stay untouched. Only the UI is
+   * re-composed with the weather read merged in — and the merged read is
+   * deliberately NOT persisted, so the very next accepted event re-composes
+   * without it and the card yields the surface back to the trip. Failure
+   * degrades to a spoken notice on the unchanged snapshot; the fallback
+   * banner is for broken trips, not for a missing side answer.
+   */
+  #submitWeatherQuery(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    // Where and when follow the trip, not the request context: once the
+    // passengers are onboard the car is routing home, so the airport stored at
+    // create time is no longer the place being asked about — and a landed
+    // flight's arrival is history, not a forecast moment.
+    const returning = current.task.passengers.confirmedOnboard
+    const arrivalAhead = !returning
+      && current.task.flight !== undefined
+      && current.task.flight.status !== 'landed'
+      && current.task.flight.status !== 'cancelled'
+    let weather: ReadToolResults['weather.get-current']
+    try {
+      weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, {
+        locationId: returning
+          ? current.task.returnTrip?.homeDestinationId ?? 'destination-home'
+          : current.requestContext?.destination.id ?? 'destination-hongqiao-t2',
+        ...(arrivalAhead ? { at: current.task.flight!.estimatedArrival } : {}),
+      })
+    } catch (error) {
+      if (!(error instanceof ReadToolOrchestrationError)) this.#throwProviderError(error, current)
+      weather = undefined
+    }
+
+    // A read that failed is not an answer, so it is not recorded: a retry gets a
+    // real attempt at the provider rather than the apology, and there is no state
+    // behind it that a second attempt could disturb.
+    if (!weather) {
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: '天气服务暂时不可用，稍后可以再问我。',
+        shouldSpeak: supportsTts,
+      })
+    }
+
+    const published = this.#publish(
+      current.task,
+      { ...current.toolResults, 'weather.get-current': weather },
+      current.requestContext,
+      current.effectReceipts,
+    )
+    // Transience lives in these two lines: the answer is what the caller gets,
+    // and the brief is what the store keeps.
+    const answered = { ...published, toolResults: current.toolResults }
+    this.#persistBriefBehind(published, current)
+    const assistant = { text: weatherSpokenSummary(weather.data, arrivalAhead, returning), shouldSpeak: supportsTts }
+    this.#recordSideAnswer(taskId, request.event.eventId, answered, assistant)
+    return this.#response(request.clientRequestId, answered, [], performance.now() - startedAt, assistant)
+  }
+
+  /**
+   * The check-schedule query turn. Same transient contract as the weather
+   * query: nothing about the task changes, the answer rides one published
+   * snapshot, and the next accepted event recomposes without it. The reading
+   * goes under its own 'calendar.query' key so the schedule strip's persisted
+   * 'calendar.list-upcoming' data is never disturbed.
+   */
+  #submitScheduleQuery(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    let schedule: ReadToolResults['calendar.query']
+    try {
+      schedule = this.#orchestrator.resolveSchedule?.(taskId, request.clientRequestId, {
+        date: FIXTURE_CALENDAR_DATE,
+      })
+    } catch (error) {
+      if (!(error instanceof ReadToolOrchestrationError)) this.#throwProviderError(error, current)
+      schedule = undefined
+    }
+
+    // Same as the weather notice: not recorded, so a retry actually retries.
+    if (!schedule) {
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: '日程服务暂时不可用，稍后可以再问我。',
+        shouldSpeak: supportsTts,
+      })
+    }
+
+    const published = this.#publish(
+      current.task,
+      { ...current.toolResults, 'calendar.query': schedule },
+      current.requestContext,
+      current.effectReceipts,
+    )
+    // Same two lines as the weather answer: the caller gets the card, the store
+    // keeps the brief.
+    const answered = { ...published, toolResults: current.toolResults }
+    this.#persistBriefBehind(published, current)
+    const assistant = { text: scheduleSpokenSummary(schedule.data.events), shouldSpeak: supportsTts }
+    this.#recordSideAnswer(taskId, request.event.eventId, answered, assistant)
+    return this.#response(request.clientRequestId, answered, [], performance.now() - startedAt, assistant)
+  }
+
+  /**
+   * The check-departure-time query turn. Same transient contract as the weather
+   * and schedule queries — nothing about the task changes, the answer rides one
+   * published snapshot — but with no provider behind it: the landing time and the
+   * planned drive are already on the snapshot, so the answer is arithmetic over
+   * facts the trip has, not a new read.
+   *
+   * Nothing to work backwards from (no flight, or no planned route yet) leaves
+   * the snapshot untouched and says so out loud. A missing side answer is not a
+   * broken trip, so the fallback banner stays out of it.
+   */
+  #submitDepartureQuery(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    // Once the car has left, when to leave is not a question with an answer any
+    // more, and the pre-departure recommendation is the one thing that must not be
+    // repeated: it was worked backwards from the landing, so it still reads as
+    // advice long after it stopped being any. What the driver is actually asking
+    // at that point is whether they are on time, so they get the arrival they are
+    // heading for — no card, and nothing about the trip touched.
+    if (hasDeparted(current.task)) {
+      const eta = current.task.navigation?.eta
+      const underway = {
+        text: eta && current.task.navigation?.destination
+          ? `已经在路上了，预计 ${clockLabel(eta)} 到${current.task.navigation.destination}。`
+          : '已经出发了，我会跟着行程提醒你。',
+        shouldSpeak: supportsTts,
+      }
+      this.#recordSideAnswer(taskId, request.event.eventId, current, underway)
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, underway)
+    }
+    const plan = departurePlan(current.task, current.toolResults?.['navigation.plan-route']?.data)
+    if (!plan) {
+      const nothingYet = { text: '还没有航班和路线可以推算出发时间。', shouldSpeak: supportsTts }
+      this.#recordSideAnswer(taskId, request.event.eventId, current, nothingYet)
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, nothingYet)
+    }
+    const published = this.#publish(
+      current.task,
+      current.toolResults,
+      current.requestContext,
+      current.effectReceipts,
+      true,
+    )
+    // The card is not in the persisted toolResults to begin with — it exists
+    // because this turn asked — so the brief goes back behind it the same way.
+    this.#persistBriefBehind(published, current)
+    const assistant = {
+      text: `建议 ${plan.departAtLabel} 出发，路上约 ${plan.driveMinutes} 分钟，比落地早 ${plan.bufferMinutes} 分钟到。`,
+      shouldSpeak: supportsTts,
+    }
+    this.#recordSideAnswer(taskId, request.event.eventId, published, assistant)
+    return this.#response(request.clientRequestId, published, [], performance.now() - startedAt, assistant)
+  }
+
   #response(
     requestId: string,
     stored: StoredTask,
     effects: AgentResponse['effects'],
     durationMs: number,
+    assistantOverride?: { text: string; shouldSpeak: boolean },
   ): AgentResponse {
-    const assistant = stored.task.phase === 'collecting-information'
+    const assistant = assistantOverride ?? (stored.task.phase === 'collecting-information'
       ? {
           text: stored.requestContext?.inputConfidence !== undefined && stored.requestContext.inputConfidence < 0.6
             ? '我不太确定刚才的内容，请确认或编辑后再试一次。'
@@ -2131,7 +2446,7 @@ export class AgentGateway {
             : '好的，请告诉我要接哪位家人。',
           shouldSpeak: stored.requestContext?.clientCapabilities.supportsTts ?? true,
         }
-      : undefined
+      : undefined)
     return agentResponseSchema.parse({
       requestId,
       task: stored.task,
@@ -2146,6 +2461,44 @@ export class AgentGateway {
       },
     })
   }
+}
+
+/** One short cabin-appropriate sentence; the card carries the detail. */
+function weatherSpokenSummary(data: WeatherOutput, forArrival: boolean, returning: boolean): string {
+  const moment = forArrival ? '到达时' : '现在'
+  const rain = data.condition === 'light-rain' || data.condition === 'heavy-rain'
+  // The wait-indoors suggestion is for family still to be picked up; on the way
+  // home with everyone onboard the rain is just a fact worth hearing.
+  const closing = rain
+    ? returning ? '，路上请慢行' : '，建议家人在到达层室内等候'
+    : returning ? '' : '，适合接机'
+  return `${moment}${data.locationName}${weatherConditionLabels[data.condition]} ${Math.round(data.temperatureC)} 度${closing}。`
+}
+
+/** The demo calendar's fixture day; the shipped fixture data lives on it. */
+const FIXTURE_CALENDAR_DATE = '2026-07-22'
+
+/**
+ * Whether the car has already left for the airport.
+ *
+ * Phase alone is the wrong test on its own — a trip can be `preparing` with a
+ * planned route and no wheels turning, and that is exactly when the departure
+ * question belongs. What marks the crossing is navigation going active, which is
+ * what `start-navigation` does and what every later phase inherits.
+ */
+function hasDeparted(task: AirportPickupTaskState): boolean {
+  return task.navigation?.status === 'active'
+    || task.phase === 'driving-to-airport'
+    || task.phase === 'approaching-airport'
+    || task.phase === 'waiting-for-passengers'
+    || task.phase === 'returning-home'
+}
+
+function scheduleSpokenSummary(events: Array<{ title: string; startAt: string }>): string {
+  if (events.length === 0) return '今天没有更多安排了。'
+  const nextClock = events[0]!.startAt.match(/T(\d{2}:\d{2})/)?.[1]
+  const nextPart = nextClock ? `，最近是 ${nextClock} 的${events[0]!.title}` : ''
+  return `今天还有 ${events.length} 项安排${nextPart}。`
 }
 
 function isCabinRevertPolicyDenial(errorCode: string | undefined): boolean {

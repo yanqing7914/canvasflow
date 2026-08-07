@@ -9,6 +9,9 @@ export type PlannerIntent =
   | 'plan-charging'
   | 'confirm-passengers-onboard'
   | 'apply-cabin-preferences'
+  | 'check-weather'
+  | 'check-schedule'
+  | 'check-departure-time'
   | 'cancel-task'
   | 'unknown'
 
@@ -131,6 +134,39 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
+  if (isWeatherQuery(compactText)) {
+    return {
+      intent: 'check-weather',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，正在为你查看接机目的地的天气。',
+    }
+  }
+
+  if (isScheduleQuery(compactText)) {
+    return {
+      intent: 'check-schedule',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，正在为你查看今天的日程。',
+    }
+  }
+
+  if (isDepartureTimeQuery(compactText)) {
+    return {
+      intent: 'check-departure-time',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，正在算建议的出发时间。',
+    }
+  }
+
   const isPickupRequest = /去机场接/.test(actionableText)
     || /机场接(?:人|妈妈|爸爸|豆豆)/.test(actionableText)
     || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(actionableText)
@@ -191,6 +227,37 @@ function pickupMissingSlots(
 
 function isTaskCancellation(text: string): boolean {
   return /取消(?:这个|本次)?(?:接机)?任务|取消接机|不去接了|不用接了|别去机场了/.test(text)
+}
+
+/**
+ * A whole-utterance weather question and nothing else. Anchored on purpose:
+ * a mixed sentence that also carries passengers or a flight number keeps its
+ * task meaning and must not be consumed by the query path.
+ */
+function isWeatherQuery(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:到(?:的时候|达时|那边))?(?:的)?天气(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
+}
+
+/**
+ * A whole-utterance schedule question, anchored like the weather form. 今天
+ * is optional but nothing else may ride along: a sentence that also carries
+ * passengers or a flight number keeps its task meaning.
+ */
+function isScheduleQuery(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:我)?(?:今天)?(?:的)?(?:还)?有?(?:什么|哪些)?(?:日程|待办|安排|行程安排)(?:事项)?(?:怎么样|有哪些|有什么)?[?？。！!]?$/.test(text)
+}
+
+/**
+ * A whole-utterance question about when to leave, anchored like the weather and
+ * schedule forms.
+ *
+ * Two shapes only, and both have to be questions. A bare 现在出发 is an
+ * instruction, not a query — answering it with a card would swallow a command —
+ * so the "now" shape requires 吗/嘛/呢 and the open shape requires 什么时候/几点.
+ */
+function isDepartureTimeQuery(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|算下|算一下)?(?:我)?(?:现在)?(?:要|该|得|应该)?(?:什么时候|几点)(?:出发|走|动身)(?:比较好|合适|呢)?[?？。！!]?$/.test(text)
+    || /^现在(?:就)?(?:要|该|能|可以)?(?:出发|走|动身)(?:了)?(?:吗|嘛|呢)[?？。！!]?$/.test(text)
 }
 
 function stableHash(value: string): string {
