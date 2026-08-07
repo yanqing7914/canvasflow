@@ -1001,20 +1001,23 @@ export class AgentGateway {
         text: `我已到达机场接机点，航班 ${request.event.flight.flightNumber}，预计 ${next.navigation?.eta ?? request.event.flight.estimatedArrival} 会合。`,
       })
     }
-    // The one proactive weather prompt of the trip. A flight update while
-    // driving is the moment the arrival window firms up, so that is when the
-    // forecast is checked — a condition, not a timer. Rain over the arrival
-    // sets the advisory once; dismissed or resolved it never returns, and a
-    // failed read costs the driver a prompt, never the turn. The reading is
-    // PERSISTED (unlike the transient query card) — the advisory card must
-    // survive every recompose until the driver answers it.
+    // The one proactive weather prompt of the trip. The IN-AIR flight update
+    // while driving is the moment the arrival window firms up — early enough
+    // for an umbrella reminder to be useful. A landed flight is past the
+    // moment: prompting to warn about arrival rain after the passenger has
+    // arrived would be advice about the past, so no other status triggers.
+    // Rain over the arrival sets the advisory once; dismissed or resolved it
+    // never returns, and a failed read costs the driver a prompt, never the
+    // turn. The reading is PERSISTED (unlike the transient query card) — the
+    // advisory card must survive every recompose until the driver answers it.
     let advisoryWeather: ReadToolResults['weather.advisory']
     if (
       request.event.type === 'flight.updated'
+      && request.event.flight.status === 'in-air'
       && next.phase === 'driving-to-airport'
       && next.weatherAdvisory === undefined
       && next.flight
-      && next.flight.status !== 'cancelled'
+      && next.flight.status === 'in-air'
       && next !== current.task
     ) {
       try {

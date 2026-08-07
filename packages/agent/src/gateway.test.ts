@@ -4190,6 +4190,31 @@ describe('AgentGateway', () => {
       expect(asked.task.taskRevision).toBe(driving.task.taskRevision)
     })
 
+    it('does not raise the advisory from a landed-first update while still driving', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+
+      // The flight lands before any in-air beat arrived. Warning about arrival
+      // rain after the passenger has arrived is advice about the past, so the
+      // landed update schedules the landing notice and raises nothing.
+      const landed = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-landed-first', expectedTaskRevision: driving.task.taskRevision,
+        event: {
+          eventId: 'landed-first', type: 'flight.updated',
+          flight: {
+            flightNumber: 'MU5102', status: 'landed',
+            scheduledArrival: '2026-07-22T20:30:00+08:00',
+            estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+          },
+          timestamp: '2026-07-22T20:40:00+08:00',
+        },
+      })
+
+      expect(landed.task.weatherAdvisory).toBeUndefined()
+      expect(landed.task.message.status).toBe('scheduled')
+      expect(landed.task.message.pendingMessageId).toBe('MU5102:landing')
+    })
+
     it('does not raise the advisory when the weather read is unavailable', () => {
       const orchestrator = new ReadToolOrchestrator()
       const gateway = new AgentGateway({
