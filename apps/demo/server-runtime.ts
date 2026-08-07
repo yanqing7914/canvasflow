@@ -349,6 +349,7 @@ async function serveStatic(staticDirectory: string, url: string, response: Serve
     response.writeHead(404).end()
     return
   }
+  const canFallbackToIndex = pathname === '/' || extname(pathname) === ''
   try {
     const file = (await stat(requested)).isDirectory() ? join(requested, 'index.html') : requested
     const body = await readFile(file)
@@ -358,6 +359,10 @@ async function serveStatic(staticDirectory: string, url: string, response: Serve
     })
     response.end(body)
   } catch {
+    if (!canFallbackToIndex) {
+      response.writeHead(404).end()
+      return
+    }
     try {
       const body = await readFile(join(staticDirectory, 'index.html'))
       response.writeHead(200, {

@@ -218,6 +218,22 @@ describe('agent server runtime', () => {
     )).toEqual(LOCAL_VOICE_ISOLATION_HEADERS)
     await expect(response.text()).resolves.toContain('CanvasFlow')
   })
+
+  it('keeps missing assets as 404 while preserving SPA route fallback', async () => {
+    staticDirectory = await mkdtemp(join(tmpdir(), 'canvasflow-demo-'))
+    await writeFile(join(staticDirectory, 'index.html'), '<h1>CanvasFlow</h1>')
+    server = createAgentServer({ staticDirectory })
+    await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', () => resolve()))
+    const address = server.address()
+    if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
+
+    const missingScript = await fetch(`http://127.0.0.1:${address.port}/assets/app.js`)
+    expect(missingScript.status).toBe(404)
+
+    const spaRoute = await fetch(`http://127.0.0.1:${address.port}/trip/pickup-001`)
+    expect(spaRoute.status).toBe(200)
+    await expect(spaRoute.text()).resolves.toContain('CanvasFlow')
+  })
 })
 
 describe('resolveStaticPath', () => {
