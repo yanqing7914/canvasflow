@@ -582,6 +582,65 @@ describe('demo integration', () => {
     expect(flightUpdateAttempts).toBe(2)
   })
 
+  it('keeps a failed navigation advance on the same timeline step for retry', async () => {
+    const user = userEvent.setup()
+    const collectingTask = createInitialTask()
+    const preparedTask: AirportPickupTaskState = {
+      ...collectingTask,
+      phase: 'preparing',
+      taskRevision: 1,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: {
+        flightNumber: 'MU5102', trusted: true, status: 'scheduled',
+        scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+      },
+      charging: { recommended: true, accepted: false, status: 'planned' },
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+    }
+    const startedTask: AirportPickupTaskState = {
+      ...preparedTask,
+      phase: 'driving-to-airport',
+      taskRevision: 2,
+      navigation: { ...preparedTask.navigation!, status: 'active' },
+    }
+    const failed = {
+      ...apiResponse(preparedTask),
+      effects: [{ effectId: 'nav:advance-failed', type: 'navigation.start' as const, status: 'failed' as const, tool: 'navigation.start', errorCode: 'PROVIDER_TIMEOUT' }],
+    }
+    const event = vi.fn()
+      .mockResolvedValueOnce(apiResponse(preparedTask))
+      .mockResolvedValue(apiResponse(preparedTask))
+    const action = vi.fn()
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(apiResponse(startedTask))
+    const api = {
+      create: vi.fn().mockResolvedValue(apiResponse(collectingTask)),
+      event,
+      action,
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    const input = screen.getByLabelText('任务输入')
+    await user.clear(input)
+    await user.type(input, 'MU5102')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByText('准备出发')
+
+    const drawer = await openControls(user)
+    const advance = screen.getByRole('button', { name: /推进下一事件/ })
+    await user.click(advance) // charging recommendation
+    await user.click(advance) // navigation fails, cursor must stay here
+    await screen.findByText('准备出发')
+    expect(action).toHaveBeenCalledTimes(1)
+
+    await user.click(advance) // retry the same navigation step
+    await waitFor(() => expect(drawer).toHaveTextContent('driving-to-airport'))
+    expect(action).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('途中')).toBeInTheDocument()
+  })
+
   it('serializes API mutations and disables controls while a request is pending', async () => {
     const user = userEvent.setup()
     let resolveCreate!: (response: AgentResponse) => void

@@ -531,11 +531,15 @@ export default function App({
     const index = stepIndex
     const step = mainFlowTimeline.steps[index]
     if (!step) return
-    const request = step.event.type === 'navigation.started'
+    const navigationStep = step.event.type === 'navigation.started'
+    const request = navigationStep
       ? api.action(current, 'start-navigation', 'navigation-plan')
       : api.event(current.task, { ...step.event, timestamp: undefined })
     const next = await run(() => request)
     if (!next) return
+    // A Provider failure can still arrive as HTTP 200 with an unchanged task.
+    // Keep the navigation step pending so the operator can retry it in place.
+    if (navigationStep && !navigationStarted(current, next)) return
     updateVehicleContext(step.event)
     setStepIndex(consumeAdvisoryContext(index + 1))
   }
