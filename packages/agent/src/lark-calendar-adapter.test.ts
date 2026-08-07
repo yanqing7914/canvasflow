@@ -75,10 +75,43 @@ describe('LarkCalendarAdapter', () => {
     expect(String(tokenCall![0])).toContain('/open-apis/auth/v3/tenant_access_token/internal')
     const eventsUrl = new URL(String(eventsCall![0]))
     expect(eventsUrl.pathname).toBe('/open-apis/calendar/v4/calendars/primary-calendar/events')
-    // The window opens at the query moment, not midnight: the answer is the
-    // day's REMAINING events.
-    expect(Number(eventsUrl.searchParams.get('start_time'))).toBe(Math.floor(NOW_MS / 1000))
+    // The request window opens at the START of the day: Lark's start_time
+    // filters on event start, so opening it at `now` would drop a meeting the
+    // driver is currently in. "Remaining" is filtered locally by end time.
+    expect(Number(eventsUrl.searchParams.get('start_time'))).toBe(Math.floor(Date.parse('2026-07-22T00:00:00+08:00') / 1000))
     expect((eventsCall![1]?.headers as Record<string, string>).authorization).toBe('Bearer tenant-token-1')
+  })
+
+  it('keeps an in-progress meeting on the answer and drops one already over', async () => {
+    // Asked at 20:00: the 19:30-20:30 meeting is still the driver's schedule,
+    // the 18:00-19:00 one is history, and an untimed 19:00 start with no end
+    // has nothing left to attend.
+    const inProgress = larkEvent({
+      event_id: 'in-progress',
+      summary: '正在进行的会',
+      start_time: { timestamp: String(Math.floor(Date.parse('2026-07-22T19:30:00+08:00') / 1000)) },
+      end_time: { timestamp: String(Math.floor(Date.parse('2026-07-22T20:30:00+08:00') / 1000)) },
+    })
+    const over = larkEvent({
+      event_id: 'over',
+      summary: '已结束的会',
+      start_time: { timestamp: String(Math.floor(Date.parse('2026-07-22T18:00:00+08:00') / 1000)) },
+      end_time: { timestamp: String(Math.floor(Date.parse('2026-07-22T19:00:00+08:00') / 1000)) },
+    })
+    const startedNoEnd = larkEvent({
+      event_id: 'started-no-end',
+      summary: '没有结束时间的提醒',
+      start_time: { timestamp: String(Math.floor(Date.parse('2026-07-22T19:00:00+08:00') / 1000)) },
+      end_time: undefined,
+    })
+    const fetch = vi.fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(jsonResponse(tokenPayload()))
+      .mockResolvedValueOnce(jsonResponse(eventsPayload([inProgress, over, startedNoEnd])))
+    const adapter = adapterWith(fetch as typeof globalThis.fetch)
+
+    const result = await adapter.listToday()
+
+    expect(result.events.map((event) => event.eventId)).toEqual(['in-progress'])
   })
 
   it('reuses a cached tenant token until its refresh margin and then re-exchanges', async () => {

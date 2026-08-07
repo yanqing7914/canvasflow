@@ -88,10 +88,10 @@ export class LarkCalendarAdapter implements ScheduleAdapter {
     const startOfDayMs = startOfCalendarDayMs(nowMs)
     const endOfDayMs = startOfDayMs + 24 * 60 * 60 * 1000
 
-    // The events endpoint is paginated: follow page_token until has_more goes
-    // false. A day that still reports more pages past the cap is treated as an
-    // invalid read rather than silently truncated — a card that presents part
-    // of the day as the whole day is worse than the fixture fallback.
+    // The window opens at the START of the day, not at the query moment: Lark's
+    // start_time filters on event start, so a window opening at `now` would drop
+    // a meeting the driver is currently in. "Remaining" is decided locally
+    // below — an event still counts while it has not ended.
     const items: unknown[] = []
     let pageToken: string | undefined
     for (let page = 0; page < MAX_EVENT_PAGES; page += 1) {
@@ -99,7 +99,7 @@ export class LarkCalendarAdapter implements ScheduleAdapter {
         `/open-apis/calendar/v4/calendars/${encodeURIComponent(this.#calendarId)}/events`,
         this.#endpoint,
       )
-      url.searchParams.set('start_time', String(Math.floor(Math.max(nowMs, startOfDayMs) / 1000)))
+      url.searchParams.set('start_time', String(Math.floor(startOfDayMs / 1000)))
       url.searchParams.set('end_time', String(Math.floor(endOfDayMs / 1000)))
       if (pageToken) url.searchParams.set('page_token', pageToken)
 
@@ -127,6 +127,10 @@ export class LarkCalendarAdapter implements ScheduleAdapter {
         const event = mapLarkEvent(item)
         return event ? [event] : []
       })
+      // Remaining means "not over yet": an in-progress meeting stays on the
+      // answer until its end passes; an event without an end stays until its
+      // start passes.
+      .filter((event) => Date.parse(event.endAt ?? event.startAt) > nowMs)
       .sort((left, right) => left.startAt.localeCompare(right.startAt))
     return listUpcomingEventsOutputSchema.parse({ events })
   }
