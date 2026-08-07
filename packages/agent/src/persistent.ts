@@ -27,7 +27,7 @@ import type { AgentHttpGateway } from './http'
 import type { ScheduleAdapter } from './lark-calendar-adapter'
 import { ModelGateway, type ModelGatewayResult } from './model-gateway'
 import type { ReadToolResults } from './orchestration'
-import { Planner, planAirportPickup, type Plan, type PlannerInput } from './planner'
+import { planAirportPickup, type Plan, type PlannerInput } from './planner'
 import type { StoredEventResult, StoredIdempotencyResult, StoredTask, TaskStore, TaskUpdateRead } from './store'
 import { createTaskUpdate } from './task-updates'
 
@@ -322,7 +322,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       return this.#run((gateway) => {
         const replay = gateway.hasCreateResult(request.clientRequestId)
         return { response: gateway.createTask(request), replay }
-      }, planned?.plan, planned?.source === 'model' ? planned.modelUsed : undefined, undefined, request.input.text)
+      }, planned?.plan, planned?.source === 'model' ? planned.modelUsed : undefined)
     })().finally(() => this.#inFlightOperations.delete(key))
     this.#inFlightOperations.set(key, pending)
     return pending
@@ -345,14 +345,20 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
       return existing.then(() => this.#run((gateway) => gateway.submitEvent(taskId, request)))
     }
     const pending = (async () => {
-      const planned = await this.#planEvent(taskId, request)
-      const prefetchedSchedule = await this.#prefetchSchedule(taskId, request, planned?.plan)
+      // A board ordinal (第三个) is rewritten into the flight number's own
+      // words BEFORE planning, so the configured planner — model seam included
+      // — interprets the rewritten turn exactly as it would the typed number.
+      const rewriteText = this.#read((gateway) => gateway.ordinalRewriteText(taskId, request))
+      const effective = rewriteText !== undefined && request.event.type === 'user.input'
+        ? { ...request, event: { ...request.event, text: rewriteText } }
+        : request
+      const planned = await this.#planEvent(taskId, effective)
+      const prefetchedSchedule = await this.#prefetchSchedule(taskId, effective, planned?.plan)
       return this.#run(
-        (gateway) => gateway.submitEvent(taskId, request),
+        (gateway) => gateway.submitEvent(taskId, effective),
         planned?.plan,
         planned?.source === 'model' ? planned.modelUsed : undefined,
         prefetchedSchedule,
-        request.event.type === 'user.input' ? request.event.text : undefined,
       )
     })().finally(() => this.#inFlightOperations.delete(key))
     this.#inFlightOperations.set(key, pending)
@@ -390,7 +396,6 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
     plannedInput?: Plan,
     modelUsed?: string,
     prefetchedSchedule?: PrefetchedScheduleResult,
-    plannedForText?: string,
   ): T {
     this.#assertOpen()
     // Serializes Gateway calls across processes sharing this SQLite file.
@@ -411,19 +416,7 @@ export class PersistentAgentRuntime implements AgentHttpGateway {
         policyGate: this.#options.policyGate,
         modelUsed,
         ...(prefetchedSchedule ? { prefetchedSchedule } : {}),
-        // The precomputed plan is an answer to ONE question — the text it was
-        // planned for. A gateway-side rewrite (an ordinal resolved to a flight
-        // number) asks a new question mid-turn, and pinning the old answer to
-        // it would swallow the rewrite; unknown text falls through to the rules.
-        ...(plannedInput ? {
-          planner: {
-            plan: (input: string | PlannerInput, state?: Parameters<Planner['plan']>[1]) => {
-              const text = typeof input === 'string' ? input : input.text
-              if (plannedForText === undefined || text === plannedForText) return plannedInput
-              return new Planner().plan(input as PlannerInput, state)
-            },
-          },
-        } : {}),
+        ...(plannedInput ? { planner: { plan: () => plannedInput } } : {}),
       })
       const result = operation(gateway)
       this.#persistRuntime(runtime)

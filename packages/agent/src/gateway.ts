@@ -38,7 +38,7 @@ import { mergePassengers } from './passengers'
 import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, renderedArrivalRows, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
-import { Planner, type Plan, type PlannerInput } from './planner'
+import { Planner, planAirportPickup, type Plan, type PlannerInput } from './planner'
 import {
   armLandingMessageRetry,
   resolveLandingMeetingEta,
@@ -279,6 +279,27 @@ export class AgentGateway {
     // (occupant intent is never stale), so gating planning on the raw client
     // stamp would skip the model for exactly the inputs that will still apply.
     return current.task
+  }
+
+  /**
+   * Pre-transaction ordinal resolution for the persistent runtime: when this
+   * user input is a whole-utterance board pick (第三个) and a board is on
+   * screen, returns the flight-number text the ordinal means. The runtime
+   * rewrites the request BEFORE planning, so the configured planner — model
+   * seam included — interprets the rewritten words exactly as it would the
+   * typed number; nothing about planning is bypassed. Returns undefined for
+   * every other input, including replays this gateway resolves internally.
+   */
+  ordinalRewriteText(taskId: string, input: SubmitEventRequest): string | undefined {
+    const request = submitEventRequestSchema.parse(input)
+    if (request.event.type !== 'user.input') return undefined
+    const current = this.#requireTask(taskId)
+    if (this.#store.getEventResult(taskId, request.event.eventId)) return undefined
+    if (current.task.phase !== 'collecting-information' || current.task.flight) return undefined
+    const plan = planAirportPickup({ text: request.event.text })
+    if (plan.intent !== 'pick-flight-choice' || plan.slotUpdates.flightChoiceOrdinal === undefined) return undefined
+    const picked = this.#renderedArrivalRows(current)?.[plan.slotUpdates.flightChoiceOrdinal - 1]
+    return picked ? `航班号 ${picked.flightNumber}` : undefined
   }
 
   cancelTask(taskId: string, input: CancelTaskRequest): AgentResponse {

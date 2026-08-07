@@ -882,14 +882,14 @@ describe('PersistentAgentRuntime', () => {
     })
   })
 
-  it('resolves a spoken ordinal through the model-planning seam without pinning the stale plan', async () => {
-    // The contract under test: the runtime pre-plans the ORIGINAL text (the
-    // model seam) and pins that plan into the transaction. When the gateway
-    // rewrites an ordinal into a flight number mid-turn, the pinned plan must
-    // yield to the configured planner for the rewritten text — otherwise the
-    // ordinal answers pick-flight-choice twice and the slot never fills.
+  it('rewrites a spoken ordinal before planning so the configured planner sees the flight number', async () => {
+    // The contract under test: the ordinal is resolved to its flight number
+    // BEFORE the pre-planning seam, so whatever planner the runtime is
+    // configured with — the model gateway here — interprets the rewritten
+    // words exactly as it would the typed number. Nothing about planning is
+    // bypassed; the ordinal is just a faster way to say the number.
     const modelGateway = new ModelGateway({
-      adapter: { modelId: 'unused-model', plan: async () => { throw new Error('rules answer ordinals; the model must not be called') } },
+      adapter: { modelId: 'unused-model', plan: async () => { throw new Error('rules answer flight numbers; the model must not be called') } },
     })
     const plan = vi.spyOn(modelGateway, 'plan')
     const agent = runtime(':memory:', { modelGateway })
@@ -909,10 +909,11 @@ describe('PersistentAgentRuntime', () => {
 
     expect(picked.task.phase).toBe('preparing')
     expect(picked.task.flight?.flightNumber).toBe(thirdOnScreen)
-    // Both turns consulted the model seam and both were rules-recognized, so
-    // the adapter behind it was never reached; the pinned rules plan still
-    // yielded to the rewrite.
+    // The configured planner was consulted for the ordinal turn with the
+    // REWRITTEN text — the same words a typed pick would carry — never the
+    // raw ordinal, and rules recognized it so the adapter stayed cold.
     expect(plan).toHaveBeenCalledTimes(2)
+    expect(plan.mock.calls[1]![0]).toMatchObject({ text: `航班号 ${thirdOnScreen}` })
     expect(picked.meta.modelUsed).toBeUndefined()
   })
 })
