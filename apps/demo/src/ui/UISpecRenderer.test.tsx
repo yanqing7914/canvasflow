@@ -496,6 +496,36 @@ describe('UISpecRenderer', () => {
     // The buffer is stated, never folded into the departure time.
     expect(screen.getByText('提前 10 分钟到')).toBeInTheDocument()
     expect(screen.getByText('直达虹桥机场 T2')).toBeInTheDocument()
+    // No reminder standing, so nothing claims one is.
+    expect(document.querySelector('.ui-departure-plan__reminder')).not.toBeInTheDocument()
+  })
+
+  it('states a standing reminder on the departure answer, with the time it promised', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['departure-plan'] } },
+      components: [{
+        id: 'departure-plan',
+        type: 'departure-plan',
+        props: {
+          departAtLabel: '20:05',
+          arrivalLabel: 'MU5102 20:40 落地',
+          driveMinutes: 25,
+          bufferMinutes: 10,
+          reminderAtLabel: '20:10',
+        },
+      }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    // Its own clock, deliberately: the route was re-read and the recommendation
+    // moved, but the reminder still names the time the driver was promised, and a
+    // bare 已设提醒 would hide that.
+    expect(document.querySelector('.ui-departure-plan__reminder')).toHaveTextContent('已设提醒 20:10')
+    expect(document.querySelector('.ui-departure-plan__time')?.textContent).toBe('20:05')
+    // Not a fact the time was derived from, so not in the list it would be read
+    // out of order from.
+    expect(document.querySelector('.ui-departure-plan__facts')).not.toHaveTextContent('已设提醒')
   })
 
   it('omits the route line from the departure answer when there is none to name', () => {
@@ -1559,15 +1589,15 @@ describe('UISpecRenderer flight choices board', () => {
   const choices = [
     {
       flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled' as const,
-      statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'pick-MU5102',
+      statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'pick-MU5102',
     },
     {
       flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed' as const,
-      statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', actionId: 'pick-MU5103',
+      statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', airportName: '虹桥机场', actionId: 'pick-MU5103',
     },
     {
       flightNumber: 'CA1516', airlineName: '中国国际航空', originName: '广州白云', status: 'in-air' as const,
-      statusLabel: '飞行中', arrivalTimeLabel: '21:15', revisedTimeLabel: '预计 21:05', terminal: 'T1', actionId: 'pick-CA1516',
+      statusLabel: '飞行中', arrivalTimeLabel: '21:15', revisedTimeLabel: '预计 21:05', terminal: 'T1', airportName: '浦东机场', actionId: 'pick-CA1516',
     },
   ]
 
@@ -1575,11 +1605,14 @@ describe('UISpecRenderer flight choices board', () => {
     choices?: unknown
     actionIds?: string[]
     definedActionIds?: string[]
+    refreshActionId?: string
   } = {}): UISpec {
     // `in` rather than `??`: one of the broken cases is a board with no choices
     // key at all, which a default would quietly repair.
     const rows = 'choices' in overrides ? overrides.choices : choices
-    const declared = overrides.actionIds ?? choices.map((choice) => choice.actionId)
+    const refresh = overrides.refreshActionId
+    const declared = overrides.actionIds
+      ?? [...choices.map((choice) => choice.actionId), ...(refresh ? [refresh] : [])]
     const defined = overrides.definedActionIds ?? declared
     return baseSpec({
       phase: 'collecting-information',
@@ -1589,7 +1622,13 @@ describe('UISpecRenderer flight choices board', () => {
         id: 'flight-choices',
         type: 'flight-choices',
         actions: declared,
-        props: { arrivalCityName: '上海', dateLabel: '今天', choices: rows, freshness: 'fixture' },
+        props: {
+          arrivalCityName: '上海',
+          dateLabel: '今天',
+          choices: rows,
+          freshness: 'fixture',
+          ...(refresh ? { refreshActionId: refresh } : {}),
+        },
       } as ComponentSpec],
       actions: defined.map((actionId) => ({
         id: actionId,
@@ -1602,22 +1641,73 @@ describe('UISpecRenderer flight choices board', () => {
 
   const renderer = () => screen.getByRole('region', { name: 'Generated task interface' })
   const rows = () => Array.from(renderer().querySelectorAll<HTMLButtonElement>('.ui-flight-choices__row'))
+  const refreshPill = () => renderer().querySelector<HTMLButtonElement>('.ui-flight-choices__refresh')
 
   it('numbers every arrival and shows what tells two of them apart', () => {
     render(<UISpecRenderer spec={boardSpec()} onAction={vi.fn()} pending={false} />)
 
     expect(rows()).toHaveLength(3)
-    const [first, second] = rows()
+    const [first, second, third] = rows()
     expect(first).toHaveAttribute('data-flight-number', 'MU5102')
     expect(first!.querySelector('.ui-flight-choices__rank')).toHaveTextContent('1')
     expect(first).toHaveTextContent('东方航空')
     expect(first).toHaveTextContent('北京首都')
     expect(first).toHaveTextContent('20:30')
     expect(first).toHaveTextContent('T2')
+    // The airport, not just the terminal: 虹桥 T2 and 浦东 T2 are an hour apart,
+    // and a row that named only the terminal would make them look interchangeable.
+    expect(first!.querySelector('.ui-flight-choices__terminal')).toHaveTextContent('虹桥机场 T2')
+    expect(third!.querySelector('.ui-flight-choices__terminal')).toHaveTextContent('浦东机场 T1')
     // The two 20:30 arrivals are told apart by the revision, not the schedule.
     expect(first!.querySelector('.ui-flight-choices__revised')).toBeNull()
     expect(second!.querySelector('.ui-flight-choices__revised')).toHaveTextContent('预计 21:10')
     expect(second!.querySelector('.ui-status--delayed')).toHaveTextContent('延误')
+  })
+
+  it('keeps the refresh out of the numbered list and out of the action bars', async () => {
+    const onAction = vi.fn()
+    const user = userEvent.setup()
+    render(<UISpecRenderer
+      spec={boardSpec({ refreshActionId: 'refresh-flight-options' })}
+      onAction={onAction}
+      pending={false}
+    />)
+
+    // Three rows, not four: a refresh that joined the list would be countable,
+    // and 第四个 has to keep meaning the row that is not there.
+    expect(rows()).toHaveLength(3)
+    // Drawn once, by the card, so it is not also promoted into a button group.
+    expect(renderer().querySelectorAll('[data-action-id="refresh-flight-options"]')).toHaveLength(1)
+    expect(renderer().querySelector('.ui-card__actions')).toBeNull()
+    expect(renderer().querySelector('.ui-actions')).toBeNull()
+
+    await user.click(refreshPill()!)
+
+    expect(onAction).toHaveBeenCalledExactlyOnceWith('refresh-flight-options', 'flight-choices')
+  })
+
+  it('offers no refresh when the spec declares one it never defined', () => {
+    render(<UISpecRenderer
+      spec={boardSpec({ refreshActionId: 'refresh-flight-options', definedActionIds: choices.map((choice) => choice.actionId) })}
+      onAction={vi.fn()}
+      pending={false}
+    />)
+
+    // A pill that cannot reach the Agent is worse than no pill: the rows still
+    // work, and the driver is not invited to press something inert.
+    expect(refreshPill()).toBeNull()
+    expect(rows()).toHaveLength(3)
+  })
+
+  it('disables the refresh alongside the rows while an action is in flight', () => {
+    render(<UISpecRenderer
+      spec={boardSpec({ refreshActionId: 'refresh-flight-options' })}
+      onAction={vi.fn()}
+      pending
+    />)
+
+    expect(refreshPill()).toBeDisabled()
+    for (const row of rows()) expect(row).toBeDisabled()
   })
 
   it('sends the picked row’s own action, dispatched from the board', async () => {

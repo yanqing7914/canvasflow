@@ -3768,6 +3768,241 @@ describe('AgentGateway', () => {
     })
   })
 
+  describe('the two answers on the departure card', () => {
+    function askedDeparture(gateway = createGateway()) {
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-for-answers', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'departure-for-answers', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+      return { gateway, created, asked }
+    }
+
+    function departureCard(ui: UISpec) {
+      const card = ui.components.find((component) => component.type === 'departure-plan')
+      if (card?.type !== 'departure-plan') throw new Error('expected a departure-plan component')
+      return card
+    }
+
+    it('offers both answers on the card it makes, and defines them in the spec', () => {
+      const { asked } = askedDeparture()
+
+      // Declared on the card and defined alongside it: the renderer resolves the
+      // ids it is handed, so an id on one side only would be an inert button.
+      expect(departureCard(asked.ui).actions).toEqual(['remind-later', 'view-calendar'])
+      for (const actionId of ['remind-later', 'view-calendar']) {
+        const action = asked.ui.actions.find((candidate) => candidate.id === actionId)
+        expect(action?.event.type).toBe('agent-message')
+      }
+    })
+
+    it('records the departure it was told about and states it back on every later ask', () => {
+      const { gateway, created, asked } = askedDeparture()
+      expect(departureCard(asked.ui).props.reminderAtLabel).toBeUndefined()
+
+      const armed = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-remind-later', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'remind-later-1', type: 'user.input', text: '稍后提醒我', timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+
+      // The recorded instant is the one the card showed a clock label for.
+      expect(armed.task.departureReminder).toEqual({
+        remindAt: '2026-07-22T20:10:00+08:00',
+        armedAt: expect.any(String),
+      })
+      expect(armed.task.taskRevision).toBe(asked.task.taskRevision + 1)
+      expect(armed.assistant?.text).toContain('20:10')
+
+      const again = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-departure-again', expectedTaskRevision: armed.task.taskRevision,
+        event: { eventId: 'departure-again', type: 'user.input', text: '什么时候出发', timestamp: '2026-07-22T12:03:00+08:00' },
+      })
+
+      // Which is the whole point of recording it: asking again is now confirmation
+      // rather than the same unanswered question, and there is nothing left to set.
+      const card = departureCard(again.ui)
+      expect(card.props.reminderAtLabel).toBe('20:10')
+      expect(card.actions).toEqual(['view-calendar'])
+      expect(again.ui.actions.some((action) => action.id === 'remind-later')).toBe(false)
+    })
+
+    it('claims nothing new when the same time is set twice', () => {
+      const { gateway, created, asked } = askedDeparture()
+      const armed = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-remind-once', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'remind-once', type: 'user.input', text: '稍后提醒我', timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+
+      const twice = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-remind-twice', expectedTaskRevision: armed.task.taskRevision,
+        event: { eventId: 'remind-twice', type: 'user.input', text: '到点提醒我', timestamp: '2026-07-22T12:03:00+08:00' },
+      })
+
+      // A different sentence and a different event, so not a replay — but the same
+      // fact, so the trip does not move. The driver still hears the confirmation.
+      expect(twice.task.taskRevision).toBe(armed.task.taskRevision)
+      expect(twice.task.departureReminder).toEqual(armed.task.departureReminder)
+      expect(twice.assistant?.text).toContain('已经设好了')
+    })
+
+    it('replays an identical reminder event id off the log', () => {
+      const { gateway, created, asked } = askedDeparture()
+      const request = {
+        clientRequestId: 'client-remind-replay', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'remind-replay', type: 'user.input' as const, text: '稍后提醒我', timestamp: '2026-07-22T12:02:00+08:00' },
+      }
+
+      const first = gateway.submitEvent(created.task.taskId, request)
+      const second = gateway.submitEvent(created.task.taskId, request)
+
+      // This turn changes state, so it replays off the event log rather than off
+      // the side-answer contract — which is defined by the revision not moving.
+      expect(second.task).toEqual(first.task)
+      expect(second.task.taskRevision).toBe(asked.task.taskRevision + 1)
+    })
+
+    it('promises nothing when there is no departure to work backwards from', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('去机场接妈妈'))
+      expect(created.task.phase).toBe('collecting-information')
+
+      const armed = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-remind-empty', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'remind-empty', type: 'user.input', text: '稍后提醒我', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(armed.task).toEqual(created.task)
+      expect(armed.task.departureReminder).toBeUndefined()
+      expect(armed.assistant?.text).toContain('还没有航班和路线')
+    })
+
+    it('refuses to set one after the car has left, and spends the one it was holding', () => {
+      const { gateway, created, asked } = askedDeparture()
+      const armed = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-remind-before-start', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'remind-before-start', type: 'user.input', text: '稍后提醒我', timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(armed.task.departureReminder).toBeDefined()
+
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'client-start-after-remind',
+        expectedTaskRevision: armed.task.taskRevision,
+        expectedUiRevision: armed.ui.uiRevision,
+        actionId: 'start-navigation',
+        componentId: 'navigation-plan',
+        idempotencyKey: 'start-after-remind',
+      })
+
+      // A reminder to leave is spent the moment the car does; left standing it
+      // would be state that contradicts the trip it belongs to.
+      expect(driving.task.phase).toBe('driving-to-airport')
+      expect(driving.task.departureReminder).toBeUndefined()
+
+      const late = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-remind-underway', expectedTaskRevision: driving.task.taskRevision,
+        event: { eventId: 'remind-underway', type: 'user.input', text: '稍后提醒我', timestamp: '2026-07-22T12:05:00+08:00' },
+      })
+      expect(late.task).toEqual(driving.task)
+      expect(late.assistant?.text).toContain('已经在路上了')
+    })
+
+    it('shows the calendar the trip already read without going back to the provider', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const schedule = vi.fn(orchestrator.resolveSchedule.bind(orchestrator))
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+          resolveSchedule: schedule,
+        },
+      })
+      const { created, asked } = askedDeparture(gateway)
+
+      const viewed = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-view-calendar', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'view-calendar-1', type: 'user.input', text: '查看日程', timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+
+      // The events were already on the snapshot, and that is the whole difference
+      // between this and 看看日程: same card, no second read.
+      expect(schedule).not.toHaveBeenCalled()
+      const card = viewed.ui.components.find((component) => component.type === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+      expect(card.props.events.map((event) => event.title)).toEqual(['豆豆的睡前故事'])
+      expect(viewed.assistant?.text).toContain('21:30 豆豆的睡前故事')
+      // A glance, not a fact: nothing about the trip changed, and the next event
+      // takes the surface back.
+      expect(viewed.task.taskRevision).toBe(asked.task.taskRevision)
+      expect(viewed.task.processedEventIds).not.toContain('view-calendar-1')
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-moving-after-calendar', expectedTaskRevision: viewed.task.taskRevision,
+        event: { eventId: 'moving-after-calendar', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:03:00+08:00' },
+      })
+      expect(moved.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+
+      // The control on that "no second read": the open question does go and ask,
+      // through the very method the glance left untouched.
+      gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-ask-schedule-control', expectedTaskRevision: moved.task.taskRevision,
+        event: { eventId: 'ask-schedule-control', type: 'user.input', text: '看看日程', timestamp: '2026-07-22T12:04:00+08:00' },
+      })
+      expect(schedule).toHaveBeenCalledTimes(1)
+    })
+
+    it('offers no glance at a calendar nobody read, and says where to get one', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(), now: () => now, createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+          // The calendar read is already best-effort inside prepareTrip; this is
+          // the shape of the trip that survived without it.
+          prepareTrip: (taskId, requestId, flightNumber) => {
+            const reads = orchestrator.prepareTrip(taskId, requestId, flightNumber)
+            const toolResults = { ...reads.toolResults }
+            delete toolResults['calendar.list-upcoming']
+            return { ...reads, toolResults }
+          },
+        },
+      })
+      const { created, asked } = askedDeparture(gateway)
+
+      // An absent button rather than an inert one: there is nothing to glance at.
+      expect(departureCard(asked.ui).actions).toEqual(['remind-later'])
+
+      const viewed = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-view-calendar-empty', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'view-calendar-empty', type: 'user.input', text: '查看日程', timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+
+      // Saying so beats an empty card, which would read as "you have nothing on".
+      expect(viewed.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      expect(viewed.assistant?.text).toContain('看看日程')
+      expect(viewed.task).toEqual(asked.task)
+    })
+
+    it('leaves both answers unknown once the trip is terminal', () => {
+      const { gateway, created, asked } = askedDeparture()
+      const cancelled = gateway.cancelTask(created.task.taskId, {
+        clientRequestId: 'client-cancel-for-answers', expectedTaskRevision: asked.task.taskRevision,
+        eventId: 'cancel-for-answers',
+      })
+
+      for (const [index, text] of ['稍后提醒我', '查看日程'].entries()) {
+        const answered = gateway.submitEvent(created.task.taskId, {
+          clientRequestId: `client-terminal-answer-${index}`, expectedTaskRevision: cancelled.task.taskRevision,
+          event: { eventId: `terminal-answer-${index}`, type: 'user.input', text, timestamp: '2026-07-22T12:10:00+08:00' },
+        })
+        expect(answered.task.phase).toBe('cancelled')
+        expect(answered.task.departureReminder).toBeUndefined()
+        expect(answered.ui.components.some((component) => component.type === 'schedule-card')).toBe(false)
+      }
+    })
+  })
+
   describe('en-route side scenes', () => {
     function drivingTask() {
       const gateway = createGateway()
@@ -3851,6 +4086,36 @@ describe('AgentGateway', () => {
       return component
     }
 
+    /**
+     * A gateway whose arrivals board is a live read for yesterday. The rows still
+     * render — they are true about a day that is over — and the revision is
+     * perfectly current, which is exactly why the revision guard cannot catch
+     * this. Live is the half that makes the expiry askable at all: a real
+     * provider read is stamped by the same clock the rank arrives on, where a
+     * fixture read is authored on a fixed day and has no instant to compare.
+     */
+    function expiredLiveBoardGateway() {
+      const orchestrator = new ReadToolOrchestrator()
+      return new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => now,
+        createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+          resolveArrivals: (taskId, requestId) => {
+            const result = orchestrator.resolveArrivals(taskId, requestId)
+            return {
+              ...result,
+              data: { ...result.data, expiresAt: '2026-07-21T23:59:59+08:00' },
+              meta: { ...result.meta, provider: 'live' as const },
+            }
+          },
+        },
+      })
+    }
+
     it('offers the arrivals board while the flight number is still missing', () => {
       const gateway = createGateway()
       const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
@@ -3888,6 +4153,43 @@ describe('AgentGateway', () => {
       // driver into the brief.
       expect(boardOf(picked.ui)).toBeUndefined()
       expect(picked.ui.components.map((component) => component.type)).toContain('flight-status')
+    })
+
+    it('drives to the airport the picked flight lands at, not the one the request assumed', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      const rows = boardOf(created.ui)!.props.choices
+      const pudongRow = rows.find((row) => row.airportName.includes('浦东'))
+      const hongqiaoRow = rows.find((row) => row.airportName.includes('虹桥'))
+      // The board has to actually offer the contrast, or the rest asserts nothing.
+      expect(pudongRow, '浦东 row').toBeDefined()
+      expect(hongqiaoRow, '虹桥 row').toBeDefined()
+
+      // Each pick gets its own task: two picks on one task is a revision
+      // conflict, and what is being compared is two trips, not two turns.
+      const pick = (row: { flightNumber: string }, suffix: string) => {
+        const own = createGateway()
+        const task = own.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+        return own.submitEvent(task.task.taskId, {
+          clientRequestId: `client-pick-${suffix}`,
+          expectedTaskRevision: task.task.taskRevision,
+          event: {
+            eventId: `pick-${suffix}`, type: 'user.input',
+            text: `航班号 ${row.flightNumber}`, timestamp: '2026-07-22T12:01:00+08:00',
+          },
+        })
+      }
+
+      const pudong = pick(pudongRow!, 'pvg')
+      expect(pudong.task.flight?.arrivalAirport).toBe('PVG')
+      expect(pudong.task.navigation?.destination).toBe('浦东机场 T2')
+
+      // Same board, same city, other row: the destination is a consequence of the
+      // pick, so the two picks must not agree.
+      const hongqiao = pick(hongqiaoRow!, 'sha')
+      expect(hongqiao.task.flight?.arrivalAirport).toBe('SHA')
+      expect(hongqiao.task.navigation?.destination).toBe('虹桥机场 T2')
+      expect(hongqiao.task.navigation?.routeId).not.toBe(pudong.task.navigation?.routeId)
     })
 
     it('asks for the number when the orchestration cannot offer a board', () => {
@@ -4006,6 +4308,245 @@ describe('AgentGateway', () => {
       expect(asked.task.flight?.flightNumber).toBe('MU5102')
       expect(asked.task.taskRevision).toBe(created.task.taskRevision)
     })
+
+    it('records which set of arrivals the board came from, and retires it with the board', () => {
+      const gateway = createGateway()
+      const orchestrator = new ReadToolOrchestrator()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+
+      // The identity on the task is the one the tool minted, not a second
+      // number the Agent invented alongside it.
+      expect(created.task.flightDiscovery?.candidateSetId)
+        .toBe(orchestrator.resolveArrivals('probe', 'probe').data.candidateSetId)
+      expect(created.task.flightDiscovery?.expiresAt).toBe('2026-07-22T23:59:59+08:00')
+
+      const picked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-pick-clears-set',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'pick-clears-set', type: 'user.input', text: '航班号 CA1516', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // The choice has been made, so there is no set left to be choosing from.
+      expect(boardOf(picked.ui)).toBeUndefined()
+      expect(picked.task.flightDiscovery).toBeUndefined()
+    })
+
+    it('re-reads the board on 刷新航班 and moves the revision an in-flight rank was planned against', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      const before = boardOf(created.ui)!.props.choices.map((choice) => choice.flightNumber)
+
+      const refreshed = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-refresh',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'refresh-board', type: 'user.input', text: '刷新航班', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // Still collecting, still a board, and the flight nobody picked is still
+      // unpicked: a refresh answers a question about the list, not about the trip.
+      expect(refreshed.task.phase).toBe('collecting-information')
+      expect(refreshed.task.flight).toBeUndefined()
+      expect(boardOf(refreshed.ui)!.props.choices.map((choice) => choice.flightNumber)).toEqual(before)
+      expect(refreshed.assistant?.text).toContain('已刷新')
+      // The bump is the whole protection: a rank spoken against the previous list
+      // carries the previous revision, and that is what refuses it.
+      expect(refreshed.task.taskRevision).toBe(created.task.taskRevision + 1)
+      expect(() => gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-stale-rank',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'stale-rank', type: 'user.input', text: '选第三个', timestamp: '2026-07-22T12:02:00+08:00' },
+      })).toThrowError(expect.objectContaining({ code: 'TASK_REVISION_CONFLICT' }))
+    })
+
+    it('leaves the board standing when the refresh read fails', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      let attempts = 0
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => now,
+        createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+          resolveArrivals: (taskId, requestId) => {
+            attempts += 1
+            if (attempts > 1) throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'arrivals timed out', true)
+            return orchestrator.resolveArrivals(taskId, requestId)
+          },
+        },
+      })
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      expect(boardOf(created.ui)).toBeDefined()
+
+      const refreshed = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-refresh-fails',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'refresh-fails', type: 'user.input', text: '刷新航班', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // A failed attempt to improve the list must not cost the driver the list.
+      // Nothing was claimed, so nothing moved: same rows, same revision, and the
+      // spoken line says so instead of pretending the read landed.
+      expect(boardOf(refreshed.ui)!.props.choices.length).toBe(boardOf(created.ui)!.props.choices.length)
+      expect(refreshed.task.taskRevision).toBe(created.task.taskRevision)
+      expect(refreshed.task.flightDiscovery).toEqual(created.task.flightDiscovery)
+      expect(refreshed.assistant?.text).toContain('刷新不了')
+    })
+
+    it('keeps 刷新航班 on the unknown path once the flight is chosen', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-refresh-after-pick',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'refresh-after-pick', type: 'user.input', text: '刷新航班', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      // There is no list to refresh on a preparing brief, so the words mean
+      // nothing and the trip is left exactly as it was.
+      expect(asked.task.flight?.flightNumber).toBe('MU5102')
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+    })
+
+    it('will not count a rank against a candidate set that has expired', () => {
+      const gateway = expiredLiveBoardGateway()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      expect(boardOf(created.ui)).toBeDefined()
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-expired-rank',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'expired-rank', type: 'user.input', text: '选第三个', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task.flight).toBeUndefined()
+      expect(asked.task.phase).toBe('collecting-information')
+    })
+
+    /**
+     * The same expired board, reached through the pre-planning rewrite instead.
+     *
+     * The persistent runtime resolves the ordinal into the flight number's own
+     * words before it plans, so this seam decides the pick — and once the text
+     * says 航班号 MU5102, the turn is an ordinary typed number and the board is
+     * never consulted again. So the seam has to refuse on exactly the boards the
+     * in-transaction path would refuse on, measured against exactly the instant
+     * that path would measure against.
+     *
+     * The trap is the caller's own stamp. User input is clamped forward on the
+     * way in — occupant intent is never stale — so a stamp from before the
+     * board expired is going to be applied as now; believing it here would make
+     * a client clock the thing that decides whether an expired board can still
+     * be picked from.
+     */
+    it('refuses the pre-planning rewrite on an expired board even for a stamp behind the clock', () => {
+      const gateway = expiredLiveBoardGateway()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      expect(boardOf(created.ui)).toBeDefined()
+
+      const behindExpiry = {
+        clientRequestId: 'client-expired-rewrite',
+        expectedTaskRevision: created.task.taskRevision,
+        event: {
+          eventId: 'expired-rewrite',
+          type: 'user.input' as const,
+          text: '选第三个',
+          timestamp: '2026-07-21T20:00:00+08:00',
+        },
+      }
+
+      expect(gateway.ordinalRewriteText(created.task.taskId, behindExpiry)).toBeUndefined()
+
+      // And submitting it changes nothing, which is the same answer the rank
+      // gets when it is spoken with an honest stamp.
+      const asked = gateway.submitEvent(created.task.taskId, behindExpiry)
+      expect(asked.task.flight).toBeUndefined()
+      expect(asked.task.phase).toBe('collecting-information')
+    })
+
+    /**
+     * The other half of that guard: a live board that has NOT expired is still
+     * rewritten, so the fix above is a clamp and not a retirement of the seam.
+     */
+    it('still rewrites a rank against a live board that is current', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => now,
+        createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+          resolveArrivals: (taskId, requestId) => {
+            const result = orchestrator.resolveArrivals(taskId, requestId)
+            return { ...result, meta: { ...result.meta, provider: 'live' as const } }
+          },
+        },
+      })
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      const board = boardOf(created.ui)
+      if (!board) throw new Error('expected a flight-choices board')
+
+      expect(gateway.ordinalRewriteText(created.task.taskId, {
+        clientRequestId: 'client-current-rewrite',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'current-rewrite', type: 'user.input', text: '选第三个', timestamp: '2026-07-22T12:01:00+08:00' },
+      })).toBe(`航班号 ${board.props.choices[2]!.flightNumber}`)
+    })
+
+    /**
+     * The same board, authored rather than read, long after the day it describes.
+     *
+     * The fixture demo runs on one fixed day for as long as the repository lives,
+     * so a wall clock is always eventually past it. Counting that as an expiry
+     * would take the spoken ordinal away from every run after the fixture date
+     * while the board it is spoken against is still on screen and still pickable
+     * by row — a guard that only ever fires on the honest case.
+     */
+    it('still counts a rank against a fixture board once the wall clock is past its day', () => {
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => '2026-08-09T21:00:00+08:00',
+        createId: () => '001',
+      })
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      const board = boardOf(created.ui)
+      expect(board).toBeDefined()
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-late-rank',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'late-rank', type: 'user.input', text: '选第三个', timestamp: '2026-08-09T21:00:01+08:00' },
+      })
+
+      expect(asked.task.flight?.flightNumber).toBe(board!.props.choices[2]!.flightNumber)
+      expect(asked.task.phase).toBe('preparing')
+    })
+
+    it('will not count a rank against a board the task does not recognize', () => {
+      const store = new MemoryTaskStore()
+      const gateway = new AgentGateway({ store, now: () => now, createId: () => '001' })
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      expect(boardOf(created.ui)).toBeDefined()
+
+      // The two halves are written together, so a disagreement is a snapshot
+      // whose record and board have gotten out of step. Which set the driver was
+      // shown is then unanswerable, and an unanswerable rank must not be guessed.
+      const stored = store.get(created.task.taskId)!
+      store.save({ ...stored, task: { ...stored.task, flightDiscovery: { ...stored.task.flightDiscovery!, candidateSetId: 'cs-someone-elses' } } })
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-unknown-set',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'unknown-set', type: 'user.input', text: '选第三个', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task.flight).toBeUndefined()
+      expect(asked.task.phase).toBe('collecting-information')
+    })
   })
 
   describe('proactive weather advisory and the umbrella reminder', () => {
@@ -4034,6 +4575,40 @@ describe('AgentGateway', () => {
       }
     }
 
+    it('does not warn a 浦东 pickup about the rain over 虹桥', () => {
+      // The two airports have different weather on purpose. Before the drive
+      // destination followed the flight, this trip read 虹桥 — and a family
+      // landing an hour east would have been told to bring an umbrella for
+      // somewhere they were never going.
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 HO1252'))
+      expect(created.task.flight?.arrivalAirport).toBe('PVG')
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'pvg-advisory-start', expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation',
+        componentId: 'navigation-plan', idempotencyKey: 'pvg-advisory-start',
+      })
+
+      const updated = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-pvg-in-air', expectedTaskRevision: driving.task.taskRevision,
+        event: {
+          eventId: 'pvg-in-air', type: 'flight.updated' as const,
+          flight: {
+            flightNumber: 'HO1252', status: 'in-air' as const,
+            scheduledArrival: '2026-07-22T21:05:00+08:00',
+            estimatedArrival: '2026-07-22T21:05:00+08:00', terminal: 'T2',
+          },
+          timestamp: '2026-07-22T19:10:00+08:00',
+        },
+      })
+
+      // 浦东 reads overcast, so there is nothing to advise about — and the update
+      // that carried no airport must not have moved the trip back west either.
+      expect(updated.task.flight?.arrivalAirport).toBe('PVG')
+      expect(updated.task.weatherAdvisory).toBeUndefined()
+      expect(updated.ui.components.some((component) => component.id === 'weather-advisory')).toBe(false)
+    })
+
     it('raises the advisory once when a flight update finds rain over the arrival', () => {
       const gateway = createGateway()
       const driving = drivingTask(gateway)
@@ -4044,8 +4619,8 @@ describe('AgentGateway', () => {
       const card = updated.ui.components.find((component) => component.id === 'weather-advisory')
       if (card?.type !== 'weather-card') throw new Error('expected the advisory weather card')
       expect(card.props.condition).toBe('light-rain')
-      expect(card.actions).toEqual(['send-umbrella-reminder', 'dismiss-weather-advisory'])
-      expect(updated.ui.actions.map((action) => action.id)).toEqual(['send-umbrella-reminder', 'dismiss-weather-advisory'])
+      expect(card.actions).toEqual(['send-umbrella-reminder', 'dismiss-advisory-weather'])
+      expect(updated.ui.actions.map((action) => action.id)).toEqual(['send-umbrella-reminder', 'dismiss-advisory-weather'])
 
       // The advisory survives an unrelated recompose: it is persisted, not a
       // transient query answer.

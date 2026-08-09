@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { AirportPickupTaskState } from '@canvasflow/schema'
-import { recommendedMeetingPoints } from '@canvasflow/tools'
+import { meetingPointKey, recommendedMeetingPoints } from '@canvasflow/tools'
 import { composePickupSpec } from './index'
 
 const timestamp = '2026-07-22T20:00:00+08:00'
@@ -25,6 +25,7 @@ describe('Pickup UISpec composer arrival', () => {
         status: 'landed',
         scheduledArrival: '2026-07-22T20:30:00+08:00',
         estimatedArrival: '2026-07-22T20:40:00+08:00',
+        arrivalAirport: 'SHA',
         terminal,
       },
       navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
@@ -46,7 +47,7 @@ describe('Pickup UISpec composer arrival', () => {
 
       expect(spec.components, phase).toEqual([expect.objectContaining({
         type: 'passenger-status',
-        props: { label, status, meetingPoint: recommendedMeetingPoints.T2!.name },
+        props: { label, status, meetingPoint: recommendedMeetingPoints[meetingPointKey('SHA', 'T2')]!.name },
       })])
       // The stale post-charge card is what used to occupy this screen.
       expect(spec.components.map((component) => component.type), phase).not.toContain('charging-recommendation')

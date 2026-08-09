@@ -18,6 +18,10 @@ import { ComponentSurface } from './ComponentSurface'
  *
  * Rows are numbered because the driver was offered a numbered list and may answer
  * by voice ("第二个"); the ordinal is the shared handle between the two ways in.
+ *
+ * The refresh control sits outside the numbered list on purpose. It is not a
+ * flight, and a sixth pressable line under five numbered ones would invite "第六
+ * 个" — a rank the board has no row for.
  */
 export function FlightChoicesCard({
   component,
@@ -32,11 +36,24 @@ export function FlightChoicesCard({
   onAction: (actionId: string, componentId: string) => void
 }) {
   const { props } = component
+  const refreshActionId = props.refreshActionId
+  const refreshAvailable = refreshActionId !== undefined && actionById.has(refreshActionId)
   return (
     <ComponentSurface component={component} className="ui-flight-choices">
       <header className="ui-flight-choices__header">
         <p className="ui-flight-choices__eyebrow">{props.dateLabel}到达 {props.arrivalCityName}</p>
         <p className="ui-flight-choices__hint">选择要接的航班</p>
+        {refreshAvailable && (
+          <button
+            className="ui-flight-choices__refresh"
+            type="button"
+            data-action-id={refreshActionId}
+            disabled={pending}
+            onClick={() => onAction(refreshActionId, component.id)}
+          >
+            刷新航班
+          </button>
+        )}
       </header>
       <ol className="ui-flight-choices__list" aria-label={`${props.arrivalCityName}到达航班`}>
         {props.choices.map((choice, index) => {
@@ -67,7 +84,7 @@ export function FlightChoicesCard({
                     </span>
                   )}
                 </span>
-                <span className="ui-flight-choices__terminal">{choice.terminal}</span>
+                <span className="ui-flight-choices__terminal">{choice.airportName} {choice.terminal}</span>
                 {/* Toned by the status value itself, the way every other card's
                     pill is, so 延误 and 已取消 read the same colour everywhere. */}
                 <span className={`ui-status ui-status--${choice.status}`}>{choice.statusLabel}</span>
