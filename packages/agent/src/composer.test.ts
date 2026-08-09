@@ -877,6 +877,29 @@ describe('Agent UISpec composer arrival and battery consistency', () => {
     expect(doorFor('SHA')).toContain('虹桥')
   })
 
+  it('names the airport the trip is actually to in the copy around the cards', () => {
+    // The heading is on screen in every phase of the drive, so a name written
+    // into it rather than read off the trip would contradict the route card
+    // sitting under it from the moment the board offered two airports.
+    expect(composeAgentSpec(arrivedTask('approaching-airport')).title)
+      .toBe('去虹桥机场接妈妈和豆豆')
+
+    const pudong = composeAgentSpec({
+      ...arrivedTask('approaching-airport'),
+      flight: { ...flight, arrivalAirport: 'PVG', terminal: 'T2' },
+      navigation: { routeId: 'route-airport-pvg-001', destination: '浦东机场 T2', eta: '2026-07-22T21:33:00+08:00', status: 'active' },
+    })
+
+    expect(pudong.title).toBe('去浦东机场接妈妈和豆豆')
+    // Same name, from the same read, wherever the trip is named: the overview's
+    // 机场 metric only reaches a screen before a flight is chosen, but it must
+    // not be the one place a second answer is kept.
+    const overview = composeAgentSpec({ ...createInitialTask('pickup-001', timestamp), phase: 'preparing' as const, passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false } })
+      .components.find((component) => component.type === 'pickup-overview')
+    if (overview?.type !== 'pickup-overview') throw new Error('expected the overview card')
+    expect(overview.props.airport).toBe('虹桥机场')
+  })
+
   it('omits the meeting point rather than guessing one for a flight whose airport is unknown', () => {
     // The locally parsed flight number does not know where the plane lands.
     // Naming a door anyway would be a confident wrong answer in the phase where

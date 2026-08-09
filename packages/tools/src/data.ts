@@ -249,6 +249,34 @@ export function pickupDestinationForAirport(airport: ArrivalAirport): { id: stri
 }
 
 /**
+ * What a screen calls the airport of this pickup — the trip title, the overview
+ * card's 机场 metric, and any label that has to name the place rather than the
+ * route to it.
+ *
+ * Two rungs and a default, in the order of how much each one knows:
+ *
+ * - The chosen flight's airport. This is the fact the choice produced, and it
+ *   stays right on the way home, where the drive destination is 家 and says
+ *   nothing about where the family was met.
+ * - Otherwise the settled drive destination, when it names an airport at all —
+ *   which is how a task prepared before the airport was recorded still reads
+ *   correctly instead of falling through to a guess.
+ * - 虹桥 only when neither exists. That means no flight has been chosen yet, so
+ *   there is no chosen airport to be wrong about, and the demo city's main
+ *   airport is the only sensible reading. (Same ladder, same reason, as the
+ *   Agent's `#arrivalWeatherLocationId`.)
+ *
+ * It lives here because the airport names live here: two renderers name this
+ * place, and one hard-coded 虹桥 in either of them would contradict a 浦东 pick
+ * on the very next screen.
+ */
+export function pickupAirportName(airport?: ArrivalAirport, destinationLabel?: string): string {
+  if (airport) return arrivalAirports[airport].name
+  if (destinationLabel?.includes('机场')) return destinationLabel.replace(/\s*T\d+$/, '')
+  return arrivalAirports.SHA.name
+}
+
+/**
  * The arrivals board: which flights the driver can choose from before they have
  * named one.
  *

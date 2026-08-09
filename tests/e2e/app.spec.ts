@@ -1086,6 +1086,11 @@ test('prepares the trip from a spoken ordinal against the rendered board', async
  * cannot. Both picks are walked, because "east" only means anything against the
  * other one.
  *
+ * The words on the brief are the other half. The heading names the airport in
+ * every phase of the trip, so a map running east under a heading that still says
+ * 虹桥 is the same feature broken a different way — the assertion is on both, on
+ * both picks.
+ *
  * Then the refresh the board now carries. Re-reading the arrivals mints the
  * candidate set again and moves the task on, so a rank aimed at the list the
  * driver was looking at a moment earlier is refused outright rather than resolved
@@ -1148,11 +1153,17 @@ test('follows a 浦东 pick east, and refuses a rank aimed at the board before a
   await pudong.click()
   await readControls(page, 'preparing')
   await expect(page.locator('.ui-card--flight-status')).toContainText(pudongFlight!)
+  // The copy around the cards moved with the pick. The heading is on screen in
+  // every phase of the trip, so 虹桥 here would contradict the route card under
+  // it — the map flipping east is only half of following the row that was pressed.
+  await expect(page.locator('#trip-brief-title')).toHaveText('去浦东机场接妈妈和豆豆')
+  await expect(page.locator('.ui-card--navigation-summary')).toContainText('浦东机场 T2')
 
   await page.getByRole('button', { name: '开始导航' }).click()
   await readControls(page, 'driving-to-airport')
   await expect(page.getByRole('img', { name: '前往浦东机场 T2的路线示意' })).toBeVisible()
   expect(await routeLineDirection(page)).toBe('east')
+  await expect(page.locator('#trip-brief-title')).toHaveText('去浦东机场接妈妈和豆豆')
 
   // The contrast, on a trip of its own: same panel, other airport, other way out
   // of the frame. Nothing is carried over — a reload starts from 尚无任务.
@@ -1160,6 +1171,7 @@ test('follows a 浦东 pick east, and refuses a rank aimed at the board before a
   await sendText(page)
   await page.locator('.ui-flight-choices__row', { hasText: 'MU5102' }).click()
   await readControls(page, 'preparing')
+  await expect(page.locator('#trip-brief-title')).toHaveText('去虹桥机场接妈妈和豆豆')
   await page.getByRole('button', { name: '开始导航' }).click()
   await readControls(page, 'driving-to-airport')
   await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()

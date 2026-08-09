@@ -22,6 +22,7 @@ import {
   knownDestinationIds,
   knownRouteIds,
   meetingPointKey,
+  pickupAirportName,
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from './data'
@@ -469,5 +470,26 @@ describe('arrival airports', () => {
     // West vs east: the last waypoint's longitude is the direction the map draws.
     expect(pudong.data!.waypoints!.at(-1)!.longitude)
       .toBeGreaterThan(hongqiao.data!.waypoints!.at(-1)!.longitude)
+  })
+
+  describe('what a screen calls the airport', () => {
+    it('names the airport of the flight that was actually chosen', () => {
+      expect(pickupAirportName('PVG')).toBe('浦东机场')
+      expect(pickupAirportName('SHA')).toBe('虹桥机场')
+      // Including on the way home, where the drive is to 家 and says nothing
+      // about where the family was met.
+      expect(pickupAirportName('PVG', '家')).toBe('浦东机场')
+    })
+
+    it('falls back to the settled destination, then to the demo city airport', () => {
+      // A trip prepared before the airport was recorded on the task still reads
+      // correctly off the destination it settled on.
+      expect(pickupAirportName(undefined, '浦东机场 T2')).toBe('浦东机场')
+      expect(pickupAirportName(undefined, '虹桥机场 T1')).toBe('虹桥机场')
+      // Neither means no flight has been chosen yet: there is no chosen airport
+      // to be wrong about.
+      expect(pickupAirportName(undefined, '家')).toBe('虹桥机场')
+      expect(pickupAirportName()).toBe('虹桥机场')
+    })
   })
 })

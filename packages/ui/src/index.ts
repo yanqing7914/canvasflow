@@ -5,6 +5,7 @@ import {
   chargingStationsForDensity,
   estimateFinalBatteryPercent,
   meetingPointKey,
+  pickupAirportName,
   recommendedMeetingPoints,
   routeSketchFor,
   vehicleSnapshots,
@@ -42,7 +43,11 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     if (currentIndex >= 0 && phaseIndex >= 0 && phaseIndex < currentIndex) return 'completed' as const
     return 'pending' as const
   }
-  const airport = task.navigation?.destination?.includes('机场') ? task.navigation.destination.replace(/\s*T\d$/, '') : '虹桥机场'
+  // The chosen flight's airport first, the settled destination second — the same
+  // ladder the Agent's composer reads, from the same table, so the two renderers
+  // cannot disagree about which airport this trip is to. Reading the destination
+  // alone would say 虹桥 on the way home from 浦东, where the drive is to 家.
+  const airport = pickupAirportName(task.flight?.arrivalAirport, task.navigation?.destination)
   const allProgressPhases = task.phase === 'completed'
     ? phaseOrder.slice(-5)
     : task.phase === 'cancelled'

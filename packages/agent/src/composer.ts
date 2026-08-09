@@ -5,6 +5,8 @@ import {
   estimateFinalBatteryPercent,
   memberPreferences,
   meetingPointKey,
+  pickupAirportName,
+  pickupDestinationForAirport,
   recommendedMeetingPoints,
   resolveAuthorizedLandingContact,
   routeSketchFor,
@@ -128,10 +130,14 @@ export function composeAgentSpec(
     ? preferences ?? memberPreferences
     : context as Record<string, MemberPreferenceRecord>
   const progress = progressComponent(task)
-  let components: UISpec['components'] = [overviewComponent(task), progress]
+  // Which airport this trip is about, asked once and answered from the trip
+  // itself. The board offers 虹桥 and 浦东, so a name written into the copy would
+  // contradict the route on the very next screen.
+  const airportName = pickupAirportName(task.flight?.arrivalAirport, task.navigation?.destination)
+  let components: UISpec['components'] = [overviewComponent(task, airportName), progress]
   let layout: UISpec['layout'] | undefined
   let title = task.passengers.names.length > 0
-    ? `去虹桥机场接${task.passengers.names.join('和')}`
+    ? `去${airportName}接${task.passengers.names.join('和')}`
     : '机场接人任务'
   let density: UISpec['presentation']['density'] = 'full'
   let priority: UISpec['presentation']['priority'] = 'normal'
@@ -173,9 +179,18 @@ export function composeAgentSpec(
     // slot once driving begins (see the `task.navigation` branch below), the
     // screen this route sketch is actually the hero of. The planned sketch still
     // rides inside `navigation-plan`; the multi-card guard keeps its band hidden.
+    //
+    // The drive's own label comes from the trip when it has one. A flight whose
+    // airport is known but whose route has not been recorded on the task yet
+    // still names the right place; only a flight number parsed locally, which
+    // genuinely does not know its airport, falls back to the demo's main one.
+    const plannedDestination = task.navigation?.destination
+      ?? (task.flight.arrivalAirport
+        ? pickupDestinationForAirport(task.flight.arrivalAirport).name
+        : `${airportName} T2`)
     components = [
       { id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } },
-      { id: 'navigation-plan', type: 'navigation-summary', props: { routeId: route.routeId, destination: task.navigation?.destination ?? '虹桥机场 T2', eta: task.navigation?.eta ?? route.arrivalTime, distanceKm: route.distanceKm, estimatedBatteryAtArrival: route.estimatedBatteryAtArrival, ...(plannedSketch ? { routeSketch: plannedSketch } : {}) } },
+      { id: 'navigation-plan', type: 'navigation-summary', props: { routeId: route.routeId, destination: plannedDestination, eta: task.navigation?.eta ?? route.arrivalTime, distanceKm: route.distanceKm, estimatedBatteryAtArrival: route.estimatedBatteryAtArrival, ...(plannedSketch ? { routeSketch: plannedSketch } : {}) } },
       { id: 'charging-plan', type: 'charging-recommendation', props: { recommended: charging.recommended, reason: charging.reason, currentBatteryPercent: vehicle.batteryPercent, estimatedFinalBatteryPercent: charging.estimatedFinalBatteryPercent, suggestedDurationMinutes: charging.suggestedDurationMinutes, etaImpactMinutes: charging.etaImpactMinutes } },
     ]
     const calendar = toolResults['calendar.list-upcoming']
@@ -747,14 +762,14 @@ function isReadToolResults(
   ))
 }
 
-function overviewComponent(task: AirportPickupTaskState): UISpec['components'][number] {
+function overviewComponent(task: AirportPickupTaskState, airportName: string): UISpec['components'][number] {
   return {
     id: 'pickup-overview',
     type: 'pickup-overview',
     props: {
       passengers: task.passengers.names,
       flightNumber: task.flight?.flightNumber ?? '待补充',
-      airport: '虹桥机场',
+      airport: airportName,
       terminal: task.flight?.terminal ?? 'T2',
       phaseLabel: phaseLabels[task.phase],
     },
