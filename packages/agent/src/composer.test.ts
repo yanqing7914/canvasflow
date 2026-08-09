@@ -8,7 +8,7 @@ import {
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from '@canvasflow/tools'
-import { ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent } from './composer'
+import { ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent } from './composer'
 import { applyEvent, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
 import type { StoredTask } from './store'
@@ -408,6 +408,40 @@ describe('Agent UISpec composer', () => {
     const layout = spec.layout
     if (layout?.type !== 'split') throw new Error(`expected a split layout underway, got ${layout?.type}`)
     expect(layout.slots.secondary).toEqual([answer!.id])
+  })
+
+  it('leaves an answer that has its own controls holding them when it takes the rail', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'active' as const },
+    }
+
+    const spec = composeAgentSpec(task, reads.toolResults, undefined, { queryAnswer: 'departure' })
+
+    // The rail hands its side-scene buttons to a reading, which has nothing of its
+    // own to put there. It must not hand them to the departure answer: 稍后提醒 and
+    // 查看日程 are the controls that question was asked to reach, and a card whose
+    // own actions are defined in the spec and referenced by nothing is the same as
+    // not having built them.
+    //
+    // The gateway never composes this state — 什么时候出发 underway is answered with
+    // the arrival instead, since the recommendation was worked backwards from the
+    // landing (see the departure query's `hasDeparted` turn). This pins the branch
+    // so that stays a routing decision rather than the only thing holding it up.
+    const answer = spec.components.find((component) => component.type === 'departure-plan')
+    expect(answer).toBeDefined()
+    expect(answer!.actions).toEqual([REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID])
+    const layout = spec.layout
+    if (layout?.type !== 'split') throw new Error(`expected a split layout underway, got ${layout?.type}`)
+    expect(layout.slots.secondary).toEqual([answer!.id])
+    // And the way to the other scenes is still defined, so it is still reachable.
+    expect(spec.actions.map((action) => action.id)).toEqual([
+      ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID,
+    ])
   })
 
   it('keeps the schedule strip on the return trip, anchored to the home eta', () => {

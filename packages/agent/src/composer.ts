@@ -507,15 +507,26 @@ export function composeAgentSpec(
       // Underway the map has its own column and the rail beside it holds exactly
       // one card — that is what makes it read as a panel floating over the map
       // rather than a second column. So the answer takes the rail instead of
-      // appending beside the brief, and it brings the side-scene buttons with it:
-      // the way to the other scene must not be what the driver loses by asking.
+      // appending beside the brief.
       //
       // The ETA is what the rail gives up for one turn. It is the number they can
       // already see the route for, they asked for something else, and the next
       // trip event brings the brief back unchanged.
+      //
+      // What the brief hands over with the rail is its side-scene buttons — the
+      // way to the other scene must not be what the driver loses by asking. But
+      // only to an answer that has nothing of its own to say: the weather and
+      // schedule cards are readings and no more, so the buttons are the only
+      // controls in the rail and inheriting them is pure gain. The departure
+      // answer carries 稍后提醒 and 查看日程, and those are the controls the
+      // question was asked to reach — overwriting them with the brief's would
+      // leave a card whose own actions are defined in the spec and referenced by
+      // nothing, which is the same as not having built them.
       const answered: UISpec['components'][number] = {
         ...queryCard,
-        ...(components[summaryIndex]!.actions ? { actions: components[summaryIndex]!.actions } : {}),
+        ...(queryCard.actions?.length || !components[summaryIndex]!.actions
+          ? {}
+          : { actions: components[summaryIndex]!.actions }),
       }
       components = components.map((component, index) => index === summaryIndex ? answered : component)
       layout = {
