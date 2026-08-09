@@ -305,7 +305,7 @@ export class AgentGateway {
     if (current.task.phase !== 'collecting-information' || current.task.flight) return undefined
     const plan = planAirportPickup({ text: request.event.text })
     if (plan.intent !== 'pick-flight-choice' || plan.slotUpdates.flightChoiceOrdinal === undefined) return undefined
-    const picked = this.#renderedArrivalRows(current, request.event.timestamp)?.[plan.slotUpdates.flightChoiceOrdinal - 1]
+    const picked = this.#renderedArrivalRows(current)?.[plan.slotUpdates.flightChoiceOrdinal - 1]
     return picked ? `航班号 ${picked.flightNumber}` : undefined
   }
 
@@ -556,7 +556,7 @@ export class AgentGateway {
       && current.task.phase === 'collecting-information'
       && !current.task.flight
     ) {
-      const rows = this.#renderedArrivalRows(current, request.event.timestamp)
+      const rows = this.#renderedArrivalRows(current)
       const picked = rows?.[plan.slotUpdates.flightChoiceOrdinal - 1]
       if (picked) {
         request.event = { ...request.event, text: `航班号 ${picked.flightNumber}` }
@@ -2327,7 +2327,7 @@ export class AgentGateway {
 
   /**
    * The rows the driver is actually looking at, or undefined when there is no
-   * board a rank may be counted against as of `at`.
+   * board a rank may still be counted against.
    *
    * Persisted toolResults only — a fresh read here would resolve an ordinal from
    * data the driver has never seen — gated on the composer's own renderability
@@ -2356,13 +2356,24 @@ export class AgentGateway {
    * ordinal permanently the morning after the fixture date, for a board still
    * being rendered and still perfectly answerable by row. The id and the revision
    * bump are what guard a fixture board, and they are frame-free.
+   *
+   * The instant it is measured against is derived here rather than passed in,
+   * and it is the same `#eventTimestamp` clamp submitEvent will stamp on the
+   * turn. A caller's own `event.timestamp` is not that instant: user input is
+   * clamped forward because occupant intent is never stale, so a client stamp
+   * behind the clock reaches the reducer as now — and taking it at face value
+   * here would let a stamp from before `expiresAt` answer a question about a
+   * board that has already expired. One of the two callers runs before that
+   * clamp is applied, so the only stamp both can agree on is the one this
+   * method computes for itself.
    */
-  #renderedArrivalRows(current: StoredTask, at: string) {
+  #renderedArrivalRows(current: StoredTask) {
     const read = current.toolResults?.['flight.list-arrivals']
     const board = read?.data
     if (!board) return undefined
     const recorded = current.task.flightDiscovery
     if (recorded && recorded.candidateSetId !== board.candidateSetId) return undefined
+    const at = this.#eventTimestamp(current.task.updatedAt)
     if (recorded && read?.meta.provider === 'live' && Date.parse(at) >= Date.parse(recorded.expiresAt)) {
       return undefined
     }

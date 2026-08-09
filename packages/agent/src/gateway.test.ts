@@ -4086,6 +4086,36 @@ describe('AgentGateway', () => {
       return component
     }
 
+    /**
+     * A gateway whose arrivals board is a live read for yesterday. The rows still
+     * render — they are true about a day that is over — and the revision is
+     * perfectly current, which is exactly why the revision guard cannot catch
+     * this. Live is the half that makes the expiry askable at all: a real
+     * provider read is stamped by the same clock the rank arrives on, where a
+     * fixture read is authored on a fixed day and has no instant to compare.
+     */
+    function expiredLiveBoardGateway() {
+      const orchestrator = new ReadToolOrchestrator()
+      return new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => now,
+        createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+          resolveArrivals: (taskId, requestId) => {
+            const result = orchestrator.resolveArrivals(taskId, requestId)
+            return {
+              ...result,
+              data: { ...result.data, expiresAt: '2026-07-21T23:59:59+08:00' },
+              meta: { ...result.meta, provider: 'live' as const },
+            }
+          },
+        },
+      })
+    }
+
     it('offers the arrivals board while the flight number is still missing', () => {
       const gateway = createGateway()
       const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
@@ -4381,31 +4411,7 @@ describe('AgentGateway', () => {
     })
 
     it('will not count a rank against a candidate set that has expired', () => {
-      const orchestrator = new ReadToolOrchestrator()
-      const gateway = new AgentGateway({
-        store: new MemoryTaskStore(),
-        now: () => now,
-        createId: () => '001',
-        orchestrator: {
-          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
-          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
-          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
-          // A live board read for yesterday. The rows still render — they are true
-          // about a day that is over — and the revision is perfectly current,
-          // which is exactly why the revision guard cannot catch this. Live is the
-          // half that makes the expiry askable at all: a real provider read is
-          // stamped by the same clock the rank arrives on, where a fixture read is
-          // authored on a fixed day and has no instant to compare.
-          resolveArrivals: (taskId, requestId) => {
-            const result = orchestrator.resolveArrivals(taskId, requestId)
-            return {
-              ...result,
-              data: { ...result.data, expiresAt: '2026-07-21T23:59:59+08:00' },
-              meta: { ...result.meta, provider: 'live' as const },
-            }
-          },
-        },
-      })
+      const gateway = expiredLiveBoardGateway()
       const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
       expect(boardOf(created.ui)).toBeDefined()
 
@@ -4417,6 +4423,78 @@ describe('AgentGateway', () => {
 
       expect(asked.task.flight).toBeUndefined()
       expect(asked.task.phase).toBe('collecting-information')
+    })
+
+    /**
+     * The same expired board, reached through the pre-planning rewrite instead.
+     *
+     * The persistent runtime resolves the ordinal into the flight number's own
+     * words before it plans, so this seam decides the pick — and once the text
+     * says 航班号 MU5102, the turn is an ordinary typed number and the board is
+     * never consulted again. So the seam has to refuse on exactly the boards the
+     * in-transaction path would refuse on, measured against exactly the instant
+     * that path would measure against.
+     *
+     * The trap is the caller's own stamp. User input is clamped forward on the
+     * way in — occupant intent is never stale — so a stamp from before the
+     * board expired is going to be applied as now; believing it here would make
+     * a client clock the thing that decides whether an expired board can still
+     * be picked from.
+     */
+    it('refuses the pre-planning rewrite on an expired board even for a stamp behind the clock', () => {
+      const gateway = expiredLiveBoardGateway()
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      expect(boardOf(created.ui)).toBeDefined()
+
+      const behindExpiry = {
+        clientRequestId: 'client-expired-rewrite',
+        expectedTaskRevision: created.task.taskRevision,
+        event: {
+          eventId: 'expired-rewrite',
+          type: 'user.input' as const,
+          text: '选第三个',
+          timestamp: '2026-07-21T20:00:00+08:00',
+        },
+      }
+
+      expect(gateway.ordinalRewriteText(created.task.taskId, behindExpiry)).toBeUndefined()
+
+      // And submitting it changes nothing, which is the same answer the rank
+      // gets when it is spoken with an honest stamp.
+      const asked = gateway.submitEvent(created.task.taskId, behindExpiry)
+      expect(asked.task.flight).toBeUndefined()
+      expect(asked.task.phase).toBe('collecting-information')
+    })
+
+    /**
+     * The other half of that guard: a live board that has NOT expired is still
+     * rewritten, so the fix above is a clamp and not a retirement of the seam.
+     */
+    it('still rewrites a rank against a live board that is current', () => {
+      const orchestrator = new ReadToolOrchestrator()
+      const gateway = new AgentGateway({
+        store: new MemoryTaskStore(),
+        now: () => now,
+        createId: () => '001',
+        orchestrator: {
+          resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+          prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+          resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+          resolveArrivals: (taskId, requestId) => {
+            const result = orchestrator.resolveArrivals(taskId, requestId)
+            return { ...result, meta: { ...result.meta, provider: 'live' as const } }
+          },
+        },
+      })
+      const created = gateway.createTask(createRequest('我现在要去机场接妈妈和豆豆'))
+      const board = boardOf(created.ui)
+      if (!board) throw new Error('expected a flight-choices board')
+
+      expect(gateway.ordinalRewriteText(created.task.taskId, {
+        clientRequestId: 'client-current-rewrite',
+        expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'current-rewrite', type: 'user.input', text: '选第三个', timestamp: '2026-07-22T12:01:00+08:00' },
+      })).toBe(`航班号 ${board.props.choices[2]!.flightNumber}`)
     })
 
     /**
