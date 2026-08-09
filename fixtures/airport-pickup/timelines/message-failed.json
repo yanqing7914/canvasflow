@@ -10,7 +10,7 @@
     "uiRevision": 4,
     "phase": "driving-to-airport",
     "passengers": { "memberIds": ["mom"], "names": ["妈妈"], "confirmedOnboard": false },
-    "flight": { "flightNumber": "MU5102", "status": "landed", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:40:00+08:00", "terminal": "T2" },
+    "flight": { "flightNumber": "MU5102", "status": "landed", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:40:00+08:00", "arrivalAirport": "SHA", "terminal": "T2" },
     "navigation": { "routeId": "route-airport-001", "destination": "虹桥机场 T2", "eta": "2026-07-22T20:52:00+08:00", "status": "active" },
     "charging": { "recommended": false, "accepted": false, "status": "none" },
     "message": { "autoNotifyAuthorized": true, "status": "scheduled", "landingNoticeSent": false, "pendingMessageId": "pickup-message-failed-001:MU5102:landing", "pendingContactId": "contact-fail", "idempotencyKey": "pickup-message-failed-001:MU5102:landing" },

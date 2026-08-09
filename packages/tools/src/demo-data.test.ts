@@ -12,13 +12,16 @@ import {
 import { applyEvent } from '@canvasflow/agent'
 import { recommendCharging } from './charging'
 import {
+  arrivalAirports,
   chargingDensityForSpeed,
   chargingStation,
   chargingStations,
   chargingStationsForDensity,
   DEMO_ORIGIN,
   flights,
+  knownDestinationIds,
   knownRouteIds,
+  meetingPointKey,
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from './data'
@@ -407,13 +410,64 @@ describe('vehicle density-control snapshots', () => {
 
 describe('recommended meeting points', () => {
   it('covers the demo flight terminal and the delayed-terminal alternate', () => {
-    const primary = recommendedMeetingPoints[flights.MU5102.terminal]
+    const demo = flights.MU5102
+    const primary = recommendedMeetingPoints[meetingPointKey(demo.arrivalAirport, demo.terminal)]
     expect(primary).toBeDefined()
-    expect(primary.terminal).toBe(flights.MU5102.terminal)
+    expect(primary.terminal).toBe(demo.terminal)
+    expect(primary.airport).toBe(demo.arrivalAirport)
     expect(primary.walkMinutes).toBeGreaterThan(0)
 
-    const delayedTerminal = recommendedMeetingPoints[flights.MU5103.terminal]
+    const delayed = flights.MU5103
+    const delayedTerminal = recommendedMeetingPoints[meetingPointKey(delayed.arrivalAirport, delayed.terminal)]
     expect(delayedTerminal).toBeDefined()
     expect(delayedTerminal.terminal).toBe('T1')
+  })
+
+  it('keeps the same terminal number at two airports apart', () => {
+    // The whole reason the key is composite: 虹桥 T2 and 浦东 T2 are an hour of
+    // driving apart, and a terminal-only lookup would hand the driver one door
+    // number for both.
+    const hongqiao = recommendedMeetingPoints[meetingPointKey('SHA', 'T2')]
+    const pudong = recommendedMeetingPoints[meetingPointKey('PVG', 'T2')]
+    expect(hongqiao).toBeDefined()
+    expect(pudong).toBeDefined()
+    expect(pudong.id).not.toBe(hongqiao.id)
+    expect(pudong.name).not.toBe(hongqiao.name)
+  })
+
+  it('has a meeting point for every airport and terminal the board can deliver', () => {
+    // A row the driver can pick must lead somewhere nameable. Anything on the
+    // board that resolves to no meeting point is a dead end discovered in the
+    // waiting-for-passengers phase, which is the worst moment to discover it.
+    for (const flight of Object.values(flights)) {
+      const key = meetingPointKey(flight.arrivalAirport, flight.terminal)
+      expect(recommendedMeetingPoints[key], `${flight.flightNumber} → ${key}`).toBeDefined()
+    }
+  })
+})
+
+describe('arrival airports', () => {
+  it('gives every flight a pickup destination that demo routes can reach', () => {
+    for (const flight of Object.values(flights)) {
+      const airport = arrivalAirports[flight.arrivalAirport]
+      expect(airport, flight.flightNumber).toBeDefined()
+      expect(flight.arrivalAirportName).toBe(airport.name)
+      expect(knownDestinationIds.has(airport.destination.id)).toBe(true)
+    }
+  })
+
+  it('plans a measurably longer drive east to 浦东 than west to 虹桥', () => {
+    // The two airports must not be interchangeable. If they produced the same
+    // drive, nothing downstream would ever reveal a pickup routed to the wrong
+    // one — and the map would have no reason to redraw.
+    const hongqiao = planRoute(ctx, { origin: DEMO_ORIGIN, destination: arrivalAirports.SHA.destination })
+    const pudong = planRoute(ctx, { origin: DEMO_ORIGIN, destination: arrivalAirports.PVG.destination })
+    expect(hongqiao.ok && pudong.ok).toBe(true)
+    expect(pudong.data!.routeId).not.toBe(hongqiao.data!.routeId)
+    expect(pudong.data!.distanceKm).toBeGreaterThan(hongqiao.data!.distanceKm)
+    expect(pudong.data!.durationMinutes).toBeGreaterThan(hongqiao.data!.durationMinutes)
+    // West vs east: the last waypoint's longitude is the direction the map draws.
+    expect(pudong.data!.waypoints!.at(-1)!.longitude)
+      .toBeGreaterThan(hongqiao.data!.waypoints!.at(-1)!.longitude)
   })
 })

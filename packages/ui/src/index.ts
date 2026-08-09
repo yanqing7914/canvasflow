@@ -4,6 +4,7 @@ import {
   chargingStation,
   chargingStationsForDensity,
   estimateFinalBatteryPercent,
+  meetingPointKey,
   recommendedMeetingPoints,
   routeSketchFor,
   vehicleSnapshots,
@@ -181,7 +182,12 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
   else if (task.phase === 'approaching-airport' || task.phase === 'waiting-for-passengers') {
     density = 'compact'
-    const meeting = task.flight?.terminal ? recommendedMeetingPoints[task.flight.terminal] : undefined
+    // Airport and terminal together, never terminal alone: 虹桥 T2 and 浦东 T2 are
+    // an hour apart, and this fallback renderer must not disagree with the Agent's
+    // composer about which door the family walks out of.
+    const meeting = task.flight?.arrivalAirport
+      ? recommendedMeetingPoints[meetingPointKey(task.flight.arrivalAirport, task.flight.terminal)]
+      : undefined
     components = [{
       id: 'passenger-status',
       type: 'passenger-status',
@@ -226,14 +232,14 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
       const advisoryCard = {
         ...weatherCard(task, advisoryWeather),
         id: 'weather-advisory',
-        actions: ['send-umbrella-reminder', 'dismiss-weather-advisory'],
+        actions: ['send-umbrella-reminder', 'dismiss-advisory-weather'],
       }
       const underway = withRouteMap([advisoryCard], routeSketch, task.navigation.destination)
       components = underway.components
       layout = underway.layout
       actions = [
         { id: 'send-umbrella-reminder', label: '提醒乘客带伞', style: 'primary', event: { type: 'agent-message', text: '提醒乘客带伞' } },
-        { id: 'dismiss-weather-advisory', label: '暂不处理', style: 'secondary', event: { type: 'agent-message', text: '暂不处理' } },
+        { id: 'dismiss-advisory-weather', label: '暂不处理', style: 'secondary', event: { type: 'agent-message', text: '暂不处理' } },
       ]
     } else {
       const underway = withRouteMap([{

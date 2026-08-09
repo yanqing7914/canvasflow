@@ -4,6 +4,7 @@ import {
   chargingStationsForDensity,
   estimateFinalBatteryPercent,
   memberPreferences,
+  meetingPointKey,
   recommendedMeetingPoints,
   resolveAuthorizedLandingContact,
   routeSketchFor,
@@ -24,17 +25,33 @@ const MAX_FLIGHT_CHOICES = 5
  * Everything the gateway knows that is neither task state nor a tool read.
  *
  * `cabinRevertActionToken` is a secret the composer may only spend, never mint.
- * `departureAnswer` is the opposite kind of thing — a flag saying this turn was
- * a question about when to leave — and it lives here for the same reason: the
- * composer cannot tell from the snapshot alone which turn asked.
+ * `queryAnswer` is the opposite kind of thing — a flag naming which side question
+ * this turn asked — and it lives here for the same reason: both answers change
+ * nothing about the task, so the composer cannot tell from the snapshot alone
+ * which turn asked. One field rather than a flag each, because the two answers
+ * compete for the same slot and only one of them can hold it.
  */
 export type ComposeContext = {
   cabinRevertActionToken?: string
-  departureAnswer?: true
+  queryAnswer?: 'departure' | 'calendar'
 }
 
 /** The pre-departure screen's own question, asked as ordinary user input. */
 export const ASK_DEPARTURE_TIME_ACTION_ID = 'ask-departure-time'
+
+/**
+ * The two answers to the departure recommendation, both on the card that makes
+ * it. Neither is 出发 — that is `start-navigation`, and it lives in the global
+ * bar because leaving is a task-wide commitment rather than a reply to a card.
+ *
+ * 稍后提醒 records the time and nothing else: no provider, no message, no
+ * scheduler. 查看日程 spends the calendar read `prepareTrip` already made, so the
+ * driver can check the recommendation against 豆豆's bedtime without paying for a
+ * second read — which is exactly why it is not `ask-schedule`, whose whole job is
+ * to go and ask.
+ */
+export const REMIND_LATER_ACTION_ID = 'remind-later'
+export const VIEW_CALENDAR_ACTION_ID = 'view-calendar'
 
 /**
  * The two side scenes the drive can ask about without leaving it.
@@ -53,7 +70,28 @@ const EN_ROUTE_QUERY_ACTIONS: UISpec['actions'] = [
 ]
 
 export const SEND_UMBRELLA_REMINDER_ACTION_ID = 'send-umbrella-reminder'
-export const DISMISS_WEATHER_ADVISORY_ACTION_ID = 'dismiss-weather-advisory'
+
+/**
+ * 暂不处理, named for the family rather than for the weather.
+ *
+ * One intent and one gateway path answer every advisory, but the id stays typed:
+ * the driver dismisses *this* prompt, and a shared `dismiss-advisory` id would
+ * make an idempotency key ambiguous the moment a second advisory can be on screen
+ * at the same time. `dismiss-advisory-<kind>` keeps that distinction without
+ * needing a mechanism to carry the kind.
+ */
+export const DISMISS_ADVISORY_WEATHER_ACTION_ID = 'dismiss-advisory-weather'
+
+/**
+ * 刷新航班, bound the same way the rows are.
+ *
+ * An `agent-message` like every other choice on this card: the board is a faster
+ * way of saying something, so the button says it. Nothing about the refresh needs
+ * a token the rows do not need — the new set's identity is recorded on the task
+ * when the read lands, and the revision bump that comes with it is what refuses a
+ * rank spoken against the old list.
+ */
+export const REFRESH_FLIGHT_OPTIONS_ACTION_ID = 'refresh-flight-options'
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
   'collecting-information': '收集信息',
@@ -320,7 +358,14 @@ export function composeAgentSpec(
     }]
   } else if (task.phase === 'approaching-airport' || task.phase === 'waiting-for-passengers') {
     const waiting = task.phase === 'waiting-for-passengers'
-    const meetingPoint = task.flight?.terminal ? recommendedMeetingPoints[task.flight.terminal] : undefined
+    // Both halves of the key are required. "T2" alone names a door at 虹桥 and a
+    // different door an hour east at 浦东, so a terminal-only lookup would send
+    // the family to whichever one the table happened to list first. When the
+    // airport is not known — the locally parsed flight number never knows it —
+    // the card omits the meeting point rather than naming a plausible wrong one.
+    const meetingPoint = task.flight?.arrivalAirport
+      ? recommendedMeetingPoints[meetingPointKey(task.flight.arrivalAirport, task.flight.terminal)]
+      : undefined
     density = 'compact'
     components = [{
       id: 'passenger-status',
@@ -373,7 +418,7 @@ export function composeAgentSpec(
         id: 'weather-advisory',
         actions: [
           ...(advisoryContactAvailable ? [SEND_UMBRELLA_REMINDER_ACTION_ID] : []),
-          DISMISS_WEATHER_ADVISORY_ACTION_ID,
+          DISMISS_ADVISORY_WEATHER_ACTION_ID,
         ],
       }
       const underway = withRouteMap([advisoryCard], activeSketch, task.navigation.destination)
@@ -383,7 +428,7 @@ export function composeAgentSpec(
         ...(advisoryContactAvailable
           ? [{ id: SEND_UMBRELLA_REMINDER_ACTION_ID, label: '提醒乘客带伞', style: 'primary' as const, event: { type: 'agent-message' as const, text: '提醒乘客带伞' } }]
           : []),
-        { id: DISMISS_WEATHER_ADVISORY_ACTION_ID, label: '暂不处理', style: 'secondary' as const, event: { type: 'agent-message' as const, text: '暂不处理' } },
+        { id: DISMISS_ADVISORY_WEATHER_ACTION_ID, label: '暂不处理', style: 'secondary' as const, event: { type: 'agent-message' as const, text: '暂不处理' } },
       ]
     } else {
       const underway = withRouteMap(
@@ -412,18 +457,44 @@ export function composeAgentSpec(
   const weather = toolResults['weather.get-current']
   const scheduleQuery = toolResults['calendar.query']
   const queryAnswerable = task.phase !== 'collecting-information' && task.phase !== 'cancelled' && task.phase !== 'completed'
-  const departure = composeContext?.departureAnswer
+  const departure = composeContext?.queryAnswer === 'departure'
     ? departurePlan(task, toolResults['navigation.plan-route']?.data)
     : undefined
+  // 查看日程 draws the same card the schedule query draws, off the read the trip
+  // already has. Same card on purpose: the driver asked one question — what is on
+  // today — and a second layout for it would only advertise which tool answered.
+  const upcoming = composeContext?.queryAnswer === 'calendar'
+    ? toolResults['calendar.list-upcoming']
+    : undefined
+  // What the departure answer can offer, which is not the same as what it would
+  // like to. A reminder already standing has nothing left to set, and 查看日程
+  // cannot be offered against a calendar nobody read — an inert button is worse
+  // than an absent one, so both are conditions rather than disabled states.
+  const departureActions: UISpec['actions'] = departure
+    ? [
+        ...(task.departureReminder
+          ? []
+          : [{ id: REMIND_LATER_ACTION_ID, label: '稍后提醒', style: 'secondary' as const, event: { type: 'agent-message' as const, text: '稍后提醒我' } }]),
+        ...((toolResults['calendar.list-upcoming']?.data.events.length ?? 0) > 0
+          ? [{ id: VIEW_CALENDAR_ACTION_ID, label: '查看日程', style: 'secondary' as const, event: { type: 'agent-message' as const, text: '查看日程' } }]
+          : []),
+      ]
+    : []
   const queryCard = queryAnswerable
     ? departure
-      ? departurePlanComponent(departure)
-      : weather
-        ? weatherCardComponent(task, weather.data)
-        : scheduleQuery
-          ? scheduleCardComponent(scheduleQuery.data.events, scheduleQuery.meta.provider === 'live' ? 'live' : 'fixture')
-          : undefined
+      ? departurePlanComponent(departure, departureActions.map((action) => action.id))
+      : upcoming
+        ? scheduleCardComponent(upcoming.data.events, upcoming.meta.provider === 'live' ? 'live' : 'fixture')
+        : weather
+          ? weatherCardComponent(task, weather.data)
+          : scheduleQuery
+            ? scheduleCardComponent(scheduleQuery.data.events, scheduleQuery.meta.provider === 'live' ? 'live' : 'fixture')
+            : undefined
     : undefined
+  // Declared on the card and defined in the spec, the way every other card's own
+  // controls are. The brief's own 什么时候出发 stays where it was: asking again is
+  // how the driver sees the reminder they just set stated back.
+  if (queryCard) actions = [...actions, ...departureActions]
   if (queryCard) {
     const stripIndex = components.findIndex((component) => component.id === 'schedule-strip')
     const summaryIndex = components.findIndex((component) => component.id === 'navigation-summary')
@@ -820,7 +891,7 @@ function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
     component: {
       id: 'flight-choices',
       type: 'flight-choices',
-      actions: rows.map((row) => row.actionId),
+      actions: [...rows.map((row) => row.actionId), REFRESH_FLIGHT_OPTIONS_ACTION_ID],
       props: {
         arrivalCityName: board.arrivalCityName,
         dateLabel: '今天',
@@ -840,20 +911,30 @@ function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
               }
             : {}),
           terminal: arrival.terminal,
+          airportName: arrival.arrivalAirportName,
           actionId,
         })),
         freshness: 'fixture',
+        refreshActionId: REFRESH_FLIGHT_OPTIONS_ACTION_ID,
       },
     },
     // The card draws every row identically, so `style` only matters to a group
     // renderer that never sees these. The first row still reads as the primary
     // one there, which is what the ordering already says.
-    actions: rows.map(({ arrival, actionId }, index) => ({
-      id: actionId,
-      label: `接 ${arrival.flightNumber}`,
-      style: index === 0 ? 'primary' : 'secondary',
-      event: { type: 'agent-message', text: `航班号 ${arrival.flightNumber}` },
-    })),
+    actions: [
+      ...rows.map(({ arrival, actionId }, index) => ({
+        id: actionId,
+        label: `接 ${arrival.flightNumber}`,
+        style: index === 0 ? ('primary' as const) : ('secondary' as const),
+        event: { type: 'agent-message' as const, text: `航班号 ${arrival.flightNumber}` },
+      })),
+      {
+        id: REFRESH_FLIGHT_OPTIONS_ACTION_ID,
+        label: '刷新航班',
+        style: 'secondary' as const,
+        event: { type: 'agent-message' as const, text: '刷新航班' },
+      },
+    ],
   }
 }
 
@@ -878,6 +959,7 @@ export type DeparturePlan = {
   driveMinutes: number
   bufferMinutes: number
   viaLabel?: string
+  reminderAtLabel?: string
 }
 
 /**
@@ -896,22 +978,53 @@ export function departurePlan(
   route: { durationMinutes: number; summary?: string } | undefined,
 ): DeparturePlan | undefined {
   if (!task.flight || !route) return undefined
-  const landingMs = Date.parse(task.flight.estimatedArrival)
-  if (Number.isNaN(landingMs)) return undefined
-  const driveMinutes = Math.round(route.durationMinutes)
-  const departAtMs = landingMs - (driveMinutes + AIRPORT_ARRIVAL_BUFFER_MINUTES) * 60_000
+  const departAt = departureAtIso(task, route)
+  if (!departAt) return undefined
   return {
-    departAtLabel: clockLabel(fixtureIso(departAtMs)),
+    departAtLabel: clockLabel(departAt),
     arrivalLabel: `${task.flight.flightNumber} ${clockLabel(task.flight.estimatedArrival)} 落地`,
-    driveMinutes,
+    driveMinutes: Math.round(route.durationMinutes),
     bufferMinutes: AIRPORT_ARRIVAL_BUFFER_MINUTES,
     ...(route.summary ? { viaLabel: route.summary } : {}),
+    // The standing reminder is read off the task rather than recomputed, so a
+    // reminder set against an earlier route keeps saying the time the driver was
+    // actually told — the card would otherwise silently revise a promise.
+    ...(task.departureReminder ? { reminderAtLabel: clockLabel(task.departureReminder.remindAt) } : {}),
   }
 }
 
-/** The departure answer as one card, shaped like the other query answers. */
-export function departurePlanComponent(plan: DeparturePlan): UISpec['components'][number] {
-  return { id: 'departure-plan', type: 'departure-plan', props: plan }
+/**
+ * The recommended departure as an instant, which is what a reminder has to store.
+ *
+ * Shares the arithmetic with `departurePlan` rather than repeating it, so a
+ * reminder can only ever name the moment the card showed a clock label for. The
+ * card keeps the label because a label is what a driver reads; the reminder keeps
+ * the instant because a label is not something you can compare or reschedule.
+ */
+export function departureAtIso(
+  task: AirportPickupTaskState,
+  route: { durationMinutes: number } | undefined,
+): string | undefined {
+  if (!task.flight || !route) return undefined
+  const landingMs = Date.parse(task.flight.estimatedArrival)
+  if (Number.isNaN(landingMs)) return undefined
+  const driveMinutes = Math.round(route.durationMinutes)
+  return fixtureIso(landingMs - (driveMinutes + AIRPORT_ARRIVAL_BUFFER_MINUTES) * 60_000)
+}
+
+/**
+ * The departure answer as one card, shaped like the other query answers.
+ *
+ * The card declares its controls; the caller defines them. Same split as every
+ * other card here — the composer decides what is answerable, not what the ids do.
+ */
+export function departurePlanComponent(plan: DeparturePlan, actionIds: string[] = []): UISpec['components'][number] {
+  return {
+    id: 'departure-plan',
+    type: 'departure-plan',
+    props: plan,
+    ...(actionIds.length > 0 ? { actions: actionIds } : {}),
+  }
 }
 
 export const weatherConditionLabels: Record<WeatherOutput['condition'], string> = {

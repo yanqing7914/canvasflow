@@ -26,6 +26,7 @@ import {
   buildLandingNotifyContent,
   createProviderRegistry,
   issueAutoNotifyAuthorization,
+  pickupDestinationForAirport,
   resolveAuthorizedLandingContact,
   resetSideEffectRuntimeTask,
   createSideEffectRuntime,
@@ -35,7 +36,7 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departurePlan, renderedArrivalRows, weatherConditionLabels, type ComposeContext } from './composer'
+import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departureAtIso, departurePlan, renderedArrivalRows, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import { Planner, planAirportPickup, type Plan, type PlannerInput } from './planner'
@@ -187,10 +188,13 @@ export class AgentGateway {
     if (existing) return this.#response(request.clientRequestId, existing, [], performance.now() - startedAt)
     const taskId = `pickup-${this.#createId()}`
     const timestamp = this.#now()
-    const requestContext: NonNullable<StoredTask['requestContext']> = {
+    let requestContext: NonNullable<StoredTask['requestContext']> = {
       vehicle: request.vehicleContext,
       clientCapabilities: request.clientCapabilities,
-      destination: request.destination ?? { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+      // Only a destination the caller actually named. No 虹桥 default: which
+      // airport this trip drives to is a consequence of the flight, and
+      // #prepareTask fills this in once the flight has been read.
+      ...(request.destination ? { destination: request.destination } : {}),
       ...(request.input.confidence === undefined ? {} : { inputConfidence: request.input.confidence }),
       updatedAt: timestamp,
     }
@@ -229,8 +233,11 @@ export class AgentGateway {
         const prepared = this.#prepareTask(task, request.clientRequestId, flightNumber, requestContext)
         task = prepared.task
         toolResults = { ...toolResults, ...prepared.toolResults }
+        requestContext = { ...requestContext, destination: prepared.destination }
       }
-      toolResults = this.#withArrivalsBoard(taskId, request.clientRequestId, task, toolResults)
+      const boarded = this.#withArrivalsBoard(taskId, request.clientRequestId, task, toolResults)
+      task = boarded.task
+      toolResults = boarded.toolResults
       const stored = this.#store.create(this.#publish(task, toolResults, requestContext), request.clientRequestId)
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
     } catch (error) {
@@ -298,7 +305,7 @@ export class AgentGateway {
     if (current.task.phase !== 'collecting-information' || current.task.flight) return undefined
     const plan = planAirportPickup({ text: request.event.text })
     if (plan.intent !== 'pick-flight-choice' || plan.slotUpdates.flightChoiceOrdinal === undefined) return undefined
-    const picked = this.#renderedArrivalRows(current)?.[plan.slotUpdates.flightChoiceOrdinal - 1]
+    const picked = this.#renderedArrivalRows(current, request.event.timestamp)?.[plan.slotUpdates.flightChoiceOrdinal - 1]
     return picked ? `航班号 ${picked.flightNumber}` : undefined
   }
 
@@ -538,9 +545,10 @@ export class AgentGateway {
     // A spoken ordinal ("第三个") is a faster way to say a flight number, never
     // a second way to set the slot. Resolve it against the same pickable rows
     // the composer rendered, rewrite the event into the number's own words, and
-    // fall through to the ordinary flight-number turn. No board, or a rank the
-    // board does not have, keeps the original text and lands on the unknown
-    // reply — the reducer treats unparseable input as a no-op.
+    // fall through to the ordinary flight-number turn. No board, a board that is
+    // no longer the set this rank was counted against, or a rank the board does
+    // not have keeps the original text and lands on the unknown reply — the
+    // reducer treats unparseable input as a no-op.
     if (
       request.event.type === 'user.input'
       && plan?.intent === 'pick-flight-choice'
@@ -548,7 +556,7 @@ export class AgentGateway {
       && current.task.phase === 'collecting-information'
       && !current.task.flight
     ) {
-      const rows = this.#renderedArrivalRows(current)
+      const rows = this.#renderedArrivalRows(current, request.event.timestamp)
       const picked = rows?.[plan.slotUpdates.flightChoiceOrdinal - 1]
       if (picked) {
         request.event = { ...request.event, text: `航班号 ${picked.flightNumber}` }
@@ -558,6 +566,16 @@ export class AgentGateway {
         // interpreting ordinals exactly as it would the typed number.
         plan = this.#planUserInput(request.event.text, current.task, request.event.eventId, request.event.timestamp)
       }
+    }
+    // 刷新航班: only where a board could be on screen. Anywhere else the words
+    // have nothing to refresh and stay on the ordinary unknown path.
+    if (
+      request.event.type === 'user.input'
+      && plan?.intent === 'refresh-flight-options'
+      && current.task.phase === 'collecting-information'
+      && !current.task.flight
+    ) {
+      return this.#refreshFlightOptions(taskId, current, request, startedAt)
     }
     if (
       request.event.type === 'user.input'
@@ -573,19 +591,55 @@ export class AgentGateway {
           ? this.#submitScheduleQuery(taskId, current, request, startedAt)
           : this.#submitDepartureQuery(taskId, current, request, startedAt)
     }
-    // The two answers to the proactive weather advisory. Only an active
-    // advisory gives these words their meaning; anywhere else they stay on the
-    // ordinary unknown path and the reducer treats them as a no-op.
+    // The two answers to the departure recommendation. Both need a departure to
+    // be about — each handler's own guards decide that — so they ride the same
+    // phase window as the question and stay unknown outside it. Only one of the
+    // two is a transient answer: 稍后提醒 records something, so it replays off the
+    // event log rather than off the side-answer contract, which is defined by the
+    // task revision not having moved.
     if (
       request.event.type === 'user.input'
-      && (plan?.intent === 'send-weather-reminder' || plan?.intent === 'dismiss-weather-advisory')
+      && plan?.intent === 'remind-later'
+      && current.task.phase !== 'completed'
+      && current.task.phase !== 'cancelled'
+    ) {
+      return this.#armDepartureReminder(taskId, current, request, startedAt)
+    }
+    if (
+      request.event.type === 'user.input'
+      && plan?.intent === 'view-calendar'
+      && current.task.phase !== 'completed'
+      && current.task.phase !== 'cancelled'
+    ) {
+      const replayed = this.#replaySideAnswer(taskId, current, request, startedAt)
+      if (replayed) return replayed
+      return this.#submitCalendarView(taskId, current, request, startedAt)
+    }
+    // The two answers to the proactive advisory. Only a prompt still standing
+    // gives these words their meaning; anywhere else they stay on the ordinary
+    // unknown path and the reducer treats them as a no-op.
+    //
+    // The umbrella reminder names the weather because that is what it sends. The
+    // dismissal does not, and asks `hasActiveAdvisory` instead — the same seam
+    // that retires them — so a second kind of advisory becomes dismissible by
+    // teaching that one function about it.
+    if (
+      request.event.type === 'user.input'
+      && plan?.intent === 'send-weather-reminder'
       && current.task.weatherAdvisory?.status === 'active'
       && current.task.phase !== 'completed'
       && current.task.phase !== 'cancelled'
     ) {
-      return plan.intent === 'send-weather-reminder'
-        ? this.#submitWeatherReminder(taskId, current, request, startedAt)
-        : this.#dismissWeatherAdvisory(taskId, current, request, startedAt)
+      return this.#submitWeatherReminder(taskId, current, request, startedAt)
+    }
+    if (
+      request.event.type === 'user.input'
+      && plan?.intent === 'dismiss-advisory'
+      && hasActiveAdvisory(current.task)
+      && current.task.phase !== 'completed'
+      && current.task.phase !== 'cancelled'
+    ) {
+      return this.#dismissAdvisory(taskId, current, request, startedAt)
     }
     let next = applyEvent(
       current.task,
@@ -765,7 +819,7 @@ export class AgentGateway {
         },
       }
     }
-    const requestContext = this.#contextAfterEvent(current.requestContext, request.event)
+    let requestContext = this.#contextAfterEvent(current.requestContext, request.event)
     const effects = [
       ...preEffects,
       ...planEffects(current.task, request.event, current.toolResults ?? {}, this.#preferences),
@@ -1021,8 +1075,16 @@ export class AgentGateway {
       && next !== current.task
     ) {
       try {
-        const reading = this.#orchestrator.resolveWeather?.(taskId, `${request.clientRequestId}:advisory`, {
-          locationId: current.requestContext?.destination.id ?? 'destination-hongqiao-t2',
+        // Rain has to be read over the airport the car is driving to. The trip's
+        // settled destination is the first source; a flight that knows its own
+        // airport is the second, for a task prepared before this field existed.
+        // Without either there is no place to ask about, so the advisory is
+        // skipped — an umbrella warning about 虹桥 while the family lands at
+        // 浦东 is worse than no warning at all.
+        const locationId = requestContext?.destination?.id
+          ?? (next.flight.arrivalAirport ? pickupDestinationForAirport(next.flight.arrivalAirport).id : undefined)
+        const reading = locationId === undefined ? undefined : this.#orchestrator.resolveWeather?.(taskId, `${request.clientRequestId}:advisory`, {
+          locationId,
           at: next.flight.estimatedArrival,
         })
         const raining = reading?.data.condition === 'light-rain' || reading?.data.condition === 'heavy-rain'
@@ -1073,7 +1135,9 @@ export class AgentGateway {
       }
       this.#throwProviderError(error, current)
     }
-    toolResults = this.#withArrivalsBoard(taskId, request.clientRequestId, next, toolResults)
+    let boarded = this.#withArrivalsBoard(taskId, request.clientRequestId, next, toolResults)
+    next = boarded.task
+    toolResults = boarded.toolResults
     const shouldPrepare = request.event.type === 'user.input'
       && next !== current.task
       && next.phase === 'preparing'
@@ -1089,6 +1153,9 @@ export class AgentGateway {
         const prepared = this.#prepareTask(next, request.clientRequestId, next.flight!.flightNumber, requestContext)
         next = prepared.task
         toolResults = { ...toolResults, ...prepared.toolResults }
+        requestContext = requestContext
+          ? { ...requestContext, destination: prepared.destination }
+          : requestContext
       } catch (error) {
         if (error instanceof ReadToolOrchestrationError) {
           const stored = this.#store.save(this.#publishFallback(
@@ -1105,7 +1172,9 @@ export class AgentGateway {
         this.#throwProviderError(error, current)
       }
     }
-    toolResults = this.#withArrivalsBoard(taskId, request.clientRequestId, next, toolResults)
+    boarded = this.#withArrivalsBoard(taskId, request.clientRequestId, next, toolResults)
+    next = boarded.task
+    toolResults = boarded.toolResults
     if (
       request.event.type === 'user.confirmed-passengers-onboard'
       && (current.task.phase === 'waiting-for-passengers' || current.task.phase === 'returning-home')
@@ -1958,10 +2027,10 @@ export class AgentGateway {
     requestContext?: StoredTask['requestContext'],
     effectReceipts?: StoredTask['effectReceipts'],
     /**
-     * Whether this turn asked when to leave. Not derivable from the snapshot —
-     * the answer changes nothing about the task — so the asking turn says so.
+     * Which side question this turn asked, when it asked one. Not derivable from
+     * the snapshot — neither answer changes the task — so the asking turn says so.
      */
-    departureAnswer?: true,
+    queryAnswer?: 'departure' | 'calendar',
   ): StoredTask {
     // A terminal transition may defer a parked-only cabin cleanup. Keep only
     // that private receipt so a later parked event can safely finish it.
@@ -1979,10 +2048,10 @@ export class AgentGateway {
       task,
       toolResults,
       this.#preferences,
-      cabinRevertActionToken || departureAnswer
+      cabinRevertActionToken || queryAnswer
         ? {
             ...(cabinRevertActionToken ? { cabinRevertActionToken } : {}),
-            ...(departureAnswer ? { departureAnswer } : {}),
+            ...(queryAnswer ? { queryAnswer } : {}),
           }
         : undefined,
     ), requestContext)
@@ -2214,40 +2283,105 @@ export class AgentGateway {
    *
    * The board only exists while the flight number is still missing: carried past
    * the pick it would keep offering a choice the driver already made, so a task
-   * that has one — or has left the collecting phase — drops the key outright.
+   * that has one — or has left the collecting phase — drops the key outright, and
+   * the recorded set identity goes with it.
    *
    * Reading it is best-effort. A board is a shortcut for saying the number, not
    * the way to say it, so a provider failure leaves the plain ask standing
    * instead of taking the whole snapshot to the provider fallback.
+   *
+   * `refresh` throws the memorized board away and reads again. Returns the task
+   * alongside the results because the set's identity belongs on the task: the
+   * ordinal path has to be able to ask "is the board I am counting against still
+   * the one that was recorded", and it can only ask that if both halves were
+   * written together. Snapshot identity is preserved when neither half changes,
+   * so the caller's own `next !== current.task` reading still means what it says.
    */
   #withArrivalsBoard(
     taskId: string,
     requestId: string,
     task: AirportPickupTaskState,
     toolResults: ReadToolResults | undefined,
-  ): ReadToolResults {
+    options: { refresh?: boolean } = {},
+  ): { task: AirportPickupTaskState; toolResults: ReadToolResults } {
     const carried: ReadToolResults = { ...toolResults }
     if (task.phase !== 'collecting-information' || task.flight) {
       delete carried['flight.list-arrivals']
-      return carried
+      return { task: withoutFlightDiscovery(task), toolResults: carried }
     }
-    if (carried['flight.list-arrivals']) return carried
+    if (options.refresh) delete carried['flight.list-arrivals']
+    const memorized = carried['flight.list-arrivals']
+    if (memorized) return { task: withFlightDiscovery(task, memorized.data), toolResults: carried }
     try {
       const board = this.#orchestrator.resolveArrivals?.(taskId, `${requestId}:arrivals`)
-      return board ? { ...carried, 'flight.list-arrivals': board } : carried
+      return board
+        ? {
+            task: withFlightDiscovery(task, board.data),
+            toolResults: { ...carried, 'flight.list-arrivals': board },
+          }
+        : { task: withoutFlightDiscovery(task), toolResults: carried }
     } catch {
-      return carried
+      return { task: withoutFlightDiscovery(task), toolResults: carried }
     }
   }
 
   /**
-   * The rows the driver is actually looking at, or undefined when no board was
-   * rendered. Persisted toolResults only — a fresh read here would resolve an
-   * ordinal from data the driver has never seen — gated on the composer's own
-   * renderability rule via the shared renderedArrivalRows.
+   * The rows the driver is actually looking at, or undefined when there is no
+   * board a rank may be counted against as of `at`.
+   *
+   * Persisted toolResults only — a fresh read here would resolve an ordinal from
+   * data the driver has never seen — gated on the composer's own renderability
+   * rule via the shared renderedArrivalRows, and on two further questions that
+   * are really the same question: is this still the set the rank was spoken
+   * against?
+   *
+   * The board's own `candidateSetId` has to match the one the task recorded when
+   * it read it. The two are written together, so a disagreement means something
+   * has gotten them out of step — and a rank resolved against a set nobody can
+   * name is exactly the mis-pick the identity exists to prevent. Refusing costs
+   * the driver a "没听懂"; guessing costs them the wrong flight. A task with no
+   * record at all predates the field rather than contradicting it, so its
+   * persisted board still stands.
+   *
+   * And the set has to not have expired. A revision number cannot express this:
+   * a task resumed the next morning carries a perfectly current revision and a
+   * board describing yesterday's arrivals.
+   *
+   * That last question is only askable of a board read from a real provider,
+   * because only then is the board's clock this clock. A fixture board is
+   * authored on one fixed day — every fixture result is stamped with the same
+   * `generatedAt` so replays stay byte-for-byte reproducible — so its `expiresAt`
+   * is a statement inside that day, not an instant on the wall. Measuring it
+   * against `now()` would not make the demo careful; it would retire the spoken
+   * ordinal permanently the morning after the fixture date, for a board still
+   * being rendered and still perfectly answerable by row. The id and the revision
+   * bump are what guard a fixture board, and they are frame-free.
    */
-  #renderedArrivalRows(current: StoredTask) {
-    return renderedArrivalRows(current.toolResults?.['flight.list-arrivals']?.data)
+  #renderedArrivalRows(current: StoredTask, at: string) {
+    const read = current.toolResults?.['flight.list-arrivals']
+    const board = read?.data
+    if (!board) return undefined
+    const recorded = current.task.flightDiscovery
+    if (recorded && recorded.candidateSetId !== board.candidateSetId) return undefined
+    if (recorded && read?.meta.provider === 'live' && Date.parse(at) >= Date.parse(recorded.expiresAt)) {
+      return undefined
+    }
+    return renderedArrivalRows(board)
+  }
+
+  /**
+   * Which airport a "机场天气怎么样" question is about.
+   *
+   * The trip's settled destination first, then the picked flight's own airport
+   * for a task prepared before that field was recorded. 虹桥 only when neither
+   * exists — which means no flight has been chosen yet, so there is no chosen
+   * airport to be wrong about, and the demo city's main airport is the only
+   * sensible reading of the question.
+   */
+  #arrivalWeatherLocationId(current: StoredTask): string {
+    if (current.requestContext?.destination) return current.requestContext.destination.id
+    const airport = current.task.flight?.arrivalAirport
+    return airport ? pickupDestinationForAirport(airport).id : 'destination-hongqiao-t2'
   }
 
   #prepareTask(
@@ -2258,7 +2392,7 @@ export class AgentGateway {
   ) {
     const reads = this.#orchestrator.prepareTrip(task.taskId, requestId, flightNumber, requestContext ? {
       vehicle: requestContext.vehicle,
-      destination: requestContext.destination,
+      ...(requestContext.destination ? { destination: requestContext.destination } : {}),
     } : undefined)
     return {
       task: {
@@ -2268,12 +2402,16 @@ export class AgentGateway {
           status: reads.flight.status,
           scheduledArrival: reads.flight.scheduledArrival,
           estimatedArrival: reads.flight.estimatedArrival,
+          arrivalAirport: reads.flight.arrivalAirport,
           terminal: reads.flight.terminal,
           baggageClaim: reads.flight.baggageClaim,
         },
         navigation: {
           routeId: reads.route.routeId,
-          destination: requestContext?.destination.name ?? reads.route.waypoints?.at(-1)?.name ?? '虹桥机场 T2',
+          // The destination the drive was actually planned to, not the one the
+          // request arrived with — those differ the moment a 浦东 flight is
+          // picked, and the label has to name the place the car is going.
+          destination: reads.destination.name,
           eta: reads.route.arrivalTime,
           status: 'planned' as const,
         },
@@ -2283,6 +2421,12 @@ export class AgentGateway {
           status: reads.charging.recommended ? 'planned' as const : 'none' as const,
         },
       },
+      /**
+       * Handed back so the caller can persist it on the request context. Every
+       * later turn — the weather advisory in particular — then reads the airport
+       * this trip settled on instead of re-deriving it or assuming 虹桥.
+       */
+      destination: reads.destination,
       toolResults: reads.toolResults,
     }
   }
@@ -2405,7 +2549,7 @@ export class AgentGateway {
       weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, {
         locationId: returning
           ? current.task.returnTrip?.homeDestinationId ?? 'destination-home'
-          : current.requestContext?.destination.id ?? 'destination-hongqiao-t2',
+          : this.#arrivalWeatherLocationId(current),
         ...(arrivalAhead ? { at: current.task.flight!.estimatedArrival } : {}),
       })
     } catch (error) {
@@ -2537,13 +2681,112 @@ export class AgentGateway {
       current.toolResults,
       current.requestContext,
       current.effectReceipts,
-      true,
+      'departure',
     )
     // The card is not in the persisted toolResults to begin with — it exists
     // because this turn asked — so the brief goes back behind it the same way.
     this.#persistBriefBehind(published, current)
     const assistant = {
       text: `建议 ${plan.departAtLabel} 出发，路上约 ${plan.driveMinutes} 分钟，比落地早 ${plan.bufferMinutes} 分钟到。`,
+      shouldSpeak: supportsTts,
+    }
+    this.#recordSideAnswer(taskId, request.event.eventId, published, assistant)
+    return this.#response(request.clientRequestId, published, [], performance.now() - startedAt, assistant)
+  }
+
+  /**
+   * 稍后提醒: record the departure the driver was just told about, so they do not
+   * have to hold it.
+   *
+   * No provider, no message, no timer — this demo has no scheduler, and inventing
+   * one behind a button would be the dishonest version of this feature. What the
+   * driver gets is real and bounded: the time is recorded, said back, and stated
+   * on the departure card from here on, so 什么时候出发 answers with the reminder
+   * instead of re-asking the question.
+   *
+   * The time is recomputed from the same landing and route the card was drawn
+   * from, not taken from the request, so the reminder can only ever name a time
+   * the driver could have seen. Nothing to work backwards from means nothing to
+   * promise, and once the car has left there is no departure ahead to remind about.
+   */
+  #armDepartureReminder(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const replayed = this.#store.getEventResult(taskId, request.event.eventId)
+    if (replayed) return this.#response(request.clientRequestId, replayed.stored, replayed.effects, performance.now() - startedAt)
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    const route = current.toolResults?.['navigation.plan-route']?.data
+    const plan = hasDeparted(current.task) ? undefined : departurePlan(current.task, route)
+    const remindAt = plan ? departureAtIso(current.task, route) : undefined
+    if (!plan || !remindAt) {
+      const nothingToPromise = {
+        text: hasDeparted(current.task) ? '已经在路上了，不用再提醒出发。' : '还没有航班和路线可以推算出发时间。',
+        shouldSpeak: supportsTts,
+      }
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, nothingToPromise)
+    }
+    const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const armed = withDepartureReminder(current.task, remindAt, timestamp)
+    // Re-arming the same time claims nothing new, so the snapshot is handed back
+    // untouched and the driver still hears the confirmation they asked for.
+    if (armed === current.task) {
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: `已经设好了，${plan.departAtLabel} 提醒你出发。`,
+        shouldSpeak: supportsTts,
+      })
+    }
+    const next: AirportPickupTaskState = {
+      ...armed,
+      taskRevision: current.task.taskRevision + 1,
+      updatedAt: timestamp,
+    }
+    const stored = this.#store.save(this.#publish(next, current.toolResults, current.requestContext, current.effectReceipts))
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+      text: `好的，${plan.departAtLabel} 我提醒你出发。`,
+      shouldSpeak: supportsTts,
+    })
+  }
+
+  /**
+   * 查看日程: show the calendar `prepareTrip` already read.
+   *
+   * Same transient contract as the other side answers and the same card the
+   * schedule query draws — the difference is entirely in what it costs. The events
+   * are on the snapshot, so this turn calls no provider, which is what makes it
+   * safe to put on the departure card as a glance rather than as a request.
+   *
+   * No read means nothing to show. The driver is told so and pointed at the
+   * question that does go and ask, rather than being given an empty card that
+   * would read as "you have nothing on today".
+   */
+  #submitCalendarView(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    const upcoming = current.toolResults?.['calendar.list-upcoming']
+    if (!upcoming || upcoming.data.events.length === 0) {
+      const nothingRead = { text: '现在还没有读到日程，可以说「看看日程」我去查一下。', shouldSpeak: supportsTts }
+      this.#recordSideAnswer(taskId, request.event.eventId, current, nothingRead)
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, nothingRead)
+    }
+    const published = this.#publish(
+      current.task,
+      current.toolResults,
+      current.requestContext,
+      current.effectReceipts,
+      'calendar',
+    )
+    this.#persistBriefBehind(published, current)
+    const next = [...upcoming.data.events].sort((left, right) => left.startAt.localeCompare(right.startAt))[0]!
+    const assistant = {
+      text: `今天还有 ${upcoming.data.events.length} 项安排，下一项是 ${clockLabel(next.startAt)} ${next.title}。`,
       shouldSpeak: supportsTts,
     }
     this.#recordSideAnswer(taskId, request.event.eventId, published, assistant)
@@ -2620,8 +2863,22 @@ export class AgentGateway {
     })
   }
 
-  /** 暂不处理: retire the advisory for good — the trip never re-prompts. */
-  #dismissWeatherAdvisory(
+  /**
+   * 刷新航班: throw the memorized arrivals board away and read it again.
+   *
+   * A real re-read, not a recompose, and `taskRevision` moves with it. That bump
+   * is what protects the turn: a spoken rank already in flight was planned
+   * against the board that was on screen a moment ago, and it now fails the
+   * ordinary revision guard instead of landing on whichever flight happens to
+   * sit third in the new set.
+   *
+   * Against fixture data the re-read usually returns the same five rows and so
+   * the same `candidateSetId`. That is honest rather than disappointing — a set
+   * that did not change cannot be mis-picked from — and it is why the identity is
+   * not the thing doing the rejecting. Its job is to make which set was picked
+   * from inspectable, and to carry the expiry a revision number cannot express.
+   */
+  #refreshFlightOptions(
     taskId: string,
     current: StoredTask,
     request: SubmitEventRequest,
@@ -2630,12 +2887,70 @@ export class AgentGateway {
     const replayed = this.#store.getEventResult(taskId, request.event.eventId)
     if (replayed) return this.#response(request.clientRequestId, replayed.stored, replayed.effects, performance.now() - startedAt)
     const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
-    const timestamp = this.#eventTimestamp(current.task.updatedAt)
-    const dismissed: AirportPickupTaskState = {
-      ...current.task,
+
+    const refreshed = this.#withArrivalsBoard(
+      taskId,
+      request.clientRequestId,
+      current.task,
+      current.toolResults,
+      { refresh: true },
+    )
+    const board = refreshed.toolResults['flight.list-arrivals']
+    // Nothing came back, so nothing is claimed and nothing is recorded: the board
+    // the driver is looking at stays exactly as it was rather than being cleared
+    // by a failed attempt to improve it, and a retry gets a real attempt.
+    if (!board) {
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: '航班列表暂时刷新不了，稍后可以再试。',
+        shouldSpeak: supportsTts,
+      })
+    }
+
+    const next: AirportPickupTaskState = {
+      ...refreshed.task,
       taskRevision: current.task.taskRevision + 1,
-      weatherAdvisory: { status: 'dismissed', advisedAt: current.task.weatherAdvisory!.advisedAt },
-      updatedAt: timestamp,
+      updatedAt: this.#eventTimestamp(current.task.updatedAt),
+    }
+    const stored = this.#store.save(this.#publish(next, refreshed.toolResults, current.requestContext, current.effectReceipts))
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    // The count is the rows the card will draw, not the rows the board carries: a
+    // cancelled flight is not a choice, and a spoken number that disagrees with
+    // the list in front of the driver is worse than no number at all.
+    const shown = renderedArrivalRows(board.data)
+    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+      text: shown
+        ? `航班列表已刷新，${board.data.arrivalCityName}还有 ${shown.length} 个到达航班。`
+        : '刷新后没有可选的到达航班，直接告诉我航班号也可以。',
+      shouldSpeak: supportsTts,
+    })
+  }
+
+  /**
+   * 暂不处理: retire whichever advisory is on screen, for good.
+   *
+   * One path for the family. The words never name the prompt, so the handler does
+   * not either — `retireActiveAdvisories` is the single place that knows which
+   * fields an advisory lives in, and it is the place the `advisories[]` P1 lands.
+   * Today that is exactly one field, and saying so here is cheaper than pretending
+   * otherwise.
+   *
+   * That something is active is the dispatcher's condition, checked through the
+   * same `hasActiveAdvisory` seam, so the retirement here always claims something
+   * and the bump is unconditional.
+   */
+  #dismissAdvisory(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const replayed = this.#store.getEventResult(taskId, request.event.eventId)
+    if (replayed) return this.#response(request.clientRequestId, replayed.stored, replayed.effects, performance.now() - startedAt)
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    const dismissed: AirportPickupTaskState = {
+      ...retireActiveAdvisories(current.task),
+      taskRevision: current.task.taskRevision + 1,
+      updatedAt: this.#eventTimestamp(current.task.updatedAt),
     }
     const stored = this.#store.save(this.#publish(dismissed, current.toolResults, current.requestContext, current.effectReceipts))
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
@@ -2676,6 +2991,79 @@ export class AgentGateway {
       },
     })
   }
+}
+
+/**
+ * Records which set of arrivals the driver is choosing from.
+ *
+ * Identity only — the rows themselves stay in the persisted tool result, and a
+ * second copy on the task would be a second truth to keep in step. Returns the
+ * same snapshot when the record already says this, so writing it cannot make an
+ * unrelated event look like it changed the task.
+ */
+function withFlightDiscovery(
+  task: AirportPickupTaskState,
+  board: { candidateSetId: string; expiresAt: string },
+): AirportPickupTaskState {
+  const recorded = task.flightDiscovery
+  if (recorded?.candidateSetId === board.candidateSetId && recorded.expiresAt === board.expiresAt) return task
+  return { ...task, flightDiscovery: { candidateSetId: board.candidateSetId, expiresAt: board.expiresAt } }
+}
+
+/** Drops the record with the board it described, on the same identity terms. */
+function withoutFlightDiscovery(task: AirportPickupTaskState): AirportPickupTaskState {
+  if (task.flightDiscovery === undefined) return task
+  const rest = { ...task }
+  delete rest.flightDiscovery
+  return rest
+}
+
+/**
+ * Retires every advisory currently prompting, and returns the same snapshot when
+ * none was.
+ *
+ * The one place that knows where advisories live. Today the answer is a single
+ * `weatherAdvisory` field, so this reads as a long way to write one assignment —
+ * but it is the seam the `advisories[]` P1 replaces, and having the dismissal
+ * path go through it now means that change is local to this function instead of
+ * being spread across a handler that names the weather.
+ *
+ * `dismissed` rather than deleted: the trip must never re-prompt, and an absent
+ * field is indistinguishable from one that never fired.
+ */
+function retireActiveAdvisories(task: AirportPickupTaskState): AirportPickupTaskState {
+  if (task.weatherAdvisory?.status !== 'active') return task
+  return { ...task, weatherAdvisory: { status: 'dismissed', advisedAt: task.weatherAdvisory.advisedAt } }
+}
+
+/**
+ * Whether any advisory is still prompting — the question 暂不处理 needs answered
+ * before it means anything.
+ *
+ * Paired with `retireActiveAdvisories` deliberately: the predicate and the
+ * retirement have to agree about where advisories live, so they sit together and
+ * a second kind of advisory is two edits in one place rather than a search.
+ */
+function hasActiveAdvisory(task: AirportPickupTaskState): boolean {
+  return task.weatherAdvisory?.status === 'active'
+}
+
+/**
+ * Records a standing departure reminder, and returns the same snapshot when one
+ * already says this.
+ *
+ * The recommendation is recomputed here rather than passed in so the reminder can
+ * only ever name a time the card could have shown. `armedAt` is what makes a
+ * re-arm visible: the same `remindAt` set twice is not the same fact twice.
+ */
+function withDepartureReminder(
+  task: AirportPickupTaskState,
+  remindAt: string,
+  armedAt: string,
+): AirportPickupTaskState {
+  const standing = task.departureReminder
+  if (standing?.remindAt === remindAt) return task
+  return { ...task, departureReminder: { remindAt, armedAt } }
 }
 
 /** One short cabin-appropriate sentence; the card carries the detail. */

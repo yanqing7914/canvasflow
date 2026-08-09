@@ -50,7 +50,7 @@
       "note": "接受补能方案，路线临时切换至充电站并重算 ETA"
     },
     {
-      "event": { "eventId": "event-flight-in-air", "type": "flight.updated", "flight": { "flightNumber": "MU5102", "status": "in-air", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:40:00+08:00", "terminal": "T2" }, "timestamp": "2026-07-22T20:10:00+08:00" },
+      "event": { "eventId": "event-flight-in-air", "type": "flight.updated", "flight": { "flightNumber": "MU5102", "status": "in-air", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:40:00+08:00", "arrivalAirport": "SHA", "terminal": "T2" }, "timestamp": "2026-07-22T20:10:00+08:00" },
       "expectedPhase": "driving-to-airport",
       "expectedTaskRevision": 5,
       "note": "航班起飞，卡片更新为飞行中"
@@ -63,7 +63,7 @@
       "note": "补能完成，机场路线上下文保持（直达切回由 Planner 显式发起）"
     },
     {
-      "event": { "eventId": "event-flight-landed", "type": "flight.updated", "flight": { "flightNumber": "MU5102", "status": "landed", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:40:00+08:00", "terminal": "T2", "baggageClaim": "12" }, "timestamp": "2026-07-22T20:40:00+08:00" },
+      "event": { "eventId": "event-flight-landed", "type": "flight.updated", "flight": { "flightNumber": "MU5102", "status": "landed", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:40:00+08:00", "arrivalAirport": "SHA", "terminal": "T2", "baggageClaim": "12" }, "timestamp": "2026-07-22T20:40:00+08:00" },
       "toolCalls": ["message.prepare"],
       "expectedPhase": "driving-to-airport",
       "expectedTaskRevision": 7,
@@ -80,7 +80,7 @@
       "event": { "eventId": "event-airport-geofence", "type": "vehicle.entered-airport-geofence", "timestamp": "2026-07-22T20:43:00+08:00" },
       "expectedPhase": "approaching-airport",
       "expectedTaskRevision": 9,
-      "note": "进入机场围栏，展示推荐接机点（P2 停车场到达层 3 号门）"
+      "note": "进入机场围栏，展示推荐接机点（虹桥 T2 P2 停车场到达层 3 号门）"
     },
     {
       "event": { "eventId": "event-vehicle-parked", "type": "vehicle.parked", "timestamp": "2026-07-22T20:45:00+08:00" },

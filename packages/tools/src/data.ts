@@ -1,4 +1,4 @@
-import type { CalendarEvent, FlightStatusOutput, RoutePlanOutput, VehicleStatusOutput, WeatherOutput } from '@canvasflow/schema'
+import type { ArrivalAirport, CalendarEvent, FlightStatusOutput, RoutePlanOutput, VehicleStatusOutput, WeatherOutput } from '@canvasflow/schema'
 import { FIXTURE_GENERATED_AT } from './result'
 
 /**
@@ -88,10 +88,12 @@ export const TIMEOUT_WEATHER_LOCATION_ID = 'destination-weather-timeout'
 export type WeatherSnapshotRecord = WeatherOutput
 
 /**
- * Fictional weather fixtures keyed by location id. The airport reading carries
+ * Fictional weather fixtures keyed by location id. The 虹桥 reading carries
  * light rain on purpose: it exercises the pickup advisory line and gives the
- * demo something to say beyond a temperature. All values are competition
- * fiction, not meteorology.
+ * demo something to say beyond a temperature. 浦东 deliberately reads dry —
+ * the two airports must not agree, or a pickup routed to the wrong one would
+ * still report plausible weather and nothing would catch it. All values are
+ * competition fiction, not meteorology.
  */
 export const weatherSnapshots: Record<string, WeatherSnapshotRecord> = {
   'destination-hongqiao-t2': {
@@ -101,6 +103,15 @@ export const weatherSnapshots: Record<string, WeatherSnapshotRecord> = {
     condition: 'light-rain',
     windLevel: 3,
     precipitationChance: 70,
+    observedAt: '2026-07-22T19:05:00+08:00',
+  },
+  'destination-pudong-t2': {
+    locationId: 'destination-pudong-t2',
+    locationName: '浦东机场 T2',
+    temperatureC: 26,
+    condition: 'overcast',
+    windLevel: 4,
+    precipitationChance: 30,
     observedAt: '2026-07-22T19:05:00+08:00',
   },
   'destination-home': {
@@ -123,6 +134,12 @@ export type FlightRecord = FlightStatusOutput & { date: string }
  * are exception lookup fixtures for delayed and cancelled tool demos. HO1252 /
  * CA1516 / CZ3588 exist so the arrivals board below has more than one airline to
  * offer, and so any row the driver picks resolves here too.
+ *
+ * The airport is authored per flight, not per board row: it is a fact about where
+ * the aircraft lands, and both the board and the single-flight status lookup have
+ * to answer it the same way. HO1252 and CZ3588 land at 浦东 so the board offers a
+ * real choice of airport; everything the existing demo drives — MU5102, its
+ * delayed and cancelled variants, and CA1516 — stays at 虹桥.
  */
 export const flights: Record<string, FlightRecord> = {
   MU5102: {
@@ -131,6 +148,8 @@ export const flights: Record<string, FlightRecord> = {
     status: 'scheduled',
     scheduledArrival: '2026-07-22T20:30:00+08:00',
     estimatedArrival: '2026-07-22T20:40:00+08:00',
+    arrivalAirport: 'SHA',
+    arrivalAirportName: '虹桥机场',
     terminal: 'T2',
     sourceUpdatedAt: FIXTURE_GENERATED_AT,
   },
@@ -140,6 +159,8 @@ export const flights: Record<string, FlightRecord> = {
     status: 'delayed',
     scheduledArrival: '2026-07-22T20:30:00+08:00',
     estimatedArrival: '2026-07-22T21:10:00+08:00',
+    arrivalAirport: 'SHA',
+    arrivalAirportName: '虹桥机场',
     terminal: 'T1',
     sourceUpdatedAt: FIXTURE_GENERATED_AT,
   },
@@ -149,6 +170,8 @@ export const flights: Record<string, FlightRecord> = {
     status: 'cancelled',
     scheduledArrival: '2026-07-22T20:30:00+08:00',
     estimatedArrival: '2026-07-22T20:30:00+08:00',
+    arrivalAirport: 'SHA',
+    arrivalAirportName: '虹桥机场',
     terminal: 'T2',
     sourceUpdatedAt: FIXTURE_GENERATED_AT,
   },
@@ -158,6 +181,8 @@ export const flights: Record<string, FlightRecord> = {
     status: 'scheduled',
     scheduledArrival: '2026-07-22T20:55:00+08:00',
     estimatedArrival: '2026-07-22T20:55:00+08:00',
+    arrivalAirport: 'PVG',
+    arrivalAirportName: '浦东机场',
     terminal: 'T2',
     sourceUpdatedAt: FIXTURE_GENERATED_AT,
   },
@@ -167,6 +192,8 @@ export const flights: Record<string, FlightRecord> = {
     status: 'in-air',
     scheduledArrival: '2026-07-22T21:15:00+08:00',
     estimatedArrival: '2026-07-22T21:05:00+08:00',
+    arrivalAirport: 'SHA',
+    arrivalAirportName: '虹桥机场',
     terminal: 'T1',
     sourceUpdatedAt: FIXTURE_GENERATED_AT,
   },
@@ -176,6 +203,8 @@ export const flights: Record<string, FlightRecord> = {
     status: 'scheduled',
     scheduledArrival: '2026-07-22T21:40:00+08:00',
     estimatedArrival: '2026-07-22T21:40:00+08:00',
+    arrivalAirport: 'PVG',
+    arrivalAirportName: '浦东机场',
     terminal: 'T2',
     sourceUpdatedAt: FIXTURE_GENERATED_AT,
   },
@@ -185,21 +214,57 @@ export const flights: Record<string, FlightRecord> = {
 export const ARRIVAL_CITY = { id: 'arrival-city-shanghai', name: '上海' } as const
 
 /**
+ * Where each arrival airport is picked up from.
+ *
+ * Keyed by airport rather than by terminal because the fixtures plan one drive
+ * per airport: MU5103 lands at 虹桥 T1 and is still met at the T2 arrivals deck,
+ * which is what the demo's single 虹桥 destination has always meant. Terminal
+ * granularity lives in {@link recommendedMeetingPoints}, where it belongs — it
+ * changes which door the family walks out of, not where the car drives.
+ *
+ * This is the table that turns "which flight" into "where to", so it is also the
+ * one place a new airport has to be taught about: the route, the weather reading
+ * and the navigation label all resolve through it.
+ */
+export const arrivalAirports: Record<ArrivalAirport, {
+  code: ArrivalAirport
+  name: string
+  destination: { id: string; name: string }
+}> = {
+  SHA: {
+    code: 'SHA',
+    name: '虹桥机场',
+    destination: { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' },
+  },
+  PVG: {
+    code: 'PVG',
+    name: '浦东机场',
+    destination: { id: 'destination-pudong-t2', name: '浦东机场 T2' },
+  },
+}
+
+/** The drive destination for a flight's arrival airport. */
+export function pickupDestinationForAirport(airport: ArrivalAirport): { id: string; name: string } {
+  return { ...arrivalAirports[airport].destination }
+}
+
+/**
  * The arrivals board: which flights the driver can choose from before they have
  * named one.
  *
  * Only the fields a board adds are authored here — the airline, where the flight
- * is coming from, and the order the rows are read in. Times, terminal and status
- * are read out of `flights` at call time, so a board row and the `flight.get-status`
- * lookup behind it can never disagree, and every row is guaranteed preparable:
- * a number listed here always resolves for the same date.
+ * is coming from, and the order the rows are read in. Times, terminal, airport
+ * and status are read out of `flights` at call time, so a board row and the
+ * `flight.get-status` lookup behind it can never disagree, and every row is
+ * guaranteed preparable: a number listed here always resolves for the same date.
  *
  * Rows are authored in scheduled-arrival order, earliest first, which is the
  * order the board presents. MU5104 is deliberately absent: it stays an exception
  * lookup fixture rather than something the driver can pick.
  *
- * Every row lands in the same city, so the pickup destination stays the demo's
- * single airport; the board does not yet offer a choice of airport.
+ * Every row lands in the same city and the board is read for that city alone —
+ * the choice of airport is a difference between rows, not between queries, which
+ * is what makes "去浦东的那个" answerable off one board.
  */
 export const arrivalBoard: { flightNumber: string; airlineName: string; originName: string }[] = [
   { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都' },
@@ -243,11 +308,21 @@ function demoRouteKey(partial: Omit<RouteFixtureKey, 'originLatitude' | 'originL
 const GEO = {
   origin: { latitude: DEMO_ORIGIN.latitude, longitude: DEMO_ORIGIN.longitude },
   home: { id: 'destination-home', name: '家', latitude: 31.228, longitude: 121.468 },
+  // Ids and names come from `arrivalAirports` rather than being retyped: a sketch
+  // whose label disagreed with the navigation label would be the same place under
+  // two names, and the polylines below are the only thing actually authored here.
   airportT2: {
-    id: 'destination-hongqiao-t2',
-    name: '虹桥机场 T2',
+    ...arrivalAirports.SHA.destination,
     latitude: 31.198,
     longitude: 121.336,
+  },
+  // 浦东 sits east of the origin where 虹桥 sits west, so the two routes leave in
+  // opposite directions. That contrast is the point: the map has to visibly answer
+  // a different question once the driver picks a different airport.
+  airportPvgT2: {
+    ...arrivalAirports.PVG.destination,
+    latitude: 31.152,
+    longitude: 121.802,
   },
   stationHongqiao01: {
     id: 'station-hongqiao-01',
@@ -369,6 +444,34 @@ export const routes: Record<string, RoutePlanOutput> = {
       GEO.airportT2,
     ],
   },
+  // 浦东: the other airport the board offers. Only the plain direct key is
+  // authored — the via / avoid-highway variants above exist for the 虹桥 demo
+  // branches, and inventing 浦东 twins for them would be fixtures nothing asks
+  // for. A request that does match none of these still fails loudly.
+  [demoRouteKey({
+    destinationId: 'destination-pudong-t2',
+    viaIds: [],
+    avoidHighway: false,
+    avoidTolls: false,
+  })]: {
+    routeId: 'route-airport-pvg-001',
+    distanceKm: 52,
+    durationMinutes: 38,
+    arrivalTime: '2026-07-22T20:43:00+08:00',
+    estimatedBatteryAtArrival: 16,
+    summary: '直达浦东机场 T2',
+    waypoints: [
+      { id: 'origin-demo', name: '出发地', ...GEO.origin },
+      GEO.airportPvgT2,
+    ],
+    polyline: [
+      GEO.origin,
+      { latitude: 31.238, longitude: 121.55 },
+      { latitude: 31.222, longitude: 121.65 },
+      { latitude: 31.185, longitude: 121.742 },
+      GEO.airportPvgT2,
+    ],
+  },
   [demoRouteKey({
     destinationId: 'destination-home',
     viaIds: [],
@@ -484,6 +587,7 @@ export const chargingStation = {
 
 export type MeetingPointRecord = {
   id: string
+  airport: ArrivalAirport
   terminal: string
   name: string
   description: string
@@ -491,24 +595,51 @@ export type MeetingPointRecord = {
 }
 
 /**
- * Recommended pickup meeting point per terminal, shown in the
+ * The composite key {@link recommendedMeetingPoints} is keyed by.
+ *
+ * Exported so callers never hand-roll the string: a terminal alone stopped
+ * identifying a place the moment the board offered two airports — 虹桥 T2 and
+ * 浦东 T2 are an hour apart — and the failure mode of getting it wrong is a
+ * confidently stated door number at the wrong airport.
+ */
+export function meetingPointKey(airport: ArrivalAirport, terminal: string): string {
+  return `${airport}-${terminal}`
+}
+
+/**
+ * Recommended pickup meeting point per airport and terminal, shown in the
  * approaching-airport / waiting-for-passengers phases. POC scope is display
  * only — no parking-spot query, reservation or payment.
+ *
+ * Only the terminals the board can actually deliver a driver to are authored:
+ * 虹桥 T1 and T2 for the demo flights, 浦东 T2 for the two rows that land there.
+ * A miss returns undefined and the card simply omits the meeting point, which is
+ * the honest answer — a guessed door is worse than none.
  */
 export const recommendedMeetingPoints: Record<string, MeetingPointRecord> = {
-  T1: {
-    id: 'meeting-point-t1-01',
+  [meetingPointKey('SHA', 'T1')]: {
+    id: 'meeting-point-sha-t1-01',
+    airport: 'SHA',
     terminal: 'T1',
-    name: 'P1 停车场到达层 5 号门',
+    name: '虹桥 T1 P1 停车场到达层 5 号门',
     description: '航站楼变更后的推荐接机点；短时停车 15 分钟内免费。',
     walkMinutes: 4,
   },
-  T2: {
-    id: 'meeting-point-t2-01',
+  [meetingPointKey('SHA', 'T2')]: {
+    id: 'meeting-point-sha-t2-01',
+    airport: 'SHA',
     terminal: 'T2',
-    name: 'P2 停车场到达层 3 号门',
+    name: '虹桥 T2 P2 停车场到达层 3 号门',
     description: '出到达大厅后直行约 50 米，短时停车 15 分钟内免费。',
     walkMinutes: 3,
+  },
+  [meetingPointKey('PVG', 'T2')]: {
+    id: 'meeting-point-pvg-t2-01',
+    airport: 'PVG',
+    terminal: 'T2',
+    name: '浦东 T2 P4 停车库到达层 8 号门',
+    description: '沿到达层向东出口步行约 120 米，短时停车 30 分钟内免费。',
+    walkMinutes: 6,
   },
 }
 
@@ -522,5 +653,6 @@ export const knownMediaTitles = new Set(['豆豆故事', '轻音乐'])
 export const knownDestinationIds = new Set([
   'destination-home',
   'destination-hongqiao-t2',
+  'destination-pudong-t2',
   'station-hongqiao-01',
 ])

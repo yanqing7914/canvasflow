@@ -29,7 +29,19 @@ export type StoredTask = {
   requestContext?: {
     vehicle: VehicleContext
     clientCapabilities: ClientCapabilities
-    destination: AgentDestination
+    /**
+     * Where this trip is driving to.
+     *
+     * Absent until it is actually known. The client may name one up front, but
+     * usually nobody has: the destination follows from which flight was picked,
+     * and 上海 has two airports on opposite sides of the city. Filling in 虹桥
+     * before the flight is read would make every consumer downstream — the
+     * navigation label, the weather advisory, the meeting point — confidently
+     * agree on an answer nobody chose. `#prepareTask` writes the derived one
+     * here once the flight is read, so after that this field means "the airport
+     * this trip settled on" rather than "the airport we assumed".
+     */
+    destination?: AgentDestination
     inputConfidence?: number
     /** Ordering watermark for request-context-only events. */
     updatedAt?: string

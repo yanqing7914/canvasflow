@@ -158,13 +158,15 @@ describe('ReadToolOrchestrator', () => {
           status: 'scheduled',
           scheduledArrival: '2026-07-22T20:30:00+08:00',
           estimatedArrival: '2026-07-22T20:40:00+08:00',
+          arrivalAirport: 'SHA',
+          arrivalAirportName: '虹桥机场',
           terminal: 'T2',
           sourceUpdatedAt: '2026-07-22T12:00:00+08:00',
         }),
         ok: false,
         data: null,
         error: { code: 'PROVIDER_TIMEOUT', message: 'temporary timeout', retryable: true },
-        meta: { ...successfulResult<FlightStatusOutput>('flight.get-status', { flightNumber: 'MU5102', status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', sourceUpdatedAt: '2026-07-22T12:00:00+08:00' }).meta, requestId: ctx.requestId },
+        meta: { ...successfulResult<FlightStatusOutput>('flight.get-status', { flightNumber: 'MU5102', status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', arrivalAirport: 'SHA', arrivalAirportName: '虹桥机场', terminal: 'T2', sourceUpdatedAt: '2026-07-22T12:00:00+08:00' }).meta, requestId: ctx.requestId },
       }))
       .mockImplementation(success)
 

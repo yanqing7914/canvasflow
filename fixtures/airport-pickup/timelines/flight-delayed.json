@@ -14,7 +14,7 @@
       "note": "延误航班查询成功，但仍停留在准备出发"
     },
     {
-      "event": { "eventId": "delayed-flight-update", "type": "flight.updated", "flight": { "flightNumber": "MU5103", "status": "delayed", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T21:10:00+08:00", "terminal": "T1" }, "timestamp": "2026-07-22T20:10:00+08:00" },
+      "event": { "eventId": "delayed-flight-update", "type": "flight.updated", "flight": { "flightNumber": "MU5103", "status": "delayed", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T21:10:00+08:00", "arrivalAirport": "SHA", "terminal": "T1" }, "timestamp": "2026-07-22T20:10:00+08:00" },
       "toolCalls": ["flight.get-status"],
       "expectedToolErrors": {},
       "expectedUI": { "generatedBy": "composer", "primaryComponent": "flight-status", "priority": "normal" },

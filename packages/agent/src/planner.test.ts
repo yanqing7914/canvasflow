@@ -246,6 +246,25 @@ describe('airport pickup Planner', () => {
     expect(planAirportPickup({ text: '第三个问题是什么', timestamp }).intent).toBe('unknown')
   })
 
+  it.each(['刷新航班', '刷新一下航班', '再查一下到达航班', '重新查一下航班列表', '帮我再看一遍', '换一批航班', '换一批'])(
+    'recognizes %s as asking for the board again',
+    (text) => {
+      expect(planAirportPickup({ text, timestamp })).toMatchObject({
+        intent: 'refresh-flight-options',
+        slotUpdates: {},
+        proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+      })
+    },
+  )
+
+  it('does not let a refresh swallow a sentence that asks for something else', () => {
+    // 查航班号 names a flight, not the list; 刷新地图 names another surface. Both
+    // have to miss, or the refresh would answer questions it cannot answer.
+    expect(planAirportPickup({ text: '查一下 MU5102', timestamp }).intent).not.toBe('refresh-flight-options')
+    expect(planAirportPickup({ text: '刷新地图', timestamp }).intent).not.toBe('refresh-flight-options')
+    expect(planAirportPickup({ text: '再查一下天气', timestamp }).intent).not.toBe('refresh-flight-options')
+  })
+
   it.each(['什么时候出发', '几点出发比较好', '我该几点出发', '算下什么时候走', '现在要出发吗', '现在可以走了吗'])(
     'recognizes %s as a whole-utterance departure-time query',
     (text) => {
@@ -292,7 +311,7 @@ describe('airport pickup Planner', () => {
 
   it.each(['暂不处理', '先不用', '不用提醒了'])('recognizes %s as dismissing the advisory', (text) => {
     expect(planAirportPickup({ text, timestamp })).toMatchObject({
-      intent: 'dismiss-weather-advisory',
+      intent: 'dismiss-advisory',
       slotUpdates: {},
       proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
     })
@@ -302,5 +321,45 @@ describe('airport pickup Planner', () => {
     expect(planAirportPickup({ text: '带伞', timestamp }).intent).toBe('unknown')
     expect(planAirportPickup({ text: '提醒乘客', timestamp }).intent).toBe('unknown')
     expect(planAirportPickup({ text: '暂不处理这个问题', timestamp }).intent).toBe('unknown')
+  })
+
+  it.each(['稍后提醒我', '待会儿提醒我出发', '到点提醒我', '提醒我出发', '到点叫我一下', '晚点再提醒我'])(
+    'recognizes %s as setting the departure reminder',
+    (text) => {
+      expect(planAirportPickup({ text, timestamp })).toMatchObject({
+        intent: 'remind-later',
+        slotUpdates: {},
+        proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+      })
+    },
+  )
+
+  it('keeps the umbrella reminder and other objects away from the departure reminder', () => {
+    // The one thing this intent must never swallow: 提醒 with an object it cannot
+    // deliver. 带伞 is a different answer to a different card, and a bare 提醒我
+    // names nothing at all.
+    expect(planAirportPickup({ text: '提醒乘客带伞', timestamp }).intent).toBe('send-weather-reminder')
+    expect(planAirportPickup({ text: '提醒我带伞', timestamp }).intent).not.toBe('remind-later')
+    expect(planAirportPickup({ text: '提醒我', timestamp }).intent).toBe('unknown')
+    expect(planAirportPickup({ text: '提醒我接妈妈', timestamp }).intent).not.toBe('remind-later')
+  })
+
+  it.each(['查看日程', '查看一下今天的日程', '帮我查看今天的安排', '打开日历'])(
+    'recognizes %s as showing the calendar already read',
+    (text) => {
+      expect(planAirportPickup({ text, timestamp })).toMatchObject({
+        intent: 'view-calendar',
+        slotUpdates: {},
+        proposedEvents: [expect.objectContaining({ type: 'user.input', text })],
+      })
+    },
+  )
+
+  it('leaves the open schedule question on the path that goes and asks', () => {
+    // Same question, deliberately not the same cost: 看看日程 fires the read,
+    // 查看日程 spends the one the trip already made.
+    expect(planAirportPickup({ text: '看看日程', timestamp }).intent).toBe('check-schedule')
+    expect(planAirportPickup({ text: '今天有什么安排', timestamp }).intent).toBe('check-schedule')
+    expect(planAirportPickup({ text: '查看航班', timestamp }).intent).not.toBe('view-calendar')
   })
 })

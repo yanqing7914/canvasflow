@@ -4,6 +4,7 @@ import {
   chargingStationsForDensity,
   estimateFinalBatteryPercent,
   memberPreferences,
+  meetingPointKey,
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from '@canvasflow/tools'
@@ -326,7 +327,7 @@ describe('Agent UISpec composer', () => {
 
   it('declines to invent a departure time with nothing to work backwards from', () => {
     const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
-    const flight = { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal }
+    const flight = { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, arrivalAirport: reads.flight.arrivalAirport, terminal: reads.flight.terminal }
     const base = {
       ...createInitialTask('pickup-001', timestamp),
       phase: 'preparing' as const,
@@ -349,7 +350,7 @@ describe('Agent UISpec composer', () => {
     }
 
     const quiet = composeAgentSpec(task, reads.toolResults)
-    const asked = composeAgentSpec(task, reads.toolResults, undefined, { departureAnswer: true })
+    const asked = composeAgentSpec(task, reads.toolResults, undefined, { queryAnswer: 'departure' })
 
     expect(quiet.components.some((component) => component.type === 'departure-plan')).toBe(false)
     // Borrows the auxiliary band rather than growing the brief.
@@ -781,6 +782,7 @@ describe('Agent UISpec composer arrival and battery consistency', () => {
     status: 'landed' as const,
     scheduledArrival: '2026-07-22T20:30:00+08:00',
     estimatedArrival: '2026-07-22T20:40:00+08:00',
+    arrivalAirport: 'SHA' as const,
     terminal: 'T2',
   }
 
@@ -814,11 +816,46 @@ describe('Agent UISpec composer arrival and battery consistency', () => {
 
       expect(spec.components, phase).toEqual([expect.objectContaining({
         type: 'passenger-status',
-        props: { label, status, meetingPoint: recommendedMeetingPoints[flight.terminal]!.name },
+        props: { label, status, meetingPoint: recommendedMeetingPoints[meetingPointKey(flight.arrivalAirport, flight.terminal)]!.name },
       })])
       // The stale post-charge card is what used to occupy this screen.
       expect(spec.components.map((component) => component.type), phase).not.toContain('charging-recommendation')
     }
+  })
+
+  it('sends a 浦东 arrival to a different door than a 虹桥 arrival of the same terminal number', () => {
+    // Both flights land at a "T2". They are an hour of driving apart, and the
+    // terminal number alone cannot tell them apart — which is why the lookup
+    // takes the airport too.
+    const doorFor = (arrivalAirport: 'SHA' | 'PVG') => {
+      const spec = composeAgentSpec({
+        ...arrivedTask('waiting-for-passengers'),
+        flight: { ...flight, arrivalAirport, terminal: 'T2' },
+      })
+      const card = spec.components[0]
+      if (card?.type !== 'passenger-status') throw new Error('expected the passenger card')
+      return card.props.meetingPoint
+    }
+
+    expect(doorFor('PVG')).toBeTruthy()
+    expect(doorFor('PVG')).not.toBe(doorFor('SHA'))
+    expect(doorFor('PVG')).toContain('浦东')
+    expect(doorFor('SHA')).toContain('虹桥')
+  })
+
+  it('omits the meeting point rather than guessing one for a flight whose airport is unknown', () => {
+    // The locally parsed flight number does not know where the plane lands.
+    // Naming a door anyway would be a confident wrong answer in the phase where
+    // the driver is standing at the curb.
+    const spec = composeAgentSpec({
+      ...arrivedTask('waiting-for-passengers'),
+      flight: { ...flight, arrivalAirport: undefined },
+    })
+
+    expect(spec.components).toEqual([expect.objectContaining({
+      type: 'passenger-status',
+      props: { label: '已停稳，等待家人', status: 'waiting' },
+    })])
   })
 
   it('omits the meeting point rather than guessing one for an unknown terminal', () => {
@@ -1077,8 +1114,12 @@ describe('Agent UISpec composer flight choices', () => {
     const choices = choicesComponent(spec)
 
     // Every row's action is declared on the component (so it stays out of the
-    // global bar) and defined in the spec (so the row is pressable).
-    expect(choices.actions).toEqual(choices.props.choices.map((choice) => choice.actionId))
+    // global bar) and defined in the spec (so the row is pressable). The refresh
+    // rides on the same list for the same reason, behind the rows it re-reads.
+    expect(choices.actions).toEqual([
+      ...choices.props.choices.map((choice) => choice.actionId),
+      choices.props.refreshActionId,
+    ])
     expect(spec.actions.map((action) => action.id)).toEqual(choices.actions)
     for (const action of spec.actions) {
       expect(action.event.type).toBe('agent-message')
@@ -1087,6 +1128,14 @@ describe('Agent UISpec composer flight choices', () => {
       id: 'pick-MU5102',
       label: '接 MU5102',
       event: { type: 'agent-message', text: '航班号 MU5102' },
+    })
+    // The refresh says the words too — the board is a faster way of speaking, and
+    // a control that reached the Agent by some other route would be a second path
+    // to keep in step with the rows.
+    expect(spec.actions.at(-1)).toMatchObject({
+      id: 'refresh-flight-options',
+      label: '刷新航班',
+      event: { type: 'agent-message', text: '刷新航班' },
     })
   })
 

@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { arrivalAirportSchema } from './tool'
 
 export const airportPickupPhaseSchema = z.enum([
   'collecting-information',
@@ -23,6 +24,25 @@ export const flightStateSchema = z
      */
     scheduledArrival: z.iso.datetime({ offset: true }).optional(),
     estimatedArrival: z.iso.datetime({ offset: true }),
+    /**
+     * Which Shanghai airport the flight lands at. Only the code is held here:
+     * the display name lives on the tool result the board renders from, and
+     * duplicating it in task state would give the same fact two homes.
+     *
+     * Optional, and with no default filled in, unlike `scheduledArrival` below.
+     * Two reasons, both about not inventing an answer:
+     *
+     * - A `flight.updated` event replaces this whole object. If an absent airport
+     *   normalized to 虹桥, a routine status push on a 浦东 pickup would quietly
+     *   move the trip to the other side of the city.
+     * - The locally parsed flight number (`trusted: false`) genuinely does not
+     *   know the airport yet. Absent says that; 'SHA' would claim otherwise.
+     *
+     * So consumers read it as "known or not known" and degrade honestly — the
+     * meeting point is omitted rather than guessed, and the drive destination
+     * comes from the provider read that does know.
+     */
+    arrivalAirport: arrivalAirportSchema.optional(),
     terminal: z.string().min(1),
     baggageClaim: z.string().optional(),
   })
@@ -76,12 +96,50 @@ export const airportPickupTaskStateSchema = z.object({
     confirmedOnboard: z.boolean(),
   }),
   flight: flightStateSchema.optional(),
+  /**
+   * Which set of arrivals the driver is currently choosing from.
+   *
+   * Only the set's identity, never its rows: the candidates themselves live in
+   * the persisted `flight.list-arrivals` tool result, and a second copy here
+   * would be a second truth to keep in step.
+   *
+   * Its job is the ordinal path. "第三个" names a row by position, which only
+   * means anything against the board that was on screen — so before resolving a
+   * rank, the gateway checks the persisted board still carries this id and has
+   * not expired. Refresh mints a new id and bumps `taskRevision`, so the
+   * ordinary revision guard is what rejects a stale spoken pick; this field is
+   * what makes the set that was picked from inspectable, and adds the expiry
+   * that a revision number cannot express.
+   */
+  flightDiscovery: z
+    .object({
+      candidateSetId: z.string().min(1),
+      expiresAt: z.iso.datetime({ offset: true }),
+    })
+    .optional(),
   navigation: z
     .object({
       routeId: z.string(),
       destination: z.string(),
       eta: z.iso.datetime({ offset: true }),
       status: z.enum(['planned', 'active', 'arrived']),
+    })
+    .optional(),
+  /**
+   * A standing "remind me when it is time to leave", set by 稍后提醒 on the
+   * departure answer.
+   *
+   * A recorded intention, not a timer — this demo has no scheduler, and the field
+   * is deliberately named for the time rather than for a firing. What it buys is
+   * that the answer stops being a thing the driver has to hold in their head: the
+   * departure card states the reminder back on every later ask, so 什么时候出发
+   * reads as confirmation instead of as the same unanswered question. Retired
+   * once the car actually leaves, because a reminder to depart is then a lie.
+   */
+  departureReminder: z
+    .object({
+      remindAt: z.iso.datetime({ offset: true }),
+      armedAt: z.iso.datetime({ offset: true }),
     })
     .optional(),
   returnTrip: returnTripStateSchema.optional(),
