@@ -128,7 +128,7 @@ function hasFlightChoiceCapability(spec: UISpec, driving: boolean): boolean {
 function hasWeatherAdvisoryCapability(
   spec: UISpec,
   driving: boolean,
-  actionId: 'send-umbrella-reminder' | 'dismiss-weather-advisory',
+  actionId: 'send-umbrella-reminder' | 'dismiss-advisory-weather',
   expectedText: string,
 ): boolean {
   const component = visibleComponent(spec, 'weather-advisory', driving)
@@ -486,7 +486,7 @@ export default function App({
     }
     if (sample.id === 'dismiss-weather-advisory') {
       return response.task.weatherAdvisory?.status === 'active'
-        && hasWeatherAdvisoryCapability(spec, driving, 'dismiss-weather-advisory', sample.text)
+        && hasWeatherAdvisoryCapability(spec, driving, 'dismiss-advisory-weather', sample.text)
     }
     return false
   }

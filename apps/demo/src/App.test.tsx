@@ -1763,8 +1763,8 @@ describe('demo integration', () => {
           props: {
             arrivalCityName: '上海', dateLabel: '今天', freshness: 'fixture',
             choices: [
-              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'pick-MU5102' },
-              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', terminal: 'T1', actionId: 'pick-MU5103' },
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'pick-MU5102' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', terminal: 'T1', airportName: '虹桥机场', actionId: 'pick-MU5103' },
             ],
           },
         }],
@@ -1806,8 +1806,8 @@ describe('demo integration', () => {
           props: {
             arrivalCityName: '上海', dateLabel: '今天', freshness: 'fixture',
             choices: [
-              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'missing-pick' },
-              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', terminal: 'T1', actionId: 'missing-pick-2' },
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'missing-pick' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', terminal: 'T1', airportName: '虹桥机场', actionId: 'missing-pick-2' },
             ],
           },
         }],
@@ -1838,8 +1838,8 @@ describe('demo integration', () => {
           props: {
             arrivalCityName: '上海', dateLabel: '今天', freshness: 'fixture',
             choices: [
-              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'pick-MU5102' },
-              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', terminal: 'T1', actionId: 'pick-MU5103' },
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'pick-MU5102' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', terminal: 'T1', airportName: '虹桥机场', actionId: 'pick-MU5103' },
             ],
           },
         }],
@@ -1857,6 +1857,43 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await openControls(user)
       expect(screen.getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
+    })
+
+    it('enables the dismiss fixture for the typed advisory action id', async () => {
+      const user = userEvent.setup()
+      const task: AirportPickupTaskState = {
+        ...createInitialTask(),
+        phase: 'driving-to-airport',
+        taskRevision: 4,
+        passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+        flight: { flightNumber: 'MU5102', trusted: true, status: 'in-air', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+        weatherAdvisory: { status: 'active', advisedAt: '2026-07-22T20:10:00+08:00' },
+      }
+      const base = apiResponse(task)
+      const ui: UISpec = {
+        ...base.ui,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['weather-advisory'] } },
+        components: [{
+          id: 'weather-advisory',
+          type: 'weather-card',
+          actions: ['dismiss-advisory-weather'],
+          props: {
+            location: '虹桥机场 T2', timeLabel: '20:40 到达时', temperatureC: 24,
+            condition: 'light-rain', conditionLabel: '小雨', precipitationChance: 70, freshness: 'fixture',
+          },
+        }],
+        actions: [{ id: 'dismiss-advisory-weather', label: '暂不处理', style: 'secondary', event: { type: 'agent-message', text: '暂不处理' } }],
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue({ ...base, ui }),
+        event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await openControls(user)
+      expect(screen.getByRole('button', { name: '语音回放：暂不处理' })).toBeEnabled()
     })
 
     it('advances the demo cursor after any supported arrivals-board ordinal', async () => {
