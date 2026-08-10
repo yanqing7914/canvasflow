@@ -1161,6 +1161,13 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   await page.getByRole('button', { name: '打开演示控制' }).click()
   const drawer = page.getByRole('dialog', { name: '演示控制' })
   await expect(drawer).toContainText('语音兜底回放')
+  const fallbackButtonWidths = await drawer.locator('.voice-fallback-button').evaluateAll((buttons) => (
+    buttons.map((button) => ({
+      button: button.getBoundingClientRect().width,
+      cell: button.parentElement?.getBoundingClientRect().width ?? 0,
+    }))
+  ))
+  expect(fallbackButtonWidths.every(({ button, cell }) => Math.abs(button - cell) < 1)).toBe(true)
   await page.getByRole('button', { name: '接机指令' }).click()
   await expect(drawer).toBeHidden()
 
