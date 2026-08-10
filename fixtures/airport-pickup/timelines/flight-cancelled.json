@@ -14,7 +14,7 @@
       "note": "取消状态尚未改变任务阶段，后续出发由 Policy 阻断"
     },
     {
-      "event": { "eventId": "cancelled-flight-update", "type": "flight.updated", "flight": { "flightNumber": "MU5104", "status": "cancelled", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:30:00+08:00", "terminal": "T2" }, "timestamp": "2026-07-22T20:10:00+08:00" },
+      "event": { "eventId": "cancelled-flight-update", "type": "flight.updated", "flight": { "flightNumber": "MU5104", "status": "cancelled", "scheduledArrival": "2026-07-22T20:30:00+08:00", "estimatedArrival": "2026-07-22T20:30:00+08:00", "arrivalAirport": "SHA", "terminal": "T2" }, "timestamp": "2026-07-22T20:10:00+08:00" },
       "toolCalls": ["flight.get-status"],
       "expectedToolErrors": {},
       "expectedUI": { "generatedBy": "composer", "primaryComponent": "flight-status", "priority": "normal" },

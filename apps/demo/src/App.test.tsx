@@ -297,23 +297,23 @@ describe('demo integration', () => {
       ...createInitialTask(),
       phase: 'approaching-airport',
       passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', arrivalAirport: 'SHA', terminal: 'T2', baggageClaim: '12' },
       navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
     })
     expect(approaching.components[0]).toMatchObject({
       type: 'passenger-status',
-      props: { status: 'landed', meetingPoint: 'P2 停车场到达层 3 号门' },
+      props: { status: 'landed', meetingPoint: '虹桥 T2 P2 停车场到达层 3 号门' },
     })
 
     const waiting = composePickupSpec({
       ...createInitialTask(),
       phase: 'waiting-for-passengers',
       passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', arrivalAirport: 'SHA', terminal: 'T2', baggageClaim: '12' },
     })
     expect(waiting.components[0]).toMatchObject({
       type: 'passenger-status',
-      props: { status: 'waiting', meetingPoint: 'P2 停车场到达层 3 号门' },
+      props: { status: 'waiting', meetingPoint: '虹桥 T2 P2 停车场到达层 3 号门' },
     })
   })
 
@@ -795,7 +795,7 @@ describe('demo integration', () => {
           ...createInitialTask(),
           phase: 'driving-to-airport',
           passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', arrivalAirport: 'SHA', terminal: 'T2' },
           navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
           message: {
             autoNotifyAuthorized: true,
@@ -821,7 +821,7 @@ describe('demo integration', () => {
           ...createInitialTask(),
           phase: 'driving-to-airport',
           passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
-          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', arrivalAirport: 'SHA', terminal: 'T2' },
           message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
           updatedAt: '2026-07-22T20:41:00+08:00',
         }}
@@ -1141,8 +1141,8 @@ describe('demo integration', () => {
             arrivalCityName: '上海',
             dateLabel: '今天',
             choices: [
-              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'pick-MU5102' },
-              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', actionId: 'pick-MU5103' },
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'pick-MU5102' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', airportName: '虹桥机场', actionId: 'pick-MU5103' },
             ],
             freshness: 'fixture',
           },

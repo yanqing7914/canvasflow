@@ -6,6 +6,7 @@ export type PlannerIntent =
   | 'create-airport-pickup'
   | 'provide-flight-number'
   | 'pick-flight-choice'
+  | 'refresh-flight-options'
   | 'start-navigation'
   | 'plan-charging'
   | 'confirm-passengers-onboard'
@@ -13,8 +14,10 @@ export type PlannerIntent =
   | 'check-weather'
   | 'check-schedule'
   | 'check-departure-time'
+  | 'remind-later'
+  | 'view-calendar'
   | 'send-weather-reminder'
-  | 'dismiss-weather-advisory'
+  | 'dismiss-advisory'
   | 'cancel-task'
   | 'unknown'
 
@@ -153,6 +156,19 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
+  // 刷新航班: read the board again. Meaningful only while one is on screen, and
+  // gated there by the gateway the same way the ordinal is.
+  if (isFlightOptionsRefresh(compactText)) {
+    return {
+      intent: 'refresh-flight-options',
+      confidence: 0.97,
+      slotUpdates: {},
+      missingSlots: pickupMissingSlots(state, passengers, flightNumber),
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，重新查一遍到达航班。',
+    }
+  }
+
   if (isWeatherQuery(compactText)) {
     return {
       intent: 'check-weather',
@@ -186,6 +202,34 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
+  // 稍后提醒: the answer to a departure recommendation, not a general-purpose
+  // "remind me" — this planner has no way to be told what about. The gateway
+  // offers it only where a departure time exists to be reminded of.
+  if (isRemindLaterRequest(compactText)) {
+    return {
+      intent: 'remind-later',
+      confidence: 0.97,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，到点我提醒你出发。',
+    }
+  }
+
+  // 查看日程 answers off the calendar the trip already read, which is why it is
+  // its own intent rather than a phrasing of 看看日程: same question, and
+  // deliberately not the same cost.
+  if (isCalendarViewRequest(compactText)) {
+    return {
+      intent: 'view-calendar',
+      confidence: 0.97,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，这是今天的日程。',
+    }
+  }
+
   // The two answers to the proactive weather advisory. Meaningful only while
   // an advisory is active; the gateway checks that and leaves the words on
   // the ordinary unknown path otherwise.
@@ -200,9 +244,12 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
+  // 暂不处理 answers whichever advisory is on screen. One intent for the family:
+  // the words never name the prompt, so an intent that did would be claiming
+  // something the driver did not say. The gateway retires what is active.
   if (/^(?:暂不处理|先不用|不用提醒(?:了)?|不用了|先这样)(?:吧|好了)?[。！!]?$/.test(compactText)) {
     return {
-      intent: 'dismiss-weather-advisory',
+      intent: 'dismiss-advisory',
       confidence: 0.98,
       slotUpdates: {},
       missingSlots: [],
@@ -291,6 +338,21 @@ function isScheduleQuery(text: string): boolean {
   return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:我)?(?:今天)?(?:的)?(?:还)?有?(?:什么|哪些)?(?:日程|待办|安排|行程安排)(?:事项)?(?:怎么样|有哪些|有什么)?[?？。！!]?$/.test(text)
 }
 
+/**
+ * 刷新航班 / 再查一下 / 换一批: read the arrivals board again.
+ *
+ * Anchored like the other whole-utterance forms. The bare 再查一下 is included
+ * without a noun even though it is vague in isolation — while a board is on
+ * screen there is only one thing to check again, and the gateway refuses the
+ * intent everywhere else, so the vagueness costs an unknown reply rather than a
+ * wrong action.
+ */
+function isFlightOptionsRefresh(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:再|重新)?(?:刷新|更新|查|看)(?:一下|一遍|下)?(?:到达)?(?:航班|列表|航班列表)(?:吧|好了)?[?？。！!]?$/.test(text)
+    || /^(?:请|麻烦)?(?:帮我|给我)?(?:再|重新)(?:查|看|搜)(?:一下|一遍|下)?(?:吧|好了)?[?？。！!]?$/.test(text)
+    || /^(?:请|麻烦)?(?:帮我|给我)?换(?:一)?(?:批|组|些)(?:航班)?(?:吧|好了)?[?？。！!]?$/.test(text)
+}
+
 const CHINESE_ORDINAL_DIGITS: Record<string, number> = {
   一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5,
   '1': 1, '2': 2, '3': 3, '4': 4, '5': 5,
@@ -320,6 +382,35 @@ function parseFlightChoiceOrdinal(text: string): number | undefined {
 function isDepartureTimeQuery(text: string): boolean {
   return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|算下|算一下)?(?:我)?(?:现在)?(?:要|该|得|应该)?(?:什么时候|几点)(?:出发|走|动身)(?:比较好|合适|呢)?[?？。！!]?$/.test(text)
     || /^现在(?:就)?(?:要|该|能|可以)?(?:出发|走|动身)(?:了)?(?:吗|嘛|呢)[?？。！!]?$/.test(text)
+}
+
+/**
+ * 稍后提醒 / 到点提醒我 / 待会儿提醒我: set the reminder for the departure that
+ * was just recommended.
+ *
+ * Anchored whole-utterance like the rest. 提醒我带伞 and 提醒乘客带伞 must not
+ * reach here, which is why every shape requires the object to be a departure or
+ * absent — a bare 提醒我 next to a departure card can only mean one thing, but
+ * 提醒 followed by anything else means something this intent cannot deliver.
+ */
+function isRemindLaterRequest(text: string): boolean {
+  return /^(?:请|麻烦)?(?:稍后|待会(?:儿)?|晚点|回头|到点|到时候)(?:再)?提醒(?:我|一下|我一下)?(?:出发|走|动身)?(?:吧|好了)?[。！!]?$/.test(text)
+    || /^(?:请|麻烦)?提醒(?:我|一下|我一下)(?:出发|走|动身)(?:吧|好了)?[。！!]?$/.test(text)
+    || /^(?:请|麻烦)?(?:到点|到时候)(?:叫|喊)我(?:一下)?(?:吧|好了)?[。！!]?$/.test(text)
+}
+
+/**
+ * 查看日程 / 看下今天的日程: show the calendar the trip already read.
+ *
+ * Deliberately narrower than `isScheduleQuery`, which owns the open forms
+ * (看看日程). These are the 查看-shaped requests the card's own button speaks, so
+ * the button and the sentence land on the free path while an open-ended question
+ * still goes and asks. Both end in the same card, so a driver who says the other
+ * one is not worse off — only a read poorer.
+ */
+function isCalendarViewRequest(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?查看(?:一下|下)?(?:我)?(?:今天(?:的)?)?(?:日程|日历|安排)(?:吧|好了)?[?？。！!]?$/.test(text)
+    || /^(?:请|麻烦)?(?:帮我|给我)?打开(?:我的)?(?:日历|日程)(?:吧|好了)?[?？。！!]?$/.test(text)
 }
 
 function stableHash(value: string): string {

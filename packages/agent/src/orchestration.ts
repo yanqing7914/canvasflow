@@ -21,7 +21,14 @@ import {
   type VehicleStatusOutput,
   type WeatherOutput,
 } from '@canvasflow/schema'
-import { ARRIVAL_CITY, createProviderRegistry, DEMO_ORIGIN, type ProviderRegistry, type ToolName } from '@canvasflow/tools'
+import {
+  ARRIVAL_CITY,
+  createProviderRegistry,
+  DEMO_ORIGIN,
+  pickupDestinationForAirport,
+  type ProviderRegistry,
+  type ToolName,
+} from '@canvasflow/tools'
 
 type SuccessfulToolResult<T> = ToolResult<T> & { ok: true; data: T; error: null }
 
@@ -70,7 +77,6 @@ export type ReadToolOrchestratorOptions = {
   registry?: ProviderRegistry
   fixtureDate?: string
   origin?: { latitude: number; longitude: number }
-  destination?: { id: string; name: string }
   safetyReservePercent?: number
 }
 
@@ -82,6 +88,14 @@ export type InitialPassengerReads = {
 
 export type TripPreparationReads = {
   flight: FlightStatusOutput
+  /**
+   * Where the drive was planned to, derived from the flight unless the caller
+   * named one. Returned rather than left implicit because the destination is
+   * what the navigation label, the weather advisory and the meeting point all
+   * have to agree on — handing back the one that was actually used is cheaper
+   * than three callers re-deriving it and one of them getting it wrong.
+   */
+  destination: { id: string; name: string }
   route: RoutePlanOutput
   vehicle: VehicleStatusOutput
   charging: ChargingRecommendationOutput
@@ -121,14 +135,12 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
   readonly #registry: ProviderRegistry
   readonly #fixtureDate: string
   readonly #origin: { latitude: number; longitude: number }
-  readonly #destination: { id: string; name: string }
   readonly #safetyReservePercent: number
 
   constructor(options: ReadToolOrchestratorOptions = {}) {
     this.#registry = options.registry ?? createProviderRegistry()
     this.#fixtureDate = options.fixtureDate ?? '2026-07-22'
     this.#origin = options.origin ?? { ...DEMO_ORIGIN }
-    this.#destination = options.destination ?? { id: 'destination-hongqiao-t2', name: '虹桥机场 T2' }
     this.#safetyReservePercent = options.safetyReservePercent ?? 20
   }
 
@@ -177,7 +189,6 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
     vehicle?: VehicleContext
     destination?: { id: string; name: string }
   }): TripPreparationReads {
-    const destination = context?.destination ?? this.#destination
     const flight = this.#call(
       'flight.get-status',
       taskId,
@@ -185,6 +196,13 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       { flightNumber, date: this.#fixtureDate },
       toolResultSchema(flightStatusOutputSchema),
     )
+    // The flight is read before the route on purpose: which airport the plane
+    // lands at is what decides where the car drives, and 虹桥 and 浦东 are on
+    // opposite sides of the city. Settling the destination before the flight is
+    // known — as a caller-supplied default would — is how a 浦东 pickup ends up
+    // routed west without anything failing. An explicitly named destination still
+    // wins, since a caller that names one is answering a different question.
+    const destination = context?.destination ?? pickupDestinationForAirport(flight.data.arrivalAirport)
     const route = this.#call(
       'navigation.plan-route',
       taskId,
@@ -231,6 +249,7 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
 
     return {
       flight: flight.data,
+      destination,
       route: route.data,
       vehicle: vehicle.data,
       charging: charging.data,

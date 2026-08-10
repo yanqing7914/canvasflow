@@ -86,7 +86,14 @@ export function applyEvent(
       if (next.flight && next.passengers.names.length > 0 && next.phase === 'collecting-information') next.phase = 'preparing'
       break
     case 'flight.updated':
-      next.flight = event.flight
+      // A provider push carries the flight's own facts and replaces them wholesale
+      // — except the airport, which a status update has no reason to restate. If a
+      // push that omits it were allowed to blank it, a 浦东 pickup would lose its
+      // destination on a routine delay notice, so a known airport is carried
+      // forward and only an explicitly stated one overrides it.
+      next.flight = event.flight.arrivalAirport === undefined && next.flight?.arrivalAirport !== undefined
+        ? { ...event.flight, arrivalAirport: next.flight.arrivalAirport }
+        : event.flight
       if (
         next.phase === 'driving-to-airport'
         && event.flight.status === 'landed'
@@ -117,6 +124,9 @@ export function applyEvent(
           eta: next.navigation?.eta ?? '2026-07-22T20:25:00+08:00',
           status: 'active',
         }
+        // A reminder to leave is spent the moment the car does. Left standing it
+        // would be state that contradicts the trip it belongs to.
+        delete next.departureReminder
       }
       break
     case 'vehicle.moving': break

@@ -265,9 +265,21 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
          */
         revisedDirection: z.enum(['later', 'earlier']).optional(),
         terminal: z.string().min(1),
+        /**
+         * Which airport the terminal belongs to, e.g. 虹桥. The board mixes two
+         * airports, so a row reading only "T2" would name a place that exists
+         * twice in the same city.
+         */
+        airportName: z.string().min(1),
         actionId: z.string().min(1),
       })).min(2).max(5),
       freshness: z.enum(['live', 'cached', 'fixture']),
+      /**
+       * The board's own "read it again" control, when the spec offers one. Kept
+       * out of `choices` because it is not a flight: a refresh that rendered as a
+       * sixth row would be countable, and "第六个" has to keep meaning nothing.
+       */
+      refreshActionId: z.string().min(1).optional(),
     }),
   }),
   componentBase.extend({
@@ -286,6 +298,15 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
       bufferMinutes: z.number().int().nonnegative(),
       /** Route variant the drive time came from, e.g. 经超充站. Never a route id. */
       viaLabel: z.string().min(1).optional(),
+      /**
+       * When a departure reminder is standing, the time it names, e.g. 20:10.
+       *
+       * Present only once the driver has actually asked for one, and it is what
+       * turns the card from an offer into a statement: the same card that said
+       * "leave at 20:10" now also says the reminder for it is set, so asking
+       * again reads as confirmation rather than as the question being unanswered.
+       */
+      reminderAtLabel: z.string().min(1).optional(),
     }),
   }),
   componentBase.extend({

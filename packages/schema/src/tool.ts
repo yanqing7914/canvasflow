@@ -68,11 +68,33 @@ export const flightStatusInputSchema = z.object({
   date: z.iso.date(),
 })
 
+/**
+ * Which Shanghai airport a flight lands at.
+ *
+ * The pickup city stays one value — 上海 — and the airport is a per-flight fact
+ * rather than a second city, because that is what the driver is actually choosing
+ * between: two arrival boards for one city would make "去浦东的那个" a query
+ * against the wrong axis.
+ *
+ * A closed enum rather than a free string: the airport selects a route, a weather
+ * location and a meeting point downstream, and every one of those lookups can
+ * only answer for airports the fixtures know.
+ */
+export const arrivalAirportSchema = z.enum(['SHA', 'PVG'])
+
 export const flightStatusOutputSchema = z.object({
   flightNumber: z.string(),
   status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
   scheduledArrival: z.iso.datetime({ offset: true }),
   estimatedArrival: z.iso.datetime({ offset: true }),
+  /**
+   * Which airport, alongside the terminal within it. Required here rather than
+   * optional: the status read is what `prepareTrip` derives the drive
+   * destination from, and a provider that could omit the airport would silently
+   * route a 浦东 pickup to 虹桥.
+   */
+  arrivalAirport: arrivalAirportSchema,
+  arrivalAirportName: z.string().min(1),
   terminal: z.string(),
   baggageClaim: z.string().optional(),
   sourceUpdatedAt: z.iso.datetime({ offset: true }),
@@ -97,6 +119,9 @@ export const flightArrivalsInputSchema = z.object({
  * and origin a driver needs to tell two 20:30 arrivals apart — every row's
  * `flightNumber` is also resolvable through `flight.get-status` for the same
  * date, so picking a row can always be prepared into a trip.
+ *
+ * The airport rides every row because the board mixes 虹桥 and 浦东: with two
+ * airports in one city, a bare terminal ("T2") no longer identifies a place.
  */
 export const flightArrivalCandidateSchema = z.object({
   flightNumber: z.string().min(1),
@@ -105,12 +130,30 @@ export const flightArrivalCandidateSchema = z.object({
   status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
   scheduledArrival: z.iso.datetime({ offset: true }),
   estimatedArrival: z.iso.datetime({ offset: true }),
+  arrivalAirport: arrivalAirportSchema,
+  arrivalAirportName: z.string().min(1),
   terminal: z.string().min(1),
 })
 
 export const flightArrivalsOutputSchema = z.object({
   arrivalCityId: z.string().min(1),
   arrivalCityName: z.string().min(1),
+  /**
+   * Identity of this exact set of candidates.
+   *
+   * Derived deterministically from the query and the rows it produced (see
+   * `candidateSetId` in packages/tools/src/flight.ts), never minted from a clock
+   * or a counter: the same fixture query has to replay to the same id, or
+   * "相同输入始终返回相同顺序" stops being checkable.
+   *
+   * What it is for: an ordinal ("第三个") names a row by position, so it is only
+   * meaningful against the set the driver was looking at. Revision numbers
+   * already reject a stale pick; this makes *which* set was picked from legible
+   * and assertable rather than implied.
+   */
+  candidateSetId: z.string().min(1),
+  /** After this instant the ordinal path refuses the set and asks for a re-read. */
+  expiresAt: z.iso.datetime({ offset: true }),
   arrivals: z.array(flightArrivalCandidateSchema),
   sourceUpdatedAt: z.iso.datetime({ offset: true }),
 })
@@ -399,6 +442,7 @@ export type PreferenceScope = z.infer<typeof preferenceScopeSchema>
 export type GetPreferencesInput = z.infer<typeof getPreferencesInputSchema>
 export type GetPreferencesOutput = z.infer<typeof getPreferencesOutputSchema>
 export type FlightStatusInput = z.infer<typeof flightStatusInputSchema>
+export type ArrivalAirport = z.infer<typeof arrivalAirportSchema>
 export type FlightStatusOutput = z.infer<typeof flightStatusOutputSchema>
 export type FlightArrivalsInput = z.infer<typeof flightArrivalsInputSchema>
 export type FlightArrivalCandidate = z.infer<typeof flightArrivalCandidateSchema>
