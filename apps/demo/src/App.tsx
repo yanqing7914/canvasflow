@@ -315,7 +315,11 @@ export default function App({
       const nextTimelineIndex = nextIndexForTimelineEvent('navigation.started')
       const next = await run(() => api.action(response, 'start-navigation', 'navigation-plan'))
       if (!next) return { sent: false }
-      if (nextTimelineIndex !== undefined && navigationStarted(response, next)) {
+      // An HTTP 200 with an unchanged task is a provider failure surfaced as a
+      // fallback brief, not a started drive. The words stay in the field so 发送
+      // can retry them — the same protection the drawer and card paths have.
+      if (!navigationStarted(response, next)) return { sent: false }
+      if (nextTimelineIndex !== undefined) {
         setStepIndex(consumeAdvisoryContext(nextTimelineIndex))
       }
       setText('')

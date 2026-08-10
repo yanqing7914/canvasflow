@@ -2056,6 +2056,10 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备出发')
 
+      // The 200-with-unchanged-task outcome is a refused send: the words stay
+      // in the field so 发送 can retry them, exactly like a failed request.
+      expect(screen.getByLabelText('任务输入')).toHaveValue('开始导航')
+
       await openControls(user)
       await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
       await waitFor(() => expect(event).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
