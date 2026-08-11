@@ -25,6 +25,9 @@ export type AMapMap = {
   remove: (overlay: AMapOverlay | AMapOverlay[]) => void
   setFitView: (overlays?: AMapOverlay[] | null) => void
   setZoomAndCenter: (zoom: number, center: [number, number]) => void
+  setCenter?: (center: [number, number], immediately?: boolean) => void
+  on?: (event: 'dragstart' | 'zoomstart', listener: () => void) => void
+  off?: (event: 'dragstart' | 'zoomstart', listener: () => void) => void
   destroy: () => void
 }
 
@@ -49,6 +52,7 @@ export type AMapOverlay = Record<string, never>
 /** A marker the crawl moves, rather than removes and rebuilds each frame. */
 export type AMapMarker = AMapOverlay & {
   setPosition: (position: [number, number]) => void
+  setAngle?: (angle: number) => void
 }
 
 /** A polyline whose points the crawl rewrites, for the traversed tail. */

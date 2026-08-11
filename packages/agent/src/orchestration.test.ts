@@ -1,5 +1,5 @@
 import type { FlightStatusOutput, GetPreferencesOutput, ToolResult } from '@canvasflow/schema'
-import { createProviderRegistry, type ProviderRegistry, type ToolContext } from '@canvasflow/tools'
+import { createProviderRegistry, DEMO_PICKUP_POINT, type ProviderRegistry, type ToolContext } from '@canvasflow/tools'
 import { describe, expect, it, vi } from 'vitest'
 import { ReadToolOrchestrationError, ReadToolOrchestrator } from './orchestration'
 
@@ -83,6 +83,18 @@ describe('ReadToolOrchestrator', () => {
       expect.objectContaining({ taskId: 'pickup-001' }),
       expect.objectContaining({ destination: { id: 'destination-hongqiao-t1', name: '虹桥机场 T1' } }),
     )
+  })
+
+  it('plans the cockpit return from the fixed pickup point, not the demo origin', () => {
+    const registry = createMutableRegistry()
+    const orchestrator = new ReadToolOrchestrator({ registry })
+
+    const result = orchestrator.resolveCockpitRoute('pickup-001', 'return-from-pickup', { leg: 'return' })
+
+    expect(result.route.data.routeId).toBe('route-home-from-pickup-001')
+    expect(result.route.data.waypoints?.[0]).toMatchObject({
+      id: 'pickup-demo', latitude: DEMO_PICKUP_POINT.latitude, longitude: DEMO_PICKUP_POINT.longitude,
+    })
   })
 
   it('rejects invalid envelopes before using provider data', () => {

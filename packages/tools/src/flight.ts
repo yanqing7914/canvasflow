@@ -1,17 +1,45 @@
 import {
-  flightArrivalsInputSchema,
-  flightArrivalsOutputSchema,
   flightStatusInputSchema,
   flightStatusOutputSchema,
+  type FlightArrivalCandidate,
   type FlightArrivalsOutput,
   type FlightStatusOutput,
   type ToolResult,
 } from '@canvasflow/schema'
+import { z } from 'zod'
 import { ARRIVAL_CITY, arrivalBoard, flights, TIMEOUT_FLIGHT_NUMBER } from './data'
 import { errorResult, FIXTURE_GENERATED_AT, okResult, type ToolContext } from './result'
 
 const TOOL = 'flight.get-status'
 const ARRIVALS_TOOL = 'flight.list-arrivals'
+
+const cockpitPickupAirportSchema = z.object({
+  label: z.string().trim().min(1).max(80),
+  code: z.enum(['SHA', 'PVG']).optional(),
+}).strict()
+
+const arrivalsInputSchema = z.object({
+  arrivalCityId: z.string().min(1),
+  date: z.iso.date(),
+  limit: z.number().int().min(1).max(10).optional(),
+  queryAt: z.iso.datetime({ offset: true }).optional(),
+  queryId: z.string().min(1).optional(),
+  pickupAirport: cockpitPickupAirportSchema.optional(),
+})
+
+const arrivalCandidateSchema = z.object({
+  flightNumber: z.string().min(1), airlineName: z.string().min(1), originName: z.string().min(1),
+  status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
+  scheduledArrival: z.iso.datetime({ offset: true }), estimatedArrival: z.iso.datetime({ offset: true }),
+  arrivalAirport: z.enum(['SHA', 'PVG']).optional(), arrivalAirportName: z.string().min(1), terminal: z.string().min(1),
+})
+
+const arrivalsOutputSchema = z.object({
+  arrivalCityId: z.string().min(1), arrivalCityName: z.string().min(1), candidateSetId: z.string().min(1),
+  queryId: z.string().min(1).optional(), queriedAt: z.iso.datetime({ offset: true }).optional(),
+  expiresAt: z.iso.datetime({ offset: true }), arrivals: z.array(arrivalCandidateSchema),
+  sourceUpdatedAt: z.iso.datetime({ offset: true }),
+})
 
 export function getFlightStatus(ctx: ToolContext, input: unknown): ToolResult<FlightStatusOutput> {
   const parsed = flightStatusInputSchema.safeParse(input)
@@ -84,6 +112,55 @@ function candidateSetId(
   return `cs-${stableHash(canonical)}`
 }
 
+const dynamicFlightTemplates = [
+  { prefix: 'MU', airlineName: '东方航空', originName: '北京首都' },
+  { prefix: 'HO', airlineName: '吉祥航空', originName: '成都天府' },
+  { prefix: 'CA', airlineName: '中国国际航空', originName: '广州白云' },
+  { prefix: 'CZ', airlineName: '中国南方航空', originName: '深圳宝安' },
+  { prefix: 'FM', airlineName: '上海航空', originName: '西安咸阳' },
+] as const
+
+const dynamicArrivalOffsetsMinutes = [30, 72, 118, 173, 232] as const
+
+/** Fictional, injected-clock arrivals for the cockpit flow. */
+export function generateDeterministicFlightArrivals(input: {
+  pickupAirport: { label: string; code?: 'SHA' | 'PVG' }
+  queryAt: string
+  queryId: string
+}): FlightArrivalsOutput {
+  const queryMs = Date.parse(input.queryAt)
+  if (Number.isNaN(queryMs)) throw new TypeError('queryAt must be an ISO datetime')
+  if (!input.queryId.trim()) throw new TypeError('queryId is required')
+
+  const arrivals: FlightArrivalCandidate[] = dynamicFlightTemplates.map((template, index) => {
+    const estimatedMs = queryMs + dynamicArrivalOffsetsMinutes[index]! * 60_000
+    const scheduledMs = estimatedMs - (index % 2 === 0 ? 0 : 8) * 60_000
+    const suffix = String(1000 + (numericHash(`${input.queryId}:${input.pickupAirport.label}:${index}`) % 9000))
+    return {
+      flightNumber: `${template.prefix}${suffix}`,
+      airlineName: template.airlineName,
+      originName: template.originName,
+      status: index === 1 || index === 3 ? 'in-air' : 'scheduled',
+      scheduledArrival: shanghaiIso(scheduledMs),
+      estimatedArrival: shanghaiIso(estimatedMs),
+      ...(input.pickupAirport.code ? { arrivalAirport: input.pickupAirport.code } : {}),
+      arrivalAirportName: input.pickupAirport.label,
+      terminal: index % 3 === 0 ? 'T1' : 'T2',
+    }
+  })
+
+  return arrivalsOutputSchema.parse({
+    arrivalCityId: `airport:${stableHash(input.pickupAirport.label)}`,
+    arrivalCityName: input.pickupAirport.label,
+    candidateSetId: `cs-${stableHash(`${input.queryId}:${input.queryAt}:${input.pickupAirport.label}`)}`,
+    queryId: input.queryId,
+    queriedAt: input.queryAt,
+    expiresAt: shanghaiIso(queryMs + 6 * 60 * 60_000),
+    arrivals,
+    sourceUpdatedAt: input.queryAt,
+  })
+}
+
 /**
  * The arrivals board for a city on a date — the read that runs before the driver
  * has named a flight.
@@ -95,12 +172,23 @@ function candidateSetId(
  * error: no arrivals is a real answer, and the caller decides how to say it.
  */
 export function listFlightArrivals(ctx: ToolContext, input: unknown): ToolResult<FlightArrivalsOutput> {
-  const parsed = flightArrivalsInputSchema.safeParse(input)
+  const parsed = arrivalsInputSchema.safeParse(input)
   if (!parsed.success) {
     return errorResult(ctx, ARRIVALS_TOOL, 'INVALID_ARGUMENT', '需要 arrivalCityId 和 date', false)
   }
 
   const { arrivalCityId, date, limit } = parsed.data
+  if (parsed.data.queryAt || parsed.data.queryId || parsed.data.pickupAirport) {
+    if (!parsed.data.queryAt || !parsed.data.queryId || !parsed.data.pickupAirport) {
+      return errorResult(ctx, ARRIVALS_TOOL, 'INVALID_ARGUMENT', '动态航班需要 queryAt、queryId 和 pickupAirport', false)
+    }
+    const board = generateDeterministicFlightArrivals({
+      pickupAirport: parsed.data.pickupAirport,
+      queryAt: parsed.data.queryAt,
+      queryId: parsed.data.queryId,
+    })
+    return okResult(ctx, ARRIVALS_TOOL, { ...board, arrivals: board.arrivals.slice(0, limit ?? 5) })
+  }
   if (arrivalCityId !== ARRIVAL_CITY.id) {
     return errorResult(ctx, ARRIVALS_TOOL, 'CITY_NOT_FOUND', `未收录该城市的到达航班（${arrivalCityId}）`, false)
   }
@@ -126,7 +214,7 @@ export function listFlightArrivals(ctx: ToolContext, input: unknown): ToolResult
   return okResult(
     ctx,
     ARRIVALS_TOOL,
-    flightArrivalsOutputSchema.parse({
+    arrivalsOutputSchema.parse({
       arrivalCityId: ARRIVAL_CITY.id,
       arrivalCityName: ARRIVAL_CITY.name,
       candidateSetId: candidateSetId(ARRIVAL_CITY.id, date, arrivals),
@@ -142,4 +230,12 @@ export function listFlightArrivals(ctx: ToolContext, input: unknown): ToolResult
       sourceUpdatedAt: FIXTURE_GENERATED_AT,
     }),
   )
+}
+
+function numericHash(value: string): number {
+  return Number.parseInt(stableHash(value), 36) >>> 0
+}
+
+function shanghaiIso(epochMs: number): string {
+  return new Date(epochMs + 8 * 60 * 60_000).toISOString().replace(/\.\d{3}Z$/u, '+08:00')
 }

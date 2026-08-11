@@ -1,12 +1,50 @@
 import { describe, expect, it } from 'vitest'
 import { ARRIVAL_CITY, arrivalBoard, flights } from './data'
-import { getFlightStatus, listFlightArrivals } from './flight'
+import { generateDeterministicFlightArrivals, getFlightStatus, listFlightArrivals } from './flight'
 import type { ToolContext } from './result'
 
 const ctx: ToolContext = { taskId: 'pickup-001' }
 const DEMO_DATE = '2026-07-22'
 
 describe('flight.list-arrivals', () => {
+  it('generates exactly five airport-scoped future flights from an injected Shanghai instant', () => {
+    const board = generateDeterministicFlightArrivals({
+      pickupAirport: { code: 'SHA', label: '虹桥机场' },
+      queryAt: '2026-08-11T09:15:00+08:00',
+      queryId: 'query-001',
+    })
+    const queryMs = Date.parse(board.queriedAt!)
+    const estimates = board.arrivals.map((arrival) => Date.parse(arrival.estimatedArrival))
+
+    expect(board.arrivals).toHaveLength(5)
+    expect(board.arrivals.every((arrival) => arrival.arrivalAirport === 'SHA' && arrival.arrivalAirportName === '虹桥机场')).toBe(true)
+    expect(board.arrivals.every((arrival) => arrival.status === 'scheduled' || arrival.status === 'in-air')).toBe(true)
+    expect(estimates).toEqual([...estimates].sort((left, right) => left - right))
+    expect(Math.min(...estimates) - queryMs).toBeGreaterThanOrEqual(30 * 60_000)
+    expect(Math.max(...estimates) - queryMs).toBeLessThanOrEqual(4 * 60 * 60_000)
+  })
+
+  it('is stable within a query and mints a new batch for a re-query', () => {
+    const input = {
+      pickupAirport: { code: 'PVG' as const, label: '浦东机场' },
+      queryAt: '2026-08-11T09:15:00+08:00',
+      queryId: 'query-001',
+    }
+    const first = generateDeterministicFlightArrivals(input)
+    expect(generateDeterministicFlightArrivals(input)).toEqual(first)
+    expect(generateDeterministicFlightArrivals({ ...input, queryId: 'query-002' }).candidateSetId)
+      .not.toBe(first.candidateSetId)
+  })
+
+  it('preserves a verbatim other-airport label without claiming a known code', () => {
+    const board = generateDeterministicFlightArrivals({
+      pickupAirport: { label: '苏南硕放机场' },
+      queryAt: '2026-08-11T09:15:00+08:00',
+      queryId: 'query-other',
+    })
+    expect(board.arrivals.every((arrival) => arrival.arrivalAirportName === '苏南硕放机场')).toBe(true)
+    expect(board.arrivals.every((arrival) => arrival.arrivalAirport === undefined)).toBe(true)
+  })
   it('lists the authored board for the demo city and date', () => {
     const result = listFlightArrivals(ctx, { arrivalCityId: ARRIVAL_CITY.id, date: DEMO_DATE })
 

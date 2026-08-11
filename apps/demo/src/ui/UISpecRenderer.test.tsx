@@ -434,8 +434,8 @@ describe('UISpecRenderer', () => {
         props: {
           dateLabel: '今天',
           events: [
-            { eventId: 'e-1', title: '豆豆的睡前故事', startAt: '2026-07-22T21:30:00+08:00', location: '家' },
-            { eventId: 'e-2', title: '家庭电话', startAt: '2026-07-22T22:00:00+08:00' },
+            { eventId: 'e-1', title: '豆豆的睡前故事', startAt: '2026-07-22T21:30:00+08:00', location: '家', status: 'ongoing' },
+            { eventId: 'e-2', title: '家庭电话', startAt: '2026-07-22T22:00:00+08:00', status: 'upcoming' },
           ],
           moreCount: 3,
           freshness: 'fixture',
@@ -447,6 +447,8 @@ describe('UISpecRenderer', () => {
 
     const list = screen.getByRole('list', { name: '今日日程列表' })
     expect(list.textContent).toMatch(/21:30.*豆豆的睡前故事.*家.*22:00.*家庭电话/u)
+    expect(screen.getByText('进行中')).toHaveAttribute('data-status', 'ongoing')
+    expect(screen.getByText('即将开始')).toHaveAttribute('data-status', 'upcoming')
     expect(screen.getByText('还有 3 项')).toBeInTheDocument()
     expect(document.querySelector('.ui-schedule-card__empty')).not.toBeInTheDocument()
   })
@@ -1643,7 +1645,7 @@ describe('UISpecRenderer flight choices board', () => {
   }
 
   const renderer = () => screen.getByRole('region', { name: 'Generated task interface' })
-  const rows = () => Array.from(renderer().querySelectorAll<HTMLButtonElement>('.ui-flight-choices__row'))
+  const rows = () => Array.from(renderer().querySelectorAll<HTMLButtonElement>('button.ui-flight-choices__row'))
   const refreshPill = () => renderer().querySelector<HTMLButtonElement>('.ui-flight-choices__refresh')
 
   it('numbers every arrival and shows what tells two of them apart', () => {
@@ -1762,8 +1764,6 @@ describe('UISpecRenderer flight choices board', () => {
       [choices[0]],
       'not-a-list',
       undefined,
-      // A row that names no action would be a choice the driver cannot make.
-      choices.map((choice) => ({ ...choice, actionId: undefined })),
       // Six rows: past the point where a driver picks rather than reads.
       [...choices, ...choices],
     ]
@@ -1775,6 +1775,18 @@ describe('UISpecRenderer flight choices board', () => {
       expect(renderer().querySelector('.ui-card--fallback')).toBeInTheDocument()
       unmount()
     }
+  })
+
+  it('renders a board without action ids as read-only information', () => {
+    render(<UISpecRenderer
+      spec={boardSpec({ choices: choices.map((choice) => ({ ...choice, actionId: undefined })), actionIds: [], definedActionIds: [] })}
+      onAction={vi.fn()}
+      pending={false}
+    />)
+
+    expect(renderer().querySelector('.ui-flight-choices')).toBeInTheDocument()
+    expect(rows()).toHaveLength(0)
+    expect(renderer().querySelectorAll('.ui-flight-choices__row--readonly')).toHaveLength(3)
   })
 
   it('keeps action ids and internal names out of what the driver reads', () => {

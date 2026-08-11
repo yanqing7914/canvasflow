@@ -197,7 +197,9 @@ export function createSpeechController(deps: SpeechControllerDeps = {}) {
       }
 
       engine.lang = lang
-      engine.continuous = false
+      // The turn ends by the machine's silence policy, not by the first final
+      // segment. This lets later phrases reset the five-second window.
+      engine.continuous = true
       engine.interimResults = true
       if ('maxAlternatives' in engine) engine.maxAlternatives = 1
 
@@ -267,7 +269,9 @@ export function createSpeechController(deps: SpeechControllerDeps = {}) {
         synth.cancel()
         synth.speak(utterance)
       } catch {
-        if (fresh()) handlers.onSpeakError?.()
+        // The caller owns the synchronous `false` path. Firing the async error
+        // callback here as well can complete a queued utterance twice and skip
+        // the command that was drained after the first completion.
         return false
       }
       return true

@@ -8,7 +8,7 @@ import {
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from '@canvasflow/tools'
-import { ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent } from './composer'
+import { ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent, weatherCardComponent } from './composer'
 import { applyEvent, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
 import type { StoredTask } from './store'
@@ -171,6 +171,31 @@ describe('Agent UISpec composer', () => {
       advisory: expect.stringContaining('室内等候'),
       freshness: 'fixture',
     })
+  })
+
+  it('lets cockpit weather pin the reading to now without changing the legacy arrival label', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const reads = orchestrator.prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const weather = orchestrator.resolveWeather('pickup-001', 'request-001', { locationId: 'destination-hongqiao-t2' })
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: {
+        flightNumber: reads.flight.flightNumber,
+        status: reads.flight.status,
+        scheduledArrival: reads.flight.scheduledArrival,
+        estimatedArrival: reads.flight.estimatedArrival,
+        terminal: reads.flight.terminal,
+      },
+    }
+
+    const legacy = weatherCardComponent(task, weather.data)
+    const cockpit = weatherCardComponent(task, weather.data, { timeLabel: '现在' })
+
+    if (legacy.type !== 'weather-card' || cockpit.type !== 'weather-card') throw new Error('expected weather cards')
+    expect(legacy.props.timeLabel).toBe('20:40 到达时')
+    expect(cockpit.props.timeLabel).toBe('现在')
   })
 
   it('appends the weather card and extends the split layout while driving', () => {

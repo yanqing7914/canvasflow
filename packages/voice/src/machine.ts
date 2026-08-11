@@ -10,6 +10,7 @@ import {
   type VoiceError,
   type VoiceErrorKind,
   type VoiceMachineConfig,
+  type VoiceRecognitionSource,
   type VoiceState,
 } from './types'
 
@@ -30,13 +31,14 @@ export type VoiceMachineSnapshot = {
 export type VoiceMachineDeps = {
   effects?: VoiceEffects
   config?: VoiceMachineConfig
+  recognitionSource?: VoiceRecognitionSource
   setTimer?: (fn: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
 }
 
 type TimerName = 'listen' | 'submit'
 
-const DEFAULT_LISTEN_MAX_MS = 12_000
+const DEFAULT_SILENCE_MS = 5_000
 const DEFAULT_SUBMIT_MAX_MS = 15_000
 
 /**
@@ -50,7 +52,10 @@ const DEFAULT_SUBMIT_MAX_MS = 15_000
  */
 export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
   const effects = deps.effects ?? {}
-  const listenMaxMs = deps.config?.listenMaxMs ?? DEFAULT_LISTEN_MAX_MS
+  const silenceMs = deps.config?.silenceMs
+    ?? deps.config?.listenMaxMs
+    ?? DEFAULT_SILENCE_MS
+  const autoSubmit = deps.config?.autoSubmit ?? true
   const submitMaxMs = deps.config?.submitMaxMs ?? DEFAULT_SUBMIT_MAX_MS
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
   const clearTimer = deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as never))
@@ -96,6 +101,43 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     effects.onError?.(error)
   }
 
+  function submitTranscript(candidate: string) {
+    transcript = normalizeTranscript(candidate)
+    transition('submitting')
+    setNamedTimer('submit', () => fail('timeout'), submitMaxMs)
+    effects.submit?.(transcript, {
+      source: 'voice',
+      confidence,
+      ...(deps.recognitionSource ? { recognitionSource: deps.recognitionSource } : {}),
+    })
+  }
+
+  function finishListening(candidate: string) {
+    clearNamedTimer('listen')
+    interim = ''
+    const normalized = normalizeTranscript(candidate)
+    if (isBlankTranscript(normalized)) {
+      fail('no-speech')
+      return
+    }
+    effects.closeAsr?.()
+    transcript = normalized
+    if (autoSubmit) {
+      submitTranscript(normalized)
+      return
+    }
+    transition('transcribing')
+  }
+
+  function silenceElapsed() {
+    if (state !== 'listening') return
+    finishListening(mergeInterim(transcript, interim))
+  }
+
+  function resetSilenceTimer() {
+    setNamedTimer('listen', silenceElapsed, silenceMs)
+  }
+
   function beginListening() {
     clearAllTimers()
     error = undefined
@@ -105,7 +147,7 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     speaking = undefined
     transition('listening')
     effects.openAsr?.()
-    setNamedTimer('listen', () => fail('timeout'), listenMaxMs)
+    resetSilenceTimer()
   }
 
   function goIdle() {
@@ -113,6 +155,14 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     interim = ''
     speaking = undefined
     transition('idle')
+  }
+
+  function reportSpeakFailure() {
+    const playbackError = voiceError('speak')
+    error = playbackError
+    speaking = undefined
+    transition('idle')
+    effects.onError?.(playbackError)
   }
 
   return {
@@ -137,15 +187,7 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
           return
         case 'listening':
           // Second press ends the turn: keep whatever was heard so far.
-          clearNamedTimer('listen')
-          effects.closeAsr?.()
-          if (isBlankTranscript(mergeInterim(transcript, interim))) {
-            fail('no-speech')
-            return
-          }
-          transcript = normalizeTranscript(mergeInterim(transcript, interim))
-          interim = ''
-          transition('transcribing')
+          finishListening(mergeInterim(transcript, interim))
           return
         case 'speaking':
           // Barge-in: cut the playback and start a new turn immediately.
@@ -163,22 +205,25 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     asrPartial(text: string) {
       if (state !== 'listening') return
       interim = text
+      if (!isBlankTranscript(text)) resetSilenceTimer()
     },
 
-    /** Engine reported a stable segment. Ends the listening turn. */
+    /** Engine reported a stable segment. Keep listening until five seconds of silence. */
     asrFinal(text: string, rawConfidence?: unknown) {
       if (state !== 'listening') return
-      clearNamedTimer('listen')
-      const merged = normalizeTranscript(mergeInterim(transcript, text))
+      const merged = normalizeTranscript(mergeInterim(transcript, text || interim))
       interim = ''
       confidence = normalizeConfidence(rawConfidence)
-      effects.closeAsr?.()
       if (isBlankTranscript(merged)) {
         fail('no-speech')
         return
       }
       transcript = merged
-      transition('transcribing')
+      if (!autoSubmit) {
+        finishListening(merged)
+        return
+      }
+      resetSilenceTimer()
     },
 
     asrError(kind: Extract<VoiceErrorKind, 'permission' | 'no-speech' | 'recognition'>) {
@@ -189,15 +234,20 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     /** Engine closed the stream without a final result. */
     asrEnd() {
       if (state !== 'listening') return
-      clearNamedTimer('listen')
       const merged = normalizeTranscript(mergeInterim(transcript, interim))
-      interim = ''
+      if (!autoSubmit) {
+        finishListening(merged)
+        return
+      }
       if (isBlankTranscript(merged)) {
         fail('no-speech')
         return
       }
+      // Continuous engines should remain open, but browsers can still end a
+      // stream after a final result. Preserve the words and let the same silence
+      // timer finish the turn instead of treating engine closure as user intent.
       transcript = merged
-      transition('transcribing')
+      interim = ''
     },
 
     /** User edited the transcript before confirming. */
@@ -216,10 +266,7 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
       if (state !== 'transcribing') return
       const candidate = normalizeTranscript(text ?? transcript)
       if (isBlankTranscript(candidate)) return
-      transcript = candidate
-      transition('submitting')
-      setNamedTimer('submit', () => fail('timeout'), submitMaxMs)
-      effects.submit?.(candidate, { source: 'voice', confidence })
+      submitTranscript(candidate)
     },
 
     /**
@@ -234,7 +281,11 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
       if (speakText && !isBlankTranscript(speakText)) {
         speaking = speakText
         transition('speaking')
-        effects.speak?.(speakText)
+        try {
+          if (!effects.speak || effects.speak(speakText) === false) reportSpeakFailure()
+        } catch {
+          reportSpeakFailure()
+        }
         return
       }
       goIdle()
@@ -248,7 +299,7 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
 
     speakError() {
       if (state !== 'speaking') return
-      fail('speak')
+      reportSpeakFailure()
     },
 
     /** Explicit cancel: drop the turn without submitting anything. */

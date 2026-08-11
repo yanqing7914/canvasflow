@@ -1,10 +1,17 @@
 import { describe, expect, it } from 'vitest'
-import { listUpcomingEvents } from './calendar'
+import { generateRuntimeCalendar, listUpcomingEvents } from './calendar'
 import type { ToolContext } from './result'
 
 const ctx: ToolContext = { taskId: 'pickup-001' }
 
 describe('calendar.list-upcoming', () => {
+  it('builds the runtime day in Asia/Shanghai with all three requested statuses', () => {
+    expect(generateRuntimeCalendar({ date: '2026-08-11', now: '2026-08-11T14:30:00+08:00' }).events).toEqual([
+      expect.objectContaining({ title: 'her开发日会', startAt: '2026-08-11T10:00:00+08:00', endAt: '2026-08-11T11:00:00+08:00', status: 'ended' }),
+      expect.objectContaining({ title: '新建her', startAt: '2026-08-11T14:00:00+08:00', endAt: '2026-08-11T15:00:00+08:00', status: 'ongoing' }),
+      expect.objectContaining({ title: 'A2A调研', startAt: '2026-08-11T16:00:00+08:00', endAt: '2026-08-11T17:00:00+08:00', status: 'upcoming' }),
+    ])
+  })
   it('returns only the requested day, ordered by start time', () => {
     const result = listUpcomingEvents(ctx, { date: '2026-07-22' })
 

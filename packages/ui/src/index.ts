@@ -13,6 +13,8 @@ import {
 } from '@canvasflow/tools'
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
+  'collecting-airport': '确认机场', 'choosing-flight': '选择航班', 'confirming-outbound': '确认出发',
+  'outbound-driving': '去程导航', 'passengers-onboard': '乘客已上车', 'confirming-return': '确认返程', 'return-driving': '返程导航',
   'collecting-information': '收集信息', preparing: '准备出发', 'driving-to-airport': '前往机场',
   'approaching-airport': '接近机场', 'waiting-for-passengers': '等待家人', 'returning-home': '返程中', completed: '已完成', cancelled: '已取消',
 }
@@ -35,7 +37,10 @@ export type ComposerContext = {
 export function composePickupSpec(task: AirportPickupTaskState, context: ComposerContext = {}): UISpec {
   if (context.fallback) return composeFallbackSpec(task, context.fallback.title, context.fallback.message, context.fallback.level)
   const nextUiRevision = Math.max(task.uiRevision, task.taskRevision) + 1
-  const phaseOrder: AirportPickupTaskState['phase'][] = ['collecting-information', 'preparing', 'driving-to-airport', 'approaching-airport', 'waiting-for-passengers', 'returning-home', 'completed']
+  const cockpitPhase = ['collecting-airport', 'choosing-flight', 'confirming-outbound', 'outbound-driving', 'passengers-onboard', 'confirming-return', 'return-driving'].includes(task.phase)
+  const phaseOrder: AirportPickupTaskState['phase'][] = cockpitPhase
+    ? ['collecting-airport', 'choosing-flight', 'confirming-outbound', 'outbound-driving', 'waiting-for-passengers', 'passengers-onboard', 'confirming-return', 'return-driving', 'completed']
+    : ['collecting-information', 'preparing', 'driving-to-airport', 'approaching-airport', 'waiting-for-passengers', 'returning-home', 'completed']
   const currentIndex = phaseOrder.indexOf(task.phase)
   const progressStatus = (phase: AirportPickupTaskState['phase']) => {
     const phaseIndex = phaseOrder.indexOf(phase)

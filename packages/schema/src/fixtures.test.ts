@@ -14,9 +14,19 @@ describe('airport pickup fixtures', () => {
       const parsed = scenarioFixtureSchema.safeParse(JSON.parse(readFileSync(resolve(directory, file), 'utf8')))
       expect(parsed.success, file).toBe(true)
       if (!parsed.success) continue
-      const afterEvent = applyEvent(parsed.data.initialTaskState, parsed.data.inputEvent)
+      // Scenario JSON currently contains legacy phases only. The cast keeps this
+      // compatibility suite focused on those fixtures while the shared schema
+      // also admits the cockpit phases.
+      const afterEvent = applyEvent(
+        parsed.data.initialTaskState as Parameters<typeof applyEvent>[0],
+        parsed.data.inputEvent as Parameters<typeof applyEvent>[1],
+      )
       expect(afterEvent, file).toEqual(parsed.data.expectedTaskState)
-      expect(planEffects(parsed.data.initialTaskState, parsed.data.inputEvent, parsed.data.toolResults), file)
+      expect(planEffects(
+        parsed.data.initialTaskState as Parameters<typeof planEffects>[0],
+        parsed.data.inputEvent as Parameters<typeof planEffects>[1],
+        parsed.data.toolResults,
+      ), file)
         .toEqual(parsed.data.expectedEffects)
       const composed = file === 'provider-timeout.json'
         ? composeFallbackSpec(afterEvent, '航班数据暂时不可用', '正在使用最近缓存，可稍后重试。')

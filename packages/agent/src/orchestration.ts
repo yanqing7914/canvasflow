@@ -20,10 +20,12 @@ import {
   type VehicleContext,
   type VehicleStatusOutput,
   type WeatherOutput,
+  type AirportPickupTaskState,
 } from '@canvasflow/schema'
 import {
   ARRIVAL_CITY,
   createProviderRegistry,
+  DEMO_PICKUP_POINT,
   DEMO_ORIGIN,
   pickupDestinationForAirport,
   type ProviderRegistry,
@@ -122,13 +124,23 @@ export interface ReadToolOrchestration {
    * the same reason as resolveWeather; a missing implementation degrades to
    * the schedule-unavailable reply.
    */
-  resolveSchedule?(taskId: string, requestId: string, input: { date: string }): SuccessfulToolResult<ListUpcomingEventsOutput>
+  resolveSchedule?(taskId: string, requestId: string, input: { date: string; now?: string }): SuccessfulToolResult<ListUpcomingEventsOutput>
   /**
    * The arrivals board for the demo's one pickup city, on the fixture date.
    * Optional for the same reason as the two above; without it the Agent asks
    * for the flight number instead of offering a list.
    */
-  resolveArrivals?(taskId: string, requestId: string, input?: { limit?: number }): SuccessfulToolResult<FlightArrivalsOutput>
+  resolveArrivals?(taskId: string, requestId: string, input?: {
+    limit?: number
+    queryAt?: string
+    queryId?: string
+    pickupAirport?: AirportPickupTaskState['pickupAirport']
+  }): SuccessfulToolResult<FlightArrivalsOutput>
+  resolveCockpitRoute?(taskId: string, requestId: string, input: {
+    leg: 'outbound' | 'return'
+    pickupAirport?: AirportPickupTaskState['pickupAirport']
+    vehicle?: VehicleContext
+  }): { route: SuccessfulToolResult<RoutePlanOutput>; vehicle: SuccessfulToolResult<VehicleStatusOutput> }
 }
 
 export class ReadToolOrchestrator implements ReadToolOrchestration {
@@ -283,7 +295,7 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
     )
   }
 
-  resolveSchedule(taskId: string, requestId: string, input: { date: string }): SuccessfulToolResult<ListUpcomingEventsOutput> {
+  resolveSchedule(taskId: string, requestId: string, input: { date: string; now?: string }): SuccessfulToolResult<ListUpcomingEventsOutput> {
     return this.#call(
       'calendar.list-upcoming',
       taskId,
@@ -298,18 +310,48 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
    * demo has one pickup city and one fixture day, and letting a caller pass
    * either would invite a board for a date the flight lookups cannot match.
    */
-  resolveArrivals(taskId: string, requestId: string, input: { limit?: number } = {}): SuccessfulToolResult<FlightArrivalsOutput> {
+  resolveArrivals(taskId: string, requestId: string, input: {
+    limit?: number
+    queryAt?: string
+    queryId?: string
+    pickupAirport?: AirportPickupTaskState['pickupAirport']
+  } = {}): SuccessfulToolResult<FlightArrivalsOutput> {
     return this.#call(
       'flight.list-arrivals',
       taskId,
       requestId,
       {
         arrivalCityId: ARRIVAL_CITY.id,
-        date: this.#fixtureDate,
+        date: input.queryAt?.slice(0, 10) ?? this.#fixtureDate,
         ...(input.limit === undefined ? {} : { limit: input.limit }),
+        ...(input.queryAt ? { queryAt: input.queryAt } : {}),
+        ...(input.queryId ? { queryId: input.queryId } : {}),
+        ...(input.pickupAirport ? { pickupAirport: input.pickupAirport } : {}),
       },
       toolResultSchema(flightArrivalsOutputSchema),
     )
+  }
+
+  resolveCockpitRoute(taskId: string, requestId: string, input: {
+    leg: 'outbound' | 'return'
+    pickupAirport?: AirportPickupTaskState['pickupAirport']
+    vehicle?: VehicleContext
+  }): { route: SuccessfulToolResult<RoutePlanOutput>; vehicle: SuccessfulToolResult<VehicleStatusOutput> } {
+    const destination = input.leg === 'return'
+      ? { id: 'destination-home', name: '家' }
+      : input.pickupAirport?.code
+        ? pickupDestinationForAirport(input.pickupAirport.code)
+        : { id: 'destination-hongqiao-t2', name: input.pickupAirport?.label ?? '机场接人点' }
+    return {
+      route: this.#call(
+        'navigation.plan-route', taskId, requestId,
+        { origin: input.leg === 'return' ? DEMO_PICKUP_POINT : this.#origin, destination }, toolResultSchema(routePlanOutputSchema),
+      ),
+      vehicle: this.#call(
+        'vehicle.get-status', taskId, requestId,
+        input.vehicle ? { context: input.vehicle } : undefined, toolResultSchema(vehicleStatusOutputSchema),
+      ),
+    }
   }
 
   #call<T>(

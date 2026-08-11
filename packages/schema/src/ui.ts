@@ -229,6 +229,7 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
          * card and the strip cannot tell the driver two different stories.
          */
         atRisk: z.boolean().optional(),
+        status: z.enum(['ended', 'ongoing', 'upcoming']).optional(),
       })).max(4),
       /** How many events the cap cut off; absent when everything fits. */
       moreCount: z.number().int().positive().optional(),
@@ -277,7 +278,7 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
          * twice in the same city.
          */
         airportName: z.string().min(1),
-        actionId: z.string().min(1),
+        actionId: z.string().min(1).optional(),
       })).min(2).max(5),
       freshness: z.enum(['live', 'cached', 'fixture']),
       /**
@@ -316,6 +317,51 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
     }),
   }),
   componentBase.extend({
+    type: z.literal('flight-detail'),
+    props: z.object({
+      flightNumber: z.string().min(1),
+      airlineName: z.string().min(1),
+      originName: z.string().min(1),
+      arrivalAirportName: z.string().min(1),
+      scheduledArrival: z.string().min(1),
+      estimatedArrival: z.string().min(1),
+      status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
+      terminal: z.string().min(1),
+      freshness: z.enum(['live', 'cached', 'fixture']),
+    }),
+  }),
+  componentBase.extend({
+    type: z.literal('route-confirmation'),
+    props: z.object({
+      leg: z.enum(['outbound', 'return']),
+      destination: z.string().min(1),
+      flightNumber: z.string().min(1).optional(),
+      flightEstimatedArrival: z.string().min(1).optional(),
+      durationMinutes: z.number().nonnegative(),
+      arrivalTime: z.string().min(1),
+      distanceKm: z.number().nonnegative(),
+      currentBatteryPercent: z.number().min(0).max(100),
+      estimatedBatteryAtArrival: z.number().min(0).max(100),
+      routeSketch: routeSketchSchema.optional(),
+      simulated: z.literal(true),
+    }),
+  }),
+  componentBase.extend({
+    type: z.literal('vehicle-status'),
+    props: z.object({
+      speedKph: z.number().nonnegative(),
+      batteryPercent: z.number().min(0).max(100),
+      remainingRangeKm: z.number().nonnegative(),
+      roadName: z.string().min(1),
+      destination: z.string().min(1),
+      remainingDistanceKm: z.number().nonnegative(),
+      eta: z.string().min(1),
+      speedMode: z.enum(['slow', 'normal', 'fast']),
+      drivingStatus: z.string().min(1),
+      simulated: z.literal(true),
+    }),
+  }),
+  componentBase.extend({
     type: z.literal('alert'),
     props: z.object({ level: z.enum(['info', 'warning', 'critical']), title: z.string(), message: z.string().optional() }),
   }),
@@ -337,6 +383,33 @@ export const actionSpecSchema = z.object({
   ]),
 })
 
+export const windowKindSchema = z.enum([
+  'flight-list',
+  'outbound-confirmation',
+  'weather',
+  'calendar',
+  'flight-detail',
+  'passenger-onboard',
+  'return-confirmation',
+  'vehicle-status',
+  'processing',
+  'error',
+])
+
+export const windowSpecSchema = z.object({
+  id: z.string().min(1),
+  kind: windowKindSchema,
+  title: z.string().min(1),
+  componentIds: z.array(z.string().min(1)).min(1),
+  actionIds: z.array(z.string().min(1)).optional(),
+  size: z.enum(['compact', 'medium', 'large']),
+  controls: z.object({
+    closable: z.boolean(),
+    minimizable: z.boolean(),
+    maximizable: z.boolean(),
+  }).strict(),
+}).strict()
+
 export const uiSpecSchema = z
   .object({
     version: z.literal('1.0'),
@@ -353,6 +426,7 @@ export const uiSpecSchema = z
     layout: layoutSpecSchema,
     components: z.array(componentSpecSchema),
     actions: z.array(actionSpecSchema),
+    windows: z.array(windowSpecSchema).optional(),
     meta: z.object({
       generatedBy: z.enum(['llm', 'composer', 'fallback']), sourceTaskRevision: z.number().int().nonnegative(),
       requiresConfirm: z.boolean(), generatedAt: z.iso.datetime({ offset: true }), traceId: z.string(),
@@ -367,12 +441,40 @@ export const uiSpecSchema = z
       context.addIssue({ code: 'custom', path: ['components'], message: 'Component ids must be unique' })
     }
     const slotIds = Object.values(spec.layout.slots).flat()
-    if (slotIds.length !== ids.length || new Set(slotIds).size !== slotIds.length || slotIds.some((id) => !ids.includes(id))) {
-      context.addIssue({ code: 'custom', path: ['layout', 'slots'], message: 'Slots must reference each component exactly once' })
+    if (new Set(slotIds).size !== slotIds.length || slotIds.some((id) => !ids.includes(id))) {
+      context.addIssue({ code: 'custom', path: ['layout', 'slots'], message: 'Slots must reference known components without duplicates' })
+    }
+    const actionIds = spec.actions.map((action) => action.id)
+    if (new Set(actionIds).size !== actionIds.length) {
+      context.addIssue({ code: 'custom', path: ['actions'], message: 'Action ids must be unique' })
+    }
+    const windowIds = (spec.windows ?? []).map((window) => window.id)
+    if (new Set(windowIds).size !== windowIds.length) {
+      context.addIssue({ code: 'custom', path: ['windows'], message: 'Window ids must be unique' })
+    }
+    const windowComponentIds = (spec.windows ?? []).flatMap((window) => window.componentIds)
+    if (new Set(windowComponentIds).size !== windowComponentIds.length || windowComponentIds.some((id) => !ids.includes(id))) {
+      context.addIssue({ code: 'custom', path: ['windows'], message: 'Window component ownership must be unique and reference components' })
+    }
+    const ownedComponentIds = new Set([...slotIds, ...windowComponentIds])
+    if (ownedComponentIds.size !== ids.length || ids.some((id) => !ownedComponentIds.has(id))) {
+      context.addIssue({ code: 'custom', path: ['windows'], message: 'Every component must be owned by layout or one window' })
+    }
+    for (const [index, window] of (spec.windows ?? []).entries()) {
+      if (new Set(window.componentIds).size !== window.componentIds.length
+        || window.componentIds.some((id) => !ids.includes(id))) {
+        context.addIssue({ code: 'custom', path: ['windows', index, 'componentIds'], message: 'Window componentIds must be unique and reference components' })
+      }
+      if (window.actionIds && (new Set(window.actionIds).size !== window.actionIds.length
+        || window.actionIds.some((id) => !actionIds.includes(id)))) {
+        context.addIssue({ code: 'custom', path: ['windows', index, 'actionIds'], message: 'Window actionIds must be unique and reference actions' })
+      }
     }
   })
 
 export type ComponentSpec = z.infer<typeof componentSpecSchema>
 export type ActionSpec = z.infer<typeof actionSpecSchema>
 export type RouteSketch = z.infer<typeof routeSketchSchema>
+export type WindowKind = z.infer<typeof windowKindSchema>
+export type WindowSpec = z.infer<typeof windowSpecSchema>
 export type UISpec = z.infer<typeof uiSpecSchema>

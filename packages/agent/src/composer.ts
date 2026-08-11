@@ -129,6 +129,13 @@ function calendarAdvisoryCard(
 export const REFRESH_FLIGHT_OPTIONS_ACTION_ID = 'refresh-flight-options'
 
 const phaseLabels: Record<AirportPickupTaskState['phase'], string> = {
+  'collecting-airport': '确认机场',
+  'choosing-flight': '选择航班',
+  'confirming-outbound': '确认出发',
+  'outbound-driving': '去程导航',
+  'passengers-onboard': '乘客已上车',
+  'confirming-return': '确认返程',
+  'return-driving': '返程导航',
   'collecting-information': '收集信息',
   preparing: '准备出发',
   'driving-to-airport': '前往机场',
@@ -177,7 +184,43 @@ export function composeAgentSpec(
   let actions: UISpec['actions'] = []
   let requiresConfirm = false
 
-  if (task.phase === 'collecting-information') {
+  if (task.phase === 'collecting-airport') {
+    components = [{ id: 'airport-required', type: 'status-banner', props: { level: 'info', title: '你要去哪个机场？', message: '例如虹桥机场或浦东机场。' } }]
+  } else if (task.phase === 'choosing-flight') {
+    const board = flightChoicesComponent(toolResults['flight.list-arrivals']?.data)
+    components = board ? [board.component] : [{ id: 'flight-loading', type: 'status-banner', props: { level: 'info', title: '正在查询最近航班' } }]
+    actions = board?.actions ?? []
+  } else if ((task.phase === 'confirming-outbound' || task.phase === 'confirming-return') && task.navigation && task.navigationSimulation) {
+    const outbound = task.phase === 'confirming-outbound'
+    const route = toolResults['navigation.plan-route']?.data
+    const componentId = outbound ? 'outbound-confirmation' : 'return-confirmation'
+    const actionId = outbound ? 'start-outbound' : 'start-return'
+    title = outbound ? '现在出发' : '确认返程'
+    components = [{
+      id: componentId, type: 'route-confirmation', actions: [actionId], props: {
+        leg: outbound ? 'outbound' : 'return', destination: task.navigation.destination,
+        ...(outbound && task.flight ? { flightNumber: task.flight.flightNumber, flightEstimatedArrival: task.flight.estimatedArrival } : {}),
+        durationMinutes: route?.durationMinutes ?? (outbound ? 20 : 40), arrivalTime: task.navigation.eta,
+        distanceKm: task.navigationSimulation.distanceKm,
+        currentBatteryPercent: task.navigationSimulation.initialBatteryPercent,
+        estimatedBatteryAtArrival: task.navigationSimulation.estimatedBatteryAtArrival,
+        ...(route ? { routeSketch: routeSketchFor(task, route) } : {}), simulated: true,
+      },
+    }]
+    actions = [{ id: actionId, label: outbound ? '现在出发' : '开始返程', style: 'primary', event: { type: 'tool-request', actionToken: actionId } }]
+    requiresConfirm = true
+  } else if (task.phase === 'passengers-onboard') {
+    title = '乘客已上车'
+    components = [{ id: 'passenger-onboard', type: 'passenger-status', props: { label: '乘客已上车', status: 'confirmed-onboard' } }]
+  } else if (task.phase === 'outbound-driving' || task.phase === 'return-driving') {
+    density = 'compact'
+    components = [{ id: 'navigation-summary', type: 'navigation-summary', props: {
+      routeId: task.navigation?.routeId ?? task.navigationSimulation?.routeId ?? 'simulation-route',
+      destination: task.navigation?.destination ?? (task.phase === 'return-driving' ? '家' : task.pickupAirport?.label ?? '机场'),
+      eta: task.navigation?.eta ?? task.updatedAt, distanceKm: task.navigationSimulation?.distanceKm ?? 0,
+      estimatedBatteryAtArrival: task.navigationSimulation?.estimatedBatteryAtArrival ?? 0,
+    } }]
+  } else if (task.phase === 'collecting-information') {
     // A board the driver can pick from answers the missing slot better than a
     // banner asking them to recall a number. When there is no usable board the
     // ask stands unchanged: the question is still the question.
@@ -618,13 +661,24 @@ export function composeAgentSpec(
       }
     }
   }
+  const cockpitFlightChoices = components.find((component) => component.type === 'flight-choices')
+  const cockpitWindow = task.phase === 'choosing-flight' && cockpitFlightChoices
+    ? [{ id: `flight-list-${task.uiRevision + 1}`, kind: 'flight-list' as const, title: `${task.pickupAirport?.label ?? '机场'}到达航班`, componentIds: [cockpitFlightChoices.id], actionIds: actions.map((action) => action.id), size: 'large' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
+    : task.phase === 'confirming-outbound'
+      ? [{ id: `outbound-confirmation-${task.uiRevision + 1}`, kind: 'outbound-confirmation' as const, title: '现在出发', componentIds: ['outbound-confirmation'], actionIds: ['start-outbound'], size: 'medium' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
+      : task.phase === 'passengers-onboard'
+        ? [{ id: `passenger-onboard-${task.uiRevision + 1}`, kind: 'passenger-onboard' as const, title: '乘客已上车', componentIds: ['passenger-onboard'], size: 'compact' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
+        : task.phase === 'confirming-return'
+          ? [{ id: `return-confirmation-${task.uiRevision + 1}`, kind: 'return-confirmation' as const, title: '确认返程', componentIds: ['return-confirmation'], actionIds: ['start-return'], size: 'medium' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
+          : undefined
+  const windowOwned = new Set((cockpitWindow ?? []).flatMap((window) => window.componentIds))
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId,
     taskRevision: task.taskRevision, uiRevision: Math.max(task.uiRevision, task.taskRevision) + 1,
     phase: task.phase, title,
     presentation: { mode: 'replace', density, theme: 'dark', priority },
-    layout: layout ?? { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } },
-    components, actions,
+    layout: layout ?? { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id).filter((id) => !windowOwned.has(id)) } },
+    components, actions, ...(cockpitWindow ? { windows: cockpitWindow } : {}),
     meta: {
       generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm,
       generatedAt: task.updatedAt, traceId: `trace-${task.taskId}-${task.taskRevision}`,
@@ -838,7 +892,11 @@ function overviewComponent(task: AirportPickupTaskState, airportName: string): U
 
 function progressComponent(task: AirportPickupTaskState): UISpec['components'][number] {
   const phases: AirportPickupTaskState['phase'][] = [
-    'collecting-information', 'preparing', 'driving-to-airport', 'approaching-airport', 'waiting-for-passengers', 'returning-home', 'completed',
+    ...(task.phase === 'collecting-airport' || task.phase === 'choosing-flight' || task.phase === 'confirming-outbound'
+      || task.phase === 'outbound-driving' || task.phase === 'passengers-onboard'
+      || task.phase === 'confirming-return' || task.phase === 'return-driving'
+      ? ['collecting-airport', 'choosing-flight', 'confirming-outbound', 'outbound-driving', 'waiting-for-passengers', 'passengers-onboard', 'confirming-return', 'return-driving', 'completed'] as const
+      : ['collecting-information', 'preparing', 'driving-to-airport', 'approaching-airport', 'waiting-for-passengers', 'returning-home', 'completed'] as const),
   ]
   const currentIndex = phases.indexOf(task.phase)
   const visiblePhases = task.phase === 'completed' ? phases.slice(-5) : phases.slice(0, Math.max(5, currentIndex + 1))
@@ -1005,13 +1063,15 @@ function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
   if (!board || !pickable) return undefined
   const rows = pickable.map((arrival) => ({
     arrival,
-    actionId: `pick-${arrival.flightNumber}`,
+    actionId: board.queryId ? `pick-${board.queryId}-${arrival.flightNumber}` : `pick-${arrival.flightNumber}`,
   }))
+  const cockpitBoard = board.queryId !== undefined
+  const componentId = board.queryId ? `flight-choices-${board.queryId}` : 'flight-choices'
   return {
     component: {
-      id: 'flight-choices',
+      id: componentId,
       type: 'flight-choices',
-      actions: [...rows.map((row) => row.actionId), REFRESH_FLIGHT_OPTIONS_ACTION_ID],
+      actions: [...rows.map((row) => row.actionId), ...(cockpitBoard ? [] : [REFRESH_FLIGHT_OPTIONS_ACTION_ID])],
       props: {
         arrivalCityName: board.arrivalCityName,
         dateLabel: '今天',
@@ -1035,7 +1095,7 @@ function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
           actionId,
         })),
         freshness: 'fixture',
-        refreshActionId: REFRESH_FLIGHT_OPTIONS_ACTION_ID,
+        ...(cockpitBoard ? {} : { refreshActionId: REFRESH_FLIGHT_OPTIONS_ACTION_ID }),
       },
     },
     // The card draws every row identically, so `style` only matters to a group
@@ -1046,16 +1106,26 @@ function flightChoicesComponent(board: FlightArrivalsOutput | undefined): {
         id: actionId,
         label: `接 ${arrival.flightNumber}`,
         style: index === 0 ? ('primary' as const) : ('secondary' as const),
-        event: { type: 'agent-message' as const, text: `航班号 ${arrival.flightNumber}` },
+        event: cockpitBoard
+          ? { type: 'tool-request' as const, actionToken: actionId }
+          : { type: 'agent-message' as const, text: `航班号 ${arrival.flightNumber}` },
       })),
-      {
+      ...(cockpitBoard ? [] : [{
         id: REFRESH_FLIGHT_OPTIONS_ACTION_ID,
         label: '刷新航班',
         style: 'secondary' as const,
         event: { type: 'agent-message' as const, text: '刷新航班' },
-      },
+      }]),
     ],
   }
+}
+
+/** Build a standalone cockpit arrivals window from a deterministic query result. */
+export function composeCockpitFlightChoices(board: FlightArrivalsOutput): {
+  component: UISpec['components'][number]
+  actions: UISpec['actions']
+} | undefined {
+  return flightChoicesComponent(board)
 }
 
 /** The clock time inside a fixture timestamp, or the timestamp if it has none. */
@@ -1165,6 +1235,7 @@ export const weatherConditionLabels: Record<WeatherOutput['condition'], string> 
 export function weatherCardComponent(
   task: AirportPickupTaskState,
   data: WeatherOutput,
+  options: { timeLabel?: string } = {},
 ): UISpec['components'][number] {
   const arrivalAhead = !task.passengers.confirmedOnboard
     && task.flight !== undefined
@@ -1180,7 +1251,7 @@ export function weatherCardComponent(
     type: 'weather-card',
     props: {
       location: data.locationName,
-      timeLabel: arrivalClock ? `${arrivalClock} 到达时` : '现在',
+      timeLabel: options.timeLabel ?? (arrivalClock ? `${arrivalClock} 到达时` : '现在'),
       temperatureC: data.temperatureC,
       condition: data.condition,
       conditionLabel: weatherConditionLabels[data.condition],
@@ -1224,6 +1295,7 @@ export function scheduleCardComponent(
         ...(projectedHomeMs !== undefined && Date.parse(event.startAt) < projectedHomeMs
           ? { atRisk: true }
           : {}),
+        ...(event.status ? { status: event.status } : {}),
       })),
       ...(moreCount > 0 ? { moreCount } : {}),
       ...(shown.length === 0 ? { emptyCopy: '今天没有更多安排了' } : {}),

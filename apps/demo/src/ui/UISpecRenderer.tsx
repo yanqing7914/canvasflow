@@ -238,6 +238,63 @@ function FlightStatusCard({ component }: { component: Extract<ComponentSpec, { t
   )
 }
 
+function FlightDetailCard({ component }: { component: Extract<ComponentSpec, { type: 'flight-detail' }> }) {
+  const { props } = component
+  const changedArrival = props.scheduledArrival !== props.estimatedArrival
+  return (
+    <ComponentSurface component={component} className="ui-flight-brief">
+      <header className="ui-flight-brief__header">
+        <span className="ui-flight-brief__glyph" aria-hidden="true"><AirplaneIcon /></span>
+        <div>
+          <p className="ui-flight-brief__source">{freshnessLabels[props.freshness]}</p>
+          <h2 className="ui-flight-brief__number">{props.flightNumber}</h2>
+        </div>
+        <StatusPill label={flightStatusLabels[props.status]} tone={props.status} />
+      </header>
+      <p className="ui-card__summary">{props.airlineName} · {props.originName} → {props.arrivalAirportName}</p>
+      <div className="vehicle-status-grid">
+        <Metric label="预计到达" value={formatTime(props.estimatedArrival)} />
+        <Metric label="计划到达" value={formatTime(props.scheduledArrival)} detail={changedArrival ? '时间已更新' : undefined} />
+        <Metric label="航站楼" value={props.terminal} />
+      </div>
+    </ComponentSurface>
+  )
+}
+
+function RouteConfirmationCard({ component }: { component: Extract<ComponentSpec, { type: 'route-confirmation' }> }) {
+  const { props } = component
+  const outbound = props.leg === 'outbound'
+  return (
+    <ComponentSurface component={component} className="ui-navigation-brief">
+      <header className="ui-navigation-brief__header">
+        <span className="ui-navigation-brief__glyph" aria-hidden="true"><NavigationIcon /></span>
+        <div>
+          <p className="ui-navigation-brief__eyebrow">{outbound ? '去程方案' : '返程方案'}</p>
+          <h2 className="ui-navigation-brief__destination">{props.destination}</h2>
+        </div>
+        <StatusPill label="模拟路线" tone="neutral" />
+      </header>
+      {outbound && props.flightNumber && (
+        <div className="ui-detail-row">
+          <span>已选航班</span>
+          <strong>{props.flightNumber}</strong>
+          {props.flightEstimatedArrival && (
+            <time dateTime={props.flightEstimatedArrival}>预计 {formatTime(props.flightEstimatedArrival)} 到达</time>
+          )}
+        </div>
+      )}
+      <div className="vehicle-status-grid">
+        <Metric label="预计驾车" value={`${Math.round(props.durationMinutes)} 分钟`} />
+        <Metric label="预计到达" value={formatTime(props.arrivalTime)} />
+        <Metric label="距离" value={formatDistance(props.distanceKm)} />
+        <Metric label="当前电量" value={formatPercent(props.currentBatteryPercent)} />
+        <Metric label={outbound ? '预计到达电量' : '预计到家电量'} value={formatPercent(props.estimatedBatteryAtArrival)} />
+      </div>
+      <p className="ui-card__status-line">模拟行驶位置，非真实 GPS</p>
+    </ComponentSurface>
+  )
+}
+
 /**
  * The trip's navigation brief, and — where it floats over a map — the one card
  * the driver can put away.
@@ -650,6 +707,7 @@ function WeatherCard({ component }: { component: Extract<ComponentSpec, { type: 
  */
 function ScheduleCard({ component }: { component: Extract<ComponentSpec, { type: 'schedule-card' }> }) {
   const { props } = component
+  const statusLabels = { ended: '已结束', ongoing: '进行中', upcoming: '即将开始' } as const
   return (
     <ComponentSurface component={component} className="ui-schedule-card">
       <header className="ui-schedule-card__header">
@@ -667,6 +725,9 @@ function ScheduleCard({ component }: { component: Extract<ComponentSpec, { type:
             >
               <time className="ui-schedule-card__time" dateTime={event.startAt}>{formatTime(event.startAt)}</time>
               <span className="ui-schedule-card__title">{event.title}</span>
+              {event.status && (
+                <span className="ui-schedule-card__status" data-status={event.status}>{statusLabels[event.status]}</span>
+              )}
               {event.location && <span className="ui-schedule-card__location">{event.location}</span>}
               {event.atRisk && <span className="ui-schedule-card__risk">可能迟到</span>}
             </li>
@@ -774,7 +835,9 @@ function ComponentCard({
   switch (result.data.type) {
     case 'pickup-overview': return <PickupOverviewCard component={result.data} />
     case 'flight-status': return <FlightStatusCard component={result.data} />
+    case 'flight-detail': return <FlightDetailCard component={result.data} />
     case 'navigation-summary': return <NavigationSummaryCard component={result.data} floating={floating} />
+    case 'route-confirmation': return <RouteConfirmationCard component={result.data} />
     case 'route-map': {
       // Geometry that survived the schema can still be undrawable — every point on
       // one spot, say. A map with no line in it is an empty frame, so the slot goes
@@ -804,6 +867,7 @@ function ComponentCard({
     case 'departure-plan': return <DeparturePlanCard component={result.data} />
     case 'alert': return <AlertCard component={result.data} />
     case 'status-banner': return <StatusBannerCard component={result.data} />
+    case 'vehicle-status': return <ComponentFallback component={component} slotId={slotId} />
   }
 }
 
@@ -862,7 +926,9 @@ function componentActionIds(component: unknown): string[] {
 function cardOwnedActionIds(component: ComponentSpec): string[] {
   return component.type === 'flight-choices'
     ? [
-        ...component.props.choices.map((choice) => choice.actionId),
+        ...component.props.choices
+          .map((choice) => choice.actionId)
+          .filter((actionId): actionId is string => actionId !== undefined),
         // The refresh pill is drawn in the card's own header, so it belongs here
         // too — left off this list it would appear twice, once as a pill and once
         // as a full-height button in the slot's group.
@@ -1020,6 +1086,8 @@ function floatingPanelId(
 export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRendererProps) {
   const runtimeComponents: unknown[] = Array.isArray(spec.components) ? spec.components : []
   const runtimeActions: unknown[] = Array.isArray(spec.actions) ? spec.actions : []
+  const hasRuntimeWindows = Array.isArray((spec as unknown as { windows?: unknown }).windows)
+    && ((spec as unknown as { windows: unknown[] }).windows.length > 0)
   const componentById = new Map<string, unknown>()
   const actionById = new Map<string, unknown>()
 
@@ -1033,6 +1101,13 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
   }
 
   const resolved = resolveLayout(spec, runtimeComponents)
+  const windowOwnedComponentIds = new Set(
+    Array.isArray((spec as unknown as { windows?: Array<{ componentIds?: unknown }> }).windows)
+      ? (spec as unknown as { windows: Array<{ componentIds?: unknown }> }).windows.flatMap((window) => (
+          Array.isArray(window.componentIds) ? window.componentIds.filter((id): id is string => typeof id === 'string') : []
+        ))
+      : [],
+  )
   // A component the driving context forbids is dropped before anything counts it, so the
   // layout hooks, the single-component treatment, and the action bar all describe what is
   // actually on screen rather than what the spec asked for.
@@ -1040,7 +1115,9 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
     ...resolved,
     slots: resolved.slots.map((slot) => ({
       ...slot,
-      ids: slot.ids.filter((componentId) => componentVisible(componentById.get(componentId), driving)),
+      ids: slot.ids.filter((componentId) => (
+        !windowOwnedComponentIds.has(componentId) && componentVisible(componentById.get(componentId), driving)
+      )),
     })),
   }
   const renderedComponentIds = new Set(layout.slots.flatMap((slot) => slot.ids))
@@ -1122,7 +1199,7 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
             })}
           </div>
         ))}
-        {renderedComponentCount === 0 && <EmptyFallback />}
+        {renderedComponentCount === 0 && !hasRuntimeWindows && <EmptyFallback />}
       </div>
       <ActionGroup
         className="ui-actions"

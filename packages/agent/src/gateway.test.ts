@@ -25,6 +25,36 @@ function createRequest(text = '我现在要去机场接妈妈和豆豆') {
   }
 }
 
+function createCockpitRequest(text: string, clientRequestId: string) {
+  return {
+    ...createRequest(text),
+    clientRequestId,
+    clientCapabilities: {
+      uiSchemaVersion: '1.0' as const,
+      supportsSse: true,
+      supportsTts: true,
+      cockpitVersion: '1' as const,
+    },
+  }
+}
+
+function startCockpitOutbound(gateway: AgentGateway, prefix: string) {
+  const flights = gateway.createTask(createCockpitRequest('去虹桥机场接人', `${prefix}-create`))
+  const board = flights.ui.components.find((component) => component.type === 'flight-choices')
+  if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
+  const actionId = board.props.choices[0]?.actionId
+  if (!actionId) throw new Error('expected cockpit flight action')
+  const selected = gateway.submitAction(flights.task.taskId, {
+    clientRequestId: `${prefix}-pick`, expectedTaskRevision: flights.task.taskRevision,
+    expectedUiRevision: flights.ui.uiRevision, actionId, componentId: board.id, idempotencyKey: `${prefix}-pick`,
+  })
+  return gateway.submitAction(selected.task.taskId, {
+    clientRequestId: `${prefix}-start`, expectedTaskRevision: selected.task.taskRevision,
+    expectedUiRevision: selected.ui.uiRevision, actionId: 'start-outbound',
+    componentId: 'outbound-confirmation', idempotencyKey: `${prefix}-start`,
+  })
+}
+
 function failedLandingMessageTask(gateway: AgentGateway) {
   const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
   const started = gateway.submitAction(created.task.taskId, {
@@ -55,6 +85,380 @@ function failedLandingMessageTask(gateway: AgentGateway) {
 }
 
 describe('AgentGateway', () => {
+  it('opens first-turn cockpit weather at the fixed origin and labels it as now', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const resolveWeather = vi.spyOn(orchestrator, 'resolveWeather')
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => 'origin', orchestrator,
+    })
+    const weather = gateway.createTask(createCockpitRequest('查天气', 'origin-weather'))
+
+    expect(weather.task.phase).toBe('collecting-airport')
+    expect(resolveWeather).toHaveBeenCalledWith(weather.task.taskId, 'origin-weather', { locationId: 'navigation-segment-origin' })
+    expect(weather.ui.windows?.at(-1)?.kind).toBe('weather')
+    const card = weather.ui.components.find((component) => component.type === 'weather-card')
+    if (card?.type !== 'weather-card') throw new Error('expected weather card')
+    expect(card.props.timeLabel).toBe('现在')
+  })
+
+  it('keeps first-turn cockpit weather in airport collection with an explicit provider failure', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const failing: ReadToolOrchestration = {
+      resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+      prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+      resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+      resolveWeather: () => {
+        throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'weather timed out', true)
+      },
+    }
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => 'origin-failure', orchestrator: failing,
+    })
+
+    const created = gateway.createTask(createCockpitRequest('查天气', 'origin-weather-failure'))
+
+    expect(created.task.phase).toBe('collecting-airport')
+    expect(created.ui.windows ?? []).toHaveLength(0)
+    expect(created.assistant?.text).toBe('天气服务暂时不可用，稍后可以再问我。')
+  })
+
+  it('uses exact speed-control boundary copy without changing a parked cockpit task', () => {
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => 'parked-speed' })
+    const created = gateway.createTask(createCockpitRequest('我现在要去机场接人', 'parked-speed-create'))
+
+    for (const [index, text] of ['跑快点', '跑慢点'].entries()) {
+      const answered = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: `parked-speed-${index}`, expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: `parked-speed-${index}`, type: 'user.input', text, source: 'text', timestamp: now },
+      })
+      expect(answered.task).toEqual(created.task)
+      expect(answered.assistant?.text).toBe('当前没有正在行驶的车辆')
+    }
+  })
+
+  it('uses exact fastest and slowest boundary copy while preserving the active drive', () => {
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => 'speed-boundary' })
+    const driving = startCockpitOutbound(gateway, 'speed-boundary')
+    const fast = gateway.submitEvent(driving.task.taskId, {
+      clientRequestId: 'speed-fast', expectedTaskRevision: driving.task.taskRevision,
+      event: { eventId: 'speed-fast', type: 'user.input', text: '跑快点', source: 'text', timestamp: now },
+    })
+    const fastest = gateway.submitEvent(fast.task.taskId, {
+      clientRequestId: 'speed-fastest', expectedTaskRevision: fast.task.taskRevision,
+      event: { eventId: 'speed-fastest', type: 'user.input', text: '跑快点', source: 'text', timestamp: now },
+    })
+    expect(fastest.task).toEqual(fast.task)
+    expect(fastest.assistant?.text).toBe('已经是最快档位')
+
+    const normal = gateway.submitEvent(fastest.task.taskId, {
+      clientRequestId: 'speed-normal', expectedTaskRevision: fastest.task.taskRevision,
+      event: { eventId: 'speed-normal', type: 'user.input', text: '跑慢点', source: 'text', timestamp: now },
+    })
+    const slow = gateway.submitEvent(normal.task.taskId, {
+      clientRequestId: 'speed-slow', expectedTaskRevision: normal.task.taskRevision,
+      event: { eventId: 'speed-slow', type: 'user.input', text: '跑慢点', source: 'text', timestamp: now },
+    })
+    const slowest = gateway.submitEvent(slow.task.taskId, {
+      clientRequestId: 'speed-slowest', expectedTaskRevision: slow.task.taskRevision,
+      event: { eventId: 'speed-slowest', type: 'user.input', text: '跑慢点', source: 'text', timestamp: now },
+    })
+    expect(slowest.task).toEqual(slow.task)
+    expect(slowest.assistant?.text).toBe('已经是最慢档位')
+  })
+
+  it('retries cockpit weather after a provider timeout without caching the failed event', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    let attempts = 0
+    const resolveWeather = vi.fn((taskId: string, requestId: string, input: { locationId: string; at?: string }) => {
+      attempts += 1
+      if (attempts === 1) throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'weather timed out', true)
+      return orchestrator.resolveWeather(taskId, requestId, input)
+    })
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => 'weather-retry',
+      orchestrator: {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveWeather,
+      },
+    })
+    const created = gateway.createTask(createCockpitRequest('我现在要去机场接人', 'weather-retry-create'))
+    const request = {
+      clientRequestId: 'weather-retry-first', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'weather-retry-event', type: 'user.input' as const, text: '查天气', source: 'text' as const, timestamp: now },
+    }
+
+    expect(() => gateway.submitEvent(created.task.taskId, request)).toThrowError(expect.objectContaining({
+      code: 'PROVIDER_TIMEOUT', retryable: true, latest: expect.objectContaining({ task: created.task }),
+    }))
+    const retried = gateway.submitEvent(created.task.taskId, request)
+
+    expect(resolveWeather).toHaveBeenCalledTimes(2)
+    expect(retried.ui.windows?.at(-1)?.kind).toBe('weather')
+    const card = retried.ui.components.find((component) => component.type === 'weather-card')
+    if (card?.type !== 'weather-card') throw new Error('expected weather card')
+    expect(card.props.timeLabel).toBe('现在')
+  })
+
+  it('retries cockpit calendar after a provider timeout without caching the failed event', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    let attempts = 0
+    const resolveSchedule = vi.fn((taskId: string, requestId: string, input: { date: string; now?: string }) => {
+      attempts += 1
+      if (attempts === 1) throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'calendar timed out', true)
+      return orchestrator.resolveSchedule(taskId, requestId, input)
+    })
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => 'calendar-retry',
+      orchestrator: {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveSchedule,
+      },
+    })
+    const created = gateway.createTask(createCockpitRequest('我现在要去机场接人', 'calendar-retry-create'))
+    const request = {
+      clientRequestId: 'calendar-retry-first', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'calendar-retry-event', type: 'user.input' as const, text: '查日历', source: 'text' as const, timestamp: now },
+    }
+
+    expect(() => gateway.submitEvent(created.task.taskId, request)).toThrowError(expect.objectContaining({
+      code: 'PROVIDER_TIMEOUT', retryable: true, latest: expect.objectContaining({ task: created.task }),
+    }))
+    const retried = gateway.submitEvent(created.task.taskId, { ...request, clientRequestId: 'calendar-retry-second' })
+
+    expect(resolveSchedule).toHaveBeenCalledTimes(2)
+    expect(retried.ui.windows?.at(-1)?.kind).toBe('calendar')
+  })
+
+  it('runs the opt-in cockpit flow through guarded create, event, and action paths', () => {
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => '2026-08-11T09:00:00+08:00',
+      createId: () => 'cockpit',
+    })
+    const cockpitRequest = {
+      ...createRequest('我现在要去机场接人'),
+      clientRequestId: 'cockpit-create',
+      clientCapabilities: { uiSchemaVersion: '1.0' as const, supportsSse: true, supportsTts: true, cockpitVersion: '1' as const },
+    }
+    const created = gateway.createTask(cockpitRequest)
+    expect(created.task.phase).toBe('collecting-airport')
+    expect(created.assistant?.text).toContain('哪个机场')
+
+    const flights = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'airport-answer', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'airport-answer', type: 'user.input', text: '虹桥机场', source: 'text', timestamp: now },
+    })
+    expect(flights.task.phase).toBe('choosing-flight')
+    expect(flights.assistant?.shouldSpeak).toBe(false)
+    expect(flights.ui.windows?.at(-1)?.kind).toBe('flight-list')
+    const board = flights.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
+    expect(board.props.choices).toHaveLength(5)
+    const pickAction = board.props.choices[0]!.actionId
+    if (!pickAction) throw new Error('expected pick action')
+
+    const selected = gateway.submitAction(flights.task.taskId, {
+      clientRequestId: 'pick-flight', expectedTaskRevision: flights.task.taskRevision, expectedUiRevision: flights.ui.uiRevision,
+      actionId: pickAction, componentId: board.id, idempotencyKey: 'pick-flight',
+    })
+    expect(selected.task.phase).toBe('confirming-outbound')
+    expect(selected.task.flight?.flightNumber).toBe(board.props.choices[0]!.flightNumber)
+    expect(selected.ui.windows?.map((window) => window.kind)).toEqual(expect.arrayContaining(['flight-list', 'outbound-confirmation']))
+
+    const started = gateway.submitAction(selected.task.taskId, {
+      clientRequestId: 'start-outbound', expectedTaskRevision: selected.task.taskRevision, expectedUiRevision: selected.ui.uiRevision,
+      actionId: 'start-outbound', componentId: 'outbound-confirmation', idempotencyKey: 'start-outbound',
+    })
+    expect(started.task.phase).toBe('outbound-driving')
+    expect(started.ui.windows ?? []).toHaveLength(0)
+
+    const missingPositionWeather = gateway.submitEvent(started.task.taskId, {
+      clientRequestId: 'weather-without-position', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'weather-without-position', type: 'user.input', text: '查天气', source: 'voice', timestamp: now },
+    })
+    expect(missingPositionWeather.ui.windows).toEqual(started.ui.windows)
+    expect(missingPositionWeather.assistant?.text).toContain('当前模拟位置')
+    const outboundSeed = started.task.navigationSimulation!
+    const midBattery = (outboundSeed.initialBatteryPercent + outboundSeed.estimatedBatteryAtArrival) / 2
+    const midRange = midBattery / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm
+    const weather = gateway.submitEvent(started.task.taskId, {
+      clientRequestId: 'weather', expectedTaskRevision: missingPositionWeather.task.taskRevision,
+      event: {
+        eventId: 'weather', type: 'user.input', text: '查天气', source: 'voice', timestamp: now,
+        navigationSnapshot: {
+          routeId: started.task.navigationSimulation!.routeId, leg: 'outbound', progress: 0.5,
+          speedKph: 55, batteryPercent: midBattery, remainingRangeKm: midRange,
+          remainingDistanceKm: 16, currentRoad: '伪造道路',
+        },
+      },
+    })
+    expect(weather.ui.windows?.at(-1)?.kind).toBe('weather')
+    expect(weather.assistant?.shouldSpeak).toBe(true)
+    const calendar = gateway.submitEvent(weather.task.taskId, {
+      clientRequestId: 'calendar', expectedTaskRevision: weather.task.taskRevision,
+      event: { eventId: 'calendar', type: 'user.input', text: '查日历', source: 'text', timestamp: now },
+    })
+    expect(calendar.ui.windows?.at(-1)?.kind).toBe('calendar')
+    expect(calendar.assistant?.shouldSpeak).toBe(false)
+    const faster = gateway.submitEvent(calendar.task.taskId, {
+      clientRequestId: 'faster', expectedTaskRevision: calendar.task.taskRevision,
+      event: { eventId: 'faster', type: 'user.input', text: '跑快点', source: 'text', timestamp: now },
+    })
+    expect(faster.task.cockpit?.speedMode).toBe('fast')
+    expect(faster.ui.windows?.some((window) => window.kind === 'weather')).toBe(true)
+
+    expect(() => gateway.submitEvent(faster.task.taskId, {
+      clientRequestId: 'premature-arrival', expectedTaskRevision: faster.task.taskRevision,
+      event: {
+        eventId: 'premature-arrival', type: 'navigation.outbound-arrived', timestamp: now,
+        navigationSnapshot: {
+          routeId: faster.task.navigationSimulation!.routeId, leg: 'outbound', progress: 0.5,
+          speedKph: 75, batteryPercent: midBattery, remainingRangeKm: midRange, remainingDistanceKm: 16, currentRoad: '内环高架',
+        },
+      },
+    })).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }))
+    expect(() => gateway.submitEvent(faster.task.taskId, {
+      clientRequestId: 'wrong-route-arrival', expectedTaskRevision: faster.task.taskRevision,
+      event: {
+        eventId: 'wrong-route-arrival', type: 'navigation.outbound-arrived', timestamp: now,
+        navigationSnapshot: {
+          routeId: 'wrong-route', leg: 'outbound', progress: 1,
+          speedKph: 0, batteryPercent: outboundSeed.estimatedBatteryAtArrival,
+          remainingRangeKm: outboundSeed.estimatedBatteryAtArrival / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm,
+          remainingDistanceKm: 0, currentRoad: '机场接人点',
+        },
+      },
+    })).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }))
+    const arrived = gateway.submitEvent(faster.task.taskId, {
+      clientRequestId: 'arrived-airport', expectedTaskRevision: faster.task.taskRevision,
+      event: {
+        eventId: 'arrived-airport', type: 'navigation.outbound-arrived', timestamp: now,
+        navigationSnapshot: {
+          routeId: faster.task.navigationSimulation!.routeId, leg: 'outbound', progress: 1,
+          speedKph: 0, batteryPercent: outboundSeed.estimatedBatteryAtArrival,
+          remainingRangeKm: outboundSeed.estimatedBatteryAtArrival / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm,
+          remainingDistanceKm: 0, currentRoad: '机场接人点',
+        },
+      },
+    })
+    const onboard = gateway.submitEvent(arrived.task.taskId, {
+      clientRequestId: 'onboard', expectedTaskRevision: arrived.task.taskRevision,
+      event: { eventId: 'onboard', type: 'user.input', text: '接到人了', source: 'text', timestamp: now },
+    })
+    expect(onboard.task.phase).toBe('passengers-onboard')
+    const airportWeather = gateway.submitEvent(onboard.task.taskId, {
+      clientRequestId: 'airport-weather', expectedTaskRevision: onboard.task.taskRevision,
+      event: { eventId: 'airport-weather', type: 'user.input', text: '查天气', source: 'text', timestamp: now },
+    })
+    const terminalBattery = onboard.task.navigationSimulation!.estimatedBatteryAtArrival
+    const terminalRange = terminalBattery / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm
+    expect(() => gateway.submitEvent(onboard.task.taskId, {
+      clientRequestId: 'return-without-vehicle', expectedTaskRevision: airportWeather.task.taskRevision,
+      event: { eventId: 'return-without-vehicle', type: 'user.input', text: '开始回家', source: 'text', timestamp: now },
+    })).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }))
+    const confirmingReturn = gateway.submitEvent(onboard.task.taskId, {
+      clientRequestId: 'return-request', expectedTaskRevision: airportWeather.task.taskRevision,
+      event: {
+        eventId: 'return-request', type: 'user.input', text: '开始回家', source: 'text', timestamp: now,
+        navigationSnapshot: {
+          routeId: onboard.task.navigationSimulation!.routeId, leg: 'outbound', progress: 1,
+          speedKph: 0, batteryPercent: terminalBattery, remainingRangeKm: terminalRange, remainingDistanceKm: 0,
+          currentRoad: '伪造机场道路',
+        },
+      },
+    })
+    expect(confirmingReturn.task.phase).toBe('confirming-return')
+    expect(confirmingReturn.task.navigationSimulation?.initialBatteryPercent).toBe(terminalBattery)
+    const returnCard = confirmingReturn.ui.components.find((component) => component.type === 'route-confirmation')
+    expect(returnCard).toMatchObject({ props: { currentBatteryPercent: terminalBattery } })
+    const returning = gateway.submitAction(confirmingReturn.task.taskId, {
+      clientRequestId: 'start-return', expectedTaskRevision: confirmingReturn.task.taskRevision, expectedUiRevision: confirmingReturn.ui.uiRevision,
+      actionId: 'start-return', componentId: 'return-confirmation', idempotencyKey: 'start-return',
+    })
+    expect(returning.task.phase).toBe('return-driving')
+    const completed = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'home', expectedTaskRevision: returning.task.taskRevision,
+      event: {
+        eventId: 'home', type: 'navigation.return-arrived', timestamp: now,
+        navigationSnapshot: {
+          routeId: returning.task.navigationSimulation!.routeId, leg: 'return', progress: 1,
+          speedKph: 0, batteryPercent: returning.task.navigationSimulation!.estimatedBatteryAtArrival,
+          remainingRangeKm: returning.task.navigationSimulation!.estimatedBatteryAtArrival / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm,
+          remainingDistanceKm: 0, currentRoad: '家',
+        },
+      },
+    })
+    expect(completed.task).toMatchObject({ phase: 'completed', passengers: { names: [], confirmedOnboard: false } })
+    expect(completed.task.flight).toBeUndefined()
+    expect(completed.task.cockpit).toBeUndefined()
+    expect(completed.ui.windows ?? []).toHaveLength(0)
+  })
+
+  it('rejects forged navigation snapshots and uses server-derived segment values', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask({
+      ...createRequest('我现在要去机场接人'),
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true, cockpitVersion: '1' },
+      clientRequestId: 'snapshot-create',
+    })
+    const flights = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'snapshot-airport', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'snapshot-airport', type: 'user.input', text: '虹桥机场', timestamp: now },
+    })
+    const board = flights.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices' || !board.props.choices[0]?.actionId) throw new Error('expected flight choices')
+    const selected = gateway.submitAction(flights.task.taskId, {
+      clientRequestId: 'snapshot-pick', expectedTaskRevision: flights.task.taskRevision, expectedUiRevision: flights.ui.uiRevision,
+      actionId: board.props.choices[0].actionId, componentId: board.id, idempotencyKey: 'snapshot-pick',
+    })
+    const started = gateway.submitAction(selected.task.taskId, {
+      clientRequestId: 'snapshot-start', expectedTaskRevision: selected.task.taskRevision, expectedUiRevision: selected.ui.uiRevision,
+      actionId: 'start-outbound', componentId: 'outbound-confirmation', idempotencyKey: 'snapshot-start',
+    })
+    expect(() => gateway.submitEvent(started.task.taskId, {
+      clientRequestId: 'snapshot-forged', expectedTaskRevision: started.task.taskRevision,
+      event: {
+        eventId: 'snapshot-forged', type: 'user.input', text: '查天气', timestamp: now,
+        navigationSnapshot: {
+          routeId: started.task.navigationSimulation!.routeId, leg: 'outbound', progress: 0.5,
+          speedKph: 1, batteryPercent: 99, remainingRangeKm: 999, remainingDistanceKm: 1,
+          eta: '2099-01-01T00:00:00+00:00', currentRoad: '伪造道路',
+        },
+      },
+    })).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }))
+    const weather = gateway.submitEvent(started.task.taskId, {
+      clientRequestId: 'snapshot-valid', expectedTaskRevision: started.task.taskRevision,
+      event: {
+        eventId: 'snapshot-valid', type: 'user.input', text: '查天气', timestamp: now,
+        navigationSnapshot: {
+          routeId: started.task.navigationSimulation!.routeId, leg: 'outbound', progress: 0.5,
+          speedKph: 55, batteryPercent: 34.5, remainingRangeKm: 172.5, remainingDistanceKm: 16,
+          eta: '2099-01-01T00:00:00+00:00', currentRoad: '伪造道路',
+        },
+      },
+    })
+    const weatherCard = weather.ui.components.find((component) => component.type === 'weather-card')
+    expect(weatherCard).toMatchObject({ props: { location: '内环高架' } })
+    const vehicle = gateway.submitEvent(started.task.taskId, {
+      clientRequestId: 'snapshot-vehicle', expectedTaskRevision: weather.task.taskRevision,
+      event: {
+        eventId: 'snapshot-vehicle', type: 'user.input', text: '查看车辆状态', timestamp: now,
+        navigationSnapshot: {
+          routeId: started.task.navigationSimulation!.routeId, leg: 'outbound', progress: 0.5,
+          speedKph: 55, batteryPercent: 34.5, remainingRangeKm: 172.5, remainingDistanceKm: 16,
+          eta: '2099-01-01T00:00:00+00:00', currentRoad: '伪造道路',
+        },
+      },
+    })
+    const vehicleCard = vehicle.ui.components.find((component) => component.type === 'vehicle-status')
+    expect(vehicleCard).toMatchObject({ props: { roadName: '内环高架', remainingDistanceKm: 16 } })
+    if (vehicleCard?.type === 'vehicle-status') expect(vehicleCard.props.eta).not.toBe('2099-01-01T00:00:00+00:00')
+  })
+
   it('uses the injected Planner as the create slot-filling boundary', () => {
     const planner = new Planner()
     const plan = vi.spyOn(planner, 'plan').mockReturnValue({

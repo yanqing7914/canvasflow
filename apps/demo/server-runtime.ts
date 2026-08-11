@@ -24,6 +24,34 @@ export type ConfiguredAgentRuntimeOptions = {
 
 export const E2E_FAIL_AUTO_MESSAGE_SEND = 'AGENT_E2E_FAIL_AUTO_MESSAGE_SEND'
 export const CANVASFLOW_E2E = 'CANVASFLOW_E2E'
+export const CANVASFLOW_E2E_NOW = 'CANVASFLOW_E2E_NOW'
+
+type RuntimeClock = {
+  now: () => string
+  nowMs: () => number
+}
+
+/**
+ * A deterministic clock for browser tests. It is deliberately gated by the
+ * explicit E2E mode flag so an accidental production environment variable can
+ * never freeze the Agent's wall clock.
+ */
+export function e2eClockFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): RuntimeClock | undefined {
+  if (environment[CANVASFLOW_E2E] !== '1') return undefined
+  const configured = environment[CANVASFLOW_E2E_NOW]
+  if (!configured) return undefined
+  const timestamp = Date.parse(configured)
+  if (!Number.isFinite(timestamp)) {
+    throw new Error(`${CANVASFLOW_E2E_NOW} must be a valid ISO timestamp`)
+  }
+  return {
+    // Preserve the authored offset for fixtures and user-facing local dates.
+    now: () => configured,
+    nowMs: () => timestamp,
+  }
+}
 
 /** Request prefix the client hits; forwarded to {@link AMAP_UPSTREAM_ORIGIN}. */
 export const AMAP_SERVICE_PREFIX = '/_AMapService'
@@ -140,6 +168,7 @@ export function createE2eProviderFactory(environment: NodeJS.ProcessEnv): Provid
 export function createConfiguredAgentRuntime(options: ConfiguredAgentRuntimeOptions = {}): PersistentAgentRuntime {
   const environment = options.environment ?? process.env
   const mode = providerModeFromEnvironment(environment)
+  const e2eClock = e2eClockFromEnvironment(environment)
   if (mode === 'live' && createE2eProviderFactory(environment)) {
     throw new Error(`${E2E_FAIL_AUTO_MESSAGE_SEND} is unavailable in live provider mode`)
   }
@@ -149,6 +178,7 @@ export function createConfiguredAgentRuntime(options: ConfiguredAgentRuntimeOpti
     providerFactory: options.providerFactory ?? createE2eProviderFactory(environment),
     modelGateway: new ModelGateway(modelAdapterOptionsFromEnvironment(environment)),
     scheduleAdapter: larkCalendarAdapterFromEnvironment(environment),
+    ...(e2eClock ?? {}),
   })
 }
 

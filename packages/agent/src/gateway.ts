@@ -21,6 +21,8 @@ import {
   type UISpec,
   type ProviderMode,
   type WeatherOutput,
+  type NavigationCommandSnapshot,
+  type VehicleContext,
 } from '@canvasflow/schema'
 import {
   buildLandingNotifyContent,
@@ -34,9 +36,31 @@ import {
   type ProviderRegistry,
   type SideEffectRuntime,
 } from '@canvasflow/tools'
-import { applyEvent, createInitialTask } from './index'
+import { applyEvent, createCockpitTask, createInitialTask } from './index'
+import {
+  START_OUTBOUND_ACTION_ID,
+  START_RETURN_ACTION_ID,
+  isCockpitActionAllowed,
+  requestCockpitReturn,
+  selectCockpitFlight,
+} from './cockpit'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departureAtIso, departurePlan, firstCalendarConflict, projectedHomeArrivalMs, renderedArrivalRows, weatherConditionLabels, type ComposeContext } from './composer'
+import {
+  applyRequestPresentation,
+  clockLabel,
+  composeAgentSpec,
+  composeCockpitFlightChoices,
+  composeFallbackSpec,
+  departureAtIso,
+  departurePlan,
+  firstCalendarConflict,
+  projectedHomeArrivalMs,
+  renderedArrivalRows,
+  scheduleCardComponent,
+  weatherCardComponent,
+  weatherConditionLabels,
+  type ComposeContext,
+} from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import { Planner, planAirportPickup, type Plan, type PlannerInput } from './planner'
@@ -62,6 +86,48 @@ const returnTripPolicyErrorCodes = new Set([
   'VEHICLE_CONTEXT_REQUIRED',
   'VEHICLE_MOVING',
 ])
+
+type SanitizedCockpitSnapshot = {
+  vehicle: VehicleContext
+  remainingDistanceKm: number
+  eta?: string
+  roadName: string
+  weatherLocationId: string
+}
+
+function withinEnvelope(actual: number, expected: number, tolerance: number): boolean {
+  return Number.isFinite(actual) && Math.abs(actual - expected) <= tolerance
+}
+
+function cockpitLocationForSnapshot(task: AirportPickupTaskState, progress: number): {
+  roadName: string
+  weatherLocationId: string
+} {
+  const outbound = task.navigationSimulation?.leg === 'outbound'
+  const airportLocationId = task.pickupAirport?.code === 'PVG' ? 'destination-pudong-t2' : 'destination-hongqiao-t2'
+  if (progress >= 1) {
+    return outbound
+      ? { roadName: task.pickupAirport?.label ?? '机场接人点', weatherLocationId: airportLocationId }
+      : { roadName: '家', weatherLocationId: 'destination-home' }
+  }
+  if (progress < 0.34) return { roadName: '延安西路', weatherLocationId: 'navigation-segment-origin' }
+  if (progress < 0.67) return { roadName: '内环高架', weatherLocationId: 'navigation-segment-elevated' }
+  return outbound
+    ? { roadName: '虹桥路', weatherLocationId: 'navigation-segment-airport' }
+    : { roadName: '沪青平公路', weatherLocationId: 'navigation-segment-homeward' }
+}
+
+function returnBatteryAtArrival(
+  outbound: AirportPickupTaskState,
+  returnDistanceKm: number,
+  currentBatteryPercent: number,
+): number {
+  const seed = outbound.navigationSimulation
+  const perKm = seed && seed.distanceKm > 0
+    ? Math.max(0, (seed.initialBatteryPercent - seed.estimatedBatteryAtArrival) / seed.distanceKm)
+    : 0
+  return Math.max(0, Math.min(currentBatteryPercent, currentBatteryPercent - perKm * returnDistanceKm))
+}
 
 /**
  * The operation side answers are replayed under.
@@ -198,6 +264,9 @@ export class AgentGateway {
       ...(request.input.confidence === undefined ? {} : { inputConfidence: request.input.confidence }),
       updatedAt: timestamp,
     }
+    if (request.clientCapabilities.cockpitVersion === '1') {
+      return this.#createCockpitTask(request, taskId, timestamp, requestContext, startedAt)
+    }
     if (request.input.confidence !== undefined && request.input.confidence < 0.6) {
       const stored = this.#store.create(this.#publish(createInitialTask(taskId, timestamp), {}, requestContext), request.clientRequestId)
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
@@ -250,6 +319,64 @@ export class AgentGateway {
       }
       this.#throwProviderError(error)
     }
+  }
+
+  #createCockpitTask(
+    request: CreateTaskRequest,
+    taskId: string,
+    timestamp: string,
+    requestContext: NonNullable<StoredTask['requestContext']>,
+    startedAt: number,
+  ): AgentResponse {
+    let task = createCockpitTask(taskId, timestamp)
+    const plan = this.#planUserInput(request.input.text, task, `${request.clientRequestId}:input`, timestamp)
+    const airport = plan.slotUpdates.airport
+    let toolResults: ReadToolResults = {}
+    let assistantText = plan.assistantText
+    if (plan.intent === 'check-weather') {
+      try {
+        const weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, {
+          locationId: 'navigation-segment-origin',
+        })
+        if (weather) {
+          const published = this.#publish(task, toolResults, requestContext)
+          const component = {
+            ...weatherCardComponent(task, weather.data, { timeLabel: '现在' }),
+            id: `weather-${request.clientRequestId}:input`,
+          }
+          const ui = this.#appendCockpitInfoWindow(
+            taskId, published.ui, component, 'weather', `${request.clientRequestId}:input`, timestamp,
+          )
+          const stored = this.#store.create({
+            ...published,
+            task: { ...published.task, uiRevision: ui.uiRevision },
+            ui,
+          }, request.clientRequestId)
+          return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+            text: '已打开天气。',
+            shouldSpeak: request.input.source === 'voice' && request.clientCapabilities.supportsTts,
+          })
+        }
+        assistantText = '天气服务暂时不可用，稍后可以再问我。'
+      } catch (error) {
+        if (!(error instanceof ReadToolOrchestrationError)) this.#throwProviderError(error)
+        assistantText = '天气服务暂时不可用，稍后可以再问我。'
+      }
+    }
+    if (airport) {
+      task = applyEvent(task, {
+        eventId: `${request.clientRequestId}:airport`, type: 'pickup.airport-selected', airport, timestamp,
+      }, this.#preferences)
+      const queried = this.#queryCockpitFlights(taskId, request.clientRequestId, task, timestamp)
+      task = queried.task
+      toolResults = queried.toolResults
+      assistantText = `已找到 ${queried.board.data.arrivals.length} 个${airport.label}到达航班。`
+    }
+    const stored = this.#store.create(this.#publish(task, toolResults, requestContext), request.clientRequestId)
+    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+      text: assistantText,
+      shouldSpeak: request.input.source === 'voice' && request.clientCapabilities.supportsTts,
+    })
   }
 
   getTask(taskId: string, requestId = this.#createId()): AgentResponse {
@@ -483,6 +610,9 @@ export class AgentGateway {
     const startedAt = performance.now()
     const request = submitEventRequestSchema.parse(input)
     const current = this.#requireTask(taskId)
+    if (current.requestContext?.clientCapabilities.cockpitVersion === '1') {
+      return this.#submitCockpitEvent(taskId, current, request, startedAt)
+    }
     if (request.event.type === 'navigation.started') {
       throw new AgentGatewayError('POLICY_DENIED', 'Navigation must be started through a registered action', false, current)
     }
@@ -1376,6 +1506,9 @@ export class AgentGateway {
     const startedAt = performance.now()
     const request = submitActionRequestSchema.parse(input)
     const current = this.#requireTask(taskId)
+    if (current.requestContext?.clientCapabilities.cockpitVersion === '1') {
+      return this.#submitCockpitAction(taskId, current, request, startedAt)
+    }
     const operation = `action:${request.actionId}:${request.componentId}`
     const previous = this.#store.getIdempotencyResult(taskId, operation, request.idempotencyKey)
     if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
@@ -1430,6 +1563,492 @@ export class AgentGateway {
     const effectRecords = [execution.effect]
     this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: effectRecords })
     return this.#response(request.clientRequestId, stored, effectRecords, performance.now() - startedAt)
+  }
+
+  #queryCockpitFlights(
+    taskId: string,
+    requestId: string,
+    task: AirportPickupTaskState,
+    queryAt: string,
+  ) {
+    if (!task.pickupAirport) throw new AgentGatewayError('POLICY_DENIED', 'Airport is required before querying flights')
+    const queryId = `${requestId}:flights`
+    const board = this.#orchestrator.resolveArrivals?.(taskId, requestId, {
+      limit: 5, queryAt, queryId, pickupAirport: task.pickupAirport,
+    })
+    if (!board || board.data.arrivals.length !== 5) {
+      throw new AgentGatewayError('PROVIDER_FAILED', 'The flight provider did not return five arrivals', true)
+    }
+    return {
+      board,
+      task: withFlightDiscovery(task, board.data),
+      toolResults: { 'flight.list-arrivals': board } satisfies ReadToolResults,
+    }
+  }
+
+  #submitCockpitEvent(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const previous = this.#store.getEventResult(taskId, request.event.eventId)
+    if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
+    if (request.expectedTaskRevision !== current.task.taskRevision) {
+      throw new AgentGatewayError('TASK_REVISION_CONFLICT', 'Task revision conflict', false, current)
+    }
+    if (request.event.type === 'navigation.started') {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation must be started through a registered action', false, current)
+    }
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    const shouldSpeak = request.event.type === 'user.input' && request.event.source === 'voice' && supportsTts
+    const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const commandSnapshot = request.event.type === 'user.input' && request.event.navigationSnapshot
+      ? this.#sanitizeCockpitSnapshot(current, request.event.navigationSnapshot, timestamp)
+      : undefined
+
+    if (request.event.type === 'user.input') {
+      const plan = this.#planUserInput(request.event.text, current.task, request.event.eventId, timestamp)
+      if (plan.intent === 'provide-airport' && current.task.phase === 'collecting-airport' && plan.slotUpdates.airport) {
+        const airportTask = applyEvent(current.task, {
+          eventId: request.event.eventId, type: 'pickup.airport-selected', airport: plan.slotUpdates.airport, timestamp,
+        }, this.#preferences)
+        const queried = this.#queryCockpitFlights(taskId, request.clientRequestId, airportTask, timestamp)
+        const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(queried.task, queried.toolResults, current.requestContext, current.effectReceipts)))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+          text: `已找到 5 个${plan.slotUpdates.airport.label}到达航班。`, shouldSpeak,
+        })
+      }
+      if (plan.intent === 'refresh-flight-options' && current.task.pickupAirport) {
+        const queried = this.#queryCockpitFlights(taskId, request.clientRequestId, current.task, timestamp)
+        const readOnly = current.task.phase !== 'choosing-flight'
+        const next = readOnly
+          ? { ...current.task, taskRevision: current.task.taskRevision + 1, updatedAt: timestamp }
+          : { ...queried.task, taskRevision: current.task.taskRevision + 1, updatedAt: timestamp }
+        const stored = readOnly
+          ? this.#store.save(this.#appendCockpitFlightWindow(current, queried.board.data, next, timestamp))
+          : this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, queried.toolResults, current.requestContext, current.effectReceipts)))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: '航班列表已重新查询。', shouldSpeak })
+      }
+      if (plan.intent === 'request-return') {
+        if (current.task.phase !== 'passengers-onboard') return this.#cockpitNoop(current, request, startedAt, '请先确认乘客已经上车。')
+        if (!commandSnapshot || request.event.navigationSnapshot?.leg !== 'outbound' || request.event.navigationSnapshot.progress !== 1) {
+          throw new AgentGatewayError('POLICY_DENIED', 'Return planning requires the completed outbound vehicle state', false, current)
+        }
+        const routeReads = this.#orchestrator.resolveCockpitRoute?.(taskId, request.clientRequestId, {
+          leg: 'return', vehicle: commandSnapshot.vehicle,
+        })
+        if (!routeReads) throw new AgentGatewayError('PROVIDER_FAILED', 'Return route provider is unavailable', true, current)
+        const route = {
+          ...routeReads.route,
+          data: {
+            ...routeReads.route.data,
+            estimatedBatteryAtArrival: returnBatteryAtArrival(current.task, routeReads.route.data.distanceKm, routeReads.vehicle.data.batteryPercent),
+          },
+        }
+        const next = requestCockpitReturn(current.task, {
+          route: route.data,
+          batteryPercent: routeReads.vehicle.data.batteryPercent, at: timestamp,
+        })
+        const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
+          ...current.toolResults, 'navigation.plan-route': route, 'vehicle.get-status': routeReads.vehicle,
+        }, current.requestContext, current.effectReceipts)))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: '返程路线已准备好，请确认开始返程。', shouldSpeak })
+      }
+      if (plan.intent === 'check-weather') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'weather', commandSnapshot)
+      if (plan.intent === 'check-schedule' || plan.intent === 'view-calendar') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'calendar')
+      if (plan.intent === 'check-flight-detail') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'flight-detail')
+      if (plan.intent === 'check-vehicle-status') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'vehicle-status', commandSnapshot)
+      if (plan.intent === 'confirm-passengers-onboard' && plan.proposedEvents[0]?.type === 'passengers.onboard') {
+        request.event = plan.proposedEvents[0]
+      } else if (plan.intent === 'speed-up' || plan.intent === 'speed-down' || plan.intent === 'hide-navigation-info' || plan.intent === 'show-navigation-info') {
+        const next = this.#applyCockpitLocalControl(current.task, plan.intent, timestamp)
+        if (next === current.task) {
+          const driving = current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving'
+          const text = plan.intent === 'speed-up' || plan.intent === 'speed-down'
+            ? !driving
+              ? '当前没有正在行驶的车辆'
+              : plan.intent === 'speed-up'
+                ? '已经是最快档位'
+                : '已经是最慢档位'
+            : plan.assistantText
+          return this.#cockpitNoop(current, request, startedAt, text)
+        }
+        const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, current.toolResults, current.requestContext, current.effectReceipts)))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: plan.assistantText, shouldSpeak })
+      } else if (plan.intent === 'pause-unsupported' || plan.intent === 'start-navigation' || plan.intent === 'start-return') {
+        return this.#cockpitNoop(current, request, startedAt, plan.intent === 'pause-unsupported' ? plan.assistantText : '请使用确认窗口中的按钮开始导航。')
+      } else if (plan.proposedEvents.length === 0) {
+        return this.#cockpitNoop(current, request, startedAt, plan.assistantText)
+      }
+    }
+
+    const allowedTypedEvent = request.event.type === 'pickup.airport-selected'
+      || request.event.type === 'navigation.outbound-arrived'
+      || request.event.type === 'passengers.onboard'
+      || request.event.type === 'navigation.return-arrived'
+    if (!allowedTypedEvent) return this.#cockpitNoop(current, request, startedAt, '当前状态没有变化。')
+    if (request.event.type === 'navigation.outbound-arrived' || request.event.type === 'navigation.return-arrived') {
+      const arrival = this.#sanitizeCockpitSnapshot(current, request.event.navigationSnapshot, timestamp, true)
+      const expectedLeg = request.event.type === 'navigation.outbound-arrived' ? 'outbound' : 'return'
+      if (request.event.navigationSnapshot.leg !== expectedLeg || request.event.navigationSnapshot.progress !== 1
+        || arrival.vehicle.speedKph !== 0 || arrival.remainingDistanceKm !== 0) {
+        throw new AgentGatewayError('POLICY_DENIED', 'Arrival does not match the completed active route', false, current)
+      }
+    }
+    const normalizedEvent = { ...request.event, timestamp }
+    let next = applyEvent(current.task, normalizedEvent, this.#preferences)
+    if (next === current.task || next.taskRevision === current.task.taskRevision) {
+      return this.#cockpitNoop(current, request, startedAt, '当前阶段还不能执行这个操作。')
+    }
+    let toolResults = current.toolResults
+    if (normalizedEvent.type === 'pickup.airport-selected') {
+      const queried = this.#queryCockpitFlights(taskId, request.clientRequestId, next, timestamp)
+      next = queried.task
+      toolResults = queried.toolResults
+    }
+    if (next.phase === 'completed') toolResults = {}
+    const published = this.#publish(next, toolResults, current.requestContext, current.effectReceipts)
+    const stored = this.#store.save(this.#mergeCockpitWindows(current, published))
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    const text = normalizedEvent.type === 'passengers.onboard' ? '已记录乘客上车。'
+      : normalizedEvent.type === 'navigation.outbound-arrived' ? '已到达机场，等待接人。'
+        : normalizedEvent.type === 'navigation.return-arrived' ? '已到家，接机任务已完成。'
+          : '机场已确认，正在查询航班。'
+    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text, shouldSpeak })
+  }
+
+  #submitCockpitAction(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitActionRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const operation = `action:${request.actionId}:${request.componentId}`
+    const previous = this.#store.getIdempotencyResult(taskId, operation, request.idempotencyKey)
+    if (previous) return this.#response(request.clientRequestId, previous.stored, previous.effects, performance.now() - startedAt)
+    this.#assertRevisions(current, request.expectedTaskRevision, request.expectedUiRevision)
+    const action = current.ui.actions.find((candidate) => candidate.id === request.actionId)
+    const component = current.ui.components.find((candidate) => candidate.id === request.componentId)
+    if (!action || action.event.type !== 'tool-request' || action.event.actionToken !== request.actionId || !component?.actions?.includes(request.actionId)) {
+      throw new AgentGatewayError('INVALID_REQUEST', 'Action is not registered for the current task state', false, current)
+    }
+    if (request.actionId.startsWith('pick-') && current.task.phase === 'choosing-flight') {
+      const board = current.toolResults?.['flight.list-arrivals']?.data
+      const flight = board?.arrivals.find((candidate) => `pick-${board.queryId}-${candidate.flightNumber}` === request.actionId)
+      if (!flight || board?.candidateSetId !== current.task.flightDiscovery?.candidateSetId) {
+        throw new AgentGatewayError('POLICY_DENIED', 'Flight selection does not belong to the active query', false, current)
+      }
+      const reads = this.#orchestrator.resolveCockpitRoute?.(taskId, request.clientRequestId, {
+        leg: 'outbound', pickupAirport: current.task.pickupAirport, vehicle: current.requestContext?.vehicle,
+      })
+      if (!reads) throw new AgentGatewayError('PROVIDER_FAILED', 'Route provider is unavailable', true, current)
+      const next = selectCockpitFlight({ task: current.task, flight, route: reads.route.data, vehicle: reads.vehicle.data, at: this.#eventTimestamp(current.task.updatedAt) })
+      const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
+        ...current.toolResults, 'navigation.plan-route': reads.route, 'vehicle.get-status': reads.vehicle,
+      }, current.requestContext, current.effectReceipts)))
+      this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: [] })
+      return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: `已选择 ${flight.flightNumber}，请确认现在出发。`, shouldSpeak: false })
+    }
+    if (!isCockpitActionAllowed(current.task, request.actionId)
+      || (request.actionId !== START_OUTBOUND_ACTION_ID && request.actionId !== START_RETURN_ACTION_ID)) {
+      throw new AgentGatewayError('POLICY_DENIED', 'Action is not allowed in the current task phase', false, current)
+    }
+    const route = current.toolResults?.['navigation.plan-route']
+    if (!route || route.data.routeId !== current.task.navigation?.routeId) {
+      throw new AgentGatewayError('POLICY_DENIED', 'The confirmed route is no longer active', false, current)
+    }
+    const event = {
+      eventId: `action:${request.idempotencyKey}`, type: 'navigation.started' as const,
+      routeId: route.data.routeId, timestamp: this.#eventTimestamp(current.task.updatedAt),
+    }
+    const execution = this.#effectExecutor.startNavigation({
+      task: current.task, routeId: event.routeId, idempotencyKey: request.idempotencyKey,
+      effectId: `${event.eventId}:0`, vehicle: current.requestContext?.vehicle,
+    })
+    const stored = execution.succeeded
+      ? this.#store.save(this.#mergeCockpitWindows(current, this.#publish(applyEvent(current.task, event, this.#preferences), current.toolResults, current.requestContext, current.effectReceipts), {
+          closeKinds: new Set(['flight-list', 'outbound-confirmation', 'return-confirmation']),
+        }))
+      : current
+    const effects = [execution.effect]
+    this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects })
+    return this.#response(request.clientRequestId, stored, effects, performance.now() - startedAt)
+  }
+
+  #cockpitNoop(
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+    text: string,
+  ): AgentResponse {
+    this.#store.recordEventResult(current.task.taskId, request.event.eventId, { stored: current, effects: [] })
+    return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+      text,
+      shouldSpeak: request.event.type === 'user.input' && request.event.source === 'voice'
+        && (current.requestContext?.clientCapabilities.supportsTts ?? true),
+    })
+  }
+
+  #applyCockpitLocalControl(
+    task: AirportPickupTaskState,
+    intent: 'speed-up' | 'speed-down' | 'hide-navigation-info' | 'show-navigation-info',
+    at: string,
+  ): AirportPickupTaskState {
+    const driving = task.phase === 'outbound-driving' || task.phase === 'return-driving'
+    if (!driving && (intent === 'speed-up' || intent === 'speed-down')) return task
+    const cockpit = task.cockpit ?? { speedMode: 'normal' as const, hudVisible: true }
+    let speedMode = cockpit.speedMode
+    if (intent === 'speed-up') speedMode = speedMode === 'slow' ? 'normal' : 'fast'
+    if (intent === 'speed-down') speedMode = speedMode === 'fast' ? 'normal' : 'slow'
+    const hudVisible = intent === 'hide-navigation-info' ? false
+      : intent === 'show-navigation-info' ? true
+        : cockpit.hudVisible
+    if (speedMode === cockpit.speedMode && hudVisible === cockpit.hudVisible) return task
+    return {
+      ...task,
+      cockpit: { ...cockpit, speedMode, hudVisible },
+      taskRevision: task.taskRevision + 1,
+      updatedAt: at,
+    }
+  }
+
+  #submitCockpitInfoWindow(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+    kind: 'weather' | 'calendar' | 'flight-detail' | 'vehicle-status',
+    commandSnapshot?: SanitizedCockpitSnapshot,
+  ): AgentResponse {
+    const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    let component: UISpec['components'][number]
+    if (kind === 'weather') {
+      const driving = current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving'
+      if (driving && !commandSnapshot) {
+        return this.#cockpitNoop(current, request, startedAt, '需要当前模拟位置后才能查询沿途天气。')
+      }
+      const atAirport = current.task.phase === 'waiting-for-passengers'
+        || current.task.phase === 'passengers-onboard'
+        || current.task.phase === 'confirming-return'
+      const locationId = commandSnapshot?.weatherLocationId
+        ?? (atAirport ? this.#arrivalWeatherLocationId(current) : 'navigation-segment-origin')
+      try {
+        const weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, { locationId })
+        if (!weather) {
+          throw new AgentGatewayError('PROVIDER_FAILED', '天气服务暂时不可用，请稍后重试。', true, current)
+        }
+        component = {
+          ...weatherCardComponent(current.task, weather.data, { timeLabel: '现在' }),
+          id: `weather-${request.event.eventId}`,
+        }
+      } catch (error) {
+        if (error instanceof AgentGatewayError) throw error
+        if (error instanceof ReadToolOrchestrationError) {
+          throw new AgentGatewayError(error.code, '天气服务暂时不可用，请稍后重试。', error.retryable, current)
+        }
+        this.#throwProviderError(error, current)
+      }
+    } else if (kind === 'calendar') {
+      try {
+        const calendar = this.#orchestrator.resolveSchedule?.(taskId, request.clientRequestId, {
+          date: timestamp.slice(0, 10), now: timestamp,
+        })
+        if (!calendar) {
+          throw new AgentGatewayError('PROVIDER_FAILED', '日程服务暂时不可用，请稍后重试。', true, current)
+        }
+        component = { ...scheduleCardComponent(calendar.data.events), id: `calendar-${request.event.eventId}` }
+      } catch (error) {
+        if (error instanceof AgentGatewayError) throw error
+        if (error instanceof ReadToolOrchestrationError) {
+          throw new AgentGatewayError(error.code, '日程服务暂时不可用，请稍后重试。', error.retryable, current)
+        }
+        this.#throwProviderError(error, current)
+      }
+    } else if (kind === 'flight-detail') {
+      const flight = current.task.flight
+      if (!flight?.airlineName || !flight.originName || !flight.arrivalAirportName) {
+        return this.#cockpitNoop(current, request, startedAt, '还没有选定航班。')
+      }
+      component = {
+        id: `flight-detail-${request.event.eventId}`, type: 'flight-detail', props: {
+          flightNumber: flight.flightNumber, airlineName: flight.airlineName, originName: flight.originName,
+          arrivalAirportName: flight.arrivalAirportName, scheduledArrival: flight.scheduledArrival ?? flight.estimatedArrival,
+          estimatedArrival: flight.estimatedArrival, status: flight.status, terminal: flight.terminal, freshness: 'fixture',
+        },
+      }
+    } else {
+      const vehicle = commandSnapshot?.vehicle ?? current.requestContext?.vehicle
+      const seed = current.task.navigationSimulation
+      if (!vehicle) return this.#cockpitNoop(current, request, startedAt, '车辆状态暂时不可用。')
+      component = {
+        id: `vehicle-status-${request.event.eventId}`, type: 'vehicle-status', props: {
+          speedKph: vehicle.speedKph, batteryPercent: vehicle.batteryPercent, remainingRangeKm: vehicle.remainingRangeKm,
+          roadName: commandSnapshot?.roadName ?? current.task.cockpit?.currentRoad ?? '当前位置', destination: current.task.navigation?.destination ?? '当前位置',
+          remainingDistanceKm: commandSnapshot?.remainingDistanceKm ?? seed?.distanceKm ?? 0, eta: commandSnapshot?.eta ?? current.task.navigation?.eta ?? timestamp,
+          speedMode: current.task.cockpit?.speedMode ?? 'normal',
+          drivingStatus: current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving' ? '正在导航' : '车辆已停稳', simulated: true,
+        },
+      }
+    }
+    const windowTitle = kind === 'weather' ? '天气' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
+    const ui = this.#appendCockpitInfoWindow(taskId, current.ui, component, kind, request.event.eventId, timestamp)
+    const answered: StoredTask = { ...current, task: { ...current.task, uiRevision: ui.uiRevision }, ui }
+    const stored = this.#store.save(answered)
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+      text: `已打开${windowTitle}。`,
+      shouldSpeak: request.event.type === 'user.input' && request.event.source === 'voice' && supportsTts,
+    })
+  }
+
+  #appendCockpitInfoWindow(
+    taskId: string,
+    baseUi: UISpec,
+    component: UISpec['components'][number],
+    kind: 'weather' | 'calendar' | 'flight-detail' | 'vehicle-status',
+    eventId: string,
+    timestamp: string,
+  ): UISpec {
+    const windowKind = kind === 'calendar' ? 'calendar' : kind
+    const windowTitle = kind === 'weather' ? '天气' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
+    return uiSpecSchema.parse({
+      ...baseUi,
+      uiRevision: baseUi.uiRevision + 1,
+      components: [...baseUi.components, component],
+      windows: [...(baseUi.windows ?? []), {
+        id: `${kind}-${eventId}`, kind: windowKind, title: windowTitle, componentIds: [component.id],
+        size: kind === 'calendar' ? 'large' : 'medium', controls: { closable: true, minimizable: true, maximizable: true },
+      }],
+      meta: { ...baseUi.meta, generatedAt: timestamp, traceId: `trace-${taskId}-${eventId}` },
+    })
+  }
+
+  /**
+   * Command snapshots are ephemeral readings, never task facts. The browser can
+   * offer one only for its active deterministic route; the seed remains the
+   * authority for every value used by a read-only tool or the return hand-off.
+   */
+  #sanitizeCockpitSnapshot(
+    current: StoredTask,
+    snapshot: NavigationCommandSnapshot,
+    serverTimestamp: string,
+    allowTerminalProgress = false,
+  ): SanitizedCockpitSnapshot {
+    const seed = current.task.navigationSimulation
+    const navigation = current.task.navigation
+    if (!seed || !navigation || (navigation.status !== 'active' && navigation.status !== 'arrived')) {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot is not accepted outside an active route', false, current)
+    }
+    const expectedLeg = current.task.phase === 'outbound-driving' || current.task.phase === 'waiting-for-passengers' || current.task.phase === 'passengers-onboard'
+      ? 'outbound'
+      : current.task.phase === 'return-driving'
+        ? 'return'
+        : undefined
+    if (!expectedLeg || snapshot.leg !== expectedLeg || snapshot.leg !== seed.leg || snapshot.routeId !== seed.routeId || snapshot.routeId !== navigation.routeId) {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot does not match the active route', false, current)
+    }
+    const arrived = navigation.status === 'arrived' || allowTerminalProgress
+    if ((arrived && snapshot.progress !== 1) || (!arrived && snapshot.progress >= 1)) {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot progress is outside the route state', false, current)
+    }
+    const profile = seed.profiles[current.task.cockpit?.speedMode ?? 'normal']
+    const expectedSpeed = arrived ? 0 : profile.displaySpeedKph
+    const expectedBattery = seed.initialBatteryPercent
+      - (seed.initialBatteryPercent - seed.estimatedBatteryAtArrival) * snapshot.progress
+    const expectedDistance = seed.distanceKm * (1 - snapshot.progress)
+    const baseVehicle = current.requestContext?.vehicle
+    const expectedRange = baseVehicle && baseVehicle.batteryPercent > 0
+      ? expectedBattery / baseVehicle.batteryPercent * baseVehicle.remainingRangeKm
+      : undefined
+    if (
+      !withinEnvelope(snapshot.speedKph, expectedSpeed, 0.1)
+      || !withinEnvelope(snapshot.batteryPercent, expectedBattery, 0.25)
+      || !withinEnvelope(snapshot.remainingDistanceKm, expectedDistance, 0.05)
+      || (expectedRange !== undefined && !withinEnvelope(snapshot.remainingRangeKm, expectedRange, 0.5))
+    ) {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot is outside the deterministic route envelope', false, current)
+    }
+    const location = cockpitLocationForSnapshot(current.task, snapshot.progress)
+    return {
+      vehicle: {
+        speedKph: expectedSpeed,
+        batteryPercent: expectedBattery,
+        remainingRangeKm: expectedRange ?? snapshot.remainingRangeKm,
+        gear: expectedSpeed > 0 ? 'D' : 'P',
+        isNight: baseVehicle?.isNight ?? true,
+      },
+      remainingDistanceKm: expectedDistance,
+      eta: arrived
+        ? serverTimestamp
+        : new Date(Date.parse(serverTimestamp) + profile.durationSeconds * (1 - snapshot.progress) * 1_000).toISOString(),
+      roadName: location.roadName,
+      weatherLocationId: location.weatherLocationId,
+    }
+  }
+
+  #appendCockpitFlightWindow(
+    current: StoredTask,
+    board: NonNullable<ReadToolResults['flight.list-arrivals']>['data'],
+    task: AirportPickupTaskState,
+    timestamp: string,
+  ): StoredTask {
+    const composed = composeCockpitFlightChoices(board)
+    if (!composed) throw new AgentGatewayError('PROVIDER_FAILED', 'The arrivals board cannot be rendered', false, current)
+    const component = { ...composed.component, actions: undefined }
+    const ui = uiSpecSchema.parse({
+      ...current.ui,
+      uiRevision: current.ui.uiRevision + 1,
+      taskRevision: task.taskRevision,
+      components: [...current.ui.components, component],
+      windows: [...(current.ui.windows ?? []), {
+        id: `flight-list-${board.queryId}`, kind: 'flight-list', title: `${task.pickupAirport?.label ?? '机场'}到达航班`,
+        componentIds: [component.id], size: 'large', controls: { closable: true, minimizable: true, maximizable: true },
+      }],
+      meta: { ...current.ui.meta, sourceTaskRevision: task.taskRevision, generatedAt: timestamp, traceId: `trace-${task.taskId}-${board.queryId}` },
+    })
+    return { ...current, task: { ...task, uiRevision: ui.uiRevision }, ui }
+  }
+
+  #mergeCockpitWindows(
+    previous: StoredTask,
+    published: StoredTask,
+    options: { closeKinds?: Set<NonNullable<UISpec['windows']>[number]['kind']> } = {},
+  ): StoredTask {
+    if (published.task.phase === 'completed' || published.task.phase === 'cancelled') return published
+    const closeKinds = options.closeKinds ?? new Set()
+    const currentWindows = published.ui.windows ?? []
+    const currentWindowIds = new Set(currentWindows.map((window) => window.id))
+    const preservedWindows = (previous.ui.windows ?? []).filter((window) => (
+      !closeKinds.has(window.kind) && !currentWindowIds.has(window.id)
+    ))
+    const publishedComponentIds = new Set(published.ui.components.map((component) => component.id))
+    const preservedComponentIds = new Set(preservedWindows.flatMap((window) => window.componentIds))
+    const preservedComponents = previous.ui.components
+      .filter((component) => preservedComponentIds.has(component.id) && !publishedComponentIds.has(component.id))
+      .map((component) => component.type === 'flight-choices' ? { ...component, actions: undefined } : component)
+    const publishedActionIds = new Set(published.ui.actions.map((action) => action.id))
+    const preservedActionIds = new Set(preservedWindows
+      .filter((window) => window.kind !== 'flight-list')
+      .flatMap((window) => window.actionIds ?? []))
+    const preservedActions = previous.ui.actions.filter((action) => (
+      preservedActionIds.has(action.id) && !publishedActionIds.has(action.id)
+    ))
+    const sanitizedWindows = preservedWindows.map((window) => window.kind === 'flight-list'
+      ? { ...window, actionIds: undefined }
+      : window)
+    const ui = uiSpecSchema.parse({
+      ...published.ui,
+      components: [...published.ui.components, ...preservedComponents],
+      actions: [...published.ui.actions, ...preservedActions],
+      windows: [...sanitizedWindows, ...currentWindows],
+    })
+    return { ...published, task: { ...published.task, uiRevision: ui.uiRevision }, ui }
   }
 
   submitConfirmation(taskId: string, confirmationId: string, input: SubmitConfirmationRequest): AgentResponse {

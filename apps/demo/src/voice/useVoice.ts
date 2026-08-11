@@ -6,10 +6,15 @@ import {
   isSecureContextOk,
   voiceError,
   type SpeechControllerDeps,
+  type VoiceRecognitionSource,
   type VoiceMachineSnapshot,
 } from '@canvasflow/voice'
 
-export type VoiceSubmitMeta = { source: 'voice'; confidence?: number }
+export type VoiceSubmitMeta = {
+  source: 'voice'
+  confidence?: number
+  recognitionSource?: VoiceRecognitionSource
+}
 
 /** Optional copy to speak back once the transcript has been handled. */
 type TranscriptReply = string | undefined | void
@@ -25,6 +30,14 @@ export type UseVoiceOptions = {
   onTranscript?: (text: string, meta: VoiceSubmitMeta) => TranscriptReply | Promise<TranscriptReply>
   /** Test hook: swaps in fake Web Speech engines. */
   speech?: SpeechControllerDeps
+  /** Hands-free turns submit after this quiet period; false keeps confirmation. */
+  autoSubmit?: boolean | (() => boolean)
+  /** Injectable timer seam for deterministic silence handling. */
+  silenceMs?: number
+  /** Provenance for a recognition turn, used to reject trusted system TTS echoes. */
+  recognitionSource?: VoiceRecognitionSource | (() => VoiceRecognitionSource)
+  /** Optional shared playback queue. When present, replies leave this FSM idle immediately. */
+  speakReply?: (text: string) => void
 }
 
 const INITIAL_SNAPSHOT: VoiceMachineSnapshot = {
@@ -40,15 +53,28 @@ const INITIAL_SNAPSHOT: VoiceMachineSnapshot = {
  * `onTranscript`; this hook only moves text.
  */
 export function useVoice(options: UseVoiceOptions = {}) {
-  const { enabled = true, onTranscript, speech } = options
+  const { enabled = true, onTranscript, speech, autoSubmit = true, silenceMs = 5_000, recognitionSource, speakReply } = options
   const [snapshot, setSnapshot] = useState<VoiceMachineSnapshot>(INITIAL_SNAPSHOT)
 
   // Keep the seam and the engine factories in refs so a new object identity on
   // either one never tears down a live listening turn.
   const onTranscriptRef = useRef(onTranscript)
   onTranscriptRef.current = onTranscript
+  const speakReplyRef = useRef(speakReply)
+  speakReplyRef.current = speakReply
+  const autoSubmitRef = useRef(autoSubmit)
+  autoSubmitRef.current = autoSubmit
+  const recognitionSourceRef = useRef(recognitionSource)
+  recognitionSourceRef.current = recognitionSource
   const speechRef = useRef(speech)
   speechRef.current = speech
+  const initialAutoSubmit = typeof autoSubmit === 'function' ? autoSubmit() : autoSubmit
+  const initialRecognitionSource = typeof recognitionSource === 'function' ? recognitionSource() : recognitionSource
+  const [turnConfig, setTurnConfig] = useState({
+    autoSubmit: initialAutoSubmit,
+    recognitionSource: initialRecognitionSource,
+  })
+  const pendingTurnConfigRef = useRef<typeof turnConfig | undefined>(undefined)
 
   const injected = Boolean(speech?.createRecognition)
   const supported = useMemo(() => injected || isRecognitionSupported(), [injected])
@@ -59,7 +85,6 @@ export function useVoice(options: UseVoiceOptions = {}) {
     machine: ReturnType<typeof createVoiceMachine>
     controller: ReturnType<typeof createSpeechController>
   } | null>(null)
-
   useEffect(() => {
     if (!available) {
       loopRef.current = null
@@ -95,8 +120,30 @@ export function useVoice(options: UseVoiceOptions = {}) {
     })
 
     const machine = createVoiceMachine({
+      config: {
+        autoSubmit: turnConfig.autoSubmit,
+        silenceMs,
+      },
+      recognitionSource: turnConfig.recognitionSource,
       effects: {
         openAsr: () => {
+          const turnAutoSubmit = autoSubmitRef.current
+          const turnRecognitionSource = recognitionSourceRef.current
+          const nextAutoSubmit = typeof turnAutoSubmit === 'function' ? turnAutoSubmit() : turnAutoSubmit
+          const nextRecognitionSource = typeof turnRecognitionSource === 'function'
+            ? turnRecognitionSource()
+            : turnRecognitionSource
+          if (nextAutoSubmit !== turnConfig.autoSubmit || nextRecognitionSource !== turnConfig.recognitionSource) {
+            pendingTurnConfigRef.current = {
+              autoSubmit: nextAutoSubmit,
+              recognitionSource: nextRecognitionSource,
+            }
+            queueMicrotask(() => setTurnConfig({
+              autoSubmit: nextAutoSubmit,
+              recognitionSource: nextRecognitionSource,
+            }))
+            return
+          }
           if (!controller.startListening()) {
             // Report asynchronously: the machine is mid-transition into listening.
             queueMicrotask(on((current) => current.asrError('recognition')))
@@ -121,7 +168,14 @@ export function useVoice(options: UseVoiceOptions = {}) {
             return
           }
           void Promise.resolve(result).then(
-            (reply) => finish(typeof reply === 'string' ? reply : undefined),
+          (reply) => {
+            if (typeof reply === 'string' && speakReplyRef.current) {
+              speakReplyRef.current(reply)
+              finish(undefined)
+              return
+            }
+            finish(typeof reply === 'string' ? reply : undefined)
+          },
             () => finish(undefined),
           )
         },
@@ -132,6 +186,16 @@ export function useVoice(options: UseVoiceOptions = {}) {
     loopRef.current = { machine, controller }
     setSnapshot(machine.snapshot())
 
+    if (pendingTurnConfigRef.current) {
+      pendingTurnConfigRef.current = undefined
+      queueMicrotask(() => {
+        const current = loopRef.current?.machine
+        if (!current || current.snapshot().state !== 'idle') return
+        current.press()
+        setSnapshot(current.snapshot())
+      })
+    }
+
     return () => {
       // Clearing the holder makes every queued callback a no-op after teardown.
       holder.machine = undefined
@@ -139,7 +203,7 @@ export function useVoice(options: UseVoiceOptions = {}) {
       machine.dispose()
       controller.dispose()
     }
-  }, [available])
+  }, [available, silenceMs, turnConfig.autoSubmit, turnConfig.recognitionSource])
 
   const act = useCallback((run: (machine: ReturnType<typeof createVoiceMachine>) => void) => {
     const loop = loopRef.current

@@ -35,6 +35,9 @@ export type AMapRouteHandle = {
    * caller does not have to know whether the spec authored a progress value.
    */
   setProgress: (progress: number) => void
+  setRoute: (sketch: RouteSketch) => Promise<boolean>
+  setFollow: (follow: boolean) => void
+  recenter: () => void
   destroy: () => void
 }
 
@@ -42,6 +45,7 @@ export type AMapRouteOptions = {
   sketch: RouteSketch
   mode: 'overview' | 'follow'
   theme: 'light' | 'dark'
+  onManualInteraction?: () => void
 }
 
 /**
@@ -159,25 +163,27 @@ function drawRoute(
   if (path.length < 2) throw new Error('empty route path')
 
   const palette = THEMES[options.theme]
-  const overlays: AMapOverlay[] = []
-  const route = new amap.Polyline({
-    path: path.map((point) => [point.lng, point.lat]),
-    strokeColor: palette.route,
-    strokeWeight: 6,
-    strokeOpacity: 0.9,
-    lineJoin: 'round',
-    zIndex: 50,
-  })
-  map.add(route)
-  overlays.push(route)
-
-  const progress = normalizedProgress(options.sketch.progress)
+  let overlays: AMapOverlay[] = []
+  let following = options.mode === 'follow'
   let vehicle: LngLatPoint | undefined
   /** Set only where a marker was drawn, and the only thing `setProgress` moves. */
   let moveTo: ((progress: number) => void) | undefined
-
-  if (progress !== undefined) {
-    const asXy = path.map((point) => ({ x: point.lng, y: point.lat }))
+  const drawPath = (routePath: LngLatPoint[], progress: number | undefined) => {
+    if (overlays.length > 0) map.remove(overlays)
+    overlays = []
+    moveTo = undefined
+    const route = new amap.Polyline({
+      path: routePath.map((point) => [point.lng, point.lat]),
+      strokeColor: palette.route,
+      strokeWeight: 6,
+      strokeOpacity: 0.9,
+      lineJoin: 'round',
+      zIndex: 50,
+    })
+    map.add(route)
+    overlays.push(route)
+    if (progress === undefined) return
+    const asXy = routePath.map((point) => ({ x: point.lng, y: point.lat }))
     const lengths = segmentLengths(asXy)
     if (lengths.some((length) => length > 0)) {
       const at = pointAtProgress(asXy, lengths, progress)
@@ -195,23 +201,43 @@ function drawRoute(
       map.add(tail)
       overlays.push(tail)
 
-      const marker = new amap.Marker({ position: [vehicle.lng, vehicle.lat], zIndex: 70 })
+      const marker = new amap.Marker({
+        position: [vehicle.lng, vehicle.lat],
+        zIndex: 70,
+        anchor: 'center',
+        content: '<span class="amap-cockpit-car" aria-hidden="true"><span></span></span>',
+      })
       map.add(marker)
       overlays.push(marker)
 
       moveTo = (next: number) => {
         const point = pointAtProgress(asXy, lengths, next)
+        vehicle = { lng: point.x, lat: point.y }
         marker.setPosition([point.x, point.y])
+        marker.setAngle?.(headingAtProgress(asXy, lengths, next))
         tail.setPath(traversedPath(asXy, lengths, next).map((covered) => [covered.x, covered.y]))
+        if (following) {
+          if (map.setCenter) map.setCenter([point.x, point.y], false)
+          else map.setZoomAndCenter(14, [point.x, point.y])
+        }
       }
     }
   }
+  drawPath(path, normalizedProgress(options.sketch.progress))
 
   if (options.mode === 'follow' && vehicle) {
     map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
   } else {
     map.setFitView(overlays)
   }
+
+  const leaveFollow = () => {
+    if (!following) return
+    following = false
+    options.onManualInteraction?.()
+  }
+  map.on?.('dragstart', leaveFollow)
+  map.on?.('zoomstart', leaveFollow)
 
   return {
     setProgress: (next: number) => {
@@ -225,8 +251,25 @@ function drawRoute(
         // map down over it would be the worse outcome.
       }
     },
+    setRoute: (sketch: RouteSketch) => searchRoute(amap, map, sketch).then((nextPath) => {
+      if (nextPath.length < 2) return false
+      drawPath(nextPath, normalizedProgress(sketch.progress))
+      if (following && vehicle) map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
+      else map.setFitView(overlays)
+      return true
+    }),
+    setFollow: (next: boolean) => { following = next },
+    recenter: () => {
+      following = true
+      if (vehicle) {
+        if (map.setCenter) map.setCenter([vehicle.lng, vehicle.lat], false)
+        else map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
+      }
+    },
     destroy: () => {
       try {
+        map.off?.('dragstart', leaveFollow)
+        map.off?.('zoomstart', leaveFollow)
         map.remove(overlays)
         map.destroy()
       } catch {
@@ -234,6 +277,37 @@ function drawRoute(
       }
     },
   }
+}
+
+function searchRoute(amap: AMapApi, map: AMapMap, sketch: RouteSketch): Promise<LngLatPoint[]> {
+  const stops = sketch.waypoints.filter(plottable)
+  if (stops.length < 2) return Promise.resolve([])
+  return new Promise((resolve) => {
+    let driving: AMapDriving
+    try {
+      driving = new amap.Driving({ map })
+    } catch {
+      resolve([])
+      return
+    }
+    try {
+      driving.search(tuple(stops[0]!), tuple(stops[stops.length - 1]!), {
+        waypoints: stops.slice(1, -1).map(tuple),
+      }, (status, result) => resolve(status === 'complete' ? extractPath(result) : []))
+    } catch {
+      resolve([])
+    }
+  })
+}
+
+function headingAtProgress(
+  points: Array<{ x: number; y: number }>,
+  lengths: number[],
+  progress: number,
+): number {
+  const before = pointAtProgress(points, lengths, Math.max(0, progress - 0.002))
+  const after = pointAtProgress(points, lengths, Math.min(1, progress + 0.002))
+  return Math.atan2(after.x - before.x, after.y - before.y) * 180 / Math.PI
 }
 
 /** Only a finite fraction in [0, 1] places a vehicle; anything else is overview. */
