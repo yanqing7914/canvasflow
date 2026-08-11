@@ -221,6 +221,77 @@ describe('renderAMapRoute runtime failures', () => {
   })
 })
 
+describe('renderAMapRoute runtime failures', () => {
+  it('signals a Map constructor failure while preserving the null fallback', async () => {
+    const onRuntimeFailure = vi.fn()
+    const broken = {
+      Map: class { constructor() { throw new Error('map failed') } },
+    } as unknown as AMapApi
+
+    await expect(renderAMapRoute(broken, document.createElement('div'), {
+      sketch,
+      mode: 'follow',
+      theme: 'light',
+      onRuntimeFailure,
+    })).resolves.toBeNull()
+    expect(onRuntimeFailure).toHaveBeenCalledOnce()
+  })
+
+  it.each(['constructor', 'search', 'status'] as const)(
+    'signals a Driving %s failure once and tears down the partial map',
+    async (failure) => {
+      const fake = fakeAMap()
+      const onRuntimeFailure = vi.fn()
+      fake.amap.Driving = class {
+        constructor() {
+          if (failure === 'constructor') throw new Error('driving failed')
+        }
+        search(
+          _origin: unknown,
+          _destination: unknown,
+          _options: { waypoints?: unknown[] },
+          callback: (status: string, result: unknown) => void,
+        ) {
+          if (failure === 'search') throw new Error('search failed')
+          callback('error', {})
+        }
+      } as unknown as AMapApi['Driving']
+
+      await expect(renderAMapRoute(fake.amap, document.createElement('div'), {
+        sketch,
+        mode: 'follow',
+        theme: 'light',
+        onRuntimeFailure,
+      })).resolves.toBeNull()
+      expect(onRuntimeFailure).toHaveBeenCalledOnce()
+      expect(fake.destroy).toHaveBeenCalledOnce()
+    },
+  )
+
+  it('signals a later route-search failure without destroying the working map', async () => {
+    const fake = fakeAMap()
+    const onRuntimeFailure = vi.fn()
+    const handle = await renderAMapRoute(fake.amap, document.createElement('div'), {
+      sketch,
+      mode: 'follow',
+      theme: 'light',
+      onRuntimeFailure,
+    })
+    fake.amap.Driving = class {
+      search(
+        _origin: unknown,
+        _destination: unknown,
+        _options: { waypoints?: unknown[] },
+        callback: (status: string, result: unknown) => void,
+      ) { callback('error', {}) }
+    } as unknown as AMapApi['Driving']
+
+    await expect(handle?.setRoute(sketch)).resolves.toBe(false)
+    expect(onRuntimeFailure).toHaveBeenCalledOnce()
+    expect(fake.destroy).not.toHaveBeenCalled()
+  })
+})
+
 /**
  * `setProgress` is the whole of the crawl's reach into the map.
  *
