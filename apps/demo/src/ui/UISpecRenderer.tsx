@@ -346,7 +346,6 @@ function RouteSketchBand({
       >
         <span className="ui-navigation-brief__route-start" />
         <span className="ui-navigation-brief__route-line" />
-        <span className="ui-navigation-brief__route-end" />
       </div>
     )
   }
@@ -858,7 +857,13 @@ function componentActionIds(component: unknown): string[] {
  */
 function cardOwnedActionIds(component: ComponentSpec): string[] {
   return component.type === 'flight-choices'
-    ? component.props.choices.map((choice) => choice.actionId)
+    ? [
+        ...component.props.choices.map((choice) => choice.actionId),
+        // The refresh pill is drawn in the card's own header, so it belongs here
+        // too — left off this list it would appear twice, once as a pill and once
+        // as a full-height button in the slot's group.
+        ...(component.props.refreshActionId ? [component.props.refreshActionId] : []),
+      ]
     : []
 }
 
@@ -887,6 +892,13 @@ function DeparturePlanCard({ component }: { component: Extract<ComponentSpec, { 
         <li className="ui-departure-plan__fact">提前 {props.bufferMinutes} 分钟到</li>
         {props.viaLabel && <li className="ui-departure-plan__fact ui-departure-plan__fact--via">{props.viaLabel}</li>}
       </ul>
+      {/* Not a fact the time was derived from, so not in the list: it is the
+          answer to "did that reminder take". It carries its own clock because a
+          reminder set against an earlier route keeps the time the driver was
+          actually promised, and a bare 已设提醒 would hide the difference. */}
+      {props.reminderAtLabel && (
+        <p className="ui-departure-plan__reminder">已设提醒 {props.reminderAtLabel}</p>
+      )}
     </ComponentSurface>
   )
 }

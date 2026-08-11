@@ -4,10 +4,11 @@ import {
   chargingStationsForDensity,
   estimateFinalBatteryPercent,
   memberPreferences,
+  meetingPointKey,
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from '@canvasflow/tools'
-import { ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent } from './composer'
+import { ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent } from './composer'
 import { applyEvent, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
 import type { StoredTask } from './store'
@@ -326,7 +327,7 @@ describe('Agent UISpec composer', () => {
 
   it('declines to invent a departure time with nothing to work backwards from', () => {
     const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
-    const flight = { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal }
+    const flight = { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, arrivalAirport: reads.flight.arrivalAirport, terminal: reads.flight.terminal }
     const base = {
       ...createInitialTask('pickup-001', timestamp),
       phase: 'preparing' as const,
@@ -349,7 +350,7 @@ describe('Agent UISpec composer', () => {
     }
 
     const quiet = composeAgentSpec(task, reads.toolResults)
-    const asked = composeAgentSpec(task, reads.toolResults, undefined, { departureAnswer: true })
+    const asked = composeAgentSpec(task, reads.toolResults, undefined, { queryAnswer: 'departure' })
 
     expect(quiet.components.some((component) => component.type === 'departure-plan')).toBe(false)
     // Borrows the auxiliary band rather than growing the brief.
@@ -407,6 +408,40 @@ describe('Agent UISpec composer', () => {
     const layout = spec.layout
     if (layout?.type !== 'split') throw new Error(`expected a split layout underway, got ${layout?.type}`)
     expect(layout.slots.secondary).toEqual([answer!.id])
+  })
+
+  it('leaves an answer that has its own controls holding them when it takes the rail', () => {
+    const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'driving-to-airport' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'active' as const },
+    }
+
+    const spec = composeAgentSpec(task, reads.toolResults, undefined, { queryAnswer: 'departure' })
+
+    // The rail hands its side-scene buttons to a reading, which has nothing of its
+    // own to put there. It must not hand them to the departure answer: 稍后提醒 and
+    // 查看日程 are the controls that question was asked to reach, and a card whose
+    // own actions are defined in the spec and referenced by nothing is the same as
+    // not having built them.
+    //
+    // The gateway never composes this state — 什么时候出发 underway is answered with
+    // the arrival instead, since the recommendation was worked backwards from the
+    // landing (see the departure query's `hasDeparted` turn). This pins the branch
+    // so that stays a routing decision rather than the only thing holding it up.
+    const answer = spec.components.find((component) => component.type === 'departure-plan')
+    expect(answer).toBeDefined()
+    expect(answer!.actions).toEqual([REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID])
+    const layout = spec.layout
+    if (layout?.type !== 'split') throw new Error(`expected a split layout underway, got ${layout?.type}`)
+    expect(layout.slots.secondary).toEqual([answer!.id])
+    // And the way to the other scenes is still defined, so it is still reachable.
+    expect(spec.actions.map((action) => action.id)).toEqual([
+      ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID,
+    ])
   })
 
   it('keeps the schedule strip on the return trip, anchored to the home eta', () => {
@@ -781,6 +816,7 @@ describe('Agent UISpec composer arrival and battery consistency', () => {
     status: 'landed' as const,
     scheduledArrival: '2026-07-22T20:30:00+08:00',
     estimatedArrival: '2026-07-22T20:40:00+08:00',
+    arrivalAirport: 'SHA' as const,
     terminal: 'T2',
   }
 
@@ -814,11 +850,69 @@ describe('Agent UISpec composer arrival and battery consistency', () => {
 
       expect(spec.components, phase).toEqual([expect.objectContaining({
         type: 'passenger-status',
-        props: { label, status, meetingPoint: recommendedMeetingPoints[flight.terminal]!.name },
+        props: { label, status, meetingPoint: recommendedMeetingPoints[meetingPointKey(flight.arrivalAirport, flight.terminal)]!.name },
       })])
       // The stale post-charge card is what used to occupy this screen.
       expect(spec.components.map((component) => component.type), phase).not.toContain('charging-recommendation')
     }
+  })
+
+  it('sends a 浦东 arrival to a different door than a 虹桥 arrival of the same terminal number', () => {
+    // Both flights land at a "T2". They are an hour of driving apart, and the
+    // terminal number alone cannot tell them apart — which is why the lookup
+    // takes the airport too.
+    const doorFor = (arrivalAirport: 'SHA' | 'PVG') => {
+      const spec = composeAgentSpec({
+        ...arrivedTask('waiting-for-passengers'),
+        flight: { ...flight, arrivalAirport, terminal: 'T2' },
+      })
+      const card = spec.components[0]
+      if (card?.type !== 'passenger-status') throw new Error('expected the passenger card')
+      return card.props.meetingPoint
+    }
+
+    expect(doorFor('PVG')).toBeTruthy()
+    expect(doorFor('PVG')).not.toBe(doorFor('SHA'))
+    expect(doorFor('PVG')).toContain('浦东')
+    expect(doorFor('SHA')).toContain('虹桥')
+  })
+
+  it('names the airport the trip is actually to in the copy around the cards', () => {
+    // The heading is on screen in every phase of the drive, so a name written
+    // into it rather than read off the trip would contradict the route card
+    // sitting under it from the moment the board offered two airports.
+    expect(composeAgentSpec(arrivedTask('approaching-airport')).title)
+      .toBe('去虹桥机场接妈妈和豆豆')
+
+    const pudong = composeAgentSpec({
+      ...arrivedTask('approaching-airport'),
+      flight: { ...flight, arrivalAirport: 'PVG', terminal: 'T2' },
+      navigation: { routeId: 'route-airport-pvg-001', destination: '浦东机场 T2', eta: '2026-07-22T21:33:00+08:00', status: 'active' },
+    })
+
+    expect(pudong.title).toBe('去浦东机场接妈妈和豆豆')
+    // Same name, from the same read, wherever the trip is named: the overview's
+    // 机场 metric only reaches a screen before a flight is chosen, but it must
+    // not be the one place a second answer is kept.
+    const overview = composeAgentSpec({ ...createInitialTask('pickup-001', timestamp), phase: 'preparing' as const, passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false } })
+      .components.find((component) => component.type === 'pickup-overview')
+    if (overview?.type !== 'pickup-overview') throw new Error('expected the overview card')
+    expect(overview.props.airport).toBe('虹桥机场')
+  })
+
+  it('omits the meeting point rather than guessing one for a flight whose airport is unknown', () => {
+    // The locally parsed flight number does not know where the plane lands.
+    // Naming a door anyway would be a confident wrong answer in the phase where
+    // the driver is standing at the curb.
+    const spec = composeAgentSpec({
+      ...arrivedTask('waiting-for-passengers'),
+      flight: { ...flight, arrivalAirport: undefined },
+    })
+
+    expect(spec.components).toEqual([expect.objectContaining({
+      type: 'passenger-status',
+      props: { label: '已停稳，等待家人', status: 'waiting' },
+    })])
   })
 
   it('omits the meeting point rather than guessing one for an unknown terminal', () => {
@@ -1077,8 +1171,12 @@ describe('Agent UISpec composer flight choices', () => {
     const choices = choicesComponent(spec)
 
     // Every row's action is declared on the component (so it stays out of the
-    // global bar) and defined in the spec (so the row is pressable).
-    expect(choices.actions).toEqual(choices.props.choices.map((choice) => choice.actionId))
+    // global bar) and defined in the spec (so the row is pressable). The refresh
+    // rides on the same list for the same reason, behind the rows it re-reads.
+    expect(choices.actions).toEqual([
+      ...choices.props.choices.map((choice) => choice.actionId),
+      choices.props.refreshActionId,
+    ])
     expect(spec.actions.map((action) => action.id)).toEqual(choices.actions)
     for (const action of spec.actions) {
       expect(action.event.type).toBe('agent-message')
@@ -1087,6 +1185,14 @@ describe('Agent UISpec composer flight choices', () => {
       id: 'pick-MU5102',
       label: '接 MU5102',
       event: { type: 'agent-message', text: '航班号 MU5102' },
+    })
+    // The refresh says the words too — the board is a faster way of speaking, and
+    // a control that reached the Agent by some other route would be a second path
+    // to keep in step with the rows.
+    expect(spec.actions.at(-1)).toMatchObject({
+      id: 'refresh-flight-options',
+      label: '刷新航班',
+      event: { type: 'agent-message', text: '刷新航班' },
     })
   })
 

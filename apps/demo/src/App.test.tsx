@@ -261,7 +261,13 @@ describe('demo integration', () => {
         return responseWithVisibility(task)
       }),
       action: vi.fn(async (current: AgentResponse) => {
-        task = applyEvent(current.task, mainFlowTimeline.steps[3]!.event)
+        task = applyEvent({
+          ...current.task,
+          navigation: current.task.navigation ?? {
+            routeId: 'route-airport-001', destination: '虹桥机场 T2',
+            eta: '2026-07-22T20:25:00+08:00', status: 'planned',
+          },
+        }, { ...mainFlowTimeline.steps[3]!.event, timestamp: '2026-07-22T20:11:00+08:00' })
         return responseWithVisibility(task)
       }),
       confirmation: vi.fn(),
@@ -291,23 +297,23 @@ describe('demo integration', () => {
       ...createInitialTask(),
       phase: 'approaching-airport',
       passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', arrivalAirport: 'SHA', terminal: 'T2', baggageClaim: '12' },
       navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
     })
     expect(approaching.components[0]).toMatchObject({
       type: 'passenger-status',
-      props: { status: 'landed', meetingPoint: 'P2 停车场到达层 3 号门' },
+      props: { status: 'landed', meetingPoint: '虹桥 T2 P2 停车场到达层 3 号门' },
     })
 
     const waiting = composePickupSpec({
       ...createInitialTask(),
       phase: 'waiting-for-passengers',
       passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2', baggageClaim: '12' },
+      flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', arrivalAirport: 'SHA', terminal: 'T2', baggageClaim: '12' },
     })
     expect(waiting.components[0]).toMatchObject({
       type: 'passenger-status',
-      props: { status: 'waiting', meetingPoint: 'P2 停车场到达层 3 号门' },
+      props: { status: 'waiting', meetingPoint: '虹桥 T2 P2 停车场到达层 3 号门' },
     })
   })
 
@@ -576,6 +582,65 @@ describe('demo integration', () => {
     expect(flightUpdateAttempts).toBe(2)
   })
 
+  it('keeps a failed navigation advance on the same timeline step for retry', async () => {
+    const user = userEvent.setup()
+    const collectingTask = createInitialTask()
+    const preparedTask: AirportPickupTaskState = {
+      ...collectingTask,
+      phase: 'preparing',
+      taskRevision: 1,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: {
+        flightNumber: 'MU5102', trusted: true, status: 'scheduled',
+        scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+      },
+      charging: { recommended: true, accepted: false, status: 'planned' },
+      navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+    }
+    const startedTask: AirportPickupTaskState = {
+      ...preparedTask,
+      phase: 'driving-to-airport',
+      taskRevision: 2,
+      navigation: { ...preparedTask.navigation!, status: 'active' },
+    }
+    const failed = {
+      ...apiResponse(preparedTask),
+      effects: [{ effectId: 'nav:advance-failed', type: 'navigation.start' as const, status: 'failed' as const, tool: 'navigation.start', errorCode: 'PROVIDER_TIMEOUT' }],
+    }
+    const event = vi.fn()
+      .mockResolvedValueOnce(apiResponse(preparedTask))
+      .mockResolvedValue(apiResponse(preparedTask))
+    const action = vi.fn()
+      .mockResolvedValueOnce(failed)
+      .mockResolvedValueOnce(apiResponse(startedTask))
+    const api = {
+      create: vi.fn().mockResolvedValue(apiResponse(collectingTask)),
+      event,
+      action,
+      confirmation: vi.fn(),
+    }
+    render(<App api={api} />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    const input = screen.getByLabelText('任务输入')
+    await user.clear(input)
+    await user.type(input, 'MU5102')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await screen.findByText('准备出发')
+
+    const drawer = await openControls(user)
+    const advance = screen.getByRole('button', { name: /推进下一事件/ })
+    await user.click(advance) // charging recommendation
+    await user.click(advance) // navigation fails, cursor must stay here
+    await screen.findByText('准备出发')
+    expect(action).toHaveBeenCalledTimes(1)
+
+    await user.click(advance) // retry the same navigation step
+    await waitFor(() => expect(drawer).toHaveTextContent('driving-to-airport'))
+    expect(action).toHaveBeenCalledTimes(2)
+    expect(screen.getByText('途中')).toBeInTheDocument()
+  })
+
   it('serializes API mutations and disables controls while a request is pending', async () => {
     const user = userEvent.setup()
     let resolveCreate!: (response: AgentResponse) => void
@@ -730,7 +795,7 @@ describe('demo integration', () => {
           ...createInitialTask(),
           phase: 'driving-to-airport',
           passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
-          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', arrivalAirport: 'SHA', terminal: 'T2' },
           navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
           message: {
             autoNotifyAuthorized: true,
@@ -756,7 +821,7 @@ describe('demo integration', () => {
           ...createInitialTask(),
           phase: 'driving-to-airport',
           passengers: { memberIds: ['doubao'], names: ['豆豆'], confirmedOnboard: false },
-          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+          flight: { flightNumber: 'MU5102', status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', arrivalAirport: 'SHA', terminal: 'T2' },
           message: { autoNotifyAuthorized: true, status: 'failed', landingNoticeSent: false },
           updatedAt: '2026-07-22T20:41:00+08:00',
         }}
@@ -1076,8 +1141,8 @@ describe('demo integration', () => {
             arrivalCityName: '上海',
             dateLabel: '今天',
             choices: [
-              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', actionId: 'pick-MU5102' },
-              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', actionId: 'pick-MU5103' },
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'pick-MU5102' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', revisedTimeLabel: '预计 21:10', terminal: 'T1', airportName: '虹桥机场', actionId: 'pick-MU5103' },
             ],
             freshness: 'fixture',
           },
@@ -1551,7 +1616,7 @@ describe('demo integration', () => {
 
       const drawer = await openControls(user)
       expect(drawer).toHaveTextContent('语音兜底回放')
-      await user.click(screen.getByRole('button', { name: '补充航班号' }))
+      await user.click(screen.getByRole('button', { name: '接机指令' }))
       await flush()
 
       // The stage is back and the recording is playing into a listening turn.
@@ -1562,17 +1627,17 @@ describe('demo integration', () => {
       // The recording ends; its canonical transcript waits in the field like
       // any other turn's words. Nothing has been submitted.
       emit(() => audio.current().onended?.())
-      expect(screen.getByLabelText('任务输入')).toHaveValue('航班 MU5102')
+      expect(screen.getByLabelText('任务输入')).toHaveValue('我现在要去机场接妈妈和豆豆')
       expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('已转写，确认或编辑后发送。')
       expect(create).not.toHaveBeenCalled()
 
       // 发送 confirms it with the sample's recorded source and confidence.
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
-      expect(create).toHaveBeenCalledWith('航班 MU5102', {
+      expect(create).toHaveBeenCalledWith('我现在要去机场接妈妈和豆豆', {
         vehicleContext: expect.anything(),
         source: 'voice',
-        confidence: 0.98,
+        confidence: 0.96,
       })
 
       // The armed sample was consumed: the next press listens for real again.
@@ -1618,19 +1683,19 @@ describe('demo integration', () => {
       expect(screen.getByRole('button', { name: '语音入口暂不可用' })).toBeDisabled()
 
       await openControls(user)
-      await user.click(screen.getByRole('button', { name: '补充航班号' }))
+      await user.click(screen.getByRole('button', { name: '接机指令' }))
 
       // The recording still plays for the audience; the transcript is parked in
       // the text field, and only 发送 moves it on.
       expect(audio.current().played).toBe(1)
       const input = screen.getByLabelText('任务输入')
-      expect(input).toHaveValue('航班 MU5102')
+      expect(input).toHaveValue('我现在要去机场接妈妈和豆豆')
       expect(create).not.toHaveBeenCalled()
 
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
       // Without a recognition turn there is no honest voice meta to claim.
-      expect(create).toHaveBeenCalledWith('航班 MU5102', { vehicleContext: expect.anything() })
+      expect(create).toHaveBeenCalledWith('我现在要去机场接妈妈和豆豆', { vehicleContext: expect.anything() })
     })
 
     it('refuses to replay over an unsent draft the driver typed', async () => {
@@ -1668,8 +1733,8 @@ describe('demo integration', () => {
       render(<App api={api} fixtureAudio={audio.factory} />)
 
       await openControls(user)
-      await user.click(screen.getByRole('button', { name: '补充航班号' }))
-      expect(screen.getByLabelText('任务输入')).toHaveValue('航班 MU5102')
+      await user.click(screen.getByRole('button', { name: '接机指令' }))
+      expect(screen.getByLabelText('任务输入')).toHaveValue('我现在要去机场接妈妈和豆豆')
 
       // The parked words are unconfirmed; another sample may not clobber them.
       await openControls(user)
@@ -1680,7 +1745,330 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
       await openControls(user)
-      expect(screen.getByRole('button', { name: '接机指令' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: '补充航班号' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
+    })
+
+    it('enables state-bound samples only when their matching UI capability is visible', async () => {
+      const user = userEvent.setup()
+      const initial = createInitialTask()
+      const base = composePickupSpec(initial)
+      const arrivalsUi: UISpec = {
+        ...base,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['flight-choices'] } },
+        components: [{
+          id: 'flight-choices',
+          type: 'flight-choices',
+          actions: ['pick-MU5102', 'pick-MU5103'],
+          props: {
+            arrivalCityName: '上海', dateLabel: '今天', freshness: 'fixture',
+            choices: [
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'pick-MU5102' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', terminal: 'T1', airportName: '虹桥机场', actionId: 'pick-MU5103' },
+            ],
+          },
+        }],
+        actions: [
+          { id: 'pick-MU5102', label: '接 MU5102', style: 'primary', event: { type: 'agent-message', text: '航班号 MU5102' } },
+          { id: 'pick-MU5103', label: '接 MU5103', style: 'secondary', event: { type: 'agent-message', text: '航班号 MU5103' } },
+        ],
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue({ ...apiResponse(initial), ui: arrivalsUi }),
+        event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      let drawer = await openControls(user)
+      expect(screen.getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: '语音回放：开始导航' })).toBeDisabled()
+      await user.keyboard('{Escape}')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      drawer = await openControls(user)
+      expect(drawer).toHaveTextContent('语音兜底回放')
+      expect(screen.getByRole('button', { name: '选择第一个航班' })).toBeEnabled()
+      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: '语音回放：提醒带伞' })).toBeDisabled()
+    })
+
+    it('keeps a fixture disabled when its visible card has no matching executable action', async () => {
+      const user = userEvent.setup()
+      const initial = createInitialTask()
+      const base = composePickupSpec(initial)
+      const brokenArrivalsUi: UISpec = {
+        ...base,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['flight-choices'] } },
+        components: [{
+          id: 'flight-choices',
+          type: 'flight-choices',
+          actions: ['missing-pick'],
+          props: {
+            arrivalCityName: '上海', dateLabel: '今天', freshness: 'fixture',
+            choices: [
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'missing-pick' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', terminal: 'T1', airportName: '虹桥机场', actionId: 'missing-pick-2' },
+            ],
+          },
+        }],
+        actions: [],
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue({ ...apiResponse(initial), ui: brokenArrivalsUi }),
+        event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await openControls(user)
+      expect(screen.getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
+    })
+
+    it('uses the renderer first-wins rule when duplicate action ids disagree', async () => {
+      const user = userEvent.setup()
+      const initial = createInitialTask()
+      const base = composePickupSpec(initial)
+      const ui: UISpec = {
+        ...base,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['flight-choices'] } },
+        components: [{
+          id: 'flight-choices',
+          type: 'flight-choices',
+          actions: ['pick-MU5102'],
+          props: {
+            arrivalCityName: '上海', dateLabel: '今天', freshness: 'fixture',
+            choices: [
+              { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'scheduled', statusLabel: '计划中', arrivalTimeLabel: '20:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'pick-MU5102' },
+              { flightNumber: 'MU5103', airlineName: '东方航空', originName: '深圳宝安', status: 'delayed', statusLabel: '延误', arrivalTimeLabel: '20:30', terminal: 'T1', airportName: '虹桥机场', actionId: 'pick-MU5103' },
+            ],
+          },
+        }],
+        actions: [
+          { id: 'pick-MU5102', label: '第一条不可执行', style: 'secondary', event: { type: 'dismiss', targetId: 'nothing' } },
+          { id: 'pick-MU5102', label: '第二条看似可执行', style: 'primary', event: { type: 'agent-message', text: '航班号 MU5102' } },
+        ],
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue({ ...apiResponse(initial), ui }),
+        event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await openControls(user)
+      expect(screen.getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
+    })
+
+    it('enables the dismiss fixture for the typed advisory action id', async () => {
+      const user = userEvent.setup()
+      const task: AirportPickupTaskState = {
+        ...createInitialTask(),
+        phase: 'driving-to-airport',
+        taskRevision: 4,
+        passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+        flight: { flightNumber: 'MU5102', trusted: true, status: 'in-air', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'active' },
+        weatherAdvisory: { status: 'active', advisedAt: '2026-07-22T20:10:00+08:00' },
+      }
+      const base = apiResponse(task)
+      const ui: UISpec = {
+        ...base.ui,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['weather-advisory'] } },
+        components: [{
+          id: 'weather-advisory',
+          type: 'weather-card',
+          actions: ['dismiss-advisory-weather'],
+          props: {
+            location: '虹桥机场 T2', timeLabel: '20:40 到达时', temperatureC: 24,
+            condition: 'light-rain', conditionLabel: '小雨', precipitationChance: 70, freshness: 'fixture',
+          },
+        }],
+        actions: [{ id: 'dismiss-advisory-weather', label: '暂不处理', style: 'secondary', event: { type: 'agent-message', text: '暂不处理' } }],
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue({ ...base, ui }),
+        event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await openControls(user)
+      expect(screen.getByRole('button', { name: '语音回放：暂不处理' })).toBeEnabled()
+    })
+
+    it('advances the demo cursor after any supported arrivals-board ordinal', async () => {
+      const user = userEvent.setup()
+      const collecting = createInitialTask()
+      const prepared: AirportPickupTaskState = {
+        ...collecting,
+        phase: 'preparing',
+        taskRevision: 1,
+        passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+        flight: { flightNumber: 'HO1252', trusted: true, status: 'scheduled', scheduledArrival: '2026-07-22T20:55:00+08:00', estimatedArrival: '2026-07-22T20:55:00+08:00', terminal: 'T2' },
+        charging: { recommended: true, accepted: false, status: 'planned' },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+      }
+      const event = vi.fn()
+        .mockResolvedValueOnce(apiResponse(prepared))
+        .mockResolvedValue(apiResponse(prepared))
+      const api = {
+        create: vi.fn().mockResolvedValue(apiResponse(collecting)),
+        event, action: vi.fn(), confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await user.clear(screen.getByLabelText('任务输入'))
+      await user.type(screen.getByLabelText('任务输入'), '选第三个')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备出发')
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
+      await waitFor(() => expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+        eventId: 'event-charging-recommended',
+      })))
+    })
+
+    it('advances after a normalized flight number with spaces or prose around it', async () => {
+      const user = userEvent.setup()
+      const task = createInitialTask()
+      const prepared = {
+        ...task,
+        phase: 'preparing' as const,
+        taskRevision: 1,
+        passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+        flight: { flightNumber: 'MU5102', trusted: true, status: 'scheduled' as const, scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        charging: { recommended: true, accepted: false, status: 'planned' as const },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' as const },
+      }
+      const event = vi.fn().mockResolvedValue(apiResponse(prepared))
+      const api = {
+        create: vi.fn().mockResolvedValue(apiResponse(task)),
+        event,
+        action: vi.fn(), confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await user.clear(screen.getByLabelText('任务输入'))
+      await user.type(screen.getByLabelText('任务输入'), '航班是 MU 5102')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备出发')
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
+      await waitFor(() => expect(event).toHaveBeenLastCalledWith(expect.anything(), expect.objectContaining({
+        eventId: 'event-charging-recommended',
+      })))
+    })
+
+    it('submits the navigation fixture through the registered action and not user.input', async () => {
+      const user = userEvent.setup()
+      const audio = createFakeFixtureAudio()
+      const preparedTask: AirportPickupTaskState = {
+        ...createInitialTask(),
+        phase: 'preparing',
+        taskRevision: 3,
+        passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+        flight: { flightNumber: 'MU5102', trusted: true, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        charging: { recommended: true, accepted: false, status: 'planned' },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+      }
+      const prepared = apiResponse(preparedTask)
+      prepared.ui = {
+        ...prepared.ui,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['navigation-plan'] } },
+        components: [{
+          id: 'navigation-plan',
+          type: 'navigation-summary',
+          actions: ['start-navigation'],
+          props: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', distanceKm: 32, estimatedBatteryAtArrival: 27 },
+        }],
+        actions: [{ id: 'start-navigation', label: '开始导航', style: 'primary', event: { type: 'tool-request', actionToken: 'start-navigation' } }],
+      }
+      const startedTask: AirportPickupTaskState = {
+        ...preparedTask,
+        phase: 'driving-to-airport',
+        taskRevision: 4,
+        navigation: { ...preparedTask.navigation!, status: 'active' },
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue(prepared),
+        event: vi.fn(),
+        action: vi.fn().mockResolvedValue(apiResponse(startedTask)),
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} fixtureAudio={audio.factory} />)
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: '语音回放：开始导航' }))
+      await waitFor(() => expect(screen.getByLabelText('任务输入')).toHaveValue('开始导航'))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      await waitFor(() => expect(api.action).toHaveBeenCalledWith(expect.anything(), 'start-navigation', 'navigation-plan'))
+      expect(api.event).not.toHaveBeenCalled()
+      expect(await screen.findByText('途中')).toBeInTheDocument()
+    })
+
+    it('does not consume the navigation timeline step when the registered action fails', async () => {
+      const user = userEvent.setup()
+      const audio = createFakeFixtureAudio()
+      const preparedTask: AirportPickupTaskState = {
+        ...createInitialTask(),
+        phase: 'preparing',
+        taskRevision: 3,
+        passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+        flight: { flightNumber: 'MU5102', trusted: true, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        charging: { recommended: true, accepted: false, status: 'planned' },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+      }
+      const prepared = apiResponse(preparedTask)
+      prepared.ui = {
+        ...prepared.ui,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['navigation-plan'] } },
+        components: [{
+          id: 'navigation-plan',
+          type: 'navigation-summary',
+          actions: ['start-navigation'],
+          props: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', distanceKm: 32, estimatedBatteryAtArrival: 27 },
+        }],
+        actions: [{ id: 'start-navigation', label: '开始导航', style: 'primary', event: { type: 'tool-request', actionToken: 'start-navigation' } }],
+      }
+      const failed = {
+        ...prepared,
+        effects: [{ effectId: 'nav:0', type: 'navigation.start' as const, status: 'failed' as const, tool: 'navigation.start', errorCode: 'PROVIDER_TIMEOUT' }],
+      }
+      const event = vi.fn().mockResolvedValue(prepared)
+      const action = vi.fn().mockResolvedValue(failed)
+      const api = {
+        create: vi.fn().mockResolvedValue(prepared),
+        event,
+        action,
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} fixtureAudio={audio.factory} />)
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: '语音回放：开始导航' }))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备出发')
+
+      // The 200-with-unchanged-task outcome is a refused send: the words stay
+      // in the field so 发送 can retry them, exactly like a failed request.
+      expect(screen.getByLabelText('任务输入')).toHaveValue('开始导航')
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
+      await waitFor(() => expect(event).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        eventId: 'event-flight-number',
+      })))
+      expect(event).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+        eventId: 'event-charging-started',
+      }))
+      expect(action).toHaveBeenCalledTimes(1)
     })
   })
 })

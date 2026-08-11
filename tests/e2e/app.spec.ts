@@ -182,6 +182,22 @@ async function expectNoScroll(page: Page) {
   expect(layout.textBoxes.filter((box) => box.clippedWidthBy > 1)).toEqual([])
 }
 
+/**
+ * Which way across the frame the drawn route runs.
+ *
+ * The standalone panel is projected as a map — north up, west left, deliberately
+ * unmirrored, unlike the in-card band — so the sign of (last x − first x) on the
+ * route line is the compass direction of the leg. It is the one thing about the
+ * drawing that a mislabelled destination cannot fake, which is what makes it the
+ * assertion for "the map followed the airport the driver picked".
+ */
+async function routeLineDirection(page: Page): Promise<'east' | 'west'> {
+  const path = await page.locator('.ui-route-map__line').getAttribute('d')
+  const xs = [...(path ?? '').matchAll(/[ML] (-?[\d.]+) (-?[\d.]+)/g)].map((match) => Number(match[1]))
+  expect(xs.length, `expected a drawn route line, got ${path}`).toBeGreaterThan(1)
+  return xs[xs.length - 1]! > xs[0]! ? 'east' : 'west'
+}
+
 test('renders the UISpec surface responsively and keeps primary controls keyboard accessible @layout', async ({ page }, testInfo) => {
   // The 1920x720 project supplies the demo resolution through its own viewport, so
   // resizing here would throw it away; the default project still sweeps both widths.
@@ -474,6 +490,53 @@ test('answers when to leave from the button on the brief without growing the fra
   await page.getByRole('button', { name: '开始导航' }).click()
   await readControls(page, 'driving-to-airport')
   await expect(page.locator('.ui-card--departure-plan')).toHaveCount(0)
+  await expectNoScroll(page)
+})
+
+/**
+ * The two answers the departure card offers, on a real screen.
+ *
+ * Neither is a shortcut for something already on the brief. 稍后提醒 writes the one
+ * thing a question is otherwise not allowed to write — the time the driver was
+ * promised — and 查看日程 spends the calendar read the trip already made instead of
+ * going back for another. The answer card is transient either way, so a recorded
+ * reminder can only show up on the *next* ask, and that is precisely the claim
+ * being made here: it was written down, not just said out loud.
+ */
+test('records the departure reminder and shows the calendar the trip already read @layout', async ({ page }) => {
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+
+  const plan = page.locator('.ui-component:has([data-component-id="navigation-plan"])')
+  // Controls are siblings of the card surface, so the wrapper is what holds both.
+  const departure = page.locator('.ui-component:has([data-component-id="departure-plan"])')
+  const departureCard = page.locator('.ui-card--departure-plan')
+
+  await plan.getByRole('button', { name: '什么时候出发' }).click()
+  await expect(departureCard).toBeVisible()
+  await expect(departureCard).not.toContainText('已设提醒')
+  await expectNoScroll(page)
+
+  await departure.getByRole('button', { name: '稍后提醒' }).click()
+  await expect(departureCard).toHaveCount(0)
+
+  // The same question again, and this time it answers with the promise standing.
+  // The reminder carries its own clock rather than being implied by the
+  // recommendation, which is what lets it survive a re-read of the route.
+  await plan.getByRole('button', { name: '什么时候出发' }).click()
+  await expect(departureCard).toBeVisible()
+  await expect(departureCard.locator('.ui-departure-plan__reminder')).toHaveText('已设提醒 20:10')
+  // Set once and it stays set: the control that would set it again is gone rather
+  // than sitting there inert.
+  await expect(departure.getByRole('button', { name: '稍后提醒' })).toHaveCount(0)
+  await expectNoScroll(page)
+
+  // And the glance at the day, off a read the trip already paid for.
+  await departure.getByRole('button', { name: '查看日程' }).click()
+  const schedule = page.locator('.ui-card--schedule-card')
+  await expect(schedule).toBeVisible()
+  await expect(schedule).toContainText('豆豆的睡前故事')
   await expectNoScroll(page)
 })
 
@@ -1014,6 +1077,108 @@ test('prepares the trip from a spoken ordinal against the rendered board', async
 })
 
 /**
+ * The board offers a choice of airport now, and both halves of that choice need
+ * proving on a real screen.
+ *
+ * 浦东 is east of the demo origin where 虹桥 is west, so the direction the route
+ * line runs is what says the drive actually followed the row that was pressed —
+ * a destination label can be wrong and still read correctly, a compass direction
+ * cannot. Both picks are walked, because "east" only means anything against the
+ * other one.
+ *
+ * The words on the brief are the other half. The heading names the airport in
+ * every phase of the trip, so a map running east under a heading that still says
+ * 虹桥 is the same feature broken a different way — the assertion is on both, on
+ * both picks.
+ *
+ * Then the refresh the board now carries. Re-reading the arrivals mints the
+ * candidate set again and moves the task on, so a rank aimed at the list the
+ * driver was looking at a moment earlier is refused outright rather than resolved
+ * against whatever is on screen now. Silently picking the third row of a different
+ * board is the failure the identity exists to prevent, so the refusal is asserted
+ * together with the state that was not touched.
+ */
+test('follows a 浦东 pick east, and refuses a rank aimed at the board before a refresh', async ({ page }) => {
+  await page.goto('/')
+  const createResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && new URL(response.url()).pathname === '/v1/tasks'
+  ))
+  await sendText(page)
+  const created = await (await createResponsePromise).json()
+  expect(created.task.flightDiscovery.candidateSetId).toMatch(/^cs-/)
+
+  // One board, two airports: the choice is a difference between rows rather than
+  // between queries, which is what makes it answerable off a single list.
+  const rows = page.locator('.ui-flight-choices__row')
+  await expect(rows.filter({ hasText: '虹桥机场' }).first()).toBeVisible()
+  const pudong = rows.filter({ hasText: '浦东机场' }).first()
+  await expect(pudong).toBeEnabled()
+
+  // The refresh, pressed the way the driver would. It travels as the same words
+  // the composer would have sent, so the board is re-read and the task moves.
+  const refreshResponsePromise = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/events$/.test(new URL(response.url()).pathname)
+  ))
+  await page.getByRole('button', { name: '刷新航班' }).click()
+  const refreshed = await (await refreshResponsePromise).json()
+  expect(refreshed.task.taskRevision).toBeGreaterThan(created.task.taskRevision)
+  expect(refreshed.task.flightDiscovery.candidateSetId).toMatch(/^cs-/)
+  await expect(page.locator('.ui-flight-choices')).toBeVisible()
+  await expect(rows.first()).toBeEnabled()
+
+  // 选第三个, against the list as it stood before that refresh — it carries the
+  // revision it was planned against and is refused for it.
+  const stale = await postApi(page, `/v1/tasks/${created.task.taskId}/events`, {
+    clientRequestId: 'e2e-stale-rank',
+    expectedTaskRevision: created.task.taskRevision,
+    event: {
+      eventId: 'e2e-stale-rank',
+      type: 'user.input',
+      text: '选第三个',
+      timestamp: futureTimestamp(),
+    },
+  })
+  expect(stale.status()).toBe(409)
+  await expect(stale.json()).resolves.toMatchObject({ error: { code: 'TASK_REVISION_CONFLICT' } })
+  // Refused rather than half-applied: no flight was chosen by that rank, and the
+  // board the driver is looking at is still the one to choose from.
+  await expect(page.locator('.ui-card--flight-status')).toHaveCount(0)
+  await expect(page.locator('.ui-flight-choices')).toBeVisible()
+  await readControls(page, 'collecting-information')
+
+  // And the pick that does land, off the board actually on screen.
+  const pudongFlight = await pudong.getAttribute('data-flight-number')
+  await pudong.click()
+  await readControls(page, 'preparing')
+  await expect(page.locator('.ui-card--flight-status')).toContainText(pudongFlight!)
+  // The copy around the cards moved with the pick. The heading is on screen in
+  // every phase of the trip, so 虹桥 here would contradict the route card under
+  // it — the map flipping east is only half of following the row that was pressed.
+  await expect(page.locator('#trip-brief-title')).toHaveText('去浦东机场接妈妈和豆豆')
+  await expect(page.locator('.ui-card--navigation-summary')).toContainText('浦东机场 T2')
+
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.getByRole('img', { name: '前往浦东机场 T2的路线示意' })).toBeVisible()
+  expect(await routeLineDirection(page)).toBe('east')
+  await expect(page.locator('#trip-brief-title')).toHaveText('去浦东机场接妈妈和豆豆')
+
+  // The contrast, on a trip of its own: same panel, other airport, other way out
+  // of the frame. Nothing is carried over — a reload starts from 尚无任务.
+  await page.goto('/')
+  await sendText(page)
+  await page.locator('.ui-flight-choices__row', { hasText: 'MU5102' }).click()
+  await readControls(page, 'preparing')
+  await expect(page.locator('#trip-brief-title')).toHaveText('去虹桥机场接妈妈和豆豆')
+  await page.getByRole('button', { name: '开始导航' }).click()
+  await readControls(page, 'driving-to-airport')
+  await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
+  expect(await routeLineDirection(page)).toBe('west')
+})
+
+/**
  * The whole scenario in one pass, driver-side only: the trip is asked for in
  * words, the flight is picked off a board, the departure time is asked about, the
  * drive begins, two side scenes are read on the way, and the airport is reached.
@@ -1161,6 +1326,13 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   await page.getByRole('button', { name: '打开演示控制' }).click()
   const drawer = page.getByRole('dialog', { name: '演示控制' })
   await expect(drawer).toContainText('语音兜底回放')
+  const fallbackButtonWidths = await drawer.locator('.voice-fallback-button').evaluateAll((buttons) => (
+    buttons.map((button) => ({
+      button: button.getBoundingClientRect().width,
+      cell: button.parentElement?.getBoundingClientRect().width ?? 0,
+    }))
+  ))
+  expect(fallbackButtonWidths.every(({ button, cell }) => Math.abs(button - cell) < 1)).toBe(true)
   await page.getByRole('button', { name: '接机指令' }).click()
   await expect(drawer).toBeHidden()
 
@@ -1177,6 +1349,83 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   const created = await (await createResponsePromise).json()
   expect(created.task.phase).toBe('collecting-information')
   await readControls(page, 'collecting-information')
+})
+
+test('covers the main trip beats with state-bound WAV fallbacks', async ({ page }) => {
+  // Force the deterministic degraded path: the WAV is presentation, while its
+  // canonical transcript remains the input payload under test.
+  await page.addInitScript(() => {
+    const scope = window as unknown as Record<string, unknown>
+    delete scope.SpeechRecognition
+    delete scope.webkitSpeechRecognition
+  })
+  await page.goto('/')
+
+  async function replay(label: string, expectedText: string) {
+    await page.getByRole('button', { name: '打开演示控制' }).click()
+    await page.getByRole('dialog', { name: '演示控制' }).getByRole('button', { name: label }).click()
+    const input = page.getByLabel('任务输入')
+    await expect(input).toHaveValue(expectedText, { timeout: 15_000 })
+    await page.getByRole('button', { name: '发送' }).click()
+  }
+
+  await replay('接机指令', '我现在要去机场接妈妈和豆豆')
+  await expect(page.getByText('选择要接的航班')).toBeVisible()
+
+  await replay('选择第一个航班', '选第一个')
+  await expect(page.getByText('准备出发')).toBeVisible()
+
+  await replay('查询到达天气', '到的时候天气怎么样')
+  await expect(page.locator('.ui-card--weather-card')).toBeVisible()
+
+  await replay('语音回放：开始导航', '开始导航')
+  await expect(page.getByText('途中')).toBeVisible()
+
+  await advanceFlow(page) // charging.started
+  await advanceFlow(page) // flight.updated in-air -> advisory
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
+
+  await replay('语音回放：提醒带伞', '提醒乘客带伞')
+  await expect(page.getByRole('button', { name: '确认发送' })).toBeVisible()
+  await page.getByRole('button', { name: '确认发送' }).click()
+  await expect(page.locator('.ui-card--message-preview')).toHaveCount(0)
+
+  // The side-action voice turn must not consume the next authored timeline row.
+  const next = await advanceFlow(page)
+  expect(next.task.processedEventIds).toContain('event-charging-completed')
+})
+
+test('replays the direct flight-number and advisory-dismiss WAV branches', async ({ page }) => {
+  await page.addInitScript(() => {
+    const scope = window as unknown as Record<string, unknown>
+    delete scope.SpeechRecognition
+    delete scope.webkitSpeechRecognition
+  })
+  await page.goto('/')
+
+  async function replay(label: string, expectedText: string) {
+    await page.getByRole('button', { name: '打开演示控制' }).click()
+    await page.getByRole('dialog', { name: '演示控制' }).getByRole('button', { name: label }).click()
+    const input = page.getByLabel('任务输入')
+    await expect(input).toHaveValue(expectedText, { timeout: 15_000 })
+    await page.getByRole('button', { name: '发送' }).click()
+  }
+
+  await replay('接机指令', '我现在要去机场接妈妈和豆豆')
+  await replay('补充航班号', '航班 MU5102')
+  await expect(page.getByText('准备出发')).toBeVisible()
+  await replay('语音回放：开始导航', '开始导航')
+
+  await advanceFlow(page) // charging.started
+  await advanceFlow(page) // flight.updated in-air -> advisory
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
+
+  await replay('语音回放：暂不处理', '暂不处理')
+  await expect(page.locator('[data-component-id="weather-advisory"]')).toHaveCount(0)
+  await expect(page.locator('[data-component-type="navigation-summary"]')).toBeVisible()
+
+  const next = await advanceFlow(page)
+  expect(next.task.processedEventIds).toContain('event-charging-completed')
 })
 
 test('applies an out-of-band task update through the durable SSE stream', async ({ page }) => {

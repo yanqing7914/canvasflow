@@ -30,7 +30,7 @@ this file is about attribution for what the project uses and borrows, and a
 generated full-tree dependency license inventory would be a different artifact
 with a different purpose.
 
-The only binary assets in the tree are the three voice fixtures
+The only binary assets in the tree are the eight voice fixtures
 (`fixtures/airport-pickup/voice/*.wav`, mono 16-bit PCM); every other tracked file
 is text authored here. Their own README
 describes them as fictional demo utterances rather than production recordings or

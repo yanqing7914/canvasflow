@@ -4,6 +4,8 @@ import {
   chargingStation,
   chargingStationsForDensity,
   estimateFinalBatteryPercent,
+  meetingPointKey,
+  pickupAirportName,
   recommendedMeetingPoints,
   routeSketchFor,
   vehicleSnapshots,
@@ -41,7 +43,11 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     if (currentIndex >= 0 && phaseIndex >= 0 && phaseIndex < currentIndex) return 'completed' as const
     return 'pending' as const
   }
-  const airport = task.navigation?.destination?.includes('机场') ? task.navigation.destination.replace(/\s*T\d$/, '') : '虹桥机场'
+  // The chosen flight's airport first, the settled destination second — the same
+  // ladder the Agent's composer reads, from the same table, so the two renderers
+  // cannot disagree about which airport this trip is to. Reading the destination
+  // alone would say 虹桥 on the way home from 浦东, where the drive is to 家.
+  const airport = pickupAirportName(task.flight?.arrivalAirport, task.navigation?.destination)
   const allProgressPhases = task.phase === 'completed'
     ? phaseOrder.slice(-5)
     : task.phase === 'cancelled'
@@ -181,7 +187,12 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
   else if (task.passengers.confirmedOnboard) { title = '返程回家'; density = 'compact'; components = [{ id: 'passenger-status', type: 'passenger-status', props: { label: `${task.passengers.names.join('和')}已上车`, status: 'confirmed-onboard' } }] }
   else if (task.phase === 'approaching-airport' || task.phase === 'waiting-for-passengers') {
     density = 'compact'
-    const meeting = task.flight?.terminal ? recommendedMeetingPoints[task.flight.terminal] : undefined
+    // Airport and terminal together, never terminal alone: 虹桥 T2 and 浦东 T2 are
+    // an hour apart, and this fallback renderer must not disagree with the Agent's
+    // composer about which door the family walks out of.
+    const meeting = task.flight?.arrivalAirport
+      ? recommendedMeetingPoints[meetingPointKey(task.flight.arrivalAirport, task.flight.terminal)]
+      : undefined
     components = [{
       id: 'passenger-status',
       type: 'passenger-status',
@@ -226,14 +237,14 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
       const advisoryCard = {
         ...weatherCard(task, advisoryWeather),
         id: 'weather-advisory',
-        actions: ['send-umbrella-reminder', 'dismiss-weather-advisory'],
+        actions: ['send-umbrella-reminder', 'dismiss-advisory-weather'],
       }
       const underway = withRouteMap([advisoryCard], routeSketch, task.navigation.destination)
       components = underway.components
       layout = underway.layout
       actions = [
         { id: 'send-umbrella-reminder', label: '提醒乘客带伞', style: 'primary', event: { type: 'agent-message', text: '提醒乘客带伞' } },
-        { id: 'dismiss-weather-advisory', label: '暂不处理', style: 'secondary', event: { type: 'agent-message', text: '暂不处理' } },
+        { id: 'dismiss-advisory-weather', label: '暂不处理', style: 'secondary', event: { type: 'agent-message', text: '暂不处理' } },
       ]
     } else {
       const underway = withRouteMap([{

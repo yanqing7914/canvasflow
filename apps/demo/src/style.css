@@ -476,6 +476,15 @@ a:focus-visible {
    floor, because a driver reads this at a glance, at arm's length, over a
    basemap that is moving.
 
+   `--glass-stroke` is the activity stroke — the dot and the line under the
+   destination — and it answers a different floor: a graphic owes 3:1, not 7:1.
+   `--blue` cannot carry it on light glass, where the worst case composites to
+   #b8b8b8 and #246bfd reaches only 2.30:1; the light value is that same blue
+   darkened until it clears, so it is still recognisably the route's blue. The
+   dark theme's `--blue` already reaches 3.81:1 on its own worst case and is
+   restated here rather than inherited, so both cabins are measured from a token
+   that exists in both blocks.
+
    `--glass-fill-solid` is what the no-`backdrop-filter` and
    reduced-transparency branches fall back to; it may never be more transparent
    than the panel it replaces. glass-contrast.test.ts recomputes all of this from
@@ -509,6 +518,7 @@ a:focus-visible {
   --glass-fill-solid: 0.95;
   --glass-ink: #102033;
   --glass-label: #1e2634;
+  --glass-stroke: #1a4db6;
   --glass-edge: rgba(255, 255, 255, 0.55);
   --glass-highlight: rgba(255, 255, 255, 0.9);
   --glass-shadow: rgba(16, 32, 51, 0.18);
@@ -553,6 +563,7 @@ a:focus-visible {
   --glass-fill-solid: 0.96;
   --glass-ink: #f2f6fb;
   --glass-label: #dbe4ef;
+  --glass-stroke: #6ea2ff;
   /* The light theme's edge is a hairline of the panel's own light. At night the
      same white would ring the panel in a bright frame, so the edge drops to a
      trace and the depth cue moves into the shadow, which the dark basemap can
@@ -1225,37 +1236,25 @@ a:focus-visible {
   margin-top: 18px;
 }
 
-.ui-navigation-brief__route-start,
-.ui-navigation-brief__route-end {
+/* Both parts take the stroke's own colour rather than naming a blue, so the one
+   `color` on the rule above governs the whole mark. That is what lets the glass
+   panel repaint it in a single declaration; off the glass `currentColor`
+   resolves to the same `--blue` these two used to state for themselves. */
+.ui-navigation-brief__route-start {
   display: block;
   width: 10px;
   height: 10px;
   border: 2px solid currentColor;
   border-radius: 50%;
-  background: var(--knockout);
+  background: currentColor;
 }
-
-.ui-navigation-brief__route-start { background: var(--blue); }
-
-.ui-navigation-brief__route-end { color: var(--panel-fallback-edge); }
-
-.ui-navigation-brief__route-rule[data-route-progress="unavailable"]
-  .ui-navigation-brief__route-end { display: none; }
 
 .ui-navigation-brief__route-line {
   display: block;
   width: 48px;
   height: 2px;
   border-radius: 999px;
-  background: var(--blue);
-}
-
-.ui-navigation-brief__route-rule[data-route-progress="unavailable"]
-  .ui-navigation-brief__route-line {
-  width: 48px;
-  height: 2px;
-  border-radius: 999px;
-  background: var(--blue);
+  background: currentColor;
 }
 
 /* ---------------------------------------------------------------------------
@@ -1607,6 +1606,15 @@ a:focus-visible {
   .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
     .ui-metric__label {
     color: var(--glass-label);
+  }
+
+  /* The activity stroke rides on the glass for the same reason, and loses more by
+     it: `--blue` is 2.30:1 over the light panel's worst-case composite, where a
+     graphic owes 3:1. One declaration moves the dot and the line together,
+     because both take `currentColor` from the rule they sit in. */
+  .ui-layout--split:has(.ui-card--route-map):has(> .ui-slot--secondary > .ui-component:only-child)
+    .ui-navigation-brief__route-rule {
+    color: var(--glass-stroke);
   }
 
   /* The fold, only where there is a panel to fold. A 44px hit target at the top
@@ -2498,6 +2506,65 @@ a:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* The standing reminder, parked at the end of the row. Quiet on purpose — the
+   driver already heard the confirmation, and this is only here so a later ask
+   answers instead of re-asking. */
+.ui-departure-plan__reminder {
+  flex: none;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--blue) 12%, transparent);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  color: var(--blue);
+  white-space: nowrap;
+}
+
+/* 稍后提醒 and 查看日程 ride on the band instead of sitting under it.
+
+   The answer borrows the schedule strip's slot on a brief that is already running
+   at its full height, and the strip is a 29px band: the ordinary controls row —
+   two 72px buttons over a rule, 89px in all — is 68px more than the 720px frame
+   has, and the surface scrolls. Beside the facts there is width to spare at every
+   size the band is still a row, so that is where they go.
+
+   44px, the size the map panel's fold control already uses: still a thumb target
+   in a moving car, and short enough that the band lands 4px taller than the strip
+   it replaced rather than 89px taller. The hairline moves up to the wrapper so it
+   spans the whole band, controls included, and the band still reads as one line.
+
+   Only where the card is a row. Below the split it becomes a column in a brief
+   that scrolls (see the narrow block), so there is both room to spend and no row
+   to ride on, and the full-size stacked controls are right again. */
+@media (min-width: 681px) {
+  .ui-layout--stack .ui-component:has(> .ui-card--departure-plan) {
+    grid-template-rows: minmax(min-content, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: clamp(10px, 1.4vw, 24px);
+    border-top: 1px solid var(--quiet-rule);
+  }
+
+  .ui-layout--stack .ui-component:has(> .ui-card--departure-plan) > .ui-card--departure-plan {
+    border-top: 0;
+  }
+
+  .ui-layout--stack .ui-component:has(> .ui-card--departure-plan) > .ui-card__actions {
+    grid-auto-flow: column;
+    grid-template-columns: none;
+    align-self: center;
+    gap: 10px;
+    padding-top: 0;
+    border-top: 0;
+  }
+
+  .ui-layout--stack .ui-component:has(> .ui-card--departure-plan) .ui-action {
+    min-height: 44px;
+    padding: 0 18px;
+    font-size: 16px;
+  }
+}
+
 /* The arrivals board. The driver is choosing, so the card gives its whole height
    to rows and the row itself is the control: one full-width target per flight,
    72px tall like every other action, laid out on one line so the eye reads down
@@ -2527,6 +2594,35 @@ a:focus-visible {
   color: var(--ink);
   font-size: 18px;
   font-weight: 700;
+}
+
+/* The one control on this card that is not a flight, so it is deliberately not
+   row-shaped: a compact pill in the header rather than a sixth 72px target under
+   five numbered ones. It is still a real touch target — 44px tall, which is what
+   a glance-and-press in a moving car needs — just visibly a different kind of
+   thing from the choices below it. */
+.ui-flight-choices__refresh {
+  display: inline-flex;
+  flex: none;
+  min-height: 44px;
+  align-items: center;
+  border: 1px solid var(--control-edge);
+  border-radius: 999px;
+  padding: 0 18px;
+  background: var(--control);
+  color: var(--ink);
+  font-size: 16px;
+  font-weight: 660;
+  white-space: nowrap;
+  transition: background-color 180ms ease;
+}
+
+.ui-flight-choices__refresh:hover:not(:disabled) { background: var(--control-hover); }
+
+.ui-flight-choices__refresh:disabled {
+  border-color: var(--rule);
+  background: var(--control-off);
+  color: var(--muted);
 }
 
 .ui-flight-choices__list {
@@ -3300,6 +3396,7 @@ a:focus-visible {
 }
 
 .voice-fallback-button {
+  width: 100%;
   min-height: 56px;
   border: 1px solid #bac6d4;
   border-radius: 12px;
