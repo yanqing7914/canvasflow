@@ -50,9 +50,12 @@ export type CalendarEventRecord = CalendarEvent & { date: string }
 
 /**
  * Family calendar fixtures keyed by day. MU5102 lands 20:40 and the return
- * drive takes ~20 minutes, so 豆豆's 21:30 story is reachable on the happy
+ * drive takes ~20 minutes, so both evening entries are reachable on the happy
  * path and missed when the MU5103 delay fixture pushes landing to 21:10 —
- * both demo branches read from this single entry. The next-day breakfast
+ * every demo branch reads from this single day. Two same-evening entries on
+ * purpose: a delay flips the whole band at once (story and review both go
+ * at-risk, the advisory names the earliest), which is the recomposition the
+ * generative-UI story needs a second row to show. The next-day breakfast
  * exists only to prove the date filter drops it.
  */
 export const calendarEvents: CalendarEventRecord[] = [
@@ -63,6 +66,14 @@ export const calendarEvents: CalendarEventRecord[] = [
     startAt: '2026-07-22T21:30:00+08:00',
     endAt: '2026-07-22T22:00:00+08:00',
     location: '家',
+  },
+  {
+    eventId: 'event-project-review',
+    date: '2026-07-22',
+    title: '项目评审',
+    startAt: '2026-07-22T21:40:00+08:00',
+    endAt: '2026-07-22T22:10:00+08:00',
+    location: '线上',
   },
   {
     eventId: 'event-family-breakfast',

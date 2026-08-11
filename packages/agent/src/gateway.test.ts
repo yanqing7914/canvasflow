@@ -3840,12 +3840,13 @@ describe('AgentGateway', () => {
       if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
       expect(card.props.events).toEqual([
         expect.objectContaining({ title: '豆豆的睡前故事', startAt: '2026-07-22T21:30:00+08:00' }),
+        expect.objectContaining({ title: '项目评审', startAt: '2026-07-22T21:40:00+08:00' }),
       ])
       expect(card.props.freshness).toBe('fixture')
       // The strip's slot is borrowed, not joined: the count must not grow.
       expect(asked.ui.components.some((component) => component.type === 'schedule-strip')).toBe(false)
       expect(asked.ui.components).toHaveLength(created.ui.components.length)
-      expect(asked.assistant?.text).toContain('1 项安排')
+      expect(asked.assistant?.text).toContain('2 项安排')
       expect(asked.assistant?.text).toContain('21:30')
 
       // Transience: the next accepted event recomposes without the reading.
@@ -4334,7 +4335,7 @@ describe('AgentGateway', () => {
       expect(schedule).not.toHaveBeenCalled()
       const card = viewed.ui.components.find((component) => component.type === 'schedule-card')
       if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
-      expect(card.props.events.map((event) => event.title)).toEqual(['豆豆的睡前故事'])
+      expect(card.props.events.map((event) => event.title)).toEqual(['豆豆的睡前故事', '项目评审'])
       expect(viewed.assistant?.text).toContain('21:30 豆豆的睡前故事')
       // A glance, not a fact: nothing about the trip changed, and the next event
       // takes the surface back.
@@ -5326,9 +5327,11 @@ describe('AgentGateway', () => {
 
       const card = viewed.ui.components.find((component) => component.id === 'schedule-card')
       if (card?.type !== 'schedule-card') throw new Error('expected the schedule card')
-      // The card carries the same at-risk judgement the advisory was raised on.
+      // The card carries the same at-risk judgement the advisory was raised on —
+      // and the delay flips the whole evening, not just the named event.
       expect(card.props.events).toEqual([
         expect.objectContaining({ title: '豆豆的睡前故事', atRisk: true }),
+        expect.objectContaining({ title: '项目评审', atRisk: true }),
       ])
     })
 
