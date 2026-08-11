@@ -3,6 +3,10 @@ import type { Page } from '@playwright/test'
 export type MockAMapSnapshot = {
   mapCreates: number
   mapDestroys: number
+  routeSearches: Array<{
+    origin: [number, number]
+    destination: [number, number]
+  }>
   centers: Array<[number, number]>
   markerPositions: Array<[number, number]>
   markerAngles: number[]
@@ -19,6 +23,7 @@ export async function installMockAMap(page: Page): Promise<void> {
     const snapshot = {
       mapCreates: 0,
       mapDestroys: 0,
+      routeSearches: [] as Array<{ origin: Point; destination: Point }>,
       centers: [] as Point[],
       markerPositions: [] as Point[],
       markerAngles: [] as number[],
@@ -54,6 +59,21 @@ export async function installMockAMap(page: Page): Promise<void> {
         ],
       },
     ]
+    const returnSteps = [...routeSteps].reverse().map((step) => ({
+      ...step,
+      path: [...step.path].reverse(),
+    }))
+
+    function point(value: unknown): Point {
+      if (Array.isArray(value) && typeof value[0] === 'number' && typeof value[1] === 'number') {
+        return [value[0], value[1]]
+      }
+      const candidate = value as { lng?: number; lat?: number; getLng?: () => number; getLat?: () => number }
+      const lng = typeof candidate?.getLng === 'function' ? candidate.getLng() : candidate?.lng
+      const lat = typeof candidate?.getLat === 'function' ? candidate.getLat() : candidate?.lat
+      if (typeof lng !== 'number' || typeof lat !== 'number') throw new TypeError('invalid mock AMap point')
+      return [lng, lat]
+    }
 
     class MockMap {
       constructor(container: HTMLElement) {
@@ -77,18 +97,23 @@ export async function installMockAMap(page: Page): Promise<void> {
 
     class MockDriving {
       search(
-        _origin: unknown,
-        _destination: unknown,
-        _options: unknown,
+        rawOrigin: unknown,
+        rawDestination: unknown,
+        options: unknown,
         callback: (status: string, result: unknown) => void,
       ) {
-        queueMicrotask(() => callback('complete', { routes: [{ steps: routeSteps }] }))
+        void options
+        const origin = point(rawOrigin)
+        const destination = point(rawDestination)
+        snapshot.routeSearches.push({ origin, destination })
+        const steps = destination[0] >= origin[0] ? returnSteps : routeSteps
+        queueMicrotask(() => callback('complete', { routes: [{ steps }] }))
       }
     }
 
     class MockPolyline {
-      constructor(_options: unknown) {}
-      setPath(_path: Point[]) {}
+      constructor(options: unknown) { void options }
+      setPath(path: Point[]) { void path }
     }
 
     class MockMarker {
@@ -98,7 +123,7 @@ export async function installMockAMap(page: Page): Promise<void> {
       }
       setPosition(position: Point) { snapshot.markerPositions.push(position) }
       setAngle(angle: number) { snapshot.markerAngles.push(angle) }
-      setContent(_content: string | HTMLElement) {}
+      setContent(content: string | HTMLElement) { void content }
     }
 
     class MockLngLat {

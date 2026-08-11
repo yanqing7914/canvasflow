@@ -1,4 +1,29 @@
 import { expect, test, type Page } from '@playwright/test'
+import path from 'node:path'
+import { emitMockAMapInteraction, installMockAMap, mockAMapSnapshot } from './mock-amap'
+
+const legacyTaskText = '我现在要去机场接妈妈和豆豆'
+
+test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.tags.includes('@cockpit')) return
+  // These specs protect the historical fixture timeline. Production now opts
+  // into cockpit v1 by default, so only legacy UI sheds that capability.
+  await page.route('**/v1/tasks', async (route) => {
+    const request = route.request()
+    if (request.method() !== 'POST') {
+      await route.continue()
+      return
+    }
+    const body = request.postDataJSON() as { clientCapabilities?: { cockpitVersion?: string } }
+    if (!body.clientCapabilities?.cockpitVersion) {
+      await route.continue()
+      return
+    }
+    const clientCapabilities = { ...body.clientCapabilities }
+    delete clientCapabilities.cockpitVersion
+    await route.continue({ postData: JSON.stringify({ ...body, clientCapabilities }) })
+  })
+})
 
 const apiRequest = {
   vehicleContext: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 210, gear: 'P', isNight: true },
@@ -56,9 +81,9 @@ async function composer(page: Page) {
  * for the send to settle: an accepted typed message closes the composer, so
  * returning early would leave the next step racing a field that is unmounting.
  */
-async function sendText(page: Page, value?: string) {
+async function sendText(page: Page, value = legacyTaskText) {
   const input = await composer(page)
-  if (value !== undefined) await input.fill(value)
+  await input.fill(value)
   await page.getByRole('button', { name: '发送' }).click()
   // Either the composer left (the send was accepted and text was the only reason
   // it was open) or it is back to editable — never mid-flight.
@@ -102,6 +127,61 @@ async function expectNoHorizontalOverflow(page: Page) {
     viewport: document.documentElement.clientWidth,
   }))
   expect(Math.max(dimensions.body, dimensions.document)).toBeLessThanOrEqual(dimensions.viewport)
+}
+
+/** Runs the real navigation reducer on explicit E2E time instead of wall time. */
+async function installControllableNavigationClock(page: Page) {
+  await page.addInitScript(() => {
+    let nowMs = Date.now()
+    const scheduled = new Set<() => void>()
+    Object.assign(window, {
+      __canvasflowNavigationClock: {
+        now: () => nowMs,
+        schedule: (callback: () => void) => {
+          scheduled.add(callback)
+          return () => { scheduled.delete(callback) }
+        },
+      },
+      __canvasflowNavigationTestClock: {
+        scheduledCount: () => scheduled.size,
+        advance: (milliseconds: number) => {
+          nowMs += milliseconds
+          for (const callback of [...scheduled]) callback()
+        },
+      },
+    })
+  })
+}
+
+async function advanceNavigationClock(page: Page, milliseconds: number) {
+  await expect.poll(() => page.evaluate(() => (
+    (window as typeof window & {
+      __canvasflowNavigationTestClock?: { scheduledCount: () => number }
+    }).__canvasflowNavigationTestClock?.scheduledCount() ?? 0
+  ))).toBeGreaterThan(0)
+  await page.evaluate(async (elapsed) => {
+    const clock = (window as typeof window & {
+      __canvasflowNavigationTestClock?: { advance: (milliseconds: number) => void }
+    }).__canvasflowNavigationTestClock
+    if (!clock) throw new Error('navigation test clock was not installed')
+    clock.advance(elapsed)
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  }, milliseconds)
+}
+
+async function cockpitWindow(page: Page, kind: string) {
+  const window = page.locator(`.cockpit-window[data-kind="${kind}"]`).last()
+  await expect(window).toBeVisible()
+  return window
+}
+
+async function cockpitProgress(page: Page): Promise<number> {
+  const text = await page.locator('.persistent-route-map__source').getByText(/模拟行程进度 \d+%/).innerText()
+  return Number(text.match(/(\d+)%/u)?.[1] ?? 0)
+}
+
+function cockpitArtifact(testInfo: { config: { rootDir: string } }, name: string) {
+  return path.join(testInfo.config.rootDir, '../../artifacts/cockpit-agent-v1', name)
 }
 
 /**
@@ -198,6 +278,211 @@ async function routeLineDirection(page: Page): Promise<'east' | 'west'> {
   return xs[xs.length - 1]! > xs[0]! ? 'east' : 'west'
 }
 
+test('runs the real cockpit airport pickup loop over a persistent mock AMap @cockpit', async ({ page }, testInfo) => {
+  test.setTimeout(60_000)
+  await installMockAMap(page)
+  await installControllableNavigationClock(page)
+  await page.goto('/')
+
+  // The production entry is genuinely empty: no passenger, airport, or sample
+  // sentence is allowed to leak into a fresh cockpit task.
+  const input = await composer(page)
+  await expect(input).toHaveValue('')
+  const createRequestPromise = page.waitForRequest((request) => (
+    request.method() === 'POST' && new URL(request.url()).pathname === '/v1/tasks'
+  ))
+  await sendText(page, '我现在要去机场接人')
+  const createRequest = await createRequestPromise
+  expect(createRequest.postDataJSON()).toMatchObject({ clientCapabilities: { cockpitVersion: '1' } })
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'collecting-airport')
+  await expect(page.getByText('你要去哪个机场？')).toBeVisible()
+  await expect(page.locator('.cockpit-window')).toHaveCount(0)
+
+  await sendText(page, '虹桥机场')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'choosing-flight')
+  const flightList = await cockpitWindow(page, 'flight-list')
+  const rows = flightList.locator('.ui-flight-choices__row')
+  await expect(rows).toHaveCount(5)
+  for (let index = 0; index < 5; index += 1) {
+    await expect(rows.nth(index)).toContainText('虹桥机场')
+    await expect(rows.nth(index)).toBeEnabled()
+  }
+  const selectedFlight = (await rows.first().getAttribute('data-flight-number')) ?? ''
+  expect(selectedFlight).not.toBe('')
+
+  await rows.first().click()
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-outbound')
+  await expect(flightList).toBeVisible()
+  const outboundConfirmation = await cockpitWindow(page, 'outbound-confirmation')
+  await expect(outboundConfirmation).toContainText(selectedFlight)
+  await expect(outboundConfirmation).toContainText('虹桥机场')
+  await expect(outboundConfirmation).toContainText(/42%|电量/u)
+  await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
+
+  const workspace = page.locator('.navigation-workspace[data-leg="outbound"]')
+  await expect(workspace).toBeVisible()
+  const workspaceBounds = await workspace.evaluate((element) => {
+    const bounds = element.getBoundingClientRect()
+    return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: innerWidth, height: innerHeight }
+  })
+  expect(workspaceBounds).toEqual({ left: 0, top: 0, right: workspaceBounds.width, bottom: workspaceBounds.height, width: workspaceBounds.width, height: workspaceBounds.height })
+  await expect(page.getByLabel('模拟导航地图')).toHaveAttribute('data-map-source', 'amap')
+  await expect(page.getByLabel('导航信息')).toContainText(selectedFlight)
+  await expect(page.getByLabel('导航信息')).toContainText('正常')
+  await expect(page.locator('.cockpit-window[data-kind="flight-list"]')).toHaveCount(0)
+  let observedProgress = 0
+  for (const elapsed of [3_000, 3_000, 3_000]) {
+    await advanceNavigationClock(page, elapsed)
+    await expect.poll(() => cockpitProgress(page)).toBeGreaterThan(observedProgress)
+    observedProgress = await cockpitProgress(page)
+  }
+
+  const departedMap = await mockAMapSnapshot(page)
+  expect(departedMap.mapCreates).toBe(1)
+  expect(departedMap.routeSearches).toHaveLength(1)
+  expect(new Set(departedMap.markerPositions.map((position) => position.join(','))).size).toBeGreaterThan(2)
+  expect(departedMap.centers.length).toBeGreaterThan(1)
+  expect(departedMap.markerAngles.length).toBeGreaterThan(0)
+  expect(departedMap.routeSearches[0]!.origin[0]).toBeGreaterThan(departedMap.routeSearches[0]!.destination[0])
+  await page.screenshot({ path: cockpitArtifact(testInfo, 'desktop-map-hud.png'), fullPage: true })
+
+  await emitMockAMapInteraction(page, 'dragstart')
+  await expect(page.getByRole('button', { name: '回到车辆位置' })).toBeVisible()
+  await page.getByRole('button', { name: '回到车辆位置' }).click()
+  await expect(page.getByRole('button', { name: '回到车辆位置' })).toHaveCount(0)
+
+  await sendText(page, '查天气')
+  const weather = await cockpitWindow(page, 'weather')
+  await expect(weather).toContainText(/天气|°C/u)
+  await sendText(page, '查日历')
+  const calendar = await cockpitWindow(page, 'calendar')
+  await expect(calendar).toContainText('her开发日会')
+  await expect(calendar).toContainText('新建her')
+  await expect(calendar).toContainText('A2A调研')
+
+  const progressBeforeSpeedUp = await cockpitProgress(page)
+  await sendText(page, '跑快点')
+  await expect(page.getByLabel('导航信息')).toContainText('快速')
+  await advanceNavigationClock(page, 5_000)
+  await expect.poll(() => cockpitProgress(page)).toBeGreaterThan(progressBeforeSpeedUp)
+  await expect(weather).toBeVisible()
+  await expect(calendar).toBeVisible()
+  expect((await mockAMapSnapshot(page)).mapCreates).toBe(1)
+  await page.screenshot({ path: cockpitArtifact(testInfo, 'desktop-map-windows.png'), fullPage: true })
+
+  await advanceNavigationClock(page, 40_000)
+  await expect(page.getByLabel('导航信息')).toContainText('已到达机场，等待接人')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'waiting-for-passengers')
+  await page.screenshot({ path: cockpitArtifact(testInfo, 'desktop-waiting-at-airport.png'), fullPage: true })
+  await sendText(page, '接到人了')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'passengers-onboard')
+  const passenger = await cockpitWindow(page, 'passenger-onboard')
+  await expect(passenger).toContainText('乘客已上车')
+
+  await sendText(page, '开始回家')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-return')
+  const returnConfirmation = await cockpitWindow(page, 'return-confirmation')
+  await expect(returnConfirmation).toContainText('家')
+  await expect(page.locator('.navigation-workspace')).toHaveAttribute('data-leg', 'outbound')
+  await returnConfirmation.getByRole('button', { name: '开始返程', exact: true }).click()
+  await expect(page.locator('.navigation-workspace')).toHaveAttribute('data-leg', 'return')
+  await expect(page.getByLabel('导航信息')).toContainText('返程导航')
+  await expect.poll(async () => (await mockAMapSnapshot(page)).routeSearches.length).toBeGreaterThanOrEqual(2)
+  const returningMap = await mockAMapSnapshot(page)
+  expect(returningMap.mapCreates).toBe(1)
+  const returnSearch = returningMap.routeSearches[returningMap.routeSearches.length - 1]!
+  expect(returnSearch.origin[0]).toBeLessThan(returnSearch.destination[0])
+  await advanceNavigationClock(page, 5_000)
+  await expect.poll(() => cockpitProgress(page)).toBeGreaterThan(2)
+
+  const completedResponsePromise = page.waitForResponse((response) => {
+    if (response.request().method() !== 'POST' || !/\/v1\/tasks\/[^/]+\/events$/u.test(new URL(response.url()).pathname)) return false
+    try {
+      return response.request().postDataJSON()?.event?.type === 'navigation.return-arrived'
+    } catch {
+      return false
+    }
+  })
+  await advanceNavigationClock(page, 90_000)
+  const completedResponse = await completedResponsePromise
+  expect(completedResponse.ok()).toBe(true)
+  const completedPayload = await completedResponse.json()
+  expect(completedPayload.assistant?.text).toContain('已到家')
+  expect(completedPayload.task).toMatchObject({ phase: 'completed', passengers: { names: [], confirmedOnboard: false } })
+  expect(completedPayload.task).not.toHaveProperty('flight')
+  expect(completedPayload.task).not.toHaveProperty('pickupAirport')
+  expect(completedPayload.task).not.toHaveProperty('navigationSimulation')
+  expect(completedPayload.task).not.toHaveProperty('cockpit')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'completed')
+  await expect(page.locator('.cockpit-window')).toHaveCount(0)
+  await expect(page.locator('.navigation-workspace')).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: '接机任务已完成' })).toBeVisible()
+  await expect(page.locator('.task-surface')).not.toContainText(selectedFlight)
+  await expect(page.locator('.task-surface')).not.toContainText('虹桥机场')
+  await expect(await composer(page)).toHaveValue('')
+
+  const completedMap = await mockAMapSnapshot(page)
+  expect(completedMap.mapCreates).toBe(1)
+  expect(completedMap.routeSearches.length).toBeGreaterThanOrEqual(2)
+  expect(completedMap.mapDestroys).toBe(1)
+  expect(completedMap.markerPositions.length).toBeGreaterThan(departedMap.markerPositions.length)
+
+  await page.screenshot({ path: cockpitArtifact(testInfo, 'desktop-completed.png'), fullPage: true })
+
+  // Completion retires the cockpit session rather than leaving a hidden task to
+  // receive the next utterance. A fresh request proves the opening prompt starts
+  // an independent pickup flow.
+  const freshTaskResponse = page.waitForResponse((response) => (
+    response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/tasks'
+  ))
+  await sendText(page, '再去机场接人')
+  const freshTask = await freshTaskResponse
+  expect(freshTask.ok()).toBe(true)
+  const freshPayload = await freshTask.json()
+  expect(freshPayload.task).toMatchObject({ phase: 'collecting-airport' })
+  expect(freshPayload.task.taskId).not.toBe(completedPayload.task.taskId)
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'collecting-airport')
+})
+
+test('keeps multiple cockpit windows inside a narrow viewport @cockpit @layout', async ({ page }, testInfo) => {
+  if (testInfo.project.name !== 'chromium') test.skip()
+  await page.setViewportSize({ width: 390, height: 844 })
+  await installMockAMap(page)
+  await installControllableNavigationClock(page)
+  await page.goto('/')
+  await sendText(page, '去虹桥机场接人')
+  const flightList = await cockpitWindow(page, 'flight-list')
+  await flightList.locator('.ui-flight-choices__row').first().click()
+  const outboundConfirmation = await cockpitWindow(page, 'outbound-confirmation')
+  await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
+  await expect(page.locator('.navigation-workspace')).toBeVisible()
+
+  await sendText(page, '查天气')
+  await sendText(page, '查日历')
+  await sendText(page, '查看车辆状态')
+  await expect(page.locator('.cockpit-window')).toHaveCount(3)
+  await expectNoHorizontalOverflow(page)
+
+  const windowLayout = await page.locator('.cockpit-window').evaluateAll((windows) => ({
+    viewport: { width: innerWidth, height: innerHeight },
+    boxes: windows.map((window) => {
+      const box = window.getBoundingClientRect()
+      return { left: box.left, right: box.right, top: box.top, bottom: box.bottom }
+    }),
+  }))
+  expect(windowLayout.boxes.every((box) => (
+    box.left >= 0 && box.right <= windowLayout.viewport.width
+    && box.top >= 0 && box.bottom <= windowLayout.viewport.height
+  ))).toBe(true)
+
+  const vehicle = await cockpitWindow(page, 'vehicle-status')
+  await vehicle.getByRole('button', { name: '放大车辆状态窗口' }).click()
+  await expect(vehicle.getByRole('button', { name: '还原车辆状态窗口' })).toBeVisible()
+  await expect(vehicle.getByRole('button', { name: '关闭车辆状态窗口' })).toBeVisible()
+  await expectNoHorizontalOverflow(page)
+  await page.screenshot({ path: cockpitArtifact(testInfo, 'mobile-windows.png'), fullPage: true })
+})
+
 test('renders the UISpec surface responsively and keeps primary controls keyboard accessible @layout', async ({ page }, testInfo) => {
   // The 1920x720 project supplies the demo resolution through its own viewport, so
   // resizing here would throw it away; the default project still sweeps both widths.
@@ -233,6 +518,9 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     const taskInput = await composer(page)
     await expect(taskInput).toBeFocused()
     const submit = page.getByRole('button', { name: '发送' })
+    // Legacy layout coverage starts the fixture timeline explicitly; the
+    // production cockpit's untouched composer intentionally stays empty.
+    await taskInput.fill(legacyTaskText)
     await page.keyboard.press('Tab')
     await expect(submit).toBeFocused()
     await page.keyboard.press('Enter')
