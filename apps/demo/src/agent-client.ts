@@ -28,7 +28,7 @@ export type TaskUpdateSubscription = {
   close(): void
 }
 
-type EventInput = AirportPickupEvent extends infer Event
+export type AgentEventInput = AirportPickupEvent extends infer Event
   ? Event extends AirportPickupEvent
     ? Omit<Event, 'eventId' | 'timestamp'> & Partial<Pick<Event, 'eventId' | 'timestamp'>>
     : never
@@ -182,7 +182,7 @@ export class AgentApiClient {
     return this.getTask(taskId)
   }
 
-  event(task: AirportPickupTaskState, event: EventInput): Promise<AgentResponse> {
+  event(task: AirportPickupTaskState, event: AgentEventInput): Promise<AgentResponse> {
     const eventId = event.eventId ?? generatedId(this.#createId, 'event')
     return this.submitEvent(task.taskId, {
       clientRequestId: generatedId(this.#createId, 'event-request'),

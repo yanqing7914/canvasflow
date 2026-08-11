@@ -314,6 +314,39 @@ a:focus-visible {
 .cockpit-window__body .ui-spec-renderer { min-height: 100%; color: #edf4ff; }
 .cockpit-window__body .ui-card { height: auto; }
 .cockpit-window[data-kind='flight-list'] .cockpit-window__body .ui-card--flight-choices { overflow: auto; }
+.cockpit-window[data-kind='calendar'] .ui-card--schedule-card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+  overflow: visible;
+}
+.cockpit-window[data-kind='calendar'] .ui-schedule-card__list {
+  width: 100%;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  overflow: visible;
+}
+.cockpit-window[data-kind='calendar'] .ui-schedule-card__event {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(58px, auto) minmax(0, 1fr);
+  gap: 4px 10px;
+  padding: 10px 0;
+}
+.cockpit-window[data-kind='calendar'] .ui-schedule-card__event + .ui-schedule-card__event::before { content: none; }
+.cockpit-window[data-kind='calendar'] .ui-schedule-card__title,
+.cockpit-window[data-kind='calendar'] .ui-schedule-card__location {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cockpit-window[data-kind='calendar'] .ui-schedule-card__location {
+  grid-column: 2;
+}
+.cockpit-window[data-kind='calendar'] .ui-schedule-card__event + .ui-schedule-card__event {
+  border-top: 1px solid rgba(164, 190, 224, 0.15);
+}
 .cockpit-window__empty { margin: 0; color: #c3d0df; font-size: 17px; line-height: 1.6; }
 .vehicle-status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
 .vehicle-status-grid > div { min-width: 0; border-radius: 12px; padding: 13px; background: rgba(42, 61, 85, 0.55); }
@@ -2582,20 +2615,19 @@ a:focus-visible {
 }
 
 .ui-schedule-card__list {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   flex: 1;
   min-width: 0;
   align-items: center;
-  gap: clamp(14px, 1.8vw, 32px);
+  gap: clamp(8px, 1vw, 18px);
   margin: 0;
   padding: 0;
   list-style: none;
-  overflow: hidden;
 }
 
 .ui-schedule-card__event {
   display: flex;
-  flex: none;
   align-items: baseline;
   gap: 8px;
   min-width: 0;
@@ -2604,10 +2636,10 @@ a:focus-visible {
 .ui-schedule-card__event + .ui-schedule-card__event::before {
   content: '';
   align-self: center;
-  width: clamp(12px, 1.4vw, 26px);
+  width: clamp(8px, 1vw, 18px);
   height: 1px;
   background: var(--rule);
-  margin-right: clamp(6px, 0.8vw, 12px);
+  margin-right: clamp(2px, 0.4vw, 8px);
 }
 
 .ui-schedule-card__time {

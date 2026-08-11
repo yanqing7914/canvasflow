@@ -206,6 +206,53 @@ describe('demo integration', () => {
     })
   })
 
+  it('submits the terminal simulator snapshot with the arrival event', async () => {
+    let nowMs = 1_000
+    let tick: (() => void) | undefined
+    const navigationClock: NavigationClock = {
+      now: () => nowMs,
+      schedule: (callback) => {
+        tick = callback
+        return () => { tick = undefined }
+      },
+    }
+    const task: AirportPickupTaskState = {
+      ...createCockpitTask('arrival-proof-task'), phase: 'outbound-driving',
+      pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+      flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-08-11T15:30:00+08:00', terminal: 'T2' },
+      navigation: { routeId: 'arrival-route', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'active' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: 'arrival-route', distanceKm: 32,
+        initialBatteryPercent: 72, estimatedBatteryAtArrival: 58,
+        profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 },
+          normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+    } as AirportPickupTaskState
+    const waiting = apiResponse({
+      ...task, phase: 'waiting-for-passengers',
+      navigation: { ...task.navigation!, status: 'arrived' },
+    } as AirportPickupTaskState)
+    const event = vi.fn().mockResolvedValue(waiting)
+    const api = { create: vi.fn().mockResolvedValue(apiResponse(task)), event, action: vi.fn(), confirmation: vi.fn() }
+    const user = userEvent.setup()
+    render(<AppComponent api={api} voiceEnabled={false} navigationClock={navigationClock} initialText="开始" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    nowMs += 90_000
+    act(() => { tick?.() })
+
+    await waitFor(() => expect(event).toHaveBeenCalledWith(task, expect.objectContaining({
+      type: 'navigation.outbound-arrived',
+      navigationSnapshot: expect.objectContaining({
+        routeId: 'arrival-route', leg: 'outbound', progress: 1, speedKph: 0,
+        batteryPercent: 58, remainingDistanceKm: 0,
+      }),
+    })))
+  })
+
   /**
    * Engineering metadata and the demo player live in the controls drawer, never on
    * the driver-facing brief. Tests that assert a raw phase or press 推进下一事件

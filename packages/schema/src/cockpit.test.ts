@@ -32,7 +32,16 @@ describe('cockpit-compatible contracts', () => {
 
   it('accepts new guarded event names and task phases', () => {
     expect(airportPickupEventSchema.parse({ eventId: 'airport', type: 'pickup.airport-selected', airport: { label: '浦东机场', code: 'PVG' }, timestamp: '2026-08-11T09:00:00+08:00' }).type).toBe('pickup.airport-selected')
-    expect(airportPickupEventSchema.parse({ eventId: 'arrive', type: 'navigation.outbound-arrived', timestamp: '2026-08-11T09:00:00+08:00' }).type).toBe('navigation.outbound-arrived')
+    expect(airportPickupEventSchema.parse({
+      eventId: 'arrive', type: 'navigation.outbound-arrived', timestamp: '2026-08-11T09:00:00+08:00',
+      navigationSnapshot: {
+        routeId: 'route-1', leg: 'outbound', progress: 1, speedKph: 0,
+        batteryPercent: 40, remainingRangeKm: 120, remainingDistanceKm: 0, currentRoad: '机场接人点',
+      },
+    }).type).toBe('navigation.outbound-arrived')
+    expect(() => airportPickupEventSchema.parse({
+      eventId: 'missing-arrival-proof', type: 'navigation.return-arrived', timestamp: '2026-08-11T09:00:00+08:00',
+    })).toThrow()
     expect(airportPickupTaskStateSchema.shape.phase.parse('return-driving')).toBe('return-driving')
   })
 

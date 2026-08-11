@@ -11,6 +11,10 @@ const flight = {
 }
 const outboundRoute = { routeId: 'route-outbound', distanceKm: 32, durationMinutes: 20, arrivalTime: '2026-08-11T09:25:00+08:00', estimatedBatteryAtArrival: 65 }
 const returnRoute = { routeId: 'route-return', distanceKm: 32, durationMinutes: 40, arrivalTime: '2026-08-11T11:00:00+08:00', estimatedBatteryAtArrival: 50 }
+const terminalSnapshot = (routeId: string, leg: 'outbound' | 'return') => ({
+  routeId, leg, progress: 1, speedKph: 0, batteryPercent: 65,
+  remainingRangeKm: 200, remainingDistanceKm: 0, currentRoad: leg === 'outbound' ? '机场接人点' : '家',
+})
 
 describe('cockpit airport pickup state machine', () => {
   it('asks for airport first and lets passenger remain empty', () => {
@@ -32,12 +36,12 @@ describe('cockpit airport pickup state machine', () => {
     const selected = selectCockpitFlight({ task: choosing, flight, route: outboundRoute, vehicle: vehicleSnapshots.parked, at: t0 })
     const driving = applyEvent(selected, { eventId: 'start', type: 'navigation.started', routeId: outboundRoute.routeId, timestamp: t0 })
     expect(applyEvent(driving, { eventId: 'early', type: 'passengers.onboard', timestamp: t0 })).toEqual(driving)
-    const waiting = applyEvent(driving, { eventId: 'arrived', type: 'navigation.outbound-arrived', timestamp: t0 })
+    const waiting = applyEvent(driving, { eventId: 'arrived', type: 'navigation.outbound-arrived', timestamp: t0, navigationSnapshot: terminalSnapshot(outboundRoute.routeId, 'outbound') })
     const onboard = applyEvent(waiting, { eventId: 'onboard', type: 'passengers.onboard', timestamp: t0 })
     const confirming = requestCockpitReturn(onboard, { route: returnRoute, batteryPercent: 65, at: t0 })
     expect(isCockpitActionAllowed(confirming, 'start-return')).toBe(true)
     const returning = applyEvent(confirming, { eventId: 'return', type: 'navigation.started', routeId: returnRoute.routeId, timestamp: t0 })
-    const completed = applyEvent(returning, { eventId: 'home', type: 'navigation.return-arrived', timestamp: t0 })
+    const completed = applyEvent(returning, { eventId: 'home', type: 'navigation.return-arrived', timestamp: t0, navigationSnapshot: terminalSnapshot(returnRoute.routeId, 'return') })
     expect(completed).toMatchObject({ phase: 'completed', passengers: { names: [], confirmedOnboard: false } })
     expect(completed.flight).toBeUndefined()
     expect(completed.pickupAirport).toBeUndefined()

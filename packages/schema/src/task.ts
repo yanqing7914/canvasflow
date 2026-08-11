@@ -262,9 +262,15 @@ export const airportPickupEventSchema = z.discriminatedUnion('type', [
     navigationSnapshot: navigationCommandSnapshotSchema.optional(),
   }),
   eventBase.extend({ type: z.literal('pickup.airport-selected'), airport: pickupAirportSchema }),
-  eventBase.extend({ type: z.literal('navigation.outbound-arrived') }),
+  eventBase.extend({
+    type: z.literal('navigation.outbound-arrived'),
+    navigationSnapshot: navigationCommandSnapshotSchema,
+  }),
   eventBase.extend({ type: z.literal('passengers.onboard') }),
-  eventBase.extend({ type: z.literal('navigation.return-arrived') }),
+  eventBase.extend({
+    type: z.literal('navigation.return-arrived'),
+    navigationSnapshot: navigationCommandSnapshotSchema,
+  }),
   eventBase.extend({ type: z.literal('navigation.started'), routeId: z.string() }),
   eventBase.extend({ type: z.literal('vehicle.moving'), speedKph: z.number().nonnegative() }),
   eventBase.extend({ type: z.literal('flight.updated'), flight: flightStateSchema }),

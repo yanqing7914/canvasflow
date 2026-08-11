@@ -55,11 +55,31 @@ function failedLandingMessageTask(gateway: AgentGateway) {
 }
 
 describe('AgentGateway', () => {
+  it('uses the fixed origin for cockpit weather before departure', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const resolveWeather = vi.spyOn(orchestrator, 'resolveWeather')
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => 'origin', orchestrator,
+    })
+    const created = gateway.createTask({
+      ...createRequest('我现在要去机场接人'),
+      clientRequestId: 'origin-create',
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true, cockpitVersion: '1' },
+    })
+
+    const weather = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'origin-weather', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'origin-weather', type: 'user.input', text: '查天气', source: 'text', timestamp: now },
+    })
+
+    expect(resolveWeather).toHaveBeenCalledWith(created.task.taskId, 'origin-weather', { locationId: 'navigation-segment-origin' })
+    expect(weather.ui.windows?.at(-1)?.kind).toBe('weather')
+  })
+
   it('runs the opt-in cockpit flow through guarded create, event, and action paths', () => {
-    let tick = 0
     const gateway = new AgentGateway({
       store: new MemoryTaskStore(),
-      now: () => `2026-08-11T09:${String(tick++).padStart(2, '0')}:00+08:00`,
+      now: () => '2026-08-11T09:00:00+08:00',
       createId: () => 'cockpit',
     })
     const cockpitRequest = {
@@ -99,9 +119,25 @@ describe('AgentGateway', () => {
     expect(started.task.phase).toBe('outbound-driving')
     expect(started.ui.windows ?? []).toHaveLength(0)
 
+    const missingPositionWeather = gateway.submitEvent(started.task.taskId, {
+      clientRequestId: 'weather-without-position', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'weather-without-position', type: 'user.input', text: '查天气', source: 'voice', timestamp: now },
+    })
+    expect(missingPositionWeather.ui.windows).toEqual(started.ui.windows)
+    expect(missingPositionWeather.assistant?.text).toContain('当前模拟位置')
+    const outboundSeed = started.task.navigationSimulation!
+    const midBattery = (outboundSeed.initialBatteryPercent + outboundSeed.estimatedBatteryAtArrival) / 2
+    const midRange = midBattery / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm
     const weather = gateway.submitEvent(started.task.taskId, {
-      clientRequestId: 'weather', expectedTaskRevision: started.task.taskRevision,
-      event: { eventId: 'weather', type: 'user.input', text: '查天气', source: 'voice', timestamp: now },
+      clientRequestId: 'weather', expectedTaskRevision: missingPositionWeather.task.taskRevision,
+      event: {
+        eventId: 'weather', type: 'user.input', text: '查天气', source: 'voice', timestamp: now,
+        navigationSnapshot: {
+          routeId: started.task.navigationSimulation!.routeId, leg: 'outbound', progress: 0.5,
+          speedKph: 55, batteryPercent: midBattery, remainingRangeKm: midRange,
+          remainingDistanceKm: 16, currentRoad: '伪造道路',
+        },
+      },
     })
     expect(weather.ui.windows?.at(-1)?.kind).toBe('weather')
     expect(weather.assistant?.shouldSpeak).toBe(true)
@@ -118,30 +154,70 @@ describe('AgentGateway', () => {
     expect(faster.task.cockpit?.speedMode).toBe('fast')
     expect(faster.ui.windows?.some((window) => window.kind === 'weather')).toBe(true)
 
+    expect(() => gateway.submitEvent(faster.task.taskId, {
+      clientRequestId: 'premature-arrival', expectedTaskRevision: faster.task.taskRevision,
+      event: {
+        eventId: 'premature-arrival', type: 'navigation.outbound-arrived', timestamp: now,
+        navigationSnapshot: {
+          routeId: faster.task.navigationSimulation!.routeId, leg: 'outbound', progress: 0.5,
+          speedKph: 75, batteryPercent: midBattery, remainingRangeKm: midRange, remainingDistanceKm: 16, currentRoad: '内环高架',
+        },
+      },
+    })).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }))
+    expect(() => gateway.submitEvent(faster.task.taskId, {
+      clientRequestId: 'wrong-route-arrival', expectedTaskRevision: faster.task.taskRevision,
+      event: {
+        eventId: 'wrong-route-arrival', type: 'navigation.outbound-arrived', timestamp: now,
+        navigationSnapshot: {
+          routeId: 'wrong-route', leg: 'outbound', progress: 1,
+          speedKph: 0, batteryPercent: outboundSeed.estimatedBatteryAtArrival,
+          remainingRangeKm: outboundSeed.estimatedBatteryAtArrival / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm,
+          remainingDistanceKm: 0, currentRoad: '机场接人点',
+        },
+      },
+    })).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }))
     const arrived = gateway.submitEvent(faster.task.taskId, {
       clientRequestId: 'arrived-airport', expectedTaskRevision: faster.task.taskRevision,
-      event: { eventId: 'arrived-airport', type: 'navigation.outbound-arrived', timestamp: now },
+      event: {
+        eventId: 'arrived-airport', type: 'navigation.outbound-arrived', timestamp: now,
+        navigationSnapshot: {
+          routeId: faster.task.navigationSimulation!.routeId, leg: 'outbound', progress: 1,
+          speedKph: 0, batteryPercent: outboundSeed.estimatedBatteryAtArrival,
+          remainingRangeKm: outboundSeed.estimatedBatteryAtArrival / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm,
+          remainingDistanceKm: 0, currentRoad: '机场接人点',
+        },
+      },
     })
     const onboard = gateway.submitEvent(arrived.task.taskId, {
       clientRequestId: 'onboard', expectedTaskRevision: arrived.task.taskRevision,
       event: { eventId: 'onboard', type: 'user.input', text: '接到人了', source: 'text', timestamp: now },
     })
     expect(onboard.task.phase).toBe('passengers-onboard')
+    const airportWeather = gateway.submitEvent(onboard.task.taskId, {
+      clientRequestId: 'airport-weather', expectedTaskRevision: onboard.task.taskRevision,
+      event: { eventId: 'airport-weather', type: 'user.input', text: '查天气', source: 'text', timestamp: now },
+    })
+    const terminalBattery = onboard.task.navigationSimulation!.estimatedBatteryAtArrival
+    const terminalRange = terminalBattery / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm
+    expect(() => gateway.submitEvent(onboard.task.taskId, {
+      clientRequestId: 'return-without-vehicle', expectedTaskRevision: airportWeather.task.taskRevision,
+      event: { eventId: 'return-without-vehicle', type: 'user.input', text: '开始回家', source: 'text', timestamp: now },
+    })).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }))
     const confirmingReturn = gateway.submitEvent(onboard.task.taskId, {
-      clientRequestId: 'return-request', expectedTaskRevision: onboard.task.taskRevision,
+      clientRequestId: 'return-request', expectedTaskRevision: airportWeather.task.taskRevision,
       event: {
         eventId: 'return-request', type: 'user.input', text: '开始回家', source: 'text', timestamp: now,
         navigationSnapshot: {
           routeId: onboard.task.navigationSimulation!.routeId, leg: 'outbound', progress: 1,
-          speedKph: 0, batteryPercent: 27, remainingRangeKm: 135, remainingDistanceKm: 0,
+          speedKph: 0, batteryPercent: terminalBattery, remainingRangeKm: terminalRange, remainingDistanceKm: 0,
           currentRoad: '伪造机场道路',
         },
       },
     })
     expect(confirmingReturn.task.phase).toBe('confirming-return')
-    expect(confirmingReturn.task.navigationSimulation).toMatchObject({ initialBatteryPercent: 27, estimatedBatteryAtArrival: 12 })
+    expect(confirmingReturn.task.navigationSimulation?.initialBatteryPercent).toBe(terminalBattery)
     const returnCard = confirmingReturn.ui.components.find((component) => component.type === 'route-confirmation')
-    expect(returnCard).toMatchObject({ props: { currentBatteryPercent: 27, estimatedBatteryAtArrival: 12 } })
+    expect(returnCard).toMatchObject({ props: { currentBatteryPercent: terminalBattery } })
     const returning = gateway.submitAction(confirmingReturn.task.taskId, {
       clientRequestId: 'start-return', expectedTaskRevision: confirmingReturn.task.taskRevision, expectedUiRevision: confirmingReturn.ui.uiRevision,
       actionId: 'start-return', componentId: 'return-confirmation', idempotencyKey: 'start-return',
@@ -149,7 +225,15 @@ describe('AgentGateway', () => {
     expect(returning.task.phase).toBe('return-driving')
     const completed = gateway.submitEvent(returning.task.taskId, {
       clientRequestId: 'home', expectedTaskRevision: returning.task.taskRevision,
-      event: { eventId: 'home', type: 'navigation.return-arrived', timestamp: now },
+      event: {
+        eventId: 'home', type: 'navigation.return-arrived', timestamp: now,
+        navigationSnapshot: {
+          routeId: returning.task.navigationSimulation!.routeId, leg: 'return', progress: 1,
+          speedKph: 0, batteryPercent: returning.task.navigationSimulation!.estimatedBatteryAtArrival,
+          remainingRangeKm: returning.task.navigationSimulation!.estimatedBatteryAtArrival / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm,
+          remainingDistanceKm: 0, currentRoad: '家',
+        },
+      },
     })
     expect(completed.task).toMatchObject({ phase: 'completed', passengers: { names: [], confirmedOnboard: false } })
     expect(completed.task.flight).toBeUndefined()

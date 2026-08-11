@@ -9,6 +9,7 @@ import type {
   AgentResponse,
   AirportPickupEvent,
   AirportPickupTaskState,
+  NavigationCommandSnapshot,
   TaskUpdateEnvelope,
   UISpec,
   VehicleContext,
@@ -22,7 +23,7 @@ import {
   isSecureContextOk,
 } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
-import { AgentApiClient, demoVehicleContext, isNightAt } from './agent-client'
+import { AgentApiClient, demoVehicleContext, isNightAt, type AgentEventInput } from './agent-client'
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
 import { NavigationWorkspace } from './ui/navigation/NavigationWorkspace'
@@ -173,18 +174,6 @@ type VoiceTurnConfig = {
   autoSubmit: boolean
   recognitionSource: 'fixture' | 'microphone'
 }
-type NavigationCommandSnapshot = {
-  routeId: string
-  leg: NavigationLeg
-  progress: number
-  speedKph: number
-  batteryPercent: number
-  remainingRangeKm: number
-  remainingDistanceKm: number
-  eta: string
-  currentRoad: string
-}
-
 function navigationVoiceIntent(text: string): NavigationVoiceIntent {
   const compact = text.replace(/\s+/g, '')
   if (/跑快点|快一点|加速/.test(compact)) return 'speed-up'
@@ -449,20 +438,12 @@ export default function App({
       && (currentResponse.task.navigation?.status === 'active' || currentResponse.task.navigation?.status === 'arrived')
       ? navigationSnapshotRef.current
       : undefined
-    const next = await run(() => (api.event as unknown as (
-      task: AirportPickupTaskState,
-      event: {
-        type: 'user.input'
-        text: string
-        source?: 'text' | 'voice'
-        navigationSnapshot?: NavigationCommandSnapshot
-      },
-    ) => Promise<AgentResponse>)(currentResponse.task, {
+    const next = await run(() => api.event(currentResponse.task, {
       type: 'user.input', text: trimmed, ...(meta ? { source: meta.source } : {}),
       ...(activeNavigationSnapshot
         ? { navigationSnapshot: activeNavigationSnapshot }
         : {}),
-    }))
+    } satisfies AgentEventInput))
     if (!next) return { sent: false }
     if (nextTimelineIndex === undefined && attachedFlight(currentResponse, next)) {
       nextTimelineIndex = nextIndexForTimelineEvent('user.input')
@@ -678,17 +659,21 @@ export default function App({
     }
     const currentResponse = responseRef.current
     if (!currentResponse) return true
+    const snapshot = navigationSnapshotRef.current
+    if (
+      !snapshot
+      || snapshot.routeId !== currentResponse.task.navigation?.routeId
+      || snapshot.routeId !== currentResponse.task.navigationSimulation?.routeId
+      || snapshot.leg !== leg
+      || snapshot.leg !== currentResponse.task.navigationSimulation?.leg
+      || snapshot.progress !== 1
+      || snapshot.speedKph !== 0
+    ) return false
     const event = leg === 'outbound'
-      ? { type: 'navigation.outbound-arrived' as const }
-      : { type: 'navigation.return-arrived' as const }
-    // New cockpit backends accept these typed events. Legacy clients do not
-    // expose them in their generated union yet, so the runtime call stays
-    // guarded behind an active remote response and degrades to a parked map.
+      ? { type: 'navigation.outbound-arrived' as const, navigationSnapshot: snapshot }
+      : { type: 'navigation.return-arrived' as const, navigationSnapshot: snapshot }
     const currentTask = currentResponse.task
-    const next = await run(() => (api.event as unknown as (
-      task: AirportPickupTaskState,
-      event: { type: 'navigation.outbound-arrived' | 'navigation.return-arrived' },
-    ) => Promise<AgentResponse>)(currentTask, event))
+    const next = await run(() => api.event(currentTask, event as AgentEventInput))
     return next !== undefined
   }
 

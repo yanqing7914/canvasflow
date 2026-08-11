@@ -1604,8 +1604,11 @@ export class AgentGateway {
       }
       if (plan.intent === 'request-return') {
         if (current.task.phase !== 'passengers-onboard') return this.#cockpitNoop(current, request, startedAt, '请先确认乘客已经上车。')
+        if (!commandSnapshot || request.event.navigationSnapshot?.leg !== 'outbound' || request.event.navigationSnapshot.progress !== 1) {
+          throw new AgentGatewayError('POLICY_DENIED', 'Return planning requires the completed outbound vehicle state', false, current)
+        }
         const routeReads = this.#orchestrator.resolveCockpitRoute?.(taskId, request.clientRequestId, {
-          leg: 'return', vehicle: commandSnapshot?.vehicle ?? current.requestContext?.vehicle,
+          leg: 'return', vehicle: commandSnapshot.vehicle,
         })
         if (!routeReads) throw new AgentGatewayError('PROVIDER_FAILED', 'Return route provider is unavailable', true, current)
         const route = {
@@ -1649,6 +1652,14 @@ export class AgentGateway {
       || request.event.type === 'passengers.onboard'
       || request.event.type === 'navigation.return-arrived'
     if (!allowedTypedEvent) return this.#cockpitNoop(current, request, startedAt, '当前状态没有变化。')
+    if (request.event.type === 'navigation.outbound-arrived' || request.event.type === 'navigation.return-arrived') {
+      const arrival = this.#sanitizeCockpitSnapshot(current, request.event.navigationSnapshot, timestamp, true)
+      const expectedLeg = request.event.type === 'navigation.outbound-arrived' ? 'outbound' : 'return'
+      if (request.event.navigationSnapshot.leg !== expectedLeg || request.event.navigationSnapshot.progress !== 1
+        || arrival.vehicle.speedKph !== 0 || arrival.remainingDistanceKm !== 0) {
+        throw new AgentGatewayError('POLICY_DENIED', 'Arrival does not match the completed active route', false, current)
+      }
+    }
     const normalizedEvent = { ...request.event, timestamp }
     let next = applyEvent(current.task, normalizedEvent, this.#preferences)
     if (next === current.task || next.taskRevision === current.task.taskRevision) {
@@ -1778,11 +1789,15 @@ export class AgentGateway {
     const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
     let component: UISpec['components'][number]
     if (kind === 'weather') {
+      const driving = current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving'
+      if (driving && !commandSnapshot) {
+        return this.#cockpitNoop(current, request, startedAt, '需要当前模拟位置后才能查询沿途天气。')
+      }
+      const atAirport = current.task.phase === 'waiting-for-passengers'
+        || current.task.phase === 'passengers-onboard'
+        || current.task.phase === 'confirming-return'
       const locationId = commandSnapshot?.weatherLocationId
-        ?? current.task.cockpit?.currentLocationId
-        ?? (current.task.phase === 'return-driving' || current.task.phase === 'passengers-onboard' || current.task.phase === 'confirming-return'
-          ? 'destination-home'
-          : this.#arrivalWeatherLocationId(current))
+        ?? (atAirport ? this.#arrivalWeatherLocationId(current) : 'navigation-segment-origin')
       const weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, { locationId })
       if (!weather) return this.#cockpitNoop(current, request, startedAt, '天气服务暂时不可用。')
       component = { ...weatherCardComponent(current.task, weather.data), id: `weather-${request.event.eventId}` }
@@ -1846,7 +1861,12 @@ export class AgentGateway {
    * offer one only for its active deterministic route; the seed remains the
    * authority for every value used by a read-only tool or the return hand-off.
    */
-  #sanitizeCockpitSnapshot(current: StoredTask, snapshot: NavigationCommandSnapshot, serverTimestamp: string): SanitizedCockpitSnapshot {
+  #sanitizeCockpitSnapshot(
+    current: StoredTask,
+    snapshot: NavigationCommandSnapshot,
+    serverTimestamp: string,
+    allowTerminalProgress = false,
+  ): SanitizedCockpitSnapshot {
     const seed = current.task.navigationSimulation
     const navigation = current.task.navigation
     if (!seed || !navigation || (navigation.status !== 'active' && navigation.status !== 'arrived')) {
@@ -1860,7 +1880,7 @@ export class AgentGateway {
     if (!expectedLeg || snapshot.leg !== expectedLeg || snapshot.leg !== seed.leg || snapshot.routeId !== seed.routeId || snapshot.routeId !== navigation.routeId) {
       throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot does not match the active route', false, current)
     }
-    const arrived = navigation.status === 'arrived'
+    const arrived = navigation.status === 'arrived' || allowTerminalProgress
     if ((arrived && snapshot.progress !== 1) || (!arrived && snapshot.progress >= 1)) {
       throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot progress is outside the route state', false, current)
     }
