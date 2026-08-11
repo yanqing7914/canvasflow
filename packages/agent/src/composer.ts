@@ -85,6 +85,39 @@ export const SEND_UMBRELLA_REMINDER_ACTION_ID = 'send-umbrella-reminder'
 export const DISMISS_ADVISORY_WEATHER_ACTION_ID = 'dismiss-advisory-weather'
 
 /**
+ * The calendar conflict's own answers, `dismiss-advisory-<kind>` like the
+ * weather's. 保持当前计划 is a dismissal that owns its meaning — the driver read
+ * the lateness and accepted it — and 查看安排 spends the calendar read the trip
+ * already holds, exactly as `view-calendar` does on the departure card.
+ */
+export const DISMISS_ADVISORY_CALENDAR_ACTION_ID = 'dismiss-advisory-calendar'
+
+const CALENDAR_ADVISORY_ACTIONS: UISpec['actions'] = [
+  { id: VIEW_CALENDAR_ACTION_ID, label: '查看安排', style: 'secondary', event: { type: 'agent-message', text: '查看日程' } },
+  { id: DISMISS_ADVISORY_CALENDAR_ACTION_ID, label: '保持当前计划', style: 'secondary', event: { type: 'agent-message', text: '保持当前计划' } },
+]
+
+/**
+ * The conflict as one card: which event, how late, and the two answers. The
+ * facts were pinned when the advisory was raised, so the card keeps saying
+ * what the driver first read even as later updates shift the projection.
+ */
+function calendarAdvisoryCard(
+  conflict: NonNullable<AirportPickupTaskState['calendarAdvisory']>,
+): UISpec['components'][number] {
+  return {
+    id: 'calendar-advisory',
+    type: 'alert',
+    props: {
+      level: 'warning',
+      title: `${clockLabel(conflict.eventStartAt)}有「${conflict.eventTitle}」`,
+      message: `按当前接人计划，预计迟到约 ${conflict.lateByMinutes} 分钟。`,
+    },
+    actions: [VIEW_CALENDAR_ACTION_ID, DISMISS_ADVISORY_CALENDAR_ACTION_ID],
+  }
+}
+
+/**
  * 刷新航班, bound the same way the rows are.
  *
  * An `agent-message` like every other choice on this card: the board is a faster
@@ -395,6 +428,13 @@ export function composeAgentSpec(
     // Exception flight states outrank active navigation and pending charging.
     density = 'compact'
     components = [{ id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival ?? task.flight.estimatedArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } }]
+    // A delay is how the calendar conflict usually arrives, so its card rides
+    // the same screen as the delay that caused it: the flight brief says what
+    // changed, the conflict says what it costs, and the two answers sit below.
+    if (task.calendarAdvisory?.status === 'active' && task.flight.status === 'delayed') {
+      components = [...components, calendarAdvisoryCard(task.calendarAdvisory)]
+      actions = CALENDAR_ADVISORY_ACTIONS
+    }
   } else if (task.charging.recommended && !task.flight) {
     // Both battery numbers come from one snapshot so the card cannot contradict
     // itself, and the station count matches what the same density tier surfaces.
@@ -445,6 +485,16 @@ export function composeAgentSpec(
           : []),
         { id: DISMISS_ADVISORY_WEATHER_ACTION_ID, label: '暂不处理', style: 'secondary' as const, event: { type: 'agent-message' as const, text: '暂不处理' } },
       ]
+    } else if (task.calendarAdvisory?.status === 'active') {
+      // The calendar conflict takes the rail the same way the rain does, and
+      // for the same reason: one condition, its consequence in minutes, and
+      // its answers are the only things the drive needs the screen to say.
+      // The weather branch above wins when both are active — rain has a send
+      // behind it where this card only asks to be read.
+      const underway = withRouteMap([calendarAdvisoryCard(task.calendarAdvisory)], activeSketch, task.navigation.destination)
+      components = underway.components
+      layout = underway.layout
+      actions = CALENDAR_ADVISORY_ACTIONS
     } else {
       const underway = withRouteMap(
         [{
@@ -495,15 +545,25 @@ export function composeAgentSpec(
           : []),
       ]
     : []
+  // The schedule answer marks what the return would miss, off the same reads
+  // the strip plots. Both card sites share it so a query during preparation
+  // and one underway agree with the strip's at-risk milestones.
+  const scheduleProjectedHomeMs = task.flight && toolResults['navigation.plan-route']
+    ? projectedHomeArrivalMs(
+        task.flight,
+        toolResults['navigation.plan-route'].data,
+        toolResults['charging.recommend']?.data ?? { recommended: false },
+      )
+    : undefined
   const queryCard = queryAnswerable
     ? departure
       ? departurePlanComponent(departure, departureActions.map((action) => action.id))
       : upcoming
-        ? scheduleCardComponent(upcoming.data.events, upcoming.meta.provider === 'live' ? 'live' : 'fixture')
+        ? scheduleCardComponent(upcoming.data.events, upcoming.meta.provider === 'live' ? 'live' : 'fixture', scheduleProjectedHomeMs)
         : weather
           ? weatherCardComponent(task, weather.data)
           : scheduleQuery
-            ? scheduleCardComponent(scheduleQuery.data.events, scheduleQuery.meta.provider === 'live' ? 'live' : 'fixture')
+            ? scheduleCardComponent(scheduleQuery.data.events, scheduleQuery.meta.provider === 'live' ? 'live' : 'fixture', scheduleProjectedHomeMs)
             : undefined
     : undefined
   // Declared on the card and defined in the spec, the way every other card's own
@@ -815,16 +875,50 @@ function calendarMilestones(events: CalendarEvent[], projectedHomeMs: number) {
   }))
 }
 
+/**
+ * When the pickup is projected to get the driver home, in epoch ms — landing
+ * plus the curbside handoff, the drive back, and any accepted charging detour.
+ * The same sum the schedule strip plots, exported so the gateway's conflict
+ * check and the strip cannot disagree about what "late" means.
+ */
+export function projectedHomeArrivalMs(
+  flight: { estimatedArrival: string },
+  route: { durationMinutes: number },
+  charging: { recommended: boolean; etaImpactMinutes?: number },
+): number | undefined {
+  const landingMs = Date.parse(flight.estimatedArrival)
+  if (Number.isNaN(landingMs)) return undefined
+  const chargingMinutes = charging.recommended ? charging.etaImpactMinutes ?? 0 : 0
+  return landingMs + (PICKUP_HANDOFF_MINUTES + route.durationMinutes + chargingMinutes) * 60_000
+}
+
+/**
+ * The first calendar event the projected return would miss, with the lateness
+ * in whole minutes. Undefined when nothing conflicts — a zero-minute conflict
+ * is not one. First in start order on purpose: the earliest missed event is
+ * the one the driver can still do something about.
+ */
+export function firstCalendarConflict(
+  events: CalendarEvent[],
+  projectedHomeMs: number,
+): { event: CalendarEvent; lateByMinutes: number } | undefined {
+  const missed = [...events]
+    .sort((left, right) => left.startAt.localeCompare(right.startAt))
+    .find((event) => Date.parse(event.startAt) < projectedHomeMs)
+  if (!missed) return undefined
+  const lateByMinutes = Math.ceil((projectedHomeMs - Date.parse(missed.startAt)) / 60_000)
+  if (lateByMinutes <= 0) return undefined
+  return { event: missed, lateByMinutes }
+}
+
 function preparingScheduleStrip(
   flight: NonNullable<AirportPickupTaskState['flight']>,
   route: { durationMinutes: number },
   charging: { recommended: boolean; etaImpactMinutes?: number },
   events: CalendarEvent[],
 ): UISpec['components'][number] | undefined {
-  const landingMs = Date.parse(flight.estimatedArrival)
-  if (Number.isNaN(landingMs)) return undefined
-  const chargingMinutes = charging.recommended ? charging.etaImpactMinutes ?? 0 : 0
-  const projectedHomeMs = landingMs + (PICKUP_HANDOFF_MINUTES + route.durationMinutes + chargingMinutes) * 60_000
+  const projectedHomeMs = projectedHomeArrivalMs(flight, route, charging)
+  if (projectedHomeMs === undefined) return undefined
   return {
     id: 'schedule-strip',
     type: 'schedule-strip',
@@ -1104,11 +1198,14 @@ const MAX_SCHEDULE_CARD_EVENTS = 4
 /**
  * The on-demand schedule answer as one card: the day's remaining events in
  * start order, capped to a glance. An empty day still answers — a query with
- * no card is indistinguishable from a query that failed.
+ * no card is indistinguishable from a query that failed. When the caller can
+ * project the return (`projectedHomeMs`), events the pickup would miss carry
+ * `atRisk` — the same judgement the strip renders, from the same number.
  */
 export function scheduleCardComponent(
   events: CalendarEvent[],
   freshness: 'live' | 'cached' | 'fixture' = 'fixture',
+  projectedHomeMs?: number,
 ): UISpec['components'][number] {
   const ordered = [...events].sort((left, right) => left.startAt.localeCompare(right.startAt))
   const shown = ordered.slice(0, MAX_SCHEDULE_CARD_EVENTS)
@@ -1124,6 +1221,9 @@ export function scheduleCardComponent(
         startAt: event.startAt,
         ...(event.endAt ? { endAt: event.endAt } : {}),
         ...(event.location ? { location: event.location } : {}),
+        ...(projectedHomeMs !== undefined && Date.parse(event.startAt) < projectedHomeMs
+          ? { atRisk: true }
+          : {}),
       })),
       ...(moreCount > 0 ? { moreCount } : {}),
       ...(shown.length === 0 ? { emptyCopy: '今天没有更多安排了' } : {}),

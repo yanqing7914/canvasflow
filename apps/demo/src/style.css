@@ -2409,6 +2409,25 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+/* An event the projected return would miss: the time keeps the strip's
+   at-risk amber and a short chip says why, so the query card and the strip
+   tell one story. */
+.ui-schedule-card__event--at-risk .ui-schedule-card__time {
+  color: var(--amber);
+}
+
+.ui-schedule-card__risk {
+  flex: none;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 640;
+  color: var(--amber);
+  background: var(--amber-pale);
+  border: 1px solid var(--amber-edge);
+  white-space: nowrap;
+}
+
 .ui-schedule-card__empty {
   flex: 1;
   min-width: 0;

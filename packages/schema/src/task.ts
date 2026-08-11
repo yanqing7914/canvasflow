@@ -183,6 +183,24 @@ export const airportPickupTaskStateSchema = z.object({
       advisedAt: z.iso.datetime({ offset: true }),
     })
     .optional(),
+  /**
+   * The one proactive calendar prompt of the trip. Set by the gateway when a
+   * flight update en route pushes the projected home arrival past an event's
+   * start; `active` keeps the conflict card on the driving rail, `dismissed`
+   * retires it for good — the trip never re-prompts, even if the lateness
+   * grows. The event identity and projected lateness are pinned at raise time
+   * so the card keeps saying what it said when the driver first saw it.
+   */
+  calendarAdvisory: z
+    .object({
+      status: z.enum(['active', 'dismissed', 'resolved']),
+      advisedAt: z.iso.datetime({ offset: true }),
+      eventId: z.string().min(1),
+      eventTitle: z.string().min(1),
+      eventStartAt: z.iso.datetime({ offset: true }),
+      lateByMinutes: z.number().int().positive(),
+    })
+    .optional(),
   processedEventIds: z.array(z.string()),
   updatedAt: z.iso.datetime({ offset: true }),
 })

@@ -247,7 +247,10 @@ export function planAirportPickup(input: PlannerInput): Plan {
   // 暂不处理 answers whichever advisory is on screen. One intent for the family:
   // the words never name the prompt, so an intent that did would be claiming
   // something the driver did not say. The gateway retires what is active.
-  if (/^(?:暂不处理|先不用|不用提醒(?:了)?|不用了|先这样)(?:吧|好了)?[。！!]?$/.test(compactText)) {
+  // 保持当前计划 joins the family as the calendar conflict's own dismissal — the
+  // driver read the lateness and accepted it, which retires the prompt the same
+  // way 暂不处理 does.
+  if (/^(?:暂不处理|先不用|不用提醒(?:了)?|不用了|先这样|保持当前计划|保持原计划|按原计划(?:走|来)?)(?:吧|好了)?[。！!]?$/.test(compactText)) {
     return {
       intent: 'dismiss-advisory',
       confidence: 0.98,
