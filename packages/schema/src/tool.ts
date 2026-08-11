@@ -82,6 +82,16 @@ export const flightStatusInputSchema = z.object({
  */
 export const arrivalAirportSchema = z.enum(['SHA', 'PVG'])
 
+/**
+ * A user-confirmed pickup airport. Known Shanghai airports carry a code; an
+ * explicitly named other airport keeps the user's label without pretending the
+ * demo owns live route or airport data for it.
+ */
+export const pickupAirportSchema = z.object({
+  label: z.string().trim().min(1).max(80),
+  code: arrivalAirportSchema.optional(),
+}).strict()
+
 export const flightStatusOutputSchema = z.object({
   flightNumber: z.string(),
   status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
@@ -112,6 +122,11 @@ export const flightArrivalsInputSchema = z.object({
   arrivalCityId: z.string().min(1),
   date: z.iso.date(),
   limit: z.number().int().min(1).max(10).optional(),
+  /** Enables the cockpit's injected-clock deterministic board. */
+  queryAt: z.iso.datetime({ offset: true }).optional(),
+  /** Stable within one query; a re-query must supply a new id. */
+  queryId: z.string().min(1).optional(),
+  pickupAirport: pickupAirportSchema.optional(),
 })
 
 /**
@@ -130,7 +145,7 @@ export const flightArrivalCandidateSchema = z.object({
   status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
   scheduledArrival: z.iso.datetime({ offset: true }),
   estimatedArrival: z.iso.datetime({ offset: true }),
-  arrivalAirport: arrivalAirportSchema,
+  arrivalAirport: arrivalAirportSchema.optional(),
   arrivalAirportName: z.string().min(1),
   terminal: z.string().min(1),
 })
@@ -152,6 +167,8 @@ export const flightArrivalsOutputSchema = z.object({
    * and assertable rather than implied.
    */
   candidateSetId: z.string().min(1),
+  queryId: z.string().min(1).optional(),
+  queriedAt: z.iso.datetime({ offset: true }).optional(),
   /** After this instant the ordinal path refuses the set and asks for a re-read. */
   expiresAt: z.iso.datetime({ offset: true }),
   arrivals: z.array(flightArrivalCandidateSchema),
@@ -218,10 +235,13 @@ export const calendarEventSchema = z.object({
   startAt: z.iso.datetime({ offset: true }),
   endAt: z.iso.datetime({ offset: true }).optional(),
   location: z.string().min(1).optional(),
+  status: z.enum(['ended', 'ongoing', 'upcoming']).optional(),
 })
 
 export const listUpcomingEventsInputSchema = z.object({
   date: z.iso.date(),
+  /** When present, fixture events are generated for date and statused at now. */
+  now: z.iso.datetime({ offset: true }).optional(),
 })
 
 export const listUpcomingEventsOutputSchema = z.object({
@@ -287,6 +307,26 @@ export const navigationUpdateRouteOutputSchema = z.object({
   destination: z.string().min(1),
   status: z.literal('active'),
 })
+
+export const navigationSimulationLegSchema = z.enum(['outbound', 'return'])
+export const navigationSimulationSpeedModeSchema = z.enum(['slow', 'normal', 'fast'])
+export const navigationSimulationSpeedProfileSchema = z.object({
+  durationSeconds: z.number().positive(),
+  displaySpeedKph: z.number().positive(),
+}).strict()
+export const navigationSimulationProfilesSchema = z.object({
+  slow: navigationSimulationSpeedProfileSchema,
+  normal: navigationSimulationSpeedProfileSchema,
+  fast: navigationSimulationSpeedProfileSchema,
+}).strict()
+export const navigationSimulationSeedSchema = z.object({
+  leg: navigationSimulationLegSchema,
+  routeId: z.string().min(1),
+  distanceKm: z.number().positive(),
+  initialBatteryPercent: z.number().min(0).max(100),
+  estimatedBatteryAtArrival: z.number().min(0).max(100),
+  profiles: navigationSimulationProfilesSchema,
+}).strict()
 
 export const cabinProfileValuesSchema = z.object({
   temperatureC: z.number().optional(),
@@ -443,6 +483,7 @@ export type GetPreferencesInput = z.infer<typeof getPreferencesInputSchema>
 export type GetPreferencesOutput = z.infer<typeof getPreferencesOutputSchema>
 export type FlightStatusInput = z.infer<typeof flightStatusInputSchema>
 export type ArrivalAirport = z.infer<typeof arrivalAirportSchema>
+export type PickupAirport = z.infer<typeof pickupAirportSchema>
 export type FlightStatusOutput = z.infer<typeof flightStatusOutputSchema>
 export type FlightArrivalsInput = z.infer<typeof flightArrivalsInputSchema>
 export type FlightArrivalCandidate = z.infer<typeof flightArrivalCandidateSchema>
@@ -462,6 +503,11 @@ export type NavigationStartInput = z.infer<typeof navigationStartInputSchema>
 export type NavigationStartOutput = z.infer<typeof navigationStartOutputSchema>
 export type NavigationUpdateRouteInput = z.infer<typeof navigationUpdateRouteInputSchema>
 export type NavigationUpdateRouteOutput = z.infer<typeof navigationUpdateRouteOutputSchema>
+export type NavigationSimulationLeg = z.infer<typeof navigationSimulationLegSchema>
+export type NavigationSimulationSpeedMode = z.infer<typeof navigationSimulationSpeedModeSchema>
+export type NavigationSimulationSpeedProfile = z.infer<typeof navigationSimulationSpeedProfileSchema>
+export type NavigationSimulationProfiles = z.infer<typeof navigationSimulationProfilesSchema>
+export type NavigationSimulationSeed = z.infer<typeof navigationSimulationSeedSchema>
 export type ApplyCabinProfileInput = z.infer<typeof applyCabinProfileInputSchema>
 export type ApplyCabinProfileOutput = z.infer<typeof applyCabinProfileOutputSchema>
 export type RevertCabinProfileInput = z.infer<typeof revertCabinProfileInputSchema>

@@ -4,10 +4,21 @@ import { parsePassengers, stripPassengerPhonePhrases } from './passengers'
 
 export type PlannerIntent =
   | 'create-airport-pickup'
+  | 'provide-airport'
+  | 'query-flight-options'
   | 'provide-flight-number'
   | 'pick-flight-choice'
   | 'refresh-flight-options'
   | 'start-navigation'
+  | 'check-flight-detail'
+  | 'check-vehicle-status'
+  | 'speed-up'
+  | 'speed-down'
+  | 'hide-navigation-info'
+  | 'show-navigation-info'
+  | 'request-return'
+  | 'start-return'
+  | 'pause-unsupported'
   | 'plan-charging'
   | 'confirm-passengers-onboard'
   | 'apply-cabin-preferences'
@@ -21,9 +32,10 @@ export type PlannerIntent =
   | 'cancel-task'
   | 'unknown'
 
-export type PlannerSlot = 'passengers' | 'flightNumber'
+export type PlannerSlot = 'airport' | 'passengers' | 'flightNumber'
 
 export type PlannerSlotUpdates = {
+  airport?: { label: string; code?: 'SHA' | 'PVG' }
   passengers?: AirportPickupTaskState['passengers']
   flightNumber?: string
   navigation?: { requested: true }
@@ -72,6 +84,25 @@ export function planAirportPickup(input: PlannerInput): Plan {
     timestamp: input.timestamp ?? state?.updatedAt ?? fallbackTimestamp,
   }
 
+  if (isPauseRequest(compactText)) return informationPlan('pause-unsupported', '当前版本暂不支持暂停。')
+  if (isFlightDetailQuery(compactText)) return informationPlan('check-flight-detail', '好的，我打开当前航班详情。')
+  if (isVehicleStatusQuery(compactText)) return informationPlan('check-vehicle-status', '好的，我打开车辆状态。')
+  if (isSpeedUpRequest(compactText)) return informationPlan('speed-up', '好的，尝试调快一档。')
+  if (isSpeedDownRequest(compactText)) return informationPlan('speed-down', '好的，尝试调慢一档。')
+  if (isHideNavigationInfo(compactText)) return informationPlan('hide-navigation-info', '已隐藏完整导航信息。')
+  if (isShowNavigationInfo(compactText)) return informationPlan('show-navigation-info', '已显示完整导航信息。')
+  if (isStartReturnRequest(compactText)) return informationPlan('start-return', '好的，准备开始返程。')
+  if (isReturnRequest(compactText)) return informationPlan('request-return', '好的，先确认返程路线。')
+
+  const airport = parsePickupAirport(text, state)
+  if (airport && state?.phase === 'collecting-airport') {
+    return {
+      intent: 'provide-airport', confidence: 0.99, slotUpdates: { airport }, missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'pickup.airport-selected', airport }],
+      assistantText: `好的，查询${airport.label}最近到达航班。`,
+    }
+  }
+
   if (isTaskCancellation(compactText)) {
     return {
       intent: 'cancel-task',
@@ -83,7 +114,7 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
-  if (/已经接到她们|接到她们了|家人(?:已经)?上车|她们(?:已经)?上车/.test(compactText)) {
+  if (/接到人了|已经接到(?:人|她们|他们)|接到她们了|家人(?:已经)?上车|她们(?:已经)?上车/.test(compactText)) {
     if (state?.phase !== 'waiting-for-passengers') {
       return {
         intent: 'confirm-passengers-onboard',
@@ -99,8 +130,11 @@ export function planAirportPickup(input: PlannerInput): Plan {
       confidence: 0.99,
       slotUpdates: { passengersOnboard: true },
       missingSlots: [],
-      proposedEvents: [{ ...eventBase, type: 'user.confirmed-passengers-onboard' }],
-      assistantText: '收到，已准备将家人标记为上车并进入返程。',
+      proposedEvents: [{
+        ...eventBase,
+        type: state.pickupAirport ? 'passengers.onboard' : 'user.confirmed-passengers-onboard',
+      }],
+      assistantText: '已记录乘客上车。',
     }
   }
 
@@ -115,7 +149,7 @@ export function planAirportPickup(input: PlannerInput): Plan {
     }
   }
 
-  if (/开始导航/.test(compactText)) {
+  if (/^(?:现在出发|开始导航|出发)$/.test(compactText)) {
     const routeId = input.routeId ?? `route-airport-${stableHash(state?.taskId ?? compactText)}`
     return {
       intent: 'start-navigation',
@@ -265,19 +299,28 @@ export function planAirportPickup(input: PlannerInput): Plan {
     || /机场接(?:人|妈妈|爸爸|豆豆)/.test(actionableText)
     || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(actionableText)
   if (isPickupRequest) {
-    const missingSlots = pickupMissingSlots(state, passengers, flightNumber)
+    const cockpit = state?.phase === 'collecting-airport'
+    const statedAirport = parsePickupAirport(text, cockpit ? state : undefined)
+    const missingSlots = cockpit
+      ? statedAirport ? [] : ['airport' as const]
+      : pickupMissingSlots(state, passengers, flightNumber)
     return {
       intent: 'create-airport-pickup',
       confidence: 0.99,
       slotUpdates: {
         ...(passengers ? { passengers } : {}),
         ...(flightNumber ? { flightNumber } : {}),
+        ...(statedAirport ? { airport: statedAirport } : {}),
       },
       missingSlots,
       proposedEvents: [{ ...eventBase, type: 'user.input', text }],
-      assistantText: missingSlots.includes('flightNumber')
-        ? '好的，请告诉我她们的航班号。'
-        : '好的，接机信息已齐全，可以继续安排行程。',
+      assistantText: cockpit && missingSlots.includes('airport')
+        ? '你要去哪个机场？例如虹桥机场或浦东机场。'
+        : cockpit && statedAirport
+          ? `好的，我帮你查${statedAirport.label}最近航班。`
+          : missingSlots.includes('flightNumber')
+            ? '好的，请告诉我她们的航班号。'
+            : '好的，接机信息已齐全，可以继续安排行程。',
     }
   }
 
@@ -308,6 +351,18 @@ export function planAirportPickup(input: PlannerInput): Plan {
   }
 }
 
+function informationPlan(intent: PlannerIntent, assistantText: string): Plan {
+  return { intent, confidence: 0.99, slotUpdates: {}, missingSlots: [], proposedEvents: [], assistantText }
+}
+
+export function parsePickupAirport(text: string, state?: AirportPickupTaskState): { label: string; code?: 'SHA' | 'PVG' } | undefined {
+  if (/虹桥(?:国际)?机场|上海虹桥/.test(text)) return { label: '虹桥机场', code: 'SHA' }
+  if (/浦东(?:国际)?机场|上海浦东/.test(text)) return { label: '浦东机场', code: 'PVG' }
+  if (state?.phase !== 'collecting-airport' && !/机场/.test(text)) return undefined
+  const match = /([\p{Script=Han}A-Za-z0-9·]{2,24}机场)/u.exec(text)
+  return match ? { label: match[1]! } : undefined
+}
+
 function pickupMissingSlots(
   state: AirportPickupTaskState | undefined,
   parsedPassengers: AirportPickupTaskState['passengers'] | undefined,
@@ -319,6 +374,16 @@ function pickupMissingSlots(
   return missing
 }
 
+function isPauseRequest(text: string): boolean { return /^(?:暂停|先停一下|暂停导航)$/.test(text) }
+function isFlightDetailQuery(text: string): boolean { return /^(?:查看|看看|打开)?(?:当前)?航班详情$/.test(text) }
+function isVehicleStatusQuery(text: string): boolean { return /^(?:查看|看看|打开)?车辆状态$|^(?:看看|查看)?电量$/.test(text) }
+function isSpeedUpRequest(text: string): boolean { return /^(?:跑快点|快一点|加快一档)$/.test(text) }
+function isSpeedDownRequest(text: string): boolean { return /^(?:跑慢点|慢一点|降低一档)$/.test(text) }
+function isHideNavigationInfo(text: string): boolean { return /^(?:隐藏导航信息|隐藏HUD|隐藏抬头显示)$/.test(text) }
+function isShowNavigationInfo(text: string): boolean { return /^(?:显示导航信息|显示HUD|显示抬头显示)$/.test(text) }
+function isReturnRequest(text: string): boolean { return /^(?:送我们回家|开始回家|回家)$/.test(text) }
+function isStartReturnRequest(text: string): boolean { return /^(?:开始返程|确认返程)$/.test(text) }
+
 function isTaskCancellation(text: string): boolean {
   return /取消(?:这个|本次)?(?:接机)?任务|取消接机|不去接了|不用接了|别去机场了/.test(text)
 }
@@ -329,7 +394,7 @@ function isTaskCancellation(text: string): boolean {
  * task meaning and must not be consumed by the query path.
  */
 function isWeatherQuery(text: string): boolean {
-  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:到(?:的时候|达时|那边))?(?:的)?天气(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查|查下|查查|查一下|看一下)?(?:到(?:的时候|达时|那边))?(?:的)?天气(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
 }
 
 /**
@@ -338,7 +403,7 @@ function isWeatherQuery(text: string): boolean {
  * passengers or a flight number keeps its task meaning.
  */
 function isScheduleQuery(text: string): boolean {
-  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查下|查查|查一下|看一下)?(?:我)?(?:今天)?(?:的)?(?:还)?有?(?:什么|哪些)?(?:日程|待办|安排|行程安排)(?:事项)?(?:怎么样|有哪些|有什么)?[?？。！!]?$/.test(text)
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查|查下|查查|查一下|看一下)?(?:我)?(?:今天)?(?:的)?(?:还)?有?(?:什么|哪些)?(?:日历|日程|待办|安排|行程安排)(?:事项)?(?:怎么样|有哪些|有什么)?[?？。！!]?$/.test(text)
 }
 
 /**
@@ -351,7 +416,7 @@ function isScheduleQuery(text: string): boolean {
  * wrong action.
  */
 function isFlightOptionsRefresh(text: string): boolean {
-  return /^(?:请|麻烦)?(?:帮我|给我)?(?:再|重新)?(?:刷新|更新|查|看)(?:一下|一遍|下)?(?:到达)?(?:航班|列表|航班列表)(?:吧|好了)?[?？。！!]?$/.test(text)
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:再|重新)?(?:刷新|更新|查|看)(?:一下|一遍|下)?(?:最近|到达)?(?:航班|列表|航班列表)(?:吧|好了)?[?？。！!]?$/.test(text)
     || /^(?:请|麻烦)?(?:帮我|给我)?(?:再|重新)(?:查|看|搜)(?:一下|一遍|下)?(?:吧|好了)?[?？。！!]?$/.test(text)
     || /^(?:请|麻烦)?(?:帮我|给我)?换(?:一)?(?:批|组|些)(?:航班)?(?:吧|好了)?[?？。！!]?$/.test(text)
 }

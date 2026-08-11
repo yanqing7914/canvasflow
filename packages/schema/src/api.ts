@@ -14,6 +14,8 @@ export const clientCapabilitiesSchema = z.object({
   uiSchemaVersion: z.literal('1.0'),
   supportsSse: z.boolean(),
   supportsTts: z.boolean(),
+  /** Opt-in marker for the airport cockpit v1 state machine. Omitted keeps legacy replay semantics. */
+  cockpitVersion: z.literal('1').optional(),
 })
 
 export const agentDestinationSchema = z.object({
@@ -82,7 +84,13 @@ export const agentResponseSchema = z.object({
   requestId: z.string(),
   task: airportPickupTaskStateSchema,
   ui: uiSpecSchema,
-  assistant: z.object({ text: z.string(), shouldSpeak: z.boolean() }).optional(),
+  assistant: z.object({
+    text: z.string(),
+    displayText: z.string().optional(),
+    speakText: z.string().optional(),
+    shouldSpeak: z.boolean(),
+    source: z.enum(['text', 'voice', 'system']).optional(),
+  }).optional(),
   effects: z.array(effectRecordSchema),
   meta: z.object({
     mode: z.enum(['fixture', 'mock', 'live']),

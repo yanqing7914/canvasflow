@@ -55,6 +55,98 @@ function failedLandingMessageTask(gateway: AgentGateway) {
 }
 
 describe('AgentGateway', () => {
+  it('runs the opt-in cockpit flow through guarded create, event, and action paths', () => {
+    let tick = 0
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => `2026-08-11T09:${String(tick++).padStart(2, '0')}:00+08:00`,
+      createId: () => 'cockpit',
+    })
+    const cockpitRequest = {
+      ...createRequest('去机场接人'),
+      clientRequestId: 'cockpit-create',
+      clientCapabilities: { uiSchemaVersion: '1.0' as const, supportsSse: true, supportsTts: true, cockpitVersion: '1' as const },
+    }
+    const created = gateway.createTask(cockpitRequest)
+    expect(created.task.phase).toBe('collecting-airport')
+    expect(created.assistant?.text).toContain('哪个机场')
+
+    const flights = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'airport-answer', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'airport-answer', type: 'user.input', text: '虹桥机场', source: 'text', timestamp: now },
+    })
+    expect(flights.task.phase).toBe('choosing-flight')
+    expect(flights.assistant?.shouldSpeak).toBe(false)
+    expect(flights.ui.windows?.at(-1)?.kind).toBe('flight-list')
+    const board = flights.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
+    expect(board.props.choices).toHaveLength(5)
+    const pickAction = board.props.choices[0]!.actionId
+    if (!pickAction) throw new Error('expected pick action')
+
+    const selected = gateway.submitAction(flights.task.taskId, {
+      clientRequestId: 'pick-flight', expectedTaskRevision: flights.task.taskRevision, expectedUiRevision: flights.ui.uiRevision,
+      actionId: pickAction, componentId: board.id, idempotencyKey: 'pick-flight',
+    })
+    expect(selected.task.phase).toBe('confirming-outbound')
+    expect(selected.task.flight?.flightNumber).toBe(board.props.choices[0]!.flightNumber)
+    expect(selected.ui.windows?.map((window) => window.kind)).toEqual(expect.arrayContaining(['flight-list', 'outbound-confirmation']))
+
+    const started = gateway.submitAction(selected.task.taskId, {
+      clientRequestId: 'start-outbound', expectedTaskRevision: selected.task.taskRevision, expectedUiRevision: selected.ui.uiRevision,
+      actionId: 'start-outbound', componentId: 'outbound-confirmation', idempotencyKey: 'start-outbound',
+    })
+    expect(started.task.phase).toBe('outbound-driving')
+    expect(started.ui.windows ?? []).toHaveLength(0)
+
+    const weather = gateway.submitEvent(started.task.taskId, {
+      clientRequestId: 'weather', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'weather', type: 'user.input', text: '查天气', source: 'voice', timestamp: now },
+    })
+    expect(weather.ui.windows?.at(-1)?.kind).toBe('weather')
+    expect(weather.assistant?.shouldSpeak).toBe(true)
+    const calendar = gateway.submitEvent(weather.task.taskId, {
+      clientRequestId: 'calendar', expectedTaskRevision: weather.task.taskRevision,
+      event: { eventId: 'calendar', type: 'user.input', text: '查日历', source: 'text', timestamp: now },
+    })
+    expect(calendar.ui.windows?.at(-1)?.kind).toBe('calendar')
+    expect(calendar.assistant?.shouldSpeak).toBe(false)
+    const faster = gateway.submitEvent(calendar.task.taskId, {
+      clientRequestId: 'faster', expectedTaskRevision: calendar.task.taskRevision,
+      event: { eventId: 'faster', type: 'user.input', text: '跑快点', source: 'text', timestamp: now },
+    })
+    expect(faster.task.cockpit?.speedMode).toBe('fast')
+    expect(faster.ui.windows?.some((window) => window.kind === 'weather')).toBe(true)
+
+    const arrived = gateway.submitEvent(faster.task.taskId, {
+      clientRequestId: 'arrived-airport', expectedTaskRevision: faster.task.taskRevision,
+      event: { eventId: 'arrived-airport', type: 'navigation.outbound-arrived', timestamp: now },
+    })
+    const onboard = gateway.submitEvent(arrived.task.taskId, {
+      clientRequestId: 'onboard', expectedTaskRevision: arrived.task.taskRevision,
+      event: { eventId: 'onboard', type: 'user.input', text: '接到人了', source: 'text', timestamp: now },
+    })
+    expect(onboard.task.phase).toBe('passengers-onboard')
+    const confirmingReturn = gateway.submitEvent(onboard.task.taskId, {
+      clientRequestId: 'return-request', expectedTaskRevision: onboard.task.taskRevision,
+      event: { eventId: 'return-request', type: 'user.input', text: '开始回家', source: 'text', timestamp: now },
+    })
+    expect(confirmingReturn.task.phase).toBe('confirming-return')
+    const returning = gateway.submitAction(confirmingReturn.task.taskId, {
+      clientRequestId: 'start-return', expectedTaskRevision: confirmingReturn.task.taskRevision, expectedUiRevision: confirmingReturn.ui.uiRevision,
+      actionId: 'start-return', componentId: 'return-confirmation', idempotencyKey: 'start-return',
+    })
+    expect(returning.task.phase).toBe('return-driving')
+    const completed = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'home', expectedTaskRevision: returning.task.taskRevision,
+      event: { eventId: 'home', type: 'navigation.return-arrived', timestamp: now },
+    })
+    expect(completed.task).toMatchObject({ phase: 'completed', passengers: { names: [], confirmedOnboard: false } })
+    expect(completed.task.flight).toBeUndefined()
+    expect(completed.task.cockpit).toBeUndefined()
+    expect(completed.ui.windows ?? []).toHaveLength(0)
+  })
+
   it('uses the injected Planner as the create slot-filling boundary', () => {
     const planner = new Planner()
     const plan = vi.spyOn(planner, 'plan').mockReturnValue({

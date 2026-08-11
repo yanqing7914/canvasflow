@@ -1,7 +1,14 @@
 import { z } from 'zod'
-import { arrivalAirportSchema } from './tool'
+import { arrivalAirportSchema, navigationSimulationSeedSchema, pickupAirportSchema } from './tool'
 
 export const airportPickupPhaseSchema = z.enum([
+  'collecting-airport',
+  'choosing-flight',
+  'confirming-outbound',
+  'outbound-driving',
+  'passengers-onboard',
+  'confirming-return',
+  'return-driving',
   'collecting-information',
   'preparing',
   'driving-to-airport',
@@ -15,6 +22,9 @@ export const airportPickupPhaseSchema = z.enum([
 export const flightStateSchema = z
   .object({
     flightNumber: z.string().min(1),
+    airlineName: z.string().min(1).optional(),
+    originName: z.string().min(1).optional(),
+    arrivalAirportName: z.string().min(1).optional(),
     /** False means only the locally parsed number is known; provider facts are not verified. */
     trusted: z.boolean().optional(),
     status: z.enum(['scheduled', 'in-air', 'landed', 'delayed', 'cancelled']),
@@ -84,12 +94,22 @@ export const returnTripStateSchema = z.object({
   media: returnTripEffectStateSchema,
 })
 
+export const cockpitContextSchema = z.object({
+  speedMode: z.enum(['slow', 'normal', 'fast']),
+  hudVisible: z.boolean(),
+  activeLeg: z.enum(['outbound', 'return']).optional(),
+  routeProgress: z.number().min(0).max(1).optional(),
+  currentRoad: z.string().min(1).optional(),
+  currentLocationId: z.string().min(1).optional(),
+}).strict()
+
 export const airportPickupTaskStateSchema = z.object({
   taskId: z.string().min(1),
   surfaceId: z.string().min(1),
   taskRevision: z.number().int().nonnegative(),
   uiRevision: z.number().int().nonnegative(),
   phase: airportPickupPhaseSchema,
+  pickupAirport: pickupAirportSchema.optional(),
   passengers: z.object({
     memberIds: z.array(z.string()),
     names: z.array(z.string()),
@@ -115,6 +135,9 @@ export const airportPickupTaskStateSchema = z.object({
     .object({
       candidateSetId: z.string().min(1),
       expiresAt: z.iso.datetime({ offset: true }),
+      queryId: z.string().min(1).optional(),
+      airportLabel: z.string().min(1).optional(),
+      queriedAt: z.iso.datetime({ offset: true }).optional(),
     })
     .optional(),
   navigation: z
@@ -125,6 +148,8 @@ export const airportPickupTaskStateSchema = z.object({
       status: z.enum(['planned', 'active', 'arrived']),
     })
     .optional(),
+  navigationSimulation: navigationSimulationSeedSchema.optional(),
+  cockpit: cockpitContextSchema.optional(),
   /**
    * A standing "remind me when it is time to leave", set by 稍后提醒 on the
    * departure answer.
@@ -211,7 +236,11 @@ const eventBase = z.object({
 })
 
 export const airportPickupEventSchema = z.discriminatedUnion('type', [
-  eventBase.extend({ type: z.literal('user.input'), text: z.string().min(1) }),
+  eventBase.extend({ type: z.literal('user.input'), text: z.string().min(1), source: z.enum(['text', 'voice']).optional() }),
+  eventBase.extend({ type: z.literal('pickup.airport-selected'), airport: pickupAirportSchema }),
+  eventBase.extend({ type: z.literal('navigation.outbound-arrived') }),
+  eventBase.extend({ type: z.literal('passengers.onboard') }),
+  eventBase.extend({ type: z.literal('navigation.return-arrived') }),
   eventBase.extend({ type: z.literal('navigation.started'), routeId: z.string() }),
   eventBase.extend({ type: z.literal('vehicle.moving'), speedKph: z.number().nonnegative() }),
   eventBase.extend({ type: z.literal('flight.updated'), flight: flightStateSchema }),
@@ -232,6 +261,7 @@ export const airportPickupEventSchema = z.discriminatedUnion('type', [
 export type AirportPickupPhase = z.infer<typeof airportPickupPhaseSchema>
 export type FlightState = z.infer<typeof flightStateSchema>
 export type ReturnTripState = z.infer<typeof returnTripStateSchema>
+export type CockpitContext = z.infer<typeof cockpitContextSchema>
 export type MemoryProposalState = z.infer<typeof memoryProposalStateSchema>
 export type AirportPickupTaskState = z.infer<typeof airportPickupTaskStateSchema>
 export type AirportPickupEvent = z.infer<typeof airportPickupEventSchema>

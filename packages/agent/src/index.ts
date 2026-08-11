@@ -13,6 +13,7 @@ export * from './effect-executor'
 export * from './flight-number'
 export * from './passengers'
 export * from './composer'
+export * from './cockpit'
 export * from './landing-message-retry'
 export * from './lark-calendar-adapter'
 export * from './model-gateway'
@@ -28,6 +29,17 @@ export type ApplyEventOptions = {
     passengers?: AirportPickupTaskState['passengers']
     flightNumber?: string
   }
+}
+
+export function createCockpitTask(taskId = 'pickup-001', updatedAt = new Date().toISOString()): AirportPickupTaskState {
+  return airportPickupTaskStateSchema.parse({
+    taskId, surfaceId: 'airport-pickup-main', taskRevision: 0, uiRevision: 0, phase: 'collecting-airport',
+    passengers: { memberIds: [], names: [], confirmedOnboard: false },
+    cockpit: { speedMode: 'normal', hudVisible: true },
+    charging: { recommended: false, accepted: false, status: 'none' },
+    message: { autoNotifyAuthorized: false, status: 'idle', landingNoticeSent: false },
+    processedEventIds: [], updatedAt,
+  })
 }
 
 export function createInitialTask(taskId = 'pickup-001', updatedAt = '2026-07-22T12:00:00+08:00'): AirportPickupTaskState {
@@ -63,6 +75,37 @@ export function applyEvent(
   let handled = false
 
   switch (event.type) {
+    case 'pickup.airport-selected':
+      if (next.phase === 'collecting-airport') {
+        next.pickupAirport = event.airport
+        next.phase = 'choosing-flight'
+      }
+      break
+    case 'navigation.outbound-arrived':
+      if (next.phase === 'outbound-driving') {
+        next.phase = 'waiting-for-passengers'
+        if (next.navigation) next.navigation.status = 'arrived'
+      }
+      break
+    case 'passengers.onboard':
+      if (next.phase === 'waiting-for-passengers') {
+        next.passengers.confirmedOnboard = true
+        next.phase = 'passengers-onboard'
+      }
+      break
+    case 'navigation.return-arrived':
+      if (next.phase === 'return-driving') {
+        next.phase = 'completed'
+        next.flight = undefined
+        next.flightDiscovery = undefined
+        next.pickupAirport = undefined
+        next.navigation = undefined
+        next.navigationSimulation = undefined
+        next.cockpit = undefined
+        next.returnTrip = undefined
+        next.passengers = { memberIds: [], names: [], confirmedOnboard: false }
+      }
+      break
     case 'user.input':
       {
         const flightNumber = options.userInputSlots
@@ -116,7 +159,13 @@ export function applyEvent(
       }
       break
     case 'navigation.started':
-      if (next.phase === 'preparing') {
+      if (next.phase === 'confirming-outbound') {
+        next.phase = 'outbound-driving'
+        next.navigation = next.navigation ? { ...next.navigation, routeId: event.routeId, status: 'active' } : undefined
+      } else if (next.phase === 'confirming-return') {
+        next.phase = 'return-driving'
+        next.navigation = next.navigation ? { ...next.navigation, routeId: event.routeId, status: 'active' } : undefined
+      } else if (next.phase === 'preparing') {
         next.phase = 'driving-to-airport'
         next.navigation = {
           routeId: event.routeId,

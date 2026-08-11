@@ -43,7 +43,8 @@ export class DefaultPolicyGate implements PolicyGate {
     if (task.phase === 'completed' || task.phase === 'cancelled') {
       return { allowed: false, errorCode: 'TASK_TERMINAL' }
     }
-    if (task.phase !== 'preparing') {
+    const cockpitStart = task.phase === 'confirming-outbound' || task.phase === 'confirming-return'
+    if (task.phase !== 'preparing' && !cockpitStart) {
       return { allowed: false, errorCode: 'INVALID_TASK_PHASE' }
     }
     if (task.flight?.status === 'cancelled') {
