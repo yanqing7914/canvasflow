@@ -197,7 +197,9 @@ export function createSpeechController(deps: SpeechControllerDeps = {}) {
       }
 
       engine.lang = lang
-      engine.continuous = false
+      // The turn ends by the machine's silence policy, not by the first final
+      // segment. This lets later phrases reset the five-second window.
+      engine.continuous = true
       engine.interimResults = true
       if ('maxAlternatives' in engine) engine.maxAlternatives = 1
 

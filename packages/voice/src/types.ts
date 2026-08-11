@@ -76,14 +76,24 @@ export function voiceError(kind: VoiceErrorKind): VoiceError {
   return { kind, ...VOICE_ERRORS[kind] }
 }
 
+export type VoiceRecognitionSource = 'microphone' | 'fixture' | 'system-tts'
+
+/** Metadata that accompanies every transcript emitted by the voice package. */
+export type VoiceSubmitMeta = {
+  source: 'voice'
+  confidence?: number
+  /** Optional trusted provenance for callers that can distinguish their ASR input. */
+  recognitionSource?: VoiceRecognitionSource
+}
+
 /** What the machine asks the outside world to do. All optional for tests. */
 export type VoiceEffects = {
   onState?: (state: VoiceState, previous: VoiceState) => void
   openAsr?: () => void
   closeAsr?: () => void
   /** Submit a confirmed transcript. The machine never inspects the text. */
-  submit?: (text: string, meta: { source: 'voice'; confidence?: number }) => void
-  speak?: (text: string) => void
+  submit?: (text: string, meta: VoiceSubmitMeta) => void
+  speak?: (text: string) => boolean | void
   stopSpeak?: () => void
   onError?: (error: VoiceError) => void
 }
@@ -91,8 +101,15 @@ export type VoiceEffects = {
 export type VoiceTimerHandle = unknown
 
 export type VoiceMachineConfig = {
-  /** Hard ceiling on a single listening turn, as a deadlock backstop. */
+  /** Silence window before an empty turn fails or captured speech auto-submits. */
+  silenceMs?: number
+  /**
+   * Compatibility alias for `silenceMs`. It is ignored when `silenceMs` is set;
+   * the machine never creates a second listening timer.
+   */
   listenMaxMs?: number
+  /** Set false to retain the legacy edit-and-confirm transcript step. */
+  autoSubmit?: boolean
   /** Hard ceiling on a submit round trip. */
   submitMaxMs?: number
 }

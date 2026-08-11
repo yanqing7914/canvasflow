@@ -39,7 +39,13 @@ function harness(config?: VoiceMachineDeps['config']) {
     names: () => calls.map((call) => call.name),
     countOf: (name: string) => calls.filter((call) => call.name === name).length,
     lastArgs: (name: string) => calls.filter((call) => call.name === name).at(-1)?.args,
-    /** Fires every pending timer, newest first, like a run-to-completion flush. */
+    fireNextTimer: () => {
+      const next = timers.entries().next().value as [number, () => void] | undefined
+      if (!next) return
+      timers.delete(next[0])
+      next[1]()
+    },
+    /** Fires a snapshot of every pending timer in insertion order. */
     fireTimers: () => {
       const pending = [...timers.entries()]
       timers.clear()
@@ -51,7 +57,7 @@ function harness(config?: VoiceMachineDeps['config']) {
 
 describe('voice machine — happy path', () => {
   it('walks idle → listening → transcribing → submitting → speaking → idle', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     expect(h.machine.snapshot().state).toBe('idle')
 
     h.machine.press()
@@ -87,7 +93,7 @@ describe('voice machine — happy path', () => {
   })
 
   it('returns straight to idle when there is nothing to speak', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('MU5102')
     h.machine.submit()
@@ -97,7 +103,7 @@ describe('voice machine — happy path', () => {
   })
 
   it('leaves no timers pending after a completed turn', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('MU5102')
     h.machine.submit()
@@ -106,9 +112,146 @@ describe('voice machine — happy path', () => {
   })
 })
 
+describe('voice machine — hands-free submission', () => {
+  it('reports no-speech after five seconds and never submits an empty turn', () => {
+    const scheduledMs: number[] = []
+    const calls: Call[] = []
+    let timer: (() => void) | undefined
+    const machine = createVoiceMachine({
+      setTimer: (fn, ms) => { timer = fn; scheduledMs.push(ms); return scheduledMs.length },
+      clearTimer: () => { timer = undefined },
+      effects: {
+        closeAsr: () => { calls.push({ name: 'closeAsr', args: [] }) },
+        submit: (...args) => { calls.push({ name: 'submit', args }) },
+      },
+    })
+    machine.press()
+    expect(scheduledMs).toEqual([5_000])
+    expect(timer).toBeTypeOf('function')
+
+    timer?.()
+    const error = machine.snapshot().error
+
+    expect(error?.kind).toBe('no-speech')
+    expect(calls.filter(({ name }) => name === 'submit')).toHaveLength(0)
+    expect(calls.filter(({ name }) => name === 'closeAsr')).toHaveLength(1)
+  })
+
+  it('keeps an interim visible and auto-submits it after silence', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrPartial('查天气')
+    expect(h.machine.snapshot().display).toBe('查天气')
+
+    h.fireNextTimer()
+
+    expect(h.machine.snapshot().state).toBe('submitting')
+    expect(h.lastArgs('submit')).toEqual([
+      '查天气',
+      { source: 'voice', confidence: undefined },
+    ])
+  })
+
+  it('keeps a final transcript listening and submits without manual confirmation', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrFinal('跑快点', 0.87)
+
+    expect(h.machine.snapshot().state).toBe('listening')
+    expect(h.machine.snapshot().display).toBe('跑快点')
+    h.fireNextTimer()
+
+    expect(h.lastArgs('submit')).toEqual([
+      '跑快点',
+      { source: 'voice', confidence: 0.87 },
+    ])
+  })
+
+  it('resets the single silence timer after every new speech result', () => {
+    const h = harness({ silenceMs: 5_000, listenMaxMs: 1 })
+    h.machine.press()
+    h.machine.asrPartial('查')
+    h.machine.asrPartial('查天气')
+    expect(h.pendingTimerCount()).toBe(1)
+
+    h.fireNextTimer()
+
+    expect(h.lastArgs('submit')?.[0]).toBe('查天气')
+  })
+
+  it('accumulates final segments until silence', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrFinal('查天气', 0.6)
+    h.machine.asrFinal('再看日历', 0.9)
+    h.fireNextTimer()
+
+    expect(h.lastArgs('submit')).toEqual([
+      '查天气 再看日历',
+      { source: 'voice', confidence: 0.9 },
+    ])
+  })
+
+  it('cancel clears captured speech and its timer without submitting', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrPartial('接到人了')
+    h.machine.cancel()
+    h.fireTimers()
+
+    expect(h.machine.snapshot()).toMatchObject({ state: 'idle', transcript: '', display: '' })
+    expect(h.countOf('submit')).toBe(0)
+    expect(h.pendingTimerCount()).toBe(0)
+  })
+
+  it('waits for silence after an unexpected engine end with captured speech', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrFinal('查天气')
+    h.machine.asrEnd()
+
+    expect(h.machine.snapshot().state).toBe('listening')
+    expect(h.countOf('submit')).toBe(0)
+    expect(h.pendingTimerCount()).toBe(1)
+
+    h.fireNextTimer()
+    expect(h.lastArgs('submit')?.[0]).toBe('查天气')
+  })
+
+  it('keeps accepting speech after an unexpected engine end callback', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrFinal('查天气')
+    h.machine.asrEnd()
+    h.machine.asrFinal('再看日历')
+    h.fireNextTimer()
+
+    expect(h.lastArgs('submit')?.[0]).toBe('查天气 再看日历')
+  })
+
+  it('preserves trusted recognition provenance in submit metadata', () => {
+    const calls: Call[] = []
+    let timer: (() => void) | undefined
+    const machine = createVoiceMachine({
+      recognitionSource: 'fixture',
+      setTimer: (fn) => { timer = fn; return 1 },
+      clearTimer: () => { timer = undefined },
+      effects: { submit: (...args) => { calls.push({ name: 'submit', args }) } },
+    })
+    machine.press()
+    machine.asrFinal('开始回家', 0.95)
+    timer?.()
+
+    expect(calls[0]?.args).toEqual([
+      '开始回家',
+      { source: 'voice', confidence: 0.95, recognitionSource: 'fixture' },
+    ])
+  })
+})
+
 describe('voice machine — transcript editing', () => {
   it('submits the edited text and drops the engine confidence', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('MU 5102', 0.4)
     h.machine.edit('MU5102')
@@ -119,7 +262,7 @@ describe('voice machine — transcript editing', () => {
   })
 
   it('accepts an inline override at submit time', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('MU 5102')
     h.machine.submit('MU5102')
@@ -127,7 +270,7 @@ describe('voice machine — transcript editing', () => {
   })
 
   it('ignores a blank submit instead of sending empty text', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('MU5102')
     h.machine.submit('   ')
@@ -144,7 +287,7 @@ describe('voice machine — transcript editing', () => {
 
 describe('voice machine — barge-in and cancel', () => {
   it('cuts playback and starts a new turn on press while speaking', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.machine.submit()
@@ -159,7 +302,7 @@ describe('voice machine — barge-in and cancel', () => {
   })
 
   it('ignores a stale speakEnd arriving after a barge-in', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.machine.submit()
@@ -171,7 +314,7 @@ describe('voice machine — barge-in and cancel', () => {
   })
 
   it('ends the listening turn on a second press, keeping what was heard', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrPartial('先检查是否需要补能')
     h.machine.press()
@@ -189,7 +332,7 @@ describe('voice machine — barge-in and cancel', () => {
   })
 
   it('cancel drops the transcript and returns to idle', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.machine.cancel()
@@ -208,7 +351,7 @@ describe('voice machine — barge-in and cancel', () => {
   })
 
   it('cancel while speaking stops playback', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.machine.submit()
@@ -219,7 +362,7 @@ describe('voice machine — barge-in and cancel', () => {
   })
 
   it('press during submitting is ignored so a request cannot be raced', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.machine.submit()
@@ -278,7 +421,7 @@ describe('voice machine — errors', () => {
   })
 
   it('promotes a partial to a transcript when the engine closes early', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrPartial('先检查是否需要补能')
     h.machine.asrEnd()
@@ -294,7 +437,7 @@ describe('voice machine — errors', () => {
   })
 
   it('reports a speak failure without losing the loop', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.machine.submit()
@@ -304,20 +447,35 @@ describe('voice machine — errors', () => {
     h.machine.press()
     expect(h.machine.snapshot().state).toBe('listening')
   })
+
+  it('does not remain speaking when no TTS effect is installed', () => {
+    const errors: string[] = []
+    const machine = createVoiceMachine({
+      config: { autoSubmit: false },
+      effects: { onError: (error) => { errors.push(error.kind) } },
+    })
+    machine.press()
+    machine.asrFinal('查天气')
+    machine.submit()
+    machine.submitDone('好的。')
+
+    expect(machine.snapshot().state).toBe('idle')
+    expect(errors).toEqual(['speak'])
+  })
 })
 
 describe('voice machine — timeout backstops', () => {
-  it('times out a listening turn that never finalizes', () => {
+  it('reports no-speech when a listening turn stays empty for the configured window', () => {
     const h = harness({ listenMaxMs: 100 })
     h.machine.press()
     h.fireTimers()
     expect(h.machine.snapshot().state).toBe('error')
-    expect(h.machine.snapshot().error?.kind).toBe('timeout')
+    expect(h.machine.snapshot().error?.kind).toBe('no-speech')
     expect(h.countOf('closeAsr')).toBe(1)
   })
 
   it('times out a submit that never resolves', () => {
-    const h = harness({ submitMaxMs: 100 })
+    const h = harness({ autoSubmit: false, submitMaxMs: 100 })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.machine.submit()
@@ -327,7 +485,7 @@ describe('voice machine — timeout backstops', () => {
   })
 
   it('clears the listen timer once the turn finalizes', () => {
-    const h = harness({ listenMaxMs: 100 })
+    const h = harness({ autoSubmit: false, listenMaxMs: 100 })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.fireTimers()
@@ -335,7 +493,7 @@ describe('voice machine — timeout backstops', () => {
   })
 
   it('ignores a late submitDone after a submit timeout', () => {
-    const h = harness({ submitMaxMs: 100 })
+    const h = harness({ autoSubmit: false, submitMaxMs: 100 })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.machine.submit()
@@ -348,7 +506,7 @@ describe('voice machine — timeout backstops', () => {
 
 describe('voice machine — stale engine callbacks', () => {
   it('ignores partial and final results once the turn ended', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('MU5102')
     h.machine.asrPartial('迟到的分片')
@@ -357,7 +515,7 @@ describe('voice machine — stale engine callbacks', () => {
   })
 
   it('ignores an engine error raised after the turn ended', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('MU5102')
     h.machine.asrError('recognition')
@@ -375,7 +533,7 @@ describe('voice machine — dispose', () => {
   })
 
   it('stops playback when disposed while speaking', () => {
-    const h = harness()
+    const h = harness({ autoSubmit: false })
     h.machine.press()
     h.machine.asrFinal('去机场接妈妈')
     h.machine.submit()

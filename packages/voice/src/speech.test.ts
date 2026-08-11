@@ -68,7 +68,7 @@ describe('speech controller — recognition lifecycle', () => {
     const { controller, engine } = setup()
     expect(controller.startListening()).toBe(true)
     expect(engine().lang).toBe('zh-CN')
-    expect(engine().continuous).toBe(false)
+    expect(engine().continuous).toBe(true)
     expect(engine().interimResults).toBe(true)
     expect(engine().started).toBe(1)
   })
