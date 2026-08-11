@@ -476,10 +476,16 @@ export default function App({
       return response.task.phase === 'collecting-information' && response.task.flight === undefined
     }
     if (sample.id === 'check-weather') {
+      // The recording says 到的时候 — the ARRIVAL-time weather. Once the car is
+      // waiting at the airport or heading home, the gateway reads the same
+      // words as current/home weather, so the labelled sample would drive a
+      // different scenario than it presents. Enabled only while the arrival
+      // is still ahead.
       return response.task.flight !== undefined
-        && response.task.phase !== 'collecting-information'
-        && response.task.phase !== 'completed'
-        && response.task.phase !== 'cancelled'
+        && response.task.flight.status !== 'landed'
+        && response.task.flight.status !== 'cancelled'
+        && !response.task.passengers.confirmedOnboard
+        && (response.task.phase === 'preparing' || response.task.phase === 'driving-to-airport')
     }
     if (sample.id === 'start-navigation') {
       return hasStartNavigationCapability(spec, driving)

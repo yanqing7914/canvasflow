@@ -1792,6 +1792,30 @@ describe('demo integration', () => {
       expect(screen.getByRole('button', { name: '语音回放：提醒带伞' })).toBeDisabled()
     })
 
+    it('disables the arrival-weather recording once the arrival is behind the trip', async () => {
+      const user = userEvent.setup()
+      // The recording says 到的时候 — arrival-time weather. Waiting at the
+      // airport or heading home, the gateway reads the same words as
+      // current/home weather, so the labelled sample must not be offered.
+      const waitingTask: AirportPickupTaskState = {
+        ...createInitialTask(),
+        phase: 'waiting-for-passengers',
+        taskRevision: 5,
+        passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+        flight: { flightNumber: 'MU5102', trusted: true, status: 'landed', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue(apiResponse(waitingTask)),
+        event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('等待家人')
+
+      await openControls(user)
+      expect(screen.getByRole('button', { name: '查询到达天气' })).toBeDisabled()
+    })
+
     it('keeps a fixture disabled when its visible card has no matching executable action', async () => {
       const user = userEvent.setup()
       const initial = createInitialTask()
