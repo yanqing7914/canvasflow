@@ -435,7 +435,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   const freshTaskResponse = page.waitForResponse((response) => (
     response.request().method() === 'POST' && new URL(response.url()).pathname === '/v1/tasks'
   ))
-  await sendText(page, '再去机场接人')
+  await sendText(page, '我现在要去机场接人')
   const freshTask = await freshTaskResponse
   expect(freshTask.ok()).toBe(true)
   const freshPayload = await freshTask.json()
@@ -1621,21 +1621,18 @@ test('replays a fixture utterance deterministically from the demo drawer', async
     }))
   ))
   expect(fallbackButtonWidths.every(({ button, cell }) => Math.abs(button - cell) < 1)).toBe(true)
-  await page.getByRole('button', { name: '接机指令' }).click()
-  await expect(drawer).toBeHidden()
-
-  // Nothing auto-submits: the words wait in the field until 发送 confirms them.
-  // The recording may genuinely play first, so allow it time to finish.
-  const input = page.getByLabel('任务输入')
-  await expect(input).toHaveValue('我现在要去机场接妈妈和豆豆', { timeout: 15_000 })
-
   const createResponsePromise = page.waitForResponse((response) => (
     response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/v1/tasks'
   ))
-  await page.getByRole('button', { name: '发送' }).click()
+  await page.getByRole('button', { name: '接机指令' }).click()
+  await expect(drawer).toBeHidden()
+
+  // Production replay follows the hands-free voice path, so its canonical
+  // transcript is accepted without exposing a separate text confirmation.
   const created = await (await createResponsePromise).json()
   expect(created.task.phase).toBe('collecting-information')
+  await expect(page.getByLabel('任务输入')).toHaveCount(0)
   await readControls(page, 'collecting-information')
 })
 
