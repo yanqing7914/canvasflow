@@ -62,15 +62,19 @@ async function readControls(page: Page, expected: string | RegExp) {
  * filling that one detaches mid-action.
  */
 async function composer(page: Page) {
-  if (await page.getByLabel('任务输入').count() === 0) {
-    const toggle = page.getByRole('button', { name: '改用文字输入' })
+  const visibleInput = page.locator('input[aria-label="任务输入"]:visible').last()
+  if (await visibleInput.count() === 0) {
+    const toggle = page.getByRole('button', { name: '改用文字输入', exact: true })
+    await expect(toggle).toBeVisible()
     await expect(toggle).toBeEnabled()
     await toggle.click()
   }
   // Resolve and settle the field itself rather than the toggle: when voice is
   // unavailable the toggle is deliberately disabled forever, and a field left from
   // the previous turn may still be disabled by a request in flight.
-  const input = page.getByLabel('任务输入')
+  const input = page.locator('input[aria-label="任务输入"]:visible').last()
+  await expect(input).toBeAttached()
+  await expect(input).toBeVisible()
   await expect(input).toBeEnabled()
   return input
 }
@@ -83,12 +87,24 @@ async function composer(page: Page) {
 async function sendText(page: Page, value = legacyTaskText) {
   const input = await composer(page)
   await input.fill(value)
-  await page.getByRole('button', { name: '发送' }).click()
+  const composerForm = input.locator('xpath=ancestor::form[1]')
+  const submit = composerForm.getByRole('button', { name: '发送', exact: true })
+  await expect(submit).toBeVisible()
+  await expect(submit).toBeEnabled()
+  const responsePromise = page.waitForResponse((response) => {
+    if (response.request().method() !== 'POST') return false
+    const path = new URL(response.url()).pathname
+    return path === '/v1/tasks' || /\/v1\/tasks\/[^/]+\/(events|actions)$/u.test(path)
+  })
+  await submit.click()
+  await responsePromise
   // Either the composer left (the send was accepted and text was the only reason
   // it was open) or it is back to editable — never mid-flight.
   await expect(async () => {
-    const field = page.getByLabel('任务输入')
+    const field = page.locator('input[aria-label="任务输入"]:visible').last()
     if (await field.count() === 0) return
+    await expect(field).toBeAttached()
+    await expect(field).toBeVisible()
     await expect(field).toBeEnabled()
   }).toPass({ timeout: 10_000 })
 }
