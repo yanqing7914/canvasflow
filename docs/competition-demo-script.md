@@ -135,6 +135,42 @@ the endpoint above (about 3 seconds per turn):
    confidence — the turn then falls back to deterministic behavior, so the
    demo cannot be stranded by the model.
 
+## Optional: Calendar Conflict Beat
+
+Requires the calendar-conflict advisory (PR #119). This is the second
+condition-raised prompt of the trip — rehearse it as the answer to "isn't
+this all a fixed script?": the same delayed-flight condition that reshapes
+the ETA is what raises the card, not a timer.
+
+The main-flow timeline never delays MU5102, so this beat is driven by one
+external flight event through the same Agent API every button uses. Read
+任务 ID and 任务版本 off the demo drawer, then:
+
+```bash
+curl -s http://127.0.0.1:4173/v1/tasks/<taskId>/events \
+  -H 'content-type: application/json' \
+  -d '{"clientRequestId":"demo-delay-1","expectedTaskRevision":<taskRevision>,"event":{"eventId":"demo-delay-1","type":"flight.updated","flight":{"flightNumber":"MU5102","status":"delayed","scheduledArrival":"2026-07-22T20:30:00+08:00","estimatedArrival":"2026-07-22T21:10:00+08:00","terminal":"T2"},"timestamp":"<now, ISO with offset>"}}'
+```
+
+### Script
+
+1. While driving, fire the delayed update. The flight brief flips to 延误,
+   and the conflict card rises beside it on its own: `21:30有「豆豆的睡前故事」
+   按当前接人计划，预计迟到约 15 分钟` — the Agent recomputed the projected
+   return (landing + handoff + return drive) against the calendar it already
+   read, and quantified the miss.
+2. Say the boundary out loud: the delay is exactly what turned a return that
+   fit into one that does not — the on-time estimate cleared the story by
+   three minutes and raised nothing.
+3. Press `查看安排` (or speak `查看日程`): the schedule card answers from the
+   read the trip already holds — no second tool call — and the story's row
+   carries the same amber 可能迟到 judgement the strip shows. One number,
+   three surfaces, no contradiction.
+4. Press `保持当前计划` (or speak it, or `暂不处理`). The advisory retires for
+   good; a later delay never re-prompts. If the rain advisory is also active,
+   it holds the driving rail (it has a send behind it) and one 暂不处理
+   retires both.
+
 ## Recording Notes
 
 - Capture one uninterrupted happy-path recording and a short fallback clip.
