@@ -16,6 +16,20 @@ export type StoredTask = {
   ui: UISpec
   /** Model provenance for the operation that produced this persisted snapshot. */
   modelUsed?: string
+  /**
+   * A line this snapshot wants spoken without having been asked anything.
+   *
+   * Written by the turn that earned it and, because it is set through
+   * `#publish`, absent from every snapshot after — so the car volunteers a fact
+   * once rather than restating it on each event that follows. That is why it
+   * cannot be derived at response time instead: an advisory that is still active
+   * looks identical to one that has just been raised, and only the raising turn
+   * knows which it is.
+   *
+   * Distinct from the `assistant` on `StoredEventResult` below, which is a
+   * replay record for answers, not a property of the snapshot.
+   */
+  announcement?: { text: string; shouldSpeak: boolean }
   toolResults?: ReadToolResults
   /** Provider receipts stay private to the Agent and never enter TaskState or UISpec. */
   effectReceipts?: {

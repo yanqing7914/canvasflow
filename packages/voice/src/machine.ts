@@ -34,10 +34,16 @@ export type VoiceMachineDeps = {
   clearTimer?: (handle: unknown) => void
 }
 
-type TimerName = 'listen' | 'submit'
+type TimerName = 'listen' | 'submit' | 'speak'
 
 const DEFAULT_LISTEN_MAX_MS = 12_000
 const DEFAULT_SUBMIT_MAX_MS = 15_000
+/**
+ * Generous enough that it never cuts a line short — the longest copy the Agent
+ * authors is a sentence or two — and short enough that a mute engine does not
+ * strand the loop for the rest of the drive.
+ */
+const DEFAULT_SPEAK_MAX_MS = 20_000
 
 /**
  * The voice loop as a pure, dependency-injected state machine: no DOM, no
@@ -52,6 +58,7 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
   const effects = deps.effects ?? {}
   const listenMaxMs = deps.config?.listenMaxMs ?? DEFAULT_LISTEN_MAX_MS
   const submitMaxMs = deps.config?.submitMaxMs ?? DEFAULT_SUBMIT_MAX_MS
+  const speakMaxMs = deps.config?.speakMaxMs ?? DEFAULT_SPEAK_MAX_MS
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
   const clearTimer = deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as never))
 
@@ -61,6 +68,14 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
   let confidence: number | undefined
   let error: VoiceError | undefined
   let speaking: string | undefined
+  /**
+   * Lines waiting behind the one being spoken. The queue lives here rather than
+   * in the speech controller so `speaking` always names the line that is
+   * actually audible: the machine hands the controller exactly one utterance and
+   * does not hand it the next until that one ends. A controller-side queue would
+   * play the right audio while the live region read the wrong line.
+   */
+  let pending: string[] = []
   const timers = new Map<TimerName, unknown>()
 
   function setNamedTimer(name: TimerName, fn: () => void, ms: number) {
@@ -92,6 +107,7 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     error = voiceError(kind)
     interim = ''
     speaking = undefined
+    pending = []
     transition('error')
     effects.onError?.(error)
   }
@@ -103,6 +119,7 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     interim = ''
     confidence = undefined
     speaking = undefined
+    pending = []
     transition('listening')
     effects.openAsr?.()
     setNamedTimer('listen', () => fail('timeout'), listenMaxMs)
@@ -112,7 +129,43 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
     clearAllTimers()
     interim = ''
     speaking = undefined
+    pending = []
     transition('idle')
+  }
+
+  /** Starts playback of one line. The caller owns the state it is starting from. */
+  function beginSpeaking(text: string) {
+    speaking = text
+    transition('speaking')
+    effects.speak?.(text)
+    // A synthesis engine can accept an utterance and then report nothing at all:
+    // a browser with no installed voices leaves `speaking` true and fires neither
+    // `end` nor `error`. Without this the loop would never leave `speaking`, the
+    // live region would read 正在播报 for the rest of the drive, and every later
+    // announcement would queue behind a line that already finished being silent.
+    setNamedTimer('speak', () => {
+      if (state !== 'speaking') return
+      // Silence the engine before moving on, in case it is merely slow rather
+      // than mute and would otherwise talk over the next line.
+      effects.stopSpeak?.()
+      finishSpeaking()
+    }, speakMaxMs)
+  }
+
+  /**
+   * Ends the current utterance and takes the next queued line, if any. Reached
+   * both when the engine reports the end and when the watchdog gives up on it:
+   * an inaudible line is still a line that is over, and the content it carried is
+   * on screen regardless, so this is deliberately not an error path.
+   */
+  function finishSpeaking() {
+    clearNamedTimer('speak')
+    const next = pending.shift()
+    if (next !== undefined) {
+      beginSpeaking(next)
+      return
+    }
+    goIdle()
   }
 
   return {
@@ -232,18 +285,45 @@ export function createVoiceMachine(deps: VoiceMachineDeps = {}) {
       transcript = ''
       confidence = undefined
       if (speakText && !isBlankTranscript(speakText)) {
-        speaking = speakText
-        transition('speaking')
-        effects.speak?.(speakText)
+        beginSpeaking(speakText)
         return
       }
       goIdle()
     },
 
+    /**
+     * The Agent speaking on its own account — a turn the driver did not open.
+     * Only `idle` and `speaking` accept it, and every refusal is deliberate:
+     *
+     * - `listening` — playback would go straight back into the open microphone.
+     * - `transcribing` — the driver is reading the transcript to confirm it, and
+     *   talking over that is talking over the thing being checked.
+     * - `submitting` — the reply to that turn arrives through `submitDone`, which
+     *   owns the playback. This is also what keeps a client that announces every
+     *   response from speaking a voice turn's reply twice.
+     * - `error` — starting playback would clear the error, and the error is what
+     *   holds the text fallback open. A line is not worth costing the driver the
+     *   only way left to answer.
+     *
+     * A refusal is silent: the line is on screen as a card either way, and voice
+     * is never the only way the cabin says something.
+     */
+    announce(text: string) {
+      if (isBlankTranscript(text)) return
+      if (state === 'speaking') {
+        // Queued rather than dropped: an advisory that arrives while the car is
+        // finishing a sentence is still worth hearing a moment later.
+        pending.push(text)
+        return
+      }
+      if (state !== 'idle') return
+      beginSpeaking(text)
+    },
+
     /** Playback finished on its own. */
     speakEnd() {
       if (state !== 'speaking') return
-      goIdle()
+      finishSpeaking()
     },
 
     speakError() {

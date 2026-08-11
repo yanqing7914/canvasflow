@@ -153,6 +153,16 @@ export function useVoice(options: UseVoiceOptions = {}) {
   const reset = useCallback(() => { act((machine) => machine.reset()) }, [act])
   const edit = useCallback((text: string) => { act((machine) => machine.edit(text)) }, [act])
   const submit = useCallback((text?: string) => { act((machine) => machine.submit(text)) }, [act])
+  /**
+   * Play a line the driver did not ask for. Safe to call on every response: the
+   * machine refuses anything that would talk over a turn in progress, so a
+   * caller does not have to know which entry point produced the response. A
+   * blank line and an unavailable voice are both no-ops.
+   */
+  const announce = useCallback((text?: string) => {
+    if (!text) return
+    act((machine) => machine.announce(text))
+  }, [act])
 
   /**
    * The error shown when voice is unavailable. Derived rather than stored so the
@@ -179,5 +189,6 @@ export function useVoice(options: UseVoiceOptions = {}) {
     reset,
     edit,
     submit,
+    announce,
   } as const
 }

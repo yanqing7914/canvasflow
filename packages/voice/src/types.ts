@@ -95,4 +95,11 @@ export type VoiceMachineConfig = {
   listenMaxMs?: number
   /** Hard ceiling on a submit round trip. */
   submitMaxMs?: number
+  /**
+   * Hard ceiling on one utterance. A synthesis engine that accepts `speak()` and
+   * then reports neither `end` nor `error` is a real configuration, not a
+   * hypothetical — a headless browser with no installed voices behaves exactly
+   * that way — and without this the loop would sit in `speaking` forever.
+   */
+  speakMaxMs?: number
 }

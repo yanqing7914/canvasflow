@@ -204,6 +204,14 @@ export default function App({
     try {
       const next = await operation()
       setResponse(next)
+      // Every path that reaches the Agent comes through here, so this is the one
+      // place the cabin has to speak from — an advisory raised by a timeline step
+      // is as audible as an answer to a question, and neither entry point has to
+      // know it. Voice turns are not spoken twice: when this resolves the machine
+      // is still in `submitting` (its `submitDone` waits on `onTranscript`, which
+      // waits on this call), and `announce` refuses that state, leaving playback
+      // to `submitDone`. That ordering is load-bearing, not incidental.
+      voice.announce(spokenReply(next))
       return next
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : '请求失败')
@@ -691,6 +699,15 @@ export default function App({
               <span className="brand-separator" aria-hidden="true">·</span>
               <span className="trip-brief__phase" data-phase-identity>{phaseIdentity}</span>
             </a>
+            {/* Rendered unconditionally so the region exists before the first
+                announcement, and inside the header because the frame is a fixed
+                680px column with no vertical slack: as its own row this line cost
+                24px that the journey content had to give up, and once the Agent
+                began speaking on ordinary turns that pushed the brief past the
+                fold. The header reserves 68px whether or not this has text and has
+                well over a thousand unused pixels of width at the demo resolution,
+                so here it costs nothing and can never move the content below it. */}
+            <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
             <div className="header-actions">
               <button
                 className={`mic-button mic-${micState}`}
@@ -734,9 +751,6 @@ export default function App({
               </button>
             </div>
           </header>
-
-          {/* Rendered unconditionally so the region exists before the first announcement. */}
-          <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
 
           {/* Provenance is a task-level fact: the Agent persists the model ID with
               the task snapshot once a validated model plan is applied, so this line

@@ -57,6 +57,23 @@ from — which is how it entered the repository without review in the first plac
 - The microphone runs a real voice turn: press to listen, review the recognised
   text in an editable field, send, then hear a short spoken acknowledgement.
   Pressing the microphone during playback barges in and starts a new turn.
+- The Agent may also speak first, on a turn the driver never opened — an
+  advisory raised by a trip event is as audible as an answer to a question.
+  Whether a line is played is decided by the Agent's `assistant.shouldSpeak`,
+  never by which entry point produced the response, so a turn typed on the
+  keyboard is spoken on exactly the same terms as one that was spoken.
+- Speaking first never interrupts the driver. A line that arrives while the
+  microphone is open, while a transcript is waiting to be confirmed, or while a
+  voice failure is holding the text field open is dropped in silence rather than
+  played, and it never replaces the card: the advisory renders either way, so
+  refusing to speak costs presentation and never information.
+- A line that cannot be heard still ends. Some browsers accept an utterance with
+  no voice installed and then report neither completion nor failure, so playback
+  carries its own deadline: the cabin stops reporting that it is speaking, any
+  queued line follows, and the microphone is free again. This is not treated as a
+  voice failure — it opens no text field and shows no error, because what was
+  inaudible was a line the driver never asked for and its content is on screen
+  regardless.
 - The voice core produces a transcript and nothing more. Task interpretation
   belongs at the Agent boundary, and a transcript goes there unread: the browser
   sends the words and a `source` marker, never its own reading of them. A

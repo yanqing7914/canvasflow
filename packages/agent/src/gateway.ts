@@ -1096,6 +1096,19 @@ export class AgentGateway {
         // A weather provider failure must never take down the flight update.
       }
     }
+    // The line that goes with the card. Authored at the raise site rather than
+    // derived in `#response`, because only this site knows the advisory went up
+    // on THIS turn: an advisory standing for three events looks identical in the
+    // snapshot, so deriving it would replay the rain on every `vehicle.moving`
+    // that follows. Same wording as the spoken answer to 「看看天气」 — one
+    // weather voice, and the closing clause is the advisory card's own copy, so
+    // what the driver hears and what they read cannot drift apart.
+    const announcement = advisoryWeather
+      ? {
+          text: weatherSpokenSummary(advisoryWeather.data, true, false),
+          shouldSpeak: requestContext?.clientCapabilities.supportsTts ?? true,
+        }
+      : undefined
     let toolResults = advisoryWeather
       ? { ...current.toolResults, 'weather.advisory': advisoryWeather }
       : current.toolResults
@@ -1318,7 +1331,10 @@ export class AgentGateway {
       this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: proposalEffects })
       return this.#response(request.clientRequestId, stored, proposalEffects, performance.now() - startedAt)
     }
-    const stored = this.#store.save(this.#publish(next, toolResults, requestContext, receiptsAfterTerminalCleanup))
+    // The only publish the advisory can reach: it raises on `flight.updated`, and
+    // every earlier return belongs to a different event type or to a failure path
+    // that keeps the previous snapshot.
+    const stored = this.#store.save(this.#publish(next, toolResults, requestContext, receiptsAfterTerminalCleanup, undefined, announcement))
     const effectRecords = effects.map((effect, index) => ({ ...effect, effectId: `${request.event.eventId}:${index}` }))
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: effectRecords })
     return this.#response(
@@ -2031,6 +2047,12 @@ export class AgentGateway {
      * the snapshot — neither answer changes the task — so the asking turn says so.
      */
     queryAnswer?: 'departure' | 'calendar',
+    /**
+     * What this turn wants said out loud without having been asked. Passed in
+     * for the same reason as `queryAnswer`: the snapshot cannot tell a fact that
+     * has just become true from one that has been true for three turns.
+     */
+    announcement?: StoredTask['announcement'],
   ): StoredTask {
     // A terminal transition may defer a parked-only cabin cleanup. Keep only
     // that private receipt so a later parked event can safely finish it.
@@ -2096,6 +2118,7 @@ export class AgentGateway {
       task: { ...task, uiRevision: publishedUi.uiRevision },
       ui: publishedUi,
       ...(this.#modelUsed ? { modelUsed: this.#modelUsed } : {}),
+      ...(announcement ? { announcement } : {}),
       toolResults,
       effectReceipts: privateReceipts,
       requestContext,
@@ -2978,7 +3001,11 @@ export class AgentGateway {
     durationMs: number,
     assistantOverride?: { text: string; shouldSpeak: boolean },
   ): AgentResponse {
-    const assistant = assistantOverride ?? (stored.task.phase === 'collecting-information'
+    // Three sources, most specific first. An override is this turn answering a
+    // question it was asked; an announcement is this turn volunteering something
+    // it was not; the prompt at the end is the standing ask of a trip that still
+    // needs facts, and only that last one is derived from the snapshot.
+    const assistant = assistantOverride ?? stored.announcement ?? (stored.task.phase === 'collecting-information'
       ? {
           text: stored.requestContext?.inputConfidence !== undefined && stored.requestContext.inputConfidence < 0.6
             ? '我不太确定刚才的内容，请确认或编辑后再试一次。'

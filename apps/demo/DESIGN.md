@@ -124,6 +124,14 @@ semantic page title may provide context but must not compete with it.
 - At 1920 x 720, the Trip Brief fills the useful viewport without looking
   unfinished and the page has no horizontal or vertical scroll. At 1024px and
   above, compress supporting facts before reducing the primary conclusion.
+- Transient status text lives inside a row that is already reserved, never in a
+  row of its own. The frame is a fixed height and the journey content takes
+  whatever is left, so a line that appears only in some states silently steals
+  space from the content in exactly those states — and a state that used to be
+  rare can stop being rare. The voice status is why this rule is written down: as
+  its own row it cost the content 24px, which was invisible until the Agent began
+  speaking on ordinary turns and pushed the brief past the fold. The header
+  reserves 68px whether or not it has status text, so it is the right host.
 - Below 680px, the brief becomes a natural single-column flow and vertical
   scrolling is allowed. The controls drawer becomes a bottom sheet. Horizontal
   overflow is never allowed.

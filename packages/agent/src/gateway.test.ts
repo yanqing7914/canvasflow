@@ -4622,6 +4622,16 @@ describe('AgentGateway', () => {
       expect(card.actions).toEqual(['send-umbrella-reminder', 'dismiss-advisory-weather'])
       expect(updated.ui.actions.map((action) => action.id)).toEqual(['send-umbrella-reminder', 'dismiss-advisory-weather'])
 
+      // Nobody asked anything on this turn, so the line is the car volunteering
+      // — and it names the airport, because 上海 has two and only one of them is
+      // raining on the family this trip is meeting.
+      expect(updated.assistant?.shouldSpeak).toBe(true)
+      expect(updated.assistant?.text).toContain('虹桥')
+      // Heard and read must not drift: the spoken line closes on the same clause
+      // the card advises with.
+      expect(updated.assistant?.text).toContain('建议家人在到达层室内等候')
+      expect(card.props.advisory).toContain('建议家人在到达层室内等候')
+
       // The advisory survives an unrelated recompose: it is persisted, not a
       // transient query answer.
       const moving = gateway.submitEvent(driving.task.taskId, {
@@ -4629,6 +4639,30 @@ describe('AgentGateway', () => {
         event: { eventId: 'advisory-moving', type: 'vehicle.moving', speedKph: 60, timestamp: '2026-07-22T19:11:00+08:00' },
       })
       expect(moving.ui.components.some((component) => component.id === 'weather-advisory')).toBe(true)
+      // The card stays; the line does not. An advisory that is still standing
+      // sounds exactly like one just raised, so speaking off the snapshot would
+      // repeat the rain on every event for the rest of the drive.
+      expect(moving.assistant).toBeUndefined()
+    })
+
+    it('stays silent about the rain for a client that cannot speak', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask({
+        ...createRequest('接妈妈和豆豆，航班 MU5102'),
+        clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: false, supportsTts: false },
+      })
+      const driving = gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'mute-advisory-start', expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation',
+        componentId: 'navigation-plan', idempotencyKey: 'mute-advisory-start',
+      })
+
+      const updated = gateway.submitEvent(driving.task.taskId, inAirUpdate(driving.task.taskRevision, 'mute-in-air'))
+
+      // The text still ships — a client without TTS may caption it — but the
+      // Agent has said not to play it, and the card carries the warning anyway.
+      expect(updated.assistant?.shouldSpeak).toBe(false)
+      expect(updated.ui.components.some((component) => component.id === 'weather-advisory')).toBe(true)
     })
 
     it('arms the umbrella reminder for confirmation and sends it only on accept', () => {

@@ -1683,4 +1683,116 @@ describe('demo integration', () => {
       expect(screen.getByRole('button', { name: '接机指令' })).toBeEnabled()
     })
   })
+
+  describe('the Agent speaking first', () => {
+    /** Fake engine callbacks reach React from outside its event system. */
+    const emit = (fn: () => void) => act(() => { fn() })
+
+    /** A create, then an en-route event whose response carries a spoken line. */
+    function volunteering(line: string, shouldSpeak = true) {
+      const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+      const event = vi.fn().mockImplementation(async (task: AirportPickupTaskState) => ({
+        ...apiResponse(task),
+        assistant: { text: line, shouldSpeak },
+      }))
+      return { create, event, action: vi.fn(), confirmation: vi.fn() }
+    }
+
+    /**
+     * Opens the keyboard and types the trip into being. With voice available the
+     * field is not on screen by default, and the point of these tests is what
+     * happens *after* a turn the driver typed rather than spoke.
+     */
+    async function createByTyping(user: ReturnType<typeof userEvent.setup>) {
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await screen.findByText('准备接机')
+    }
+
+    it('speaks an advisory the driver never asked for, without opening the keyboard', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const line = '到达时虹桥机场 T2 小雨 24 度，建议家人在到达层室内等候。'
+      const api = volunteering(line)
+      render(<App api={api} speech={speech.deps} />)
+
+      await createByTyping(user)
+      // The typed turn's own reply says nothing here, so nothing is playing yet.
+      expect(speech.synthesis.spoken).toHaveLength(0)
+
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
+      await waitFor(() => expect(api.event).toHaveBeenCalled())
+      await user.keyboard('{Escape}')
+
+      await waitFor(() => expect(speech.synthesis.spoken).toHaveLength(1))
+      expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent(line)
+      // Volunteering a fact is not a request for one: the driver is not being
+      // asked to type, so the field must not take the space to say so.
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    })
+
+    it('lets the driver cut in on an advisory with the microphone', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = volunteering('到达时虹桥机场 T2 小雨 24 度。')
+      render(<App api={api} speech={speech.deps} />)
+
+      await createByTyping(user)
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
+      await waitFor(() => expect(speech.synthesis.spoken).toHaveLength(1))
+      await user.keyboard('{Escape}')
+
+      // An unasked-for line is interruptible exactly like a reply is.
+      await user.click(screen.getByRole('button', { name: '打断语音播报并重新输入' }))
+
+      expect(speech.synthesis.cancelled).toBeGreaterThan(0)
+      expect(speech.engine().started).toBe(1)
+      emit(() => speech.engine().emit('知道了', true))
+      expect(screen.getByLabelText('任务输入')).toHaveValue('知道了')
+    })
+
+    it('says nothing when the Agent marked the line as not to be spoken', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = volunteering('到达时虹桥机场 T2 小雨 24 度。', false)
+      render(<App api={api} speech={speech.deps} />)
+
+      await createByTyping(user)
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
+      await waitFor(() => expect(api.event).toHaveBeenCalled())
+
+      // The Agent decides what to say; the client only decides whether to play
+      // it, and here it has been told not to.
+      expect(speech.synthesis.spoken).toHaveLength(0)
+    })
+
+    /**
+     * The frame is a fixed 680px column with no vertical slack, so the live region
+     * cannot be a row of its own: as one it took 24px from the journey content, and
+     * once the Agent began speaking on ordinary turns that pushed the brief past
+     * the fold at the demo resolution. The e2e `expectNoScroll` sweep is what
+     * measures the pixels; this pins the structural reason so a well-meaning move
+     * back out of the header fails here first, with the explanation attached.
+     */
+    it('keeps the spoken-status line inside the header, out of the content column', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const api = volunteering('到达时虹桥机场 T2 小雨 24 度。')
+      render(<App api={api} speech={speech.deps} />)
+
+      await createByTyping(user)
+      await openControls(user)
+      await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
+      await waitFor(() => expect(speech.synthesis.spoken).toHaveLength(1))
+
+      const status = screen.getByRole('status', { name: '语音状态' })
+      const header = document.querySelector('.trip-brief__header')
+      expect(header).not.toBeNull()
+      expect(header).toContainElement(status)
+      expect(document.querySelector('.trip-brief__content')).not.toContainElement(status)
+    })
+  })
 })

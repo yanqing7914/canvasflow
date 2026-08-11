@@ -365,6 +365,244 @@ describe('voice machine — stale engine callbacks', () => {
   })
 })
 
+describe('voice machine — proactive announcements', () => {
+  /** Drives the loop to a settled `error` state without touching internals. */
+  function failedTurn() {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrError('permission')
+    return h
+  }
+
+  it('speaks an announcement from idle without inventing a turn', () => {
+    const h = harness()
+
+    h.machine.announce('机场那边在下雨，记得给妈妈带把伞。')
+
+    const snapshot = h.machine.snapshot()
+    expect(snapshot.state).toBe('speaking')
+    expect(snapshot.speaking).toBe('机场那边在下雨，记得给妈妈带把伞。')
+    // Nothing was heard, so nothing is pending confirmation.
+    expect(snapshot.transcript).toBe('')
+    expect(snapshot.confidence).toBeUndefined()
+    expect(h.countOf('openAsr')).toBe(0)
+    expect(h.lastArgs('speak')).toEqual(['机场那边在下雨，记得给妈妈带把伞。'])
+
+    h.machine.speakEnd()
+    expect(h.machine.snapshot().state).toBe('idle')
+  })
+
+  it('can be barged in on, exactly like a reply', () => {
+    const h = harness()
+    h.machine.announce('机场那边在下雨。')
+
+    h.machine.press()
+
+    expect(h.countOf('stopSpeak')).toBe(1)
+    expect(h.machine.snapshot().state).toBe('listening')
+  })
+
+  it('queues behind the line already playing and reports the audible one', () => {
+    const h = harness()
+    h.machine.announce('第一句。')
+    h.machine.announce('第二句。')
+
+    // One utterance is handed over at a time, so `speaking` never names a line
+    // the driver cannot hear yet.
+    expect(h.countOf('speak')).toBe(1)
+    expect(h.machine.snapshot().speaking).toBe('第一句。')
+
+    h.machine.speakEnd()
+    expect(h.countOf('speak')).toBe(2)
+    const second = h.machine.snapshot()
+    expect(second.state).toBe('speaking')
+    expect(second.speaking).toBe('第二句。')
+
+    h.machine.speakEnd()
+    expect(h.machine.snapshot().state).toBe('idle')
+  })
+
+  it('drops a queued line when the driver barges in', () => {
+    const h = harness()
+    h.machine.announce('第一句。')
+    h.machine.announce('第二句。')
+
+    h.machine.press()
+    h.machine.cancel()
+
+    // The second line belonged to a moment the driver has moved past.
+    expect(h.countOf('speak')).toBe(1)
+    expect(h.machine.snapshot().state).toBe('idle')
+  })
+
+  it('refuses to speak over an open microphone', () => {
+    const h = harness()
+    h.machine.press()
+
+    h.machine.announce('机场那边在下雨。')
+
+    expect(h.countOf('speak')).toBe(0)
+    expect(h.machine.snapshot().state).toBe('listening')
+  })
+
+  it('refuses to speak over a transcript the driver is still checking', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrFinal('去机场接妈妈')
+
+    h.machine.announce('机场那边在下雨。')
+
+    expect(h.countOf('speak')).toBe(0)
+    const snapshot = h.machine.snapshot()
+    expect(snapshot.state).toBe('transcribing')
+    expect(snapshot.transcript).toBe('去机场接妈妈')
+  })
+
+  /**
+   * The guard that lets a client announce every response it receives. A voice
+   * turn's own reply arrives through `submitDone`, and if `announce` also fired
+   * on that response the driver would hear the same sentence twice.
+   */
+  it('refuses to speak while a voice turn is still in flight', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrFinal('去机场接妈妈')
+    h.machine.submit()
+
+    h.machine.announce('好的，请告诉我她们的航班号。')
+    expect(h.countOf('speak')).toBe(0)
+
+    h.machine.submitDone('好的，请告诉我她们的航班号。')
+    expect(h.countOf('speak')).toBe(1)
+  })
+
+  /**
+   * The error is what holds the text fallback open. Playing a line would clear
+   * it and take away the only way left to answer, which costs more than the
+   * line is worth — the same words are on screen as a card regardless.
+   */
+  it('leaves a standing error alone', () => {
+    const h = failedTurn()
+
+    h.machine.announce('机场那边在下雨。')
+
+    expect(h.countOf('speak')).toBe(0)
+    const snapshot = h.machine.snapshot()
+    expect(snapshot.state).toBe('error')
+    expect(snapshot.error?.kind).toBe('permission')
+  })
+
+  it('ignores a blank line', () => {
+    const h = harness()
+
+    h.machine.announce('   ')
+
+    expect(h.countOf('speak')).toBe(0)
+    expect(h.machine.snapshot().state).toBe('idle')
+  })
+})
+
+/**
+ * A synthesis engine that accepts an utterance and then reports neither `end` nor
+ * `error` is a real configuration: a browser with no installed voices leaves
+ * `speechSynthesis.speaking` true and never calls back. Without a backstop the
+ * loop would sit in `speaking` for the rest of the drive — the cabin would read
+ * 正在播报 forever, every later line would queue behind one that already finished
+ * being silent, and the microphone's only way back would be a manual barge-in.
+ */
+describe('voice machine — playback watchdog', () => {
+  it('gives up on an engine that never reports the end', () => {
+    const h = harness({ speakMaxMs: 20_000 })
+    h.machine.announce('机场那边在下雨。')
+    expect(h.machine.snapshot().state).toBe('speaking')
+
+    h.fireTimers()
+
+    // Silenced first in case the engine is slow rather than mute, then released:
+    // an inaudible line is still a line that is over.
+    expect(h.countOf('stopSpeak')).toBe(1)
+    expect(h.machine.snapshot().state).toBe('idle')
+    expect(h.machine.snapshot().speaking).toBeUndefined()
+  })
+
+  /**
+   * Not an error state, deliberately. `error` holds the text composer open and
+   * would tell the driver something went wrong with their turn, when what
+   * actually happened is that a line they never asked for was inaudible — and its
+   * content is on the screen as a card either way.
+   */
+  it('reports no error when it gives up', () => {
+    const h = harness()
+    h.machine.announce('机场那边在下雨。')
+
+    h.fireTimers()
+
+    expect(h.countOf('onError')).toBe(0)
+    expect(h.machine.snapshot().error).toBeUndefined()
+  })
+
+  it('takes the next queued line rather than dropping the rest', () => {
+    const h = harness()
+    h.machine.announce('第一句。')
+    h.machine.announce('第二句。')
+
+    h.fireTimers()
+
+    expect(h.countOf('speak')).toBe(2)
+    expect(h.machine.snapshot().speaking).toBe('第二句。')
+  })
+
+  it('arms a fresh deadline per line instead of one for the whole queue', () => {
+    const h = harness()
+    h.machine.announce('第一句。')
+    h.machine.announce('第二句。')
+
+    h.machine.speakEnd()
+
+    // The second line is playing on its own budget: were the timer left from the
+    // first, a long queue would be cut off partway through.
+    expect(h.pendingTimerCount()).toBe(1)
+    h.fireTimers()
+    expect(h.machine.snapshot().state).toBe('idle')
+  })
+
+  it('disarms once playback ends on its own', () => {
+    const h = harness()
+    h.machine.announce('机场那边在下雨。')
+
+    h.machine.speakEnd()
+
+    expect(h.machine.snapshot().state).toBe('idle')
+    // A stale deadline firing against a later turn would cut it short.
+    expect(h.pendingTimerCount()).toBe(0)
+  })
+
+  it('disarms when the driver barges in', () => {
+    const h = harness()
+    h.machine.announce('机场那边在下雨。')
+
+    h.machine.press()
+
+    expect(h.machine.snapshot().state).toBe('listening')
+    // Only the listening deadline is left; the playback one went with the line.
+    expect(h.pendingTimerCount()).toBe(1)
+    h.fireTimers()
+    expect(h.machine.snapshot().error?.kind).toBe('timeout')
+  })
+
+  it('covers a reply spoken after a voice turn, not just an announcement', () => {
+    const h = harness()
+    h.machine.press()
+    h.machine.asrFinal('去机场接妈妈')
+    h.machine.submit()
+    h.machine.submitDone('好的，请告诉我她们的航班号。')
+
+    h.fireTimers()
+
+    expect(h.machine.snapshot().state).toBe('idle')
+  })
+})
+
 describe('voice machine — dispose', () => {
   it('releases the microphone when disposed mid-turn', () => {
     const h = harness()
