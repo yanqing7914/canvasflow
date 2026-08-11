@@ -505,17 +505,15 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
   for (const viewport of viewports) {
     if (viewport) await page.setViewportSize(viewport)
     await page.goto('/')
-    const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
+    const mic = page.getByRole('button', { name: /启用小南语音唤醒|语音入口暂不可用/ })
     const keyboard = page.getByRole('button', { name: '改用文字输入' })
     const controls = page.getByRole('button', { name: '打开演示控制' })
     // Wait for the mounted surface before pressing a key: a Tab that arrives
     // pre-hydration lands on nothing and is not replayed.
     await expect(controls).toBeVisible()
 
-    // Tab order follows the brief's reading order: brand, then the header
-    // utilities. The keyboard is not in it yet because it is not on screen.
-    await page.keyboard.press('Tab')
-    await expect(page.getByRole('link', { name: /pilotflow/ })).toBeFocused()
+    // Idle has no clickable brand lockup; tab order begins with its compact
+    // microphone lamp, then the keyboard fallback and demo controls.
     await page.keyboard.press('Tab')
     // A disabled voice entry drops out of the tab order rather than trapping it.
     if (await mic.isEnabled()) {
