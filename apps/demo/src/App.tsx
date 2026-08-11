@@ -21,7 +21,6 @@ import {
   createSpeechController,
   isRecognitionSupported,
   isSecureContextOk,
-  normalizeTranscript,
 } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, AgentApiError, demoVehicleContext, isNightAt, type AgentEventInput } from './agent-client'
@@ -214,6 +213,15 @@ function navigationVoiceIntent(text: string): NavigationVoiceIntent {
   return 'other'
 }
 
+// ASR commonly adds punctuation or changes spacing around numbers. Use a
+// conservative echo fingerprint only for matching the current system utterance;
+// microphone matches are parked for explicit confirmation rather than dropped.
+function normalizeVoiceEcho(text: string): string {
+  return text
+    .toLocaleLowerCase()
+    .replace(/[\s。，、．,.!！?？…~～:：;；“”"'‘’()（）【】[\]{}]/gu, '')
+}
+
 /**
  * Why the composer is on screen. The composer is not a permanent input row: it
  * opens when the turn actually needs a keyboard, and the reason it opened is
@@ -300,6 +308,7 @@ export default function App({
   const navigationActiveRef = useRef(false)
   const navigationSnapshotRef = useRef<NavigationCommandSnapshot | undefined>(undefined)
   const speechCoordinatorRef = useRef<NavigationSpeechCoordinator<QueuedNavigationCommand> | null>(null)
+  const sendInputRef = useRef<(value: string, meta?: VoiceSubmitMeta) => Promise<InputOutcome>>(async () => ({ sent: false }))
   const systemUtteranceSequenceRef = useRef(0)
   const cockpitOperationSequenceRef = useRef(0)
   const arrivalEventIdsRef = useRef(new Map<NavigationLeg, string>())
@@ -613,6 +622,10 @@ export default function App({
     return outcome.speak
   }
 
+  // The navigation coordinator lives for the mounted App, while task/UI state
+  // changes every turn. Keep queued commands pointed at the current input path.
+  sendInputRef.current = sendInput
+
   // The next voice turn's engine. Arming a fixture sample makes exactly one
   // turn read from the recording instead of the microphone; the turn after
   // falls back to the real engine on its own.
@@ -642,10 +655,10 @@ export default function App({
         controller.stopSpeaking()
       },
       executeCommand: async (command) => {
-        const outcome = await sendInput(command.transcript, command.meta)
-        if (outcome.speak) {
+        const outcome = await sendInputRef.current(command.transcript, command.meta)
+        if (outcome.speak && speechCoordinatorRef.current === coordinator) {
           systemUtteranceSequenceRef.current += 1
-          speechCoordinatorRef.current?.enqueueSystemUtterance({
+          coordinator.enqueueSystemUtterance({
             id: `assistant-${systemUtteranceSequenceRef.current}`,
             text: outcome.speak,
           })
@@ -654,7 +667,7 @@ export default function App({
       filterRecognition: (command, context) => {
         if (command.meta.recognitionSource === 'system-tts') return false
         const activeText = context.activeUtterance?.text
-        return !activeText || normalizeTranscript(command.transcript) !== normalizeTranscript(activeText)
+        return !activeText || normalizeVoiceEcho(command.transcript) !== normalizeVoiceEcho(activeText)
       },
     })
     speechCoordinatorRef.current = coordinator
@@ -663,9 +676,8 @@ export default function App({
       controller.dispose()
       speechCoordinatorRef.current = null
     }
-  // The controller reads the current command implementation through refs and
+  // The controller reads the current command implementation through a ref and
   // the injected speech peripherals are fixed for one mounted App instance.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [speech])
 
   useEffect(() => {

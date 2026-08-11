@@ -1624,6 +1624,72 @@ describe('demo integration', () => {
       }
     })
 
+    it('uses the latest cockpit input path for navigation voice commands', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const task = {
+        ...createCockpitTask('voice-cockpit-task'), phase: 'outbound-driving',
+        pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+        flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-08-11T15:30:00+08:00', terminal: 'T2' },
+        navigation: { routeId: 'voice-cockpit-route', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'active' },
+        navigationSimulation: {
+          leg: 'outbound', routeId: 'voice-cockpit-route', distanceKm: 32,
+          initialBatteryPercent: 72, estimatedBatteryAtArrival: 58,
+          profiles: {
+            slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+            fast: { durationSeconds: 45, displaySpeedKph: 75 },
+          },
+        },
+      } as AirportPickupTaskState
+      const event = vi.fn().mockRejectedValue(new Error('天气服务暂时不可用'))
+      const api = { create: vi.fn().mockResolvedValue(apiResponse(task)), event, action: vi.fn(), confirmation: vi.fn() }
+      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} />)
+
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      expect(screen.getByLabelText('模拟导航地图')).toBeInTheDocument()
+      await waitFor(() => expect(speech.synthesis.spoken.length).toBeGreaterThan(0))
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('查天气', true, 0.9))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      expect(event).not.toHaveBeenCalled()
+      act(() => { speech.synthesis.spoken.at(-1)?.onend?.() })
+      await waitFor(() => expect(event).toHaveBeenCalledOnce())
+      expect(await screen.findByLabelText('操作未完成窗口')).toHaveTextContent('天气服务暂时不可用')
+    })
+
+    it('parks a punctuation-only match to the active navigation TTS for confirmation', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const task = {
+        ...createCockpitTask('voice-echo-task'), phase: 'outbound-driving',
+        pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+        navigation: { routeId: 'voice-echo-route', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'active' },
+        navigationSimulation: {
+          leg: 'outbound', routeId: 'voice-echo-route', distanceKm: 32,
+          initialBatteryPercent: 72, estimatedBatteryAtArrival: 58,
+          profiles: {
+            slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+            fast: { durationSeconds: 45, displaySpeedKph: 75 },
+          },
+        },
+      } as AirportPickupTaskState
+      const event = vi.fn()
+      const api = { create: vi.fn().mockResolvedValue(apiResponse(task)), event, action: vi.fn(), confirmation: vi.fn() }
+      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} />)
+
+      await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await waitFor(() => expect(speech.synthesis.spoken.length).toBeGreaterThan(0))
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('前方300米右转。', true, 0.88))
+      await user.click(screen.getByRole('button', { name: '发送' }))
+
+      expect(event).not.toHaveBeenCalled()
+      expect(screen.getByLabelText('任务输入')).toHaveValue('前方300米右转。')
+    })
+
     it('will not let the keyboard reach the previous turn while the microphone is capturing', async () => {
       const user = userEvent.setup()
       const speech = createFakeSpeech()
