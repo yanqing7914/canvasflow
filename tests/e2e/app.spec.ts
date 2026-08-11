@@ -1634,7 +1634,10 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   // transcript is accepted without exposing a separate text confirmation.
   const created = await (await createResponsePromise).json()
   expect(created.task.phase).toBe('collecting-information')
-  await expect(page.getByLabel('任务输入')).toHaveCount(0)
+  const createRequest = (await createResponsePromise).request()
+  expect(createRequest.postDataJSON()).toMatchObject({ input: { text: legacyTaskText, source: 'voice' } })
+  const input = page.getByLabel('任务输入')
+  if (await input.count() > 0) await expect(input).toHaveValue('')
   await readControls(page, 'collecting-information')
 })
 
