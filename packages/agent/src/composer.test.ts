@@ -70,6 +70,7 @@ describe('Agent UISpec composer', () => {
       expect.objectContaining({ label: 'MU5102 落地', time: reads.flight.estimatedArrival, kind: 'task', status: 'next' }),
       expect.objectContaining({ label: '预计到家', kind: 'task', status: 'upcoming' }),
       expect.objectContaining({ label: '豆豆的睡前故事', time: '2026-07-22T21:30:00+08:00', kind: 'calendar', status: 'upcoming' }),
+      expect.objectContaining({ label: '项目评审', time: '2026-07-22T21:40:00+08:00', kind: 'calendar', status: 'upcoming' }),
     ])
     // Next-day fixtures must never leak onto today's band.
     expect(strip.props.milestones.map((milestone) => milestone.label)).not.toContain('家庭早餐')
@@ -247,6 +248,7 @@ describe('Agent UISpec composer', () => {
     if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
     expect(card.props.events).toEqual([
       expect.objectContaining({ title: '豆豆的睡前故事', location: '家' }),
+      expect.objectContaining({ title: '项目评审', location: '线上' }),
     ])
     expect(card.props.emptyCopy).toBeUndefined()
   })
@@ -481,10 +483,11 @@ describe('Agent UISpec composer', () => {
     const strip = spec.components.find((component) => component.type === 'schedule-strip')
 
     if (strip?.type !== 'schedule-strip') throw new Error('expected a schedule-strip component')
-    // Home by 21:15 keeps 豆豆's 21:30 story quiet.
+    // Home by 21:15 keeps both evening entries quiet.
     expect(strip.props.milestones).toEqual([
       expect.objectContaining({ label: '到家', time: '2026-07-22T21:15:00+08:00', kind: 'task', status: 'next' }),
       expect.objectContaining({ label: '豆豆的睡前故事', kind: 'calendar', status: 'upcoming' }),
+      expect.objectContaining({ label: '项目评审', kind: 'calendar', status: 'upcoming' }),
     ])
     // The strip is auxiliary context: it trails the passenger status, never leads it.
     expect(spec.components[0]?.type).toBe('passenger-status')
