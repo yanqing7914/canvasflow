@@ -661,10 +661,14 @@ function ScheduleCard({ component }: { component: Extract<ComponentSpec, { type:
       ) : (
         <ol className="ui-schedule-card__list" aria-label="今日日程列表">
           {props.events.map((event) => (
-            <li className="ui-schedule-card__event" key={event.eventId}>
+            <li
+              className={`ui-schedule-card__event${event.atRisk ? ' ui-schedule-card__event--at-risk' : ''}`}
+              key={event.eventId}
+            >
               <time className="ui-schedule-card__time" dateTime={event.startAt}>{formatTime(event.startAt)}</time>
               <span className="ui-schedule-card__title">{event.title}</span>
               {event.location && <span className="ui-schedule-card__location">{event.location}</span>}
+              {event.atRisk && <span className="ui-schedule-card__risk">可能迟到</span>}
             </li>
           ))}
         </ol>

@@ -36,7 +36,7 @@ import {
 } from '@canvasflow/tools'
 import { applyEvent, createInitialTask } from './index'
 import { mergePassengers } from './passengers'
-import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departureAtIso, departurePlan, renderedArrivalRows, weatherConditionLabels, type ComposeContext } from './composer'
+import { applyRequestPresentation, clockLabel, composeAgentSpec, composeFallbackSpec, departureAtIso, departurePlan, firstCalendarConflict, projectedHomeArrivalMs, renderedArrivalRows, weatherConditionLabels, type ComposeContext } from './composer'
 import { planEffects } from './effects'
 import { EffectExecutor, type PolicyGate } from './effect-executor'
 import { Planner, planAirportPickup, type Plan, type PlannerInput } from './planner'
@@ -1099,6 +1099,49 @@ export class AgentGateway {
     let toolResults = advisoryWeather
       ? { ...current.toolResults, 'weather.advisory': advisoryWeather }
       : current.toolResults
+    // The one proactive calendar prompt, raised by the same kind of moment:
+    // a flight update en route moves the arrival, the projected return is
+    // recomputed off the reads the trip already holds (no new tool call), and
+    // the first missed event takes the rail. Delayed flights count where the
+    // weather advisory ignores them — a delay is exactly what turns a return
+    // that fit into one that does not. Raised once; dismissed it never
+    // returns, and the rain advisory outranks it on the rail (the composer
+    // orders that), so both can be live without fighting for the screen.
+    if (
+      request.event.type === 'flight.updated'
+      && (request.event.flight.status === 'in-air' || request.event.flight.status === 'delayed')
+      && next.phase === 'driving-to-airport'
+      && next.calendarAdvisory === undefined
+      && next.flight
+      && next !== current.task
+    ) {
+      const events = toolResults?.['calendar.list-upcoming']?.data.events
+      const route = toolResults?.['navigation.plan-route']?.data
+      const charging = toolResults?.['charging.recommend']?.data
+      if (events?.length && route) {
+        const projectedHomeMs = projectedHomeArrivalMs(
+          next.flight,
+          route,
+          charging ?? { recommended: false },
+        )
+        const conflict = projectedHomeMs === undefined
+          ? undefined
+          : firstCalendarConflict(events, projectedHomeMs)
+        if (conflict) {
+          next = {
+            ...next,
+            calendarAdvisory: {
+              status: 'active',
+              advisedAt: this.#now(),
+              eventId: conflict.event.eventId,
+              eventTitle: conflict.event.title,
+              eventStartAt: conflict.event.startAt,
+              lateByMinutes: conflict.lateByMinutes,
+            },
+          }
+        }
+      }
+    }
     const flightNumber = plan?.slotUpdates.flightNumber
     const parsedPassengers = plan?.slotUpdates.passengers
     try {
@@ -3043,8 +3086,14 @@ function withoutFlightDiscovery(task: AirportPickupTaskState): AirportPickupTask
  * field is indistinguishable from one that never fired.
  */
 function retireActiveAdvisories(task: AirportPickupTaskState): AirportPickupTaskState {
-  if (task.weatherAdvisory?.status !== 'active') return task
-  return { ...task, weatherAdvisory: { status: 'dismissed', advisedAt: task.weatherAdvisory.advisedAt } }
+  let retired = task
+  if (retired.weatherAdvisory?.status === 'active') {
+    retired = { ...retired, weatherAdvisory: { status: 'dismissed', advisedAt: retired.weatherAdvisory.advisedAt } }
+  }
+  if (retired.calendarAdvisory?.status === 'active') {
+    retired = { ...retired, calendarAdvisory: { ...retired.calendarAdvisory, status: 'dismissed' } }
+  }
+  return retired
 }
 
 /**
@@ -3056,7 +3105,7 @@ function retireActiveAdvisories(task: AirportPickupTaskState): AirportPickupTask
  * a second kind of advisory is two edits in one place rather than a search.
  */
 function hasActiveAdvisory(task: AirportPickupTaskState): boolean {
-  return task.weatherAdvisory?.status === 'active'
+  return task.weatherAdvisory?.status === 'active' || task.calendarAdvisory?.status === 'active'
 }
 
 /**
