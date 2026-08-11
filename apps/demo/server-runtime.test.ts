@@ -13,7 +13,9 @@ import {
   createConfiguredAgentRuntime,
   createE2eProviderFactory,
   CANVASFLOW_E2E,
+  CANVASFLOW_E2E_NOW,
   E2E_FAIL_AUTO_MESSAGE_SEND,
+  e2eClockFromEnvironment,
   serverHost,
   serverPort,
 } from './server-runtime'
@@ -68,6 +70,24 @@ describe('agent server runtime', () => {
   it('keeps the default provider factory when the E2E failure scenario is disabled', () => {
     expect(createE2eProviderFactory({})).toBeUndefined()
     expect(createE2eProviderFactory({ [E2E_FAIL_AUTO_MESSAGE_SEND]: '1' })).toBeUndefined()
+  })
+
+  it('only accepts a deterministic clock behind the explicit E2E gate', () => {
+    const configured = '2026-08-11T09:30:00+08:00'
+    expect(e2eClockFromEnvironment({ [CANVASFLOW_E2E_NOW]: configured })).toBeUndefined()
+    const clock = e2eClockFromEnvironment({
+      [CANVASFLOW_E2E]: '1',
+      [CANVASFLOW_E2E_NOW]: configured,
+    })
+    expect(clock?.now()).toBe(configured)
+    expect(clock?.nowMs()).toBe(Date.parse(configured))
+  })
+
+  it('rejects an invalid deterministic E2E timestamp', () => {
+    expect(() => e2eClockFromEnvironment({
+      [CANVASFLOW_E2E]: '1',
+      [CANVASFLOW_E2E_NOW]: 'not-a-date',
+    })).toThrow(`${CANVASFLOW_E2E_NOW} must be a valid ISO timestamp`)
   })
 
   it('fails only MU5103 auto-notify sends while allowing confirmed retries', () => {
