@@ -93,7 +93,11 @@ export function PersistentRouteMap({ sessionKey, routeKey, destination, progress
   useEffect(() => {
     if (!handle.current) return
     void handle.current.setRoute({ ...sketchRef.current, progress: progressRef.current }).then((replaced) => {
-      if (!replaced) setSource('sketch')
+      if (replaced) return
+      invalidateAMap({ rotate: true })
+      setRuntimeFailure(true)
+      setSource('sketch')
+      onRuntimeFailureRef.current?.()
     })
   }, [routeKey])
 

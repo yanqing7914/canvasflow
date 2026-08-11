@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { invalidateAMap, loadAMap, subscribeAMapLoader } from '../amap/loader'
+import { amapLoaderSnapshot, invalidateAMap, loadAMap, subscribeAMapLoader } from '../amap/loader'
 import { renderAMapPosition, type AMapPositionHandle } from '../amap/render'
 
 export const PEOPLES_SQUARE = { latitude: 31.2304, longitude: 121.4737 } as const
@@ -9,6 +9,7 @@ export function IdleMap({ retryNonce = 0, onRuntimeFailure }: { retryNonce?: num
   const handle = useRef<AMapPositionHandle | undefined>(undefined)
   const [source, setSource] = useState<'loading' | 'amap' | 'unavailable'>('loading')
   const [loadRevision, setLoadRevision] = useState(0)
+  const runtimeAttempts = useRef(0)
   const onRuntimeFailureRef = useRef(onRuntimeFailure)
   onRuntimeFailureRef.current = onRuntimeFailure
   useEffect(() => subscribeAMapLoader((snapshot) => {
@@ -27,11 +28,17 @@ export function IdleMap({ retryNonce = 0, onRuntimeFailure }: { retryNonce?: num
       }
       const rendered = renderAMapPosition(amap, mount, { position: PEOPLES_SQUARE, theme: 'dark' })
       if (!rendered) {
+        const keyCount = amapLoaderSnapshot().keyCount
         invalidateAMap({ rotate: true })
         setSource('unavailable')
         onRuntimeFailureRef.current?.()
+        if (runtimeAttempts.current < Math.max(0, keyCount - 1)) {
+          runtimeAttempts.current += 1
+          setLoadRevision((current) => current + 1)
+        }
         return
       }
+      runtimeAttempts.current = 0
       handle.current = rendered
       setSource('amap')
     })
