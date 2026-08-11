@@ -847,6 +847,7 @@ describe('PersistentAgentRuntime', () => {
       expect(card.props.freshness).toBe('fixture')
       expect(card.props.events).toEqual([
         expect.objectContaining({ title: '豆豆的睡前故事' }),
+        expect.objectContaining({ title: '项目评审' }),
       ])
     })
 

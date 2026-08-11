@@ -16,6 +16,12 @@ describe('calendar.list-upcoming', () => {
         startAt: '2026-07-22T21:30:00+08:00',
         location: '家',
       }),
+      expect.objectContaining({
+        eventId: 'event-project-review',
+        title: '项目评审',
+        startAt: '2026-07-22T21:40:00+08:00',
+        location: '线上',
+      }),
     ])
   })
 
