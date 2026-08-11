@@ -15,15 +15,21 @@ HTTP API. Do not call reducers or tool providers from browser developer tools.
    fixed transcript in the input and still requires `发送`; state-bound buttons
    enable only when their matching card/action is on screen.
 
-## 0:00 - 0:45: Goal To Structured Task
+## 0:00 - 0:55: Fuzzy Goal To Arrivals Board (the first memorable moment)
 
-1. Enter `接妈妈和豆豆，航班 MU 5102` and submit it.
-2. Point out that passenger and flight slots become a normalized, reviewable
-   task state (`MU5102`), rather than opaque model output.
-3. If the UI asks for a missing slot, provide it in the same text input and
-   show the task moving to the prepared navigation state.
+1. Send the prefilled `我现在要去机场接妈妈和豆豆` — a goal with no flight
+   number, and no follow-up question asked.
+2. Point at the arrivals board that answers instead: the Agent noticed the
+   missing slot, called the flight tool itself, and offered the rows it can
+   actually prepare a trip from — 虹桥 and 浦东 both — rather than
+   interrogating the driver.
+3. Say or type `选第三个`. The ordinal resolves against the rows on screen
+   (bound to the current candidate set, never a refreshed one), the board
+   retires, and passenger and flight slots become a normalized, reviewable
+   task state — not opaque model output. Clicking a row is the equivalent
+   path; use the click in the backup recording.
 
-## 0:45 - 1:45: Policy-Gated Departure
+## 0:55 - 1:45: Policy-Gated Departure
 
 1. Show the route, charging recommendation, and vehicle context in the
    generated interface.
