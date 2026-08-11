@@ -57,6 +57,47 @@ describe('demo integration', () => {
     expect(typedApi.create).toHaveBeenCalledWith('查天气', expect.objectContaining({ vehicleContext: expect.anything() }))
   })
 
+  it('gives reset confirmation priority over ordinary wake command handling', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const active = apiResponse(createCockpitTask('reset-active'))
+    const cancelled = apiResponse({ ...active.task, phase: 'cancelled' })
+    const api = {
+      create: vi.fn().mockResolvedValue(active), event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+      cancel: vi.fn().mockResolvedValue(cancelled),
+    }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    act(() => { speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledOnce())
+
+    act(() => { speech.engine().emit('小南，重新开始', true, 0.9) })
+    expect(screen.getAllByText('等待确认').length).toBeGreaterThan(0)
+    act(() => { speech.engine().emit('小南，确定', true, 0.9) })
+
+    await waitFor(() => expect(api.cancel).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'reset-active' }), '用户确认重新开始'))
+    expect(api.event).not.toHaveBeenCalled()
+    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
+  })
+
+  it('restarts continuous wake recognition after a browser-ended session', async () => {
+    vi.useFakeTimers()
+    const speech = createFakeSpeech()
+    render(<AppComponent api={{ create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }} speech={speech.deps} />)
+
+    act(() => { screen.getByRole('button', { name: '启用小南语音唤醒' }).click() })
+    act(() => { speech.engine().onstart?.() })
+    const first = speech.engine()
+    act(() => { first.onend?.(); vi.advanceTimersByTime(180) })
+    expect(speech.engines).toHaveLength(2)
+    expect(speech.engine().started).toBe(1)
+    await act(async () => {})
+    vi.useRealTimers()
+  })
+
   it('renders cockpit-owned flight and confirmation windows before navigation', async () => {
     const user = userEvent.setup()
     const task = {

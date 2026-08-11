@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
-import { loadAMap, subscribeAMapLoader } from '../amap/loader'
+import { invalidateAMap, loadAMap, subscribeAMapLoader } from '../amap/loader'
 import { renderAMapPosition, type AMapPositionHandle } from '../amap/render'
 
 export const PEOPLES_SQUARE = { latitude: 31.2304, longitude: 121.4737 } as const
 
-export function IdleMap() {
+export function IdleMap({ retryNonce = 0, onRuntimeFailure }: { retryNonce?: number; onRuntimeFailure?: () => void }) {
   const container = useRef<HTMLDivElement>(null)
   const handle = useRef<AMapPositionHandle | undefined>(undefined)
   const [source, setSource] = useState<'loading' | 'amap' | 'unavailable'>('loading')
   const [loadRevision, setLoadRevision] = useState(0)
+  const onRuntimeFailureRef = useRef(onRuntimeFailure)
+  onRuntimeFailureRef.current = onRuntimeFailure
   useEffect(() => subscribeAMapLoader((snapshot) => {
     if (snapshot.state === 'loading') setLoadRevision((current) => current + 1)
   }), [])
@@ -18,9 +20,18 @@ export function IdleMap() {
     if (!mount) return
     void loadAMap().then((amap) => {
       if (cancelled) return
-      if (!amap) { setSource('unavailable'); return }
+      if (!amap) {
+        setSource('unavailable')
+        onRuntimeFailureRef.current?.()
+        return
+      }
       const rendered = renderAMapPosition(amap, mount, { position: PEOPLES_SQUARE, theme: 'dark' })
-      if (!rendered) { setSource('unavailable'); return }
+      if (!rendered) {
+        invalidateAMap({ rotate: true })
+        setSource('unavailable')
+        onRuntimeFailureRef.current?.()
+        return
+      }
       handle.current = rendered
       setSource('amap')
     })
@@ -29,7 +40,7 @@ export function IdleMap() {
       handle.current?.destroy()
       handle.current = undefined
     }
-  }, [loadRevision])
+  }, [loadRevision, retryNonce])
   return (
     <div className="idle-map" data-map-source={source} aria-label="人民广场模拟车辆位置">
       <div ref={container} className="idle-map__basemap" data-active={source === 'amap'} aria-hidden="true" />

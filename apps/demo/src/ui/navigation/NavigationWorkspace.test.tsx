@@ -85,7 +85,7 @@ describe('NavigationWorkspace', () => {
 
     act(() => clock.advance(90_000))
     expect(onComplete).toHaveBeenCalledOnce()
-    act(() => clock.advance(1_000))
+    act(() => clock.advance(45_000))
     expect(onComplete).toHaveBeenCalledOnce()
 
     await act(async () => { finishFirst?.(false) })
@@ -111,6 +111,22 @@ describe('NavigationWorkspace', () => {
     )
     await act(async () => {})
     expect(onComplete).toHaveBeenCalledTimes(2)
+  })
+
+  it('pauses simulator progress while real map recovery is required', () => {
+    const clock = manualClock()
+    const rendered = render(
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} initialMapRuntimeFailure />,
+    )
+    const before = screen.getByText(/模拟行程进度/).textContent
+    act(() => clock.advance(45_000))
+    expect(screen.getByText(/模拟行程进度/)).toHaveTextContent(before ?? '')
+
+    rendered.rerender(
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} initialMapRuntimeFailure mapRetryNonce={1} />,
+    )
+    act(() => clock.advance(1_000))
+    expect(screen.getByText(/模拟行程进度/).textContent).not.toBe(before)
   })
 
   it('keeps the map mounted while HUD and windows change', () => {

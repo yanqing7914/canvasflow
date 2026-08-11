@@ -329,6 +329,8 @@ export default function App({
   const [wakeError, setWakeError] = useState<string>()
   const [idleNotice, setIdleNotice] = useState<string>()
   const [mapLoader, setMapLoader] = useState<AMapLoaderSnapshot>(() => amapLoaderSnapshot())
+  const [mapRetryNonce, setMapRetryNonce] = useState(0)
+  const [mapRuntimeFailed, setMapRuntimeFailed] = useState(false)
   const [vehicleContext, setVehicleContext] = useState(startingVehicleContext)
   const [latestNavigationSnapshot, setLatestNavigationSnapshot] = useState<NavigationSnapshot>()
   // Which light condition the car reports. `auto` is what a car does — read the
@@ -553,6 +555,7 @@ export default function App({
 
   function enqueueSystemSpeech(text: string, kind = 'assistant') {
     systemUtteranceSequenceRef.current += 1
+    wakeSessionRef.current?.setSpeaking(true)
     speechCoordinatorRef.current?.enqueueSystemUtterance({
       id: `${kind}-${systemUtteranceSequenceRef.current}`,
       text,
@@ -730,9 +733,11 @@ export default function App({
       createRecognition: () => null,
       handlers: {
         onSpeakEnd: () => {
+          wakeSessionRef.current?.setSpeaking(false)
           speechCoordinatorRef.current?.utteranceEnd()
         },
         onSpeakError: () => {
+          wakeSessionRef.current?.setSpeaking(false)
           speechCoordinatorRef.current?.utteranceError()
         },
       },
@@ -917,7 +922,14 @@ export default function App({
   function enableWakeVoice() {
     setWakeError(undefined)
     wakeRecognitionSourceRef.current = 'microphone'
-    wakeSessionRef.current?.authorize()
+    if (wakeSession.state === 'needs-authorization') wakeSessionRef.current?.authorize()
+    else if (!openWakeRecognition()) setWakeError('当前浏览器无法启用语音唤醒，请使用文字输入。')
+  }
+
+  function recoverMap(rotate: boolean) {
+    setMapRuntimeFailed(false)
+    setMapRetryNonce((current) => current + 1)
+    void (rotate ? switchAMapKey() : retryAMap())
   }
 
   const voice = useVoice({
@@ -1002,7 +1014,7 @@ export default function App({
   }
 
   function pressMicrophone() {
-    if (wakeWordEnabled && wakeSession.state === 'needs-authorization') {
+    if (wakeWordEnabled && (wakeSession.state === 'needs-authorization' || Boolean(wakeError))) {
       enableWakeVoice()
       return
     }
@@ -1503,7 +1515,7 @@ export default function App({
   const micState = voice.available ? voice.state : 'unavailable'
   const microphoneCopy = wakeWordEnabled ? wakeButtonLabels[wakeSession.state] : voiceButtonLabels[micState]
   const microphoneDisabled = wakeWordEnabled
-    ? !voiceEnabled || pending || wakeSession.state !== 'needs-authorization'
+    ? !voiceEnabled || pending || (wakeSession.state !== 'needs-authorization' && !wakeError)
     : !voice.available || pending || micState === 'submitting'
   // One polite live region for the whole voice loop, so the mic state and the
   // interim words reach a screen reader without competing announcements.
@@ -1596,6 +1608,9 @@ export default function App({
             retryLeg={retryNavigationLeg}
             onReminder={enqueueNavigationReminder}
             onHudVisibilityChange={setHudVisibility}
+            mapRetryNonce={mapRetryNonce}
+            onMapRuntimeFailure={() => setMapRuntimeFailed(true)}
+            onMapRuntimeReady={() => setMapRuntimeFailed(false)}
           />
           <section className="navigation-command" aria-label="导航语音与文字控制">
             <div className="header-actions">
@@ -1656,6 +1671,11 @@ export default function App({
             onMicrophone={pressMicrophone}
             onKeyboard={() => { focusComposerRef.current = true; setKeyboardRequested(true) }}
             onControls={toggleControls}
+            mapRetryNonce={mapRetryNonce}
+            onMapRuntimeFailure={() => {
+              setMapRuntimeFailed(true)
+              setMapLoader(amapLoaderSnapshot())
+            }}
           />
           {keyboardRequested || text.trim() ? (
             <form className="idle-composer" aria-label="Agent input" onSubmit={(event) => { event.preventDefault(); submitText() }}>
@@ -1907,7 +1927,9 @@ export default function App({
               <div className="console-map-recovery__copy">
                 <span>地图服务</span>
                 <strong>
-                  {mapLoader.state === 'ready'
+                  {mapRuntimeFailed
+                    ? '暂时不可用'
+                    : mapLoader.state === 'ready'
                     ? `运行中 · Key ${Math.min((mapLoader.keyIndex ?? 0) + 1, Math.max(mapLoader.keyCount, 1))}`
                     : mapLoader.state === 'loading'
                       ? '正在恢复'
@@ -1917,10 +1939,10 @@ export default function App({
                 </strong>
               </div>
               <div className="console-map-recovery__actions">
-                <button type="button" disabled={mapLoader.state === 'loading'} onClick={() => { void retryAMap() }}>
+                <button type="button" disabled={mapLoader.state === 'loading'} onClick={() => recoverMap(false)}>
                   重新尝试地图
                 </button>
-                <button type="button" disabled={mapLoader.state === 'loading' || mapLoader.keyCount < 2} onClick={() => { void switchAMapKey() }}>
+                <button type="button" disabled={mapLoader.state === 'loading' || mapLoader.keyCount < 2} onClick={() => recoverMap(true)}>
                   切换 Key
                 </button>
               </div>

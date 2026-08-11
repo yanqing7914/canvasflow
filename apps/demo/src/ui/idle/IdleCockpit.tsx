@@ -12,6 +12,8 @@ export function IdleCockpit({
   onMicrophone,
   onKeyboard,
   onControls,
+  mapRetryNonce,
+  onMapRuntimeFailure,
 }: {
   vehicle: VehicleContext
   voiceMode: IdleVoiceMode
@@ -19,6 +21,8 @@ export function IdleCockpit({
   onMicrophone: () => void
   onKeyboard: () => void
   onControls: () => void
+  mapRetryNonce?: number
+  onMapRuntimeFailure?: () => void
 }) {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
@@ -37,7 +41,7 @@ export function IdleCockpit({
 
   return (
     <section className="idle-cockpit" aria-label="空闲座舱">
-      <IdleMap />
+      <IdleMap retryNonce={mapRetryNonce} onRuntimeFailure={onMapRuntimeFailure} />
       <header className="idle-cockpit__brand"><strong>pilotflow</strong><span>小南座舱</span></header>
       <dl className="idle-cockpit__facts" aria-label="空闲座舱状态">
         <div><dt>当前时间</dt><dd>{formatter.format(now)}</dd></div>

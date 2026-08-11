@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { IdleCockpit } from './IdleCockpit'
 
 describe('IdleCockpit', () => {
-  it('shows only the five quiet cabin facts and a stationary simulated map', () => {
+  it('shows only the five quiet cabin facts and a stationary simulated map', async () => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-08-12T09:08:00+08:00'))
     render(<IdleCockpit
@@ -22,6 +22,8 @@ describe('IdleCockpit', () => {
     expect(screen.getByLabelText('人民广场模拟车辆位置')).toHaveTextContent('模拟位置，非真实 GPS')
     expect(facts).not.toHaveTextContent('航班')
     expect(screen.queryByText(/模拟行程进度/)).not.toBeInTheDocument()
+    await act(async () => {})
+    expect(screen.getByLabelText('人民广场模拟车辆位置')).toHaveAttribute('data-map-source', 'unavailable')
     act(() => { vi.runOnlyPendingTimers() })
     vi.useRealTimers()
   })
