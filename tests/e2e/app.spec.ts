@@ -1310,7 +1310,9 @@ test('floats, folds, and tiers the panel the same way on every engine @glass', a
 test('completes the airport pickup flow through the Agent API', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '打开演示控制' })).toBeEnabled()
   // Without a task there is nothing to advance, and the drawer says so.
   await expectAdvanceEnabled(page, false)
   await readControls(page, '尚无任务')
@@ -1586,7 +1588,8 @@ test('walks the pickup scenario from the arrivals board to the airport @layout',
 
 test('keeps the task usable around a voice attempt', async ({ page }) => {
   await page.goto('/')
-  const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  const mic = page.getByRole('button', { name: /启用小南语音唤醒|小南语音状态|语音入口暂不可用/ })
   await expect(mic).toBeVisible()
 
   // Headless Chromium exposes the Web Speech API but has no speech service
@@ -1595,21 +1598,10 @@ test('keeps the task usable around a voice attempt', async ({ page }) => {
   // returns to a usable state and the text path still completes the turn.
   if (await mic.isEnabled()) {
     await mic.click()
-    // The keyboard is closed on purpose while the microphone is capturing, so
-    // end the turn before typing. A second press either hands back a transcript
-    // or reports that nothing was heard; either way the keyboard reopens.
-    const capturing = page.getByRole('button', { name: '停止语音输入' })
-    if (await capturing.isVisible()) await capturing.click()
-    await expect(
-      page.getByRole('button', { name: /开始语音输入|重试语音输入|放弃这次语音输入/ }),
-    ).toBeEnabled()
-    // Whatever that turn did, a keyboard is reachable: either the failure has
-    // already opened one — in which case the toggle is deliberately unable to
-    // take it away — or the 文字 entry can still bring one up.
-    const fieldAlreadyOpen = await page.getByLabel('任务输入').count() > 0
-    if (!fieldAlreadyOpen) {
-      await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
-    }
+    // Authorization/service outcome is browser-dependent, but the quiet idle
+    // shell and its explicit text fallback must remain usable either way.
+    await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
   }
 
   await sendText(page)
@@ -1624,12 +1616,15 @@ test('falls back to text when the browser has no speech recognition', async ({ p
   })
   await page.goto('/')
 
-  const mic = page.getByRole('button', { name: '语音入口暂不可用' })
-  await expect(mic).toBeVisible()
-  await expect(mic).toBeDisabled()
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+  await expect(page.getByLabel('空闲座舱状态').getByText('语音不可用', { exact: true })).toBeVisible()
 
   await sendText(page, '我现在要去机场接妈妈和豆豆')
   await readControls(page, 'collecting-information')
+  await expect(page.getByLabel('语音状态')).toContainText('当前浏览器不支持语音识别，请改用文字输入。')
+  await expect(page.getByRole('button', { name: '收起文字输入' })).toBeDisabled()
+  await expect(page.getByLabel('任务输入')).toBeEnabled()
 })
 
 test('replays a fixture utterance deterministically from the demo drawer', async ({ page }) => {
