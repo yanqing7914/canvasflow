@@ -4812,6 +4812,160 @@ describe('AgentGateway', () => {
       expect(updated.task.flight?.status).toBe('in-air')
     })
   })
+
+  describe('proactive calendar conflict advisory', () => {
+    /** Create → start navigation, same as the weather suite's helper. */
+    function drivingTask(gateway: AgentGateway) {
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      return gateway.submitAction(created.task.taskId, {
+        clientRequestId: 'calendar-helper-start', expectedTaskRevision: created.task.taskRevision,
+        expectedUiRevision: created.ui.uiRevision, actionId: 'start-navigation',
+        componentId: 'navigation-plan', idempotencyKey: 'calendar-helper-start',
+      })
+    }
+
+    function delayedUpdate(taskRevision: number, eventId = 'calendar-delayed') {
+      // 21:10 landing + 15 handoff + 20 route = 21:45 home, past 豆豆's 21:30
+      // bedtime story by 15 minutes (the trip's own charging is not accepted,
+      // so no detour applies).
+      return {
+        clientRequestId: `client-${eventId}`, expectedTaskRevision: taskRevision,
+        event: {
+          eventId, type: 'flight.updated' as const,
+          flight: {
+            flightNumber: 'MU5102', status: 'delayed' as const,
+            scheduledArrival: '2026-07-22T20:30:00+08:00',
+            estimatedArrival: '2026-07-22T21:10:00+08:00', terminal: 'T2',
+          },
+          timestamp: '2026-07-22T19:10:00+08:00',
+        },
+      }
+    }
+
+    it('stays quiet while the projected return still makes the bedtime story', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+
+      // In-air with the fixture's own 20:40 estimate: home well before 21:30.
+      const updated = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-calendar-in-air', expectedTaskRevision: driving.task.taskRevision,
+        event: {
+          eventId: 'calendar-in-air', type: 'flight.updated' as const,
+          flight: {
+            flightNumber: 'MU5102', status: 'in-air' as const,
+            scheduledArrival: '2026-07-22T20:30:00+08:00',
+            estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2',
+          },
+          timestamp: '2026-07-22T19:10:00+08:00',
+        },
+      })
+
+      expect(updated.task.calendarAdvisory).toBeUndefined()
+      expect(updated.ui.components.some((component) => component.id === 'calendar-advisory')).toBe(false)
+    })
+
+    it('raises the conflict when a delay pushes the return past the event', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+
+      const updated = gateway.submitEvent(driving.task.taskId, delayedUpdate(driving.task.taskRevision))
+
+      expect(updated.task.calendarAdvisory).toMatchObject({
+        status: 'active',
+        eventTitle: '豆豆的睡前故事',
+        eventStartAt: '2026-07-22T21:30:00+08:00',
+        lateByMinutes: 15,
+      })
+      const card = updated.ui.components.find((component) => component.id === 'calendar-advisory')
+      if (card?.type !== 'alert') throw new Error('expected the calendar conflict alert card')
+      expect(card.props.title).toContain('豆豆的睡前故事')
+      expect(card.props.message).toContain('15 分钟')
+      expect(card.actions).toEqual(['view-calendar', 'dismiss-advisory-calendar'])
+      expect(updated.ui.actions.map((action) => action.id)).toEqual(['view-calendar', 'dismiss-advisory-calendar'])
+
+      // Persisted, not a transient answer: it survives an unrelated recompose.
+      const moving = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-calendar-moving', expectedTaskRevision: updated.task.taskRevision,
+        event: { eventId: 'calendar-moving', type: 'vehicle.moving', speedKph: 60, timestamp: '2026-07-22T19:11:00+08:00' },
+      })
+      expect(moving.ui.components.some((component) => component.id === 'calendar-advisory')).toBe(true)
+    })
+
+    it('retires the conflict for good on 保持当前计划', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+      const updated = gateway.submitEvent(driving.task.taskId, delayedUpdate(driving.task.taskRevision))
+
+      const kept = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-keep-plan', expectedTaskRevision: updated.task.taskRevision,
+        event: { eventId: 'keep-plan', type: 'user.input', text: '保持当前计划', timestamp: '2026-07-22T19:12:00+08:00' },
+      })
+
+      expect(kept.task.calendarAdvisory).toMatchObject({ status: 'dismissed' })
+      expect(kept.ui.components.some((component) => component.id === 'calendar-advisory')).toBe(false)
+
+      // Dismissed means never again — a later delayed beat must not re-raise.
+      const again = gateway.submitEvent(driving.task.taskId, delayedUpdate(kept.task.taskRevision, 'calendar-delayed-again'))
+      expect(again.task.calendarAdvisory).toMatchObject({ status: 'dismissed' })
+      expect(again.ui.components.some((component) => component.id === 'calendar-advisory')).toBe(false)
+    })
+
+    it('answers 查看安排 from the conflict card with the schedule the trip already read', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+      const updated = gateway.submitEvent(driving.task.taskId, delayedUpdate(driving.task.taskRevision))
+
+      const viewed = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-view-from-conflict', expectedTaskRevision: updated.task.taskRevision,
+        event: { eventId: 'view-from-conflict', type: 'user.input', text: '查看日程', timestamp: '2026-07-22T19:12:00+08:00' },
+      })
+
+      const card = viewed.ui.components.find((component) => component.id === 'schedule-card')
+      if (card?.type !== 'schedule-card') throw new Error('expected the schedule card')
+      // The card carries the same at-risk judgement the advisory was raised on.
+      expect(card.props.events).toEqual([
+        expect.objectContaining({ title: '豆豆的睡前故事', atRisk: true }),
+      ])
+    })
+
+    it('lets the rain advisory keep the rail when both are active', () => {
+      const gateway = createGateway()
+      const driving = drivingTask(gateway)
+
+      // One update carries both conditions: a delayed flight into rain. The
+      // arrival window firmed up late AND wet — but only in-air raises the
+      // weather advisory, so drive the delay first, then the in-air beat.
+      const delayed = gateway.submitEvent(driving.task.taskId, delayedUpdate(driving.task.taskRevision))
+      expect(delayed.task.calendarAdvisory).toMatchObject({ status: 'active' })
+
+      const rained = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-both-in-air', expectedTaskRevision: delayed.task.taskRevision,
+        event: {
+          eventId: 'both-in-air', type: 'flight.updated' as const,
+          flight: {
+            flightNumber: 'MU5102', status: 'in-air' as const,
+            scheduledArrival: '2026-07-22T20:30:00+08:00',
+            estimatedArrival: '2026-07-22T21:10:00+08:00', terminal: 'T2',
+          },
+          timestamp: '2026-07-22T19:15:00+08:00',
+        },
+      })
+
+      expect(rained.task.weatherAdvisory).toMatchObject({ status: 'active' })
+      expect(rained.task.calendarAdvisory).toMatchObject({ status: 'active' })
+      // The rail shows the rain (it has a send behind it); the conflict waits.
+      expect(rained.ui.components.some((component) => component.id === 'weather-advisory')).toBe(true)
+      expect(rained.ui.components.some((component) => component.id === 'calendar-advisory')).toBe(false)
+
+      // 暂不处理 retires both prompts: the words answer whatever is asking.
+      const dismissed = gateway.submitEvent(driving.task.taskId, {
+        clientRequestId: 'client-both-dismiss', expectedTaskRevision: rained.task.taskRevision,
+        event: { eventId: 'both-dismiss', type: 'user.input', text: '暂不处理', timestamp: '2026-07-22T19:16:00+08:00' },
+      })
+      expect(dismissed.task.weatherAdvisory).toMatchObject({ status: 'dismissed' })
+      expect(dismissed.task.calendarAdvisory).toMatchObject({ status: 'dismissed' })
+    })
+  })
 })
 
 function returningTask(gateway: AgentGateway) {

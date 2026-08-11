@@ -223,6 +223,12 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
         startAt: z.string().min(1),
         endAt: z.string().min(1).optional(),
         location: z.string().min(1).optional(),
+        /**
+         * The pickup's projected return misses this event — the same judgement
+         * the schedule strip renders as its at-risk milestone, so the query
+         * card and the strip cannot tell the driver two different stories.
+         */
+        atRisk: z.boolean().optional(),
       })).max(4),
       /** How many events the cap cut off; absent when everything fits. */
       moreCount: z.number().int().positive().optional(),

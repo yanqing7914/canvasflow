@@ -96,6 +96,30 @@ describe('Agent UISpec composer', () => {
     )
   })
 
+  it('carries the strip at-risk judgement onto the schedule query card', () => {
+    // Same trip whose strip marks the story at risk (MU5103 lands 21:10): a
+    // schedule query during it must tell the same story, from the same sum.
+    const orchestrator = new ReadToolOrchestrator()
+    const reads = orchestrator.prepareTrip('pickup-001', 'request-001', 'MU5103')
+    const query = orchestrator.resolveSchedule('pickup-001', 'request-002', { date: '2026-07-22' })
+    const task = {
+      ...createInitialTask('pickup-001', timestamp),
+      phase: 'preparing' as const,
+      passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
+      flight: { flightNumber: reads.flight.flightNumber, status: reads.flight.status, scheduledArrival: reads.flight.scheduledArrival, estimatedArrival: reads.flight.estimatedArrival, terminal: reads.flight.terminal },
+      navigation: { routeId: reads.route.routeId, destination: '虹桥机场 T2', eta: reads.route.arrivalTime, status: 'planned' as const },
+      charging: { recommended: true, accepted: false, status: 'planned' as const },
+    }
+
+    const spec = composeAgentSpec(task, { ...reads.toolResults, 'calendar.query': query })
+    const card = spec.components.find((component) => component.type === 'schedule-card')
+
+    if (card?.type !== 'schedule-card') throw new Error('expected a schedule-card component')
+    expect(card.props.events).toContainEqual(
+      expect.objectContaining({ title: '豆豆的睡前故事', atRisk: true }),
+    )
+  })
+
   it('composes without a schedule strip when the calendar read is absent', () => {
     const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
     const withoutCalendar = { ...reads.toolResults }
