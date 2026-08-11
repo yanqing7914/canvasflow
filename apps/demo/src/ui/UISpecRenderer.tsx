@@ -1020,6 +1020,8 @@ function floatingPanelId(
 export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRendererProps) {
   const runtimeComponents: unknown[] = Array.isArray(spec.components) ? spec.components : []
   const runtimeActions: unknown[] = Array.isArray(spec.actions) ? spec.actions : []
+  const hasRuntimeWindows = Array.isArray((spec as unknown as { windows?: unknown }).windows)
+    && ((spec as unknown as { windows: unknown[] }).windows.length > 0)
   const componentById = new Map<string, unknown>()
   const actionById = new Map<string, unknown>()
 
@@ -1033,6 +1035,13 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
   }
 
   const resolved = resolveLayout(spec, runtimeComponents)
+  const windowOwnedComponentIds = new Set(
+    Array.isArray((spec as unknown as { windows?: Array<{ componentIds?: unknown }> }).windows)
+      ? (spec as unknown as { windows: Array<{ componentIds?: unknown }> }).windows.flatMap((window) => (
+          Array.isArray(window.componentIds) ? window.componentIds.filter((id): id is string => typeof id === 'string') : []
+        ))
+      : [],
+  )
   // A component the driving context forbids is dropped before anything counts it, so the
   // layout hooks, the single-component treatment, and the action bar all describe what is
   // actually on screen rather than what the spec asked for.
@@ -1040,7 +1049,9 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
     ...resolved,
     slots: resolved.slots.map((slot) => ({
       ...slot,
-      ids: slot.ids.filter((componentId) => componentVisible(componentById.get(componentId), driving)),
+      ids: slot.ids.filter((componentId) => (
+        !windowOwnedComponentIds.has(componentId) && componentVisible(componentById.get(componentId), driving)
+      )),
     })),
   }
   const renderedComponentIds = new Set(layout.slots.flatMap((slot) => slot.ids))
@@ -1122,7 +1133,7 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
             })}
           </div>
         ))}
-        {renderedComponentCount === 0 && <EmptyFallback />}
+        {renderedComponentCount === 0 && !hasRuntimeWindows && <EmptyFallback />}
       </div>
       <ActionGroup
         className="ui-actions"

@@ -26,11 +26,13 @@ function fakeAMap() {
   const markerPositions: Array<[number, number]> = []
   const destroy = vi.fn()
   const remove = vi.fn()
+  const setCenter = vi.fn()
   const map = {
     add: vi.fn(),
     remove,
     setFitView: vi.fn(),
     setZoomAndCenter: vi.fn(),
+    setCenter,
     destroy,
   }
 
@@ -154,6 +156,18 @@ describe('renderAMapRoute progress', () => {
 
     handle.setProgress(1)
     expect(fake.markerPositions.at(-1)).toEqual([121.336, 31.198])
+  })
+
+  it('replaces route overlays without destroying the basemap', async () => {
+    const { fake, handle } = await rendered()
+    const reverse: RouteSketch = {
+      waypoints: [...sketch.waypoints].reverse(), polyline: [...sketch.polyline].reverse(), progress: 0,
+    }
+    await expect(handle.setRoute(reverse)).resolves.toBe(true)
+    expect(fake.remove).toHaveBeenCalled()
+    expect(fake.destroy).not.toHaveBeenCalled()
+    handle.setProgress(0.5)
+    expect(fake.markerPositions.length).toBeGreaterThan(2)
   })
 
   it('ignores a value that is not a position on the route', async () => {

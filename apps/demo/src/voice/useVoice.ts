@@ -25,6 +25,10 @@ export type UseVoiceOptions = {
   onTranscript?: (text: string, meta: VoiceSubmitMeta) => TranscriptReply | Promise<TranscriptReply>
   /** Test hook: swaps in fake Web Speech engines. */
   speech?: SpeechControllerDeps
+  /** Hands-free turns submit after this quiet period; false keeps confirmation. */
+  autoSubmit?: boolean | (() => boolean)
+  /** Injectable timer seam for deterministic silence handling. */
+  silenceMs?: number
 }
 
 const INITIAL_SNAPSHOT: VoiceMachineSnapshot = {
@@ -40,7 +44,7 @@ const INITIAL_SNAPSHOT: VoiceMachineSnapshot = {
  * `onTranscript`; this hook only moves text.
  */
 export function useVoice(options: UseVoiceOptions = {}) {
-  const { enabled = true, onTranscript, speech } = options
+  const { enabled = true, onTranscript, speech, autoSubmit = true, silenceMs = 5_000 } = options
   const [snapshot, setSnapshot] = useState<VoiceMachineSnapshot>(INITIAL_SNAPSHOT)
 
   // Keep the seam and the engine factories in refs so a new object identity on
@@ -59,6 +63,26 @@ export function useVoice(options: UseVoiceOptions = {}) {
     machine: ReturnType<typeof createVoiceMachine>
     controller: ReturnType<typeof createSpeechController>
   } | null>(null)
+  const silenceTimerRef = useRef<number | undefined>(undefined)
+
+  const clearSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current === undefined) return
+    window.clearTimeout(silenceTimerRef.current)
+    silenceTimerRef.current = undefined
+  }, [])
+
+  const scheduleAutoSubmit = useCallback(() => {
+    clearSilenceTimer()
+    const enabledForTurn = typeof autoSubmit === 'function' ? autoSubmit() : autoSubmit
+    if (!enabledForTurn) return
+    silenceTimerRef.current = window.setTimeout(() => {
+      silenceTimerRef.current = undefined
+      const machine = loopRef.current?.machine
+      if (!machine || machine.snapshot().state !== 'transcribing') return
+      machine.submit()
+      setSnapshot(machine.snapshot())
+    }, silenceMs)
+  }, [autoSubmit, clearSilenceTimer, silenceMs])
 
   useEffect(() => {
     if (!available) {
@@ -83,12 +107,20 @@ export function useVoice(options: UseVoiceOptions = {}) {
     const controller = createSpeechController({
       ...speechRef.current,
       handlers: {
-        onPartial: on<[string]>((machine, text) => machine.asrPartial(text)),
-        onFinal: on<[string, number | undefined]>((machine, text, confidence) =>
-          machine.asrFinal(text, confidence)),
+        onPartial: on<[string]>((machine, text) => {
+          clearSilenceTimer()
+          machine.asrPartial(text)
+        }),
+        onFinal: on<[string, number | undefined]>((machine, text, confidence) => {
+          machine.asrFinal(text, confidence)
+          scheduleAutoSubmit()
+        }),
         onError: on<[Parameters<ReturnType<typeof createVoiceMachine>['asrError']>[0]]>(
           (machine, kind) => machine.asrError(kind)),
-        onEnd: on((machine) => machine.asrEnd()),
+        onEnd: on((machine) => {
+          machine.asrEnd()
+          scheduleAutoSubmit()
+        }),
         onSpeakEnd: on((machine) => machine.speakEnd()),
         onSpeakError: on((machine) => machine.speakError()),
       },
@@ -136,10 +168,11 @@ export function useVoice(options: UseVoiceOptions = {}) {
       // Clearing the holder makes every queued callback a no-op after teardown.
       holder.machine = undefined
       loopRef.current = null
+      clearSilenceTimer()
       machine.dispose()
       controller.dispose()
     }
-  }, [available])
+  }, [available, clearSilenceTimer, scheduleAutoSubmit])
 
   const act = useCallback((run: (machine: ReturnType<typeof createVoiceMachine>) => void) => {
     const loop = loopRef.current
@@ -148,11 +181,11 @@ export function useVoice(options: UseVoiceOptions = {}) {
     setSnapshot(loop.machine.snapshot())
   }, [])
 
-  const press = useCallback(() => { act((machine) => machine.press()) }, [act])
-  const cancel = useCallback(() => { act((machine) => machine.cancel()) }, [act])
+  const press = useCallback(() => { clearSilenceTimer(); act((machine) => machine.press()) }, [act, clearSilenceTimer])
+  const cancel = useCallback(() => { clearSilenceTimer(); act((machine) => machine.cancel()) }, [act, clearSilenceTimer])
   const reset = useCallback(() => { act((machine) => machine.reset()) }, [act])
-  const edit = useCallback((text: string) => { act((machine) => machine.edit(text)) }, [act])
-  const submit = useCallback((text?: string) => { act((machine) => machine.submit(text)) }, [act])
+  const edit = useCallback((text: string) => { clearSilenceTimer(); act((machine) => machine.edit(text)) }, [act, clearSilenceTimer])
+  const submit = useCallback((text?: string) => { clearSilenceTimer(); act((machine) => machine.submit(text)) }, [act, clearSilenceTimer])
 
   /**
    * The error shown when voice is unavailable. Derived rather than stored so the

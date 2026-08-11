@@ -96,11 +96,12 @@ export function demoVehicleContext(
   }
 }
 
-const defaultClientCapabilities: CreateTaskRequest['clientCapabilities'] = {
+const defaultClientCapabilities = {
   uiSchemaVersion: '1.0',
   supportsSse: true,
   supportsTts: true,
-}
+  cockpitVersion: '1',
+} as CreateTaskRequest['clientCapabilities'] & { cockpitVersion: '1' }
 
 let fallbackId = 0
 

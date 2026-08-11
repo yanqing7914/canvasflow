@@ -1,15 +1,74 @@
+import type { ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import App from './App'
+import AppComponent from './App'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { applyEvent, createInitialTask } from '@canvasflow/agent'
 import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, TaskUpdateEnvelope, UISpec, VehicleContext } from '@canvasflow/schema'
 import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
 import { createFakeSpeech } from './test/speech'
+import type { CockpitUISpec, RuntimeNavigationTask } from './ui/navigation/contracts'
+import type { NavigationClock } from './ui/navigation/simulator'
+
+// Legacy cases intentionally start from the historical typed draft. Production
+// and the dedicated empty-input test below render AppComponent directly.
+function App(props: ComponentProps<typeof AppComponent>) {
+  return <AppComponent initialText="我现在要去机场接妈妈和豆豆" {...props} />
+}
 
 describe('demo integration', () => {
+  it('starts with an empty task input and never supplies an example sentence', async () => {
+    const user = userEvent.setup()
+    render(<AppComponent voiceEnabled={false} />)
+    const input = screen.getByLabelText('任务输入')
+    expect(input).toHaveValue('')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(input).toHaveValue('')
+  })
+
+  it('renders cockpit-owned flight and confirmation windows before navigation', async () => {
+    const user = userEvent.setup()
+    const task = {
+      ...createInitialTask(), phase: 'choosing-flight', pickupAirport: { label: '虹桥机场', code: 'SHA' },
+    } as unknown as AirportPickupTaskState
+    const flightComponent = {
+      id: 'flight-choices-cockpit', type: 'flight-choices' as const, actions: ['pick-cockpit-MU5102'], props: {
+        arrivalCityName: '虹桥机场', dateLabel: '今天', freshness: 'fixture' as const,
+        choices: [
+          { flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'in-air' as const, statusLabel: '飞行中', arrivalTimeLabel: '15:30', terminal: 'T2', airportName: '虹桥机场', actionId: 'pick-cockpit-MU5102' },
+          { flightNumber: 'HO1252', airlineName: '吉祥航空', originName: '广州白云', status: 'scheduled' as const, statusLabel: '计划中', arrivalTimeLabel: '16:10', terminal: 'T2', airportName: '虹桥机场', actionId: 'pick-cockpit-HO1252' },
+        ],
+      },
+    }
+    const ui = {
+      ...composePickupSpec(createInitialTask()), taskId: task.taskId, taskRevision: task.taskRevision, phase: 'choosing-flight',
+      layout: { type: 'stack' as const, gap: 'md' as const, slots: { main: [] } },
+      components: [flightComponent],
+      actions: [{ id: 'pick-cockpit-MU5102', label: '选择 MU5102', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'pick-cockpit-MU5102' } }],
+      windows: [{ id: 'flight-list-1', kind: 'flight-list' as const, title: '虹桥机场到达航班', componentIds: [flightComponent.id], actionIds: ['pick-cockpit-MU5102'], size: 'large' as const, controls: { closable: true, minimizable: true, maximizable: true } }],
+    } as unknown as CockpitUISpec
+    const response = {
+      requestId: 'request-cockpit-window', task, ui, effects: [],
+      meta: { mode: 'fixture' as const, durationMs: 1, fallbackUsed: false },
+    }
+    const api = { create: vi.fn().mockResolvedValue(response), event: vi.fn(), action: vi.fn().mockResolvedValue(response), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="去机场接人" />)
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByLabelText('虹桥机场到达航班窗口')).toBeInTheDocument()
+    const cockpitWindow = screen.getByLabelText('虹桥机场到达航班窗口')
+    const choice = cockpitWindow.querySelector<HTMLButtonElement>('[data-action-id="pick-cockpit-MU5102"]')
+    expect(choice).not.toBeNull()
+    await user.click(choice!)
+    expect(api.action).toHaveBeenCalledWith(expect.anything(), 'pick-cockpit-MU5102', 'flight-choices-cockpit')
+  })
+
+  it('keeps legacy waiting screens outside the cockpit workspace', () => {
+    render(<App initialTask={{ ...createInitialTask(), phase: 'waiting-for-passengers' }} />)
+    expect(screen.getByRole('region', { name: '当前行程' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('模拟导航地图')).not.toBeInTheDocument()
+  })
   /**
    * Engineering metadata and the demo player live in the controls drawer, never on
    * the driver-facing brief. Tests that assert a raw phase or press 推进下一事件
@@ -1212,6 +1271,28 @@ describe('demo integration', () => {
       // Nothing is waiting to be confirmed any more, so the keyboard gives the
       // space back rather than sitting there holding an empty field.
       expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    })
+
+    it('auto-submits a normal microphone transcript after five seconds of silence', async () => {
+      vi.useFakeTimers()
+      try {
+        const speech = createFakeSpeech()
+        const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
+        const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+        render(<App api={api} speech={speech.deps} />)
+
+        act(() => { screen.getByRole('button', { name: '开始语音输入' }).click() })
+        emit(() => speech.engine().emit('去虹桥机场接人', true, 0.9))
+        expect(create).not.toHaveBeenCalled()
+
+        await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+        expect(create).toHaveBeenCalledWith('去虹桥机场接人', {
+          vehicleContext: expect.anything(), source: 'voice', confidence: 0.9,
+        })
+        await act(async () => {})
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('will not let the keyboard reach the previous turn while the microphone is capturing', async () => {

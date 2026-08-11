@@ -19,6 +19,10 @@ import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, demoVehicleContext, isNightAt } from './agent-client'
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
+import { NavigationWorkspace } from './ui/navigation/NavigationWorkspace'
+import { cockpitContractPhase, runtimeWindows, type RuntimeNavigationTask } from './ui/navigation/contracts'
+import type { NavigationClock, NavigationLeg } from './ui/navigation/simulator'
+import { WindowManager } from './ui/navigation/WindowManager'
 import { GLASS_TIERS, useGlassTier } from './ui/glass-capability'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 import {
@@ -175,6 +179,9 @@ export default function App({
   voiceEnabled = true,
   speech,
   fixtureAudio,
+  navigationClock,
+  onNavigationLegComplete,
+  initialText = '',
 }: {
   api?: DemoAgentApi
   initialTask?: AirportPickupTaskState
@@ -186,11 +193,17 @@ export default function App({
   speech?: SpeechControllerDeps
   /** Test seam for the fixture replay's audio element. */
   fixtureAudio?: FixtureAudioFactory
+  /** Deterministic scheduler seam for the continuous navigation simulator. */
+  navigationClock?: NavigationClock
+  /** Main integrates this typed completion with outbound/return arrival events. */
+  onNavigationLegComplete?: (leg: NavigationLeg) => void
+  /** Explicit preview/test seed; the shipped cockpit starts empty. */
+  initialText?: string
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
-  const startingVehicleContext = initialVehicleContext ?? demoVehicleContext()
+  const [startingVehicleContext] = useState<VehicleContext>(() => initialVehicleContext ?? demoVehicleContext())
   const [response, setResponse] = useState<AgentResponse>()
-  const [text, setText] = useState('我现在要去机场接妈妈和豆豆')
+  const [text, setText] = useState(initialText)
   const [stepIndex, setStepIndex] = useState(0)
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
@@ -204,6 +217,7 @@ export default function App({
   const [controlsOpen, setControlsOpen] = useState(false)
   const [keyboardRequested, setKeyboardRequested] = useState(false)
   const pendingRef = useRef(false)
+  const responseRef = useRef<AgentResponse | undefined>(undefined)
   const streamCursorRef = useRef(0)
   const controlsTriggerRef = useRef<HTMLButtonElement>(null)
   const controlsDrawerRef = useRef<HTMLElement>(null)
@@ -220,14 +234,42 @@ export default function App({
   const [draftProtected, setDraftProtected] = useState(false)
   // Fixture-only injection is used by unit tests; the shipped demo leaves these props unset.
   const task = response?.task ?? localTask
-  const localSpec = useMemo(() => task ? composePickupSpec(task, {
-    ...composeContext,
-    landingMessageRetryAvailable: composeContext.landingMessageRetryAvailable
-      ?? Boolean(resolveAuthorizedLandingContact(task.passengers.memberIds, demoRuntime.preferences)),
-  }) : undefined, [composeContext, task])
+  responseRef.current = response
+  const localSpec = useMemo(() => {
+    if (!task || response) return undefined
+    return composePickupSpec(task, {
+      ...composeContext,
+      landingMessageRetryAvailable: composeContext.landingMessageRetryAvailable
+        ?? Boolean(resolveAuthorizedLandingContact(task.passengers.memberIds, demoRuntime.preferences)),
+    })
+  }, [composeContext, response, task])
   const spec = response?.ui ?? localSpec
   const effects = useMemo(() => response?.effects ?? [], [response])
   const remoteTaskId = response?.task.taskId
+  const runtimeTask = task as unknown as RuntimeNavigationTask | undefined
+  const navigationStatus = runtimeTask?.navigation?.status
+  const cockpitWindows = spec ? runtimeWindows(spec) : []
+  const newCockpitContract = Boolean(runtimeTask && (
+    runtimeTask.pickupAirport
+    || runtimeTask.navigationSimulation
+    || runtimeTask.cockpit
+    || ['collecting-airport', 'choosing-flight', 'confirming-outbound', 'outbound-driving', 'passengers-onboard', 'confirming-return', 'return-driving'].includes(runtimeTask.phase)
+  ))
+  const cockpitContract = Boolean(runtimeTask && spec && (
+    (newCockpitContract && cockpitContractPhase(runtimeTask.phase))
+    || runtimeTask.pickupAirport
+    || cockpitWindows.length > 0
+  ))
+  const navigationActive = Boolean(runtimeTask && spec
+    && runtimeTask.phase !== 'completed'
+    && runtimeTask.phase !== 'cancelled'
+    && newCockpitContract
+    && (navigationStatus === 'active' || navigationStatus === 'arrived'
+      || runtimeTask.phase === 'outbound-driving'
+      || runtimeTask.phase === 'waiting-for-passengers'
+      || runtimeTask.phase === 'passengers-onboard'
+      || runtimeTask.phase === 'confirming-return'
+      || runtimeTask.phase === 'return-driving'))
 
   useEffect(() => {
     if (localOnly || !remoteTaskId || !api.subscribeTaskUpdates) return
@@ -327,7 +369,12 @@ export default function App({
       return { sent: true, speak: spokenReply(next) }
     }
     let nextTimelineIndex = timelineIndexForInput(trimmed)
-    const next = await run(() => api.event(response.task, { type: 'user.input', text: trimmed }))
+    const next = await run(() => (api.event as unknown as (
+      task: AirportPickupTaskState,
+      event: { type: 'user.input'; text: string; source?: 'text' | 'voice' },
+    ) => Promise<AgentResponse>)(response.task, {
+      type: 'user.input', text: trimmed, ...(meta ? { source: meta.source } : {}),
+    }))
     if (!next) return { sent: false }
     if (nextTimelineIndex === undefined && attachedFlight(response, next)) {
       nextTimelineIndex = nextIndexForTimelineEvent('user.input')
@@ -355,6 +402,8 @@ export default function App({
   // turn read from the recording instead of the microphone; the turn after
   // falls back to the real engine on its own.
   const armedFixtureRef = useRef<VoiceFixtureSample | null>(null)
+  const fixtureRequiresConfirmationRef = useRef(false)
+  const fixtureAutoSubmit = useCallback(() => !fixtureRequiresConfirmationRef.current, [])
   const fixtureAudioRef = useRef(fixtureAudio)
   const degradedFixtureAudioRef = useRef<ReturnType<typeof playFixtureSampleAudio>>(null)
   fixtureAudioRef.current = fixtureAudio
@@ -383,7 +432,11 @@ export default function App({
       createRecognition: () => {
         const armed = armedFixtureRef.current
         armedFixtureRef.current = null
-        if (armed) return createFixtureRecognition(armed, fixtureAudioRef.current ?? undefined)
+        if (armed) {
+          fixtureRequiresConfirmationRef.current = armed.requiresConfirmation
+          return createFixtureRecognition(armed, fixtureAudioRef.current ?? undefined)
+        }
+        fixtureRequiresConfirmationRef.current = false
         return createReal()
       },
     }
@@ -393,6 +446,7 @@ export default function App({
     enabled: voiceEnabled,
     onTranscript: submitVoiceTranscript,
     speech: voiceSpeech,
+    autoSubmit: fixtureAutoSubmit,
   })
   const voiceTranscript = voice.state === 'transcribing' ? voice.transcript : undefined
   // The microphone owns the turn while it is capturing or while a confirmed
@@ -455,6 +509,33 @@ export default function App({
     // driver may have opened earlier steps back out of the way.
     setKeyboardRequested(false)
     voice.press()
+  }
+
+  function completeNavigationLeg(leg: NavigationLeg) {
+    onNavigationLegComplete?.(leg)
+    const currentResponse = responseRef.current
+    if (!currentResponse || onNavigationLegComplete) return
+    const event = leg === 'outbound'
+      ? { type: 'navigation.outbound-arrived' as const }
+      : { type: 'navigation.return-arrived' as const }
+    // New cockpit backends accept these typed events. Legacy clients do not
+    // expose them in their generated union yet, so the runtime call stays
+    // guarded behind an active remote response and degrades to a parked map.
+    const currentTask = currentResponse.task
+    void run(() => (api.event as unknown as (
+      task: AirportPickupTaskState,
+      event: { type: 'navigation.outbound-arrived' | 'navigation.return-arrived' },
+    ) => Promise<AgentResponse>)(currentTask, event))
+  }
+
+  function setHudVisibility(visible: boolean) {
+    const currentResponse = responseRef.current
+    if (!currentResponse) return
+    const text = visible ? '显示导航信息' : '隐藏导航信息'
+    void run(() => (api.event as unknown as (
+      task: AirportPickupTaskState,
+      event: { type: 'user.input'; text: string; source?: 'text' },
+    ) => Promise<AgentResponse>)(currentResponse.task, { type: 'user.input', text, source: 'text' }))
   }
 
   // Replay may not steal a turn that is mid-capture or mid-confirm, and it may
@@ -582,7 +663,8 @@ export default function App({
 
   function handleAction(actionId: string, componentId: string) {
     if (pendingRef.current) return
-    if (!response) {
+    const currentResponse = responseRef.current
+    if (!currentResponse) {
       if (!localOnly) return
       setLocalTask((current) => {
         if (!current) return current
@@ -595,26 +677,26 @@ export default function App({
       })
       return
     }
-    const action = response.ui.actions.find((candidate) => candidate.id === actionId)
+    const action = currentResponse.ui.actions.find((candidate) => candidate.id === actionId)
     const actionEvent = action?.event
     if (actionEvent?.type === 'confirmation') {
-      void run(() => api.confirmation(response.task, actionEvent.confirmationId, actionEvent.decision))
+      void run(() => api.confirmation(currentResponse.task, actionEvent.confirmationId, actionEvent.decision))
     } else if (actionEvent?.type === 'agent-message') {
       // Pressing a row is the driver saying what it says. It travels as the same
       // user input the composer sends, so the planner sees one kind of answer and
       // a card can never set a slot that typing could not. The draft field is
       // left alone: the pick is not the sentence they were writing.
       const nextTimelineIndex = timelineIndexForInput(actionEvent.text)
-      void run(() => api.event(response.task, { type: 'user.input', text: actionEvent.text })).then((next) => {
-        if (!next || nextTimelineIndex === undefined || !movedTheTrip(response, next)) return
+      void run(() => api.event(currentResponse.task, { type: 'user.input', text: actionEvent.text })).then((next) => {
+        if (!next || nextTimelineIndex === undefined || !movedTheTrip(currentResponse, next)) return
         setStepIndex(nextTimelineIndex)
       })
     } else {
       const nextTimelineIndex = actionId === 'start-navigation'
         ? nextIndexForTimelineEvent('navigation.started')
         : undefined
-      void run(() => api.action(response, actionId, componentId)).then((next) => {
-        if (!next || nextTimelineIndex === undefined || !navigationStarted(response, next)) return
+      void run(() => api.action(currentResponse, actionId, componentId)).then((next) => {
+        if (!next || nextTimelineIndex === undefined || !navigationStarted(currentResponse, next)) return
         setStepIndex(consumeAdvisoryContext(nextTimelineIndex))
       })
     }
@@ -837,7 +919,68 @@ export default function App({
       data-glass={glassTier}
       style={GLASS_TIERS[glassTier]}
     >
-      <section className="cockpit-stage" aria-label="机场接人任务">
+      {navigationActive && runtimeTask && spec ? (
+        <>
+          <NavigationWorkspace
+            task={runtimeTask}
+            spec={spec}
+            initialVehicle={startingVehicleContext}
+            clock={navigationClock}
+            pending={pending}
+            onAction={handleAction}
+            onVehicleSnapshot={setVehicleContext}
+            onLegComplete={completeNavigationLeg}
+            onHudVisibilityChange={setHudVisibility}
+          />
+          <section className="navigation-command" aria-label="导航语音与文字控制">
+            <div className="header-actions">
+              <button
+                className={`mic-button mic-${micState}`}
+                type="button"
+                aria-label={microphoneCopy.aria}
+                aria-pressed={micState === 'listening'}
+                disabled={!voice.available || pending || micState === 'submitting'}
+                onClick={pressMicrophone}
+              >
+                <MicIcon size={22} /><span>{microphoneCopy.text}</span>
+              </button>
+              <button
+                className={`keyboard-toggle${composerReason ? ' keyboard-toggle--open' : ''}`}
+                type="button"
+                aria-pressed={Boolean(composerReason)}
+                aria-label={composerReason ? '收起文字输入' : '改用文字输入'}
+                disabled={pending || textPathLocked || (Boolean(composerReason) && !composerDismissible)}
+                onClick={toggleKeyboard}
+              >
+                <KeyboardIcon size={22} /><span>文字</span>
+              </button>
+              <button
+                ref={controlsTriggerRef}
+                className="control-toggle"
+                type="button"
+                aria-expanded={controlsOpen}
+                aria-controls="event-console"
+                aria-haspopup="dialog"
+                aria-label={controlsOpen ? '收起演示控制' : '打开演示控制'}
+                onClick={toggleControls}
+              >
+                <ControlsIcon size={22} /><span>演示控制</span>
+              </button>
+            </div>
+            <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
+            {composerReason ? (
+              <form className="voice-composer" data-voice-state={micState} data-composer-reason={composerReason} aria-label="Agent input" onSubmit={(event) => { event.preventDefault(); submitText() }}>
+                {composerNotice && <p className="voice-composer__notice">{composerNotice}</p>}
+                <div className="voice-composer__row">
+                  <input ref={composerInputRef} className="voice-composer__input" type="text" aria-label="任务输入" value={text} disabled={pending || textPathLocked} placeholder="查天气、查日历或调整速度" onChange={(event) => changeText(event.target.value)} />
+                  <button className="voice-composer__send" type="submit" disabled={pending || textPathLocked}>发送</button>
+                </div>
+              </form>
+            ) : null}
+            {error && <p className="brief-error" role="alert">{error}</p>}
+          </section>
+        </>
+      ) : <section className="cockpit-stage" aria-label="机场接人任务">
         <section
           id="task-surface"
           className="task-surface"
@@ -961,7 +1104,33 @@ export default function App({
               : <p className="brief-placeholder">告诉我接谁，我来安排这趟行程。</p>}
           </div>
         </section>
-      </section>
+      </section>}
+
+      {!navigationActive && cockpitContract && spec && runtimeTask && cockpitWindows.length > 0 ? (
+        <WindowManager
+          spec={spec}
+          pending={pending}
+          driving={false}
+          vehicle={{
+            leg: runtimeTask.navigationSimulation?.leg,
+            runState: 'idle',
+            speedTier: runtimeTask.cockpit?.speedMode ?? 'normal',
+            speedKph: 0,
+            progress: runtimeTask.cockpit?.routeProgress ?? 0,
+            distanceKm: runtimeTask.navigationSimulation?.distanceKm ?? 0,
+            travelledKm: 0,
+            remainingDistanceKm: runtimeTask.navigationSimulation?.distanceKm ?? 0,
+            batteryPercent: runtimeTask.navigationSimulation?.initialBatteryPercent ?? vehicleContext.batteryPercent,
+            remainingRangeKm: vehicleContext.remainingRangeKm,
+            remainingSeconds: 0,
+            road: runtimeTask.cockpit?.currentRoad ?? '当前位置',
+            maneuver: '等待开始导航',
+            destination: runtimeTask.navigation?.destination ?? runtimeTask.pickupAirport?.label ?? '当前位置',
+          }}
+          onAction={handleAction}
+          clear={runtimeTask.phase === 'completed'}
+        />
+      ) : null}
 
       {controlsOpen ? (
         <>
