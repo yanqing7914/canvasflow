@@ -70,7 +70,7 @@ describe('AgentApiClient', () => {
       clientRequestId: 'create-1',
       input: { type: 'text', text: '接妈妈，航班 MU5102', source: 'voice', confidence: 0.96 },
       vehicleContext: { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false },
-      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true },
+      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true, cockpitVersion: '1' },
       destination: { id: 'destination-hongqiao-t2', name: '虹桥接机点' },
     })
   })

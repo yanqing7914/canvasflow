@@ -156,7 +156,8 @@ function legacyWindowKind(type: ComponentSpec['type'] | undefined): CockpitWindo
 }
 
 export function windowUISpec(spec: UISpec, window: CockpitWindowSpec): UISpec {
-  const { windows: _windows, ...baseSpec } = spec as CockpitUISpec
+  const baseSpec: CockpitUISpec = { ...spec }
+  delete baseSpec.windows
   const componentIds = new Set(window.componentIds)
   const components = spec.components.filter((component) => componentIds.has(component.id))
   const componentActionIds = new Set(components.flatMap((component) => component.actions ?? []))

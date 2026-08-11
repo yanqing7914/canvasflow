@@ -147,17 +147,19 @@ export function changeNavigationSimulationSpeed(
 }
 
 function snapshotState(snapshot: NavigationSimulationSnapshot): NavigationSimulationState {
-  const {
-    speedKph: _speedKph,
-    elapsedSeconds: _elapsedSeconds,
-    remainingSeconds: _remainingSeconds,
-    remainingDistanceKm: _remainingDistanceKm,
-    traveledDistanceKm: _traveledDistanceKm,
-    batteryPercent: _batteryPercent,
-    etaMs: _etaMs,
-    ...state
-  } = snapshot
-  return state
+  return {
+    leg: snapshot.leg,
+    routeId: snapshot.routeId,
+    distanceKm: snapshot.distanceKm,
+    initialBatteryPercent: snapshot.initialBatteryPercent,
+    estimatedBatteryAtArrival: snapshot.estimatedBatteryAtArrival,
+    profiles: snapshot.profiles,
+    speedMode: snapshot.speedMode,
+    progress: snapshot.progress,
+    anchoredAtMs: snapshot.anchoredAtMs,
+    anchoredProgress: snapshot.anchoredProgress,
+    arrived: snapshot.arrived,
+  }
 }
 
 function clampProgress(value: number): number {

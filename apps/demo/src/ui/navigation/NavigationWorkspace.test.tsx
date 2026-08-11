@@ -1,5 +1,5 @@
 import type { UISpec, VehicleContext } from '@canvasflow/schema'
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { NavigationWorkspace } from './NavigationWorkspace'
 import type { CockpitUISpec, RuntimeNavigationTask } from './contracts'
@@ -60,7 +60,7 @@ describe('NavigationWorkspace', () => {
     const clock = manualClock()
     const onComplete = vi.fn()
     const { container } = render(
-      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} onLegComplete={onComplete} />,
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onLegComplete={onComplete} />,
     )
     const start = container.querySelector('.persistent-route-map__vehicle')?.getAttribute('transform')
     act(() => clock.advance(45_000))
@@ -74,14 +74,13 @@ describe('NavigationWorkspace', () => {
     expect(onComplete).toHaveBeenCalledOnce()
   })
 
-  it('retries a failed arrival handoff without overlapping requests', async () => {
+  it('does not hammer a failed arrival handoff on every simulator tick', async () => {
     const clock = manualClock()
     let finishFirst: ((completed: boolean) => void) | undefined
     const onComplete = vi.fn()
       .mockImplementationOnce(() => new Promise<boolean>((resolve) => { finishFirst = resolve }))
-      .mockResolvedValueOnce(true)
     render(
-      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} onLegComplete={onComplete} />,
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onLegComplete={onComplete} />,
     )
 
     act(() => clock.advance(90_000))
@@ -91,8 +90,26 @@ describe('NavigationWorkspace', () => {
 
     await act(async () => { finishFirst?.(false) })
     act(() => clock.advance(1_000))
-    expect(onComplete).toHaveBeenCalledTimes(2)
+    expect(onComplete).toHaveBeenCalledOnce()
     act(() => clock.advance(1_000))
+    expect(onComplete).toHaveBeenCalledOnce()
+  })
+
+  it('retries a failed arrival handoff only after an explicit retry signal', async () => {
+    const clock = manualClock()
+    const onComplete = vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    const rendered = render(
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onLegComplete={onComplete} />,
+    )
+
+    act(() => clock.advance(90_000))
+    await act(async () => {})
+    expect(onComplete).toHaveBeenCalledOnce()
+
+    rendered.rerender(
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onLegComplete={onComplete} retryLeg={{ leg: 'outbound', nonce: 1 }} />,
+    )
+    await act(async () => {})
     expect(onComplete).toHaveBeenCalledTimes(2)
   })
 
@@ -100,11 +117,11 @@ describe('NavigationWorkspace', () => {
     const clock = manualClock()
     const first = spec()
     const rendered = render(
-      <NavigationWorkspace task={task()} spec={first} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} />,
+      <NavigationWorkspace task={task()} spec={first} initialVehicle={vehicle} clock={clock} pending={false} />,
     )
     const map = screen.getByLabelText('模拟导航地图')
     rendered.rerender(
-      <NavigationWorkspace task={{ ...task(), cockpit: { speedMode: 'normal', hudVisible: false } }} spec={first} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} />,
+      <NavigationWorkspace task={{ ...task(), cockpit: { speedMode: 'normal', hudVisible: false } }} spec={first} initialVehicle={vehicle} clock={clock} pending={false} />,
     )
     expect(screen.getByRole('button', { name: '显示导航信息' })).toBeInTheDocument()
     expect(screen.getByLabelText('最小导航信息')).toHaveTextContent('55')
@@ -114,16 +131,15 @@ describe('NavigationWorkspace', () => {
       controls: { closable: true, minimizable: true, maximizable: true },
     }
     rendered.rerender(
-      <NavigationWorkspace task={{ ...task(), cockpit: { speedMode: 'normal', hudVisible: false } }} spec={spec([weatherWindow])} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} />,
+      <NavigationWorkspace task={{ ...task(), cockpit: { speedMode: 'normal', hudVisible: false } }} spec={spec([weatherWindow])} initialVehicle={vehicle} clock={clock} pending={false} />,
     )
     expect(screen.getByLabelText('模拟导航地图')).toBe(map)
-    expect(screen.getByLabelText('当前位置天气窗口')).toBeInTheDocument()
   })
 
   it('keeps the map mounted when the outbound route is replaced by the return leg', () => {
     const clock = manualClock()
     const rendered = render(
-      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} />,
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} />,
     )
     const map = screen.getByLabelText('模拟导航地图')
     rendered.rerender(
@@ -137,7 +153,6 @@ describe('NavigationWorkspace', () => {
         initialVehicle={vehicle}
         clock={clock}
         pending={false}
-        onAction={vi.fn()}
       />,
     )
     expect(screen.getByLabelText('模拟导航地图')).toBe(map)
@@ -160,7 +175,7 @@ describe('NavigationWorkspace', () => {
       },
     }
     render(
-      <NavigationWorkspace task={backendTask} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} />,
+      <NavigationWorkspace task={backendTask} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} />,
     )
     expect(screen.getByLabelText('最小导航信息')).toHaveTextContent('65')
     act(() => clock.advance(50_000))
@@ -172,29 +187,10 @@ describe('NavigationWorkspace', () => {
     const cancel = vi.fn()
     const clock: NavigationClock = { now: () => 1_000, schedule: () => cancel }
     const rendered = render(
-      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} />,
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} />,
     )
     rendered.unmount()
     expect(cancel).toHaveBeenCalledOnce()
   })
 
-  it('renders live vehicle data and accessible window controls', () => {
-    const clock = manualClock()
-    const statusWindow = {
-      id: 'vehicle-1', kind: 'vehicle-status' as const, title: '车辆状态', componentIds: [], size: 'medium' as const,
-      controls: { closable: true, minimizable: true, maximizable: true },
-    }
-    render(
-      <NavigationWorkspace task={task()} spec={spec([statusWindow])} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} />,
-    )
-    expect(screen.getByLabelText('实时车辆状态')).toHaveTextContent('55 km/h')
-    const minimize = screen.getByRole('button', { name: '最小化车辆状态窗口' })
-    fireEvent.click(minimize)
-    expect(screen.getByRole('button', { name: '恢复车辆状态窗口' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '恢复车辆状态窗口' }))
-    fireEvent.click(screen.getByRole('button', { name: '放大车辆状态窗口' }))
-    expect(screen.getByRole('button', { name: '还原车辆状态窗口' })).toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: '关闭车辆状态窗口' }))
-    expect(screen.queryByLabelText('车辆状态窗口')).not.toBeInTheDocument()
-  })
 })

@@ -2,7 +2,6 @@ import { useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import type { RouteSketch, UISpec, VehicleContext } from '@canvasflow/schema'
 import { PersistentRouteMap } from './PersistentRouteMap'
 import { NavigationHUD } from './NavigationHUD'
-import { WindowManager } from './WindowManager'
 import {
   DEFAULT_SIMULATOR_CONFIG,
   createNavigationSimulatorState,
@@ -23,10 +22,10 @@ export type NavigationWorkspaceProps = {
   initialVehicle: VehicleContext
   clock?: NavigationClock
   pending: boolean
-  onAction: (actionId: string, componentId: string) => void
   onVehicleSnapshot?: (vehicle: VehicleContext) => void
   onSnapshot?: (snapshot: NavigationSnapshot) => void
   onLegComplete?: (leg: NavigationLeg) => boolean | void | Promise<boolean | void>
+  retryLeg?: { leg: NavigationLeg; nonce: number }
   onReminder?: (text: string) => void
   onHudVisibilityChange?: (visible: boolean) => void
 }
@@ -58,10 +57,10 @@ export function NavigationWorkspace({
   initialVehicle,
   clock,
   pending,
-  onAction,
   onVehicleSnapshot,
   onSnapshot,
   onLegComplete,
+  retryLeg,
   onReminder,
   onHudVisibilityChange,
 }: NavigationWorkspaceProps) {
@@ -69,9 +68,11 @@ export function NavigationWorkspace({
   const [state, dispatch] = useReducer(navigationSimulatorReducer, activeClock.now(), createNavigationSimulatorState)
   const [nowMs, setNowMs] = useState(activeClock.now)
   const [localHudExpanded, setLocalHudExpanded] = useState(true)
-  const [reminderText, setReminderText] = useState<string>()
+  const [reminderText, setReminderText] = useState<string | undefined>()
+  const [retryGeneration, setRetryGeneration] = useState(0)
   const completedLeg = useRef<NavigationLeg | undefined>(undefined)
   const completingLeg = useRef<NavigationLeg | undefined>(undefined)
+  const failedLeg = useRef<NavigationLeg | undefined>(undefined)
   const onVehicleSnapshotRef = useRef(onVehicleSnapshot)
   onVehicleSnapshotRef.current = onVehicleSnapshot
   const onSnapshotRef = useRef(onSnapshot)
@@ -121,7 +122,8 @@ export function NavigationWorkspace({
     })
     completedLeg.current = undefined
     completingLeg.current = undefined
-  }, [activeClock, initialVehicle.batteryPercent, phaseLeg, simulatorConfig, state.simulation, task.navigation?.routeId, task.navigationSimulation])
+    failedLeg.current = undefined
+  }, [activeClock, initialVehicle.batteryPercent, phaseLeg, simulatorConfig, state, task.navigation?.routeId, task.navigationSimulation])
 
   useEffect(() => {
     const speedTier = task.cockpit?.speedMode
@@ -142,7 +144,7 @@ export function NavigationWorkspace({
 
   useEffect(() => {
     if (snapshot.runState !== 'arrived' || !snapshot.leg
-      || completedLeg.current === snapshot.leg || completingLeg.current === snapshot.leg) return
+      || completedLeg.current === snapshot.leg || completingLeg.current === snapshot.leg || failedLeg.current === snapshot.leg) return
     const arrivingLeg = snapshot.leg
     if (!onLegComplete) {
       completedLeg.current = arrivingLeg
@@ -152,11 +154,23 @@ export function NavigationWorkspace({
     void Promise.resolve(onLegComplete(arrivingLeg)).then(
       (completed) => {
         if (completed !== false) completedLeg.current = arrivingLeg
+        else failedLeg.current = arrivingLeg
         completingLeg.current = undefined
       },
-      () => { completingLeg.current = undefined },
+      () => {
+        failedLeg.current = arrivingLeg
+        completingLeg.current = undefined
+      },
     )
-  }, [nowMs, onLegComplete, snapshot.leg, snapshot.runState])
+  }, [nowMs, onLegComplete, retryGeneration, snapshot.leg, snapshot.runState])
+
+  useEffect(() => {
+    if (!retryLeg || retryLeg.leg !== snapshot.leg || snapshot.runState !== 'arrived') return
+    failedLeg.current = undefined
+    completingLeg.current = undefined
+    completedLeg.current = undefined
+    setRetryGeneration((current) => current + 1)
+  }, [retryLeg, snapshot.leg, snapshot.runState])
 
   useEffect(() => {
     const reminder = pendingManeuverReminder(state, snapshot)
@@ -167,7 +181,7 @@ export function NavigationWorkspace({
   }, [onReminder, snapshot, state])
 
   return (
-    <section className="navigation-workspace" data-session-key={task.taskId} data-leg={leg}>
+    <section className="navigation-workspace" data-session-key={task.taskId} data-leg={leg} data-pending={pending}>
       <PersistentRouteMap
         sessionKey={task.taskId}
         routeKey={`${leg}:${task.navigation?.routeId ?? leg}`}
@@ -191,15 +205,6 @@ export function NavigationWorkspace({
           if (onHudVisibilityChange) onHudVisibilityChange(visible)
           else setLocalHudExpanded(visible)
         }}
-      />
-      <WindowManager
-        spec={spec}
-        pending={pending}
-        driving={snapshot.runState === 'driving'}
-        vehicle={snapshot}
-        onAction={onAction}
-        clear={task.phase === 'completed'}
-        preserveMissing={(spec as unknown as { windows?: unknown }).windows === undefined}
       />
     </section>
   )

@@ -20,6 +20,8 @@ export type MockAMapSnapshot = {
 export async function installMockAMap(page: Page): Promise<void> {
   await page.addInitScript(() => {
     type Point = [number, number]
+    type MockOverlay = { mount?: (map: MockMap) => void; remove?: () => void }
+    const SVG_NS = 'http://www.w3.org/2000/svg'
     const snapshot = {
       mapCreates: 0,
       mapDestroys: 0,
@@ -75,13 +77,91 @@ export async function installMockAMap(page: Page): Promise<void> {
       return [lng, lat]
     }
 
+    function svgElement(name: string, attributes: Record<string, string>) {
+      const element = document.createElementNS(SVG_NS, name)
+      for (const [key, value] of Object.entries(attributes)) element.setAttribute(key, value)
+      return element
+    }
+
+    function project([lng, lat]: Point): Point {
+      const x = 70 + (lng - 121.27) / 0.2 * 860
+      const y = 70 + (31.235 - lat) / 0.05 * 480
+      return [x, y]
+    }
+
     class MockMap {
+      readonly overlays = svgElement('g', { 'data-layer': 'route-overlays' })
+      readonly container: HTMLElement
+
       constructor(container: HTMLElement) {
         snapshot.mapCreates += 1
+        this.container = container
+        container.replaceChildren()
         container.dataset.mockAmap = 'ready'
+        container.style.background = '#09111b'
+
+        const map = svgElement('svg', {
+          viewBox: '0 0 1000 620', width: '100%', height: '100%',
+          preserveAspectRatio: 'xMidYMid slice', 'aria-hidden': 'true',
+        })
+        map.style.display = 'block'
+        map.append(svgElement('rect', { width: '1000', height: '620', fill: '#0b1521' }))
+
+        const blocks = svgElement('g', { fill: '#101e2b', stroke: '#162a3b', 'stroke-width': '1' })
+        for (let row = 0; row < 5; row += 1) {
+          for (let column = 0; column < 8; column += 1) {
+            blocks.append(svgElement('rect', {
+              x: String(48 + column * 122 + (row % 2) * 17), y: String(38 + row * 116),
+              width: '82', height: '72', rx: '10',
+            }))
+          }
+        }
+        map.append(blocks)
+
+        const roads = svgElement('g', { fill: 'none', 'stroke-linecap': 'round' })
+        const roadPaths = [
+          'M -30 165 C 210 150 360 190 560 176 S 820 116 1040 138',
+          'M -20 320 C 190 292 350 342 540 310 S 780 252 1035 285',
+          'M 70 600 C 170 480 250 405 350 300 S 560 130 690 -20',
+          'M 305 650 C 365 500 455 420 590 348 S 820 220 930 -30',
+          'M -10 505 C 240 470 385 505 565 478 S 820 420 1035 445',
+        ]
+        for (const path of roadPaths) {
+          roads.append(svgElement('path', { d: path, stroke: '#1f3448', 'stroke-width': '18', opacity: '0.88' }))
+          roads.append(svgElement('path', { d: path, stroke: '#4a6075', 'stroke-width': '2', opacity: '0.42' }))
+        }
+        map.append(roads)
+
+        const labels = [
+          ['延安西路', '730', '145'], ['内环高架', '500', '294'], ['虹桥路', '230', '435'],
+          ['当前位置', '855', '205'], ['虹桥机场 T2', '88', '520'],
+        ]
+        const labelLayer = svgElement('g', {
+          fill: '#7990a8', 'font-family': 'sans-serif', 'font-size': '17', 'font-weight': '600', opacity: '0.86',
+        })
+        for (const [label, x, y] of labels) {
+          const text = svgElement('text', { x: x!, y: y! })
+          text.textContent = label!
+          labelLayer.append(text)
+        }
+        map.append(labelLayer, this.overlays)
+        container.append(map)
+
+        const watermark = document.createElement('span')
+        watermark.textContent = 'E2E MOCK · 上海确定性道路底图'
+        Object.assign(watermark.style, {
+          position: 'absolute', left: '20px', bottom: '18px', zIndex: '2',
+          color: '#8195aa', font: '600 11px/1.2 sans-serif', letterSpacing: '0.08em',
+          textTransform: 'uppercase', textShadow: '0 1px 4px #000',
+        })
+        container.append(watermark)
       }
-      add() {}
-      remove() {}
+      add(value: MockOverlay | MockOverlay[]) {
+        for (const overlay of Array.isArray(value) ? value : [value]) overlay.mount?.(this)
+      }
+      remove(value: MockOverlay | MockOverlay[]) {
+        for (const overlay of Array.isArray(value) ? value : [value]) overlay.remove?.()
+      }
       setFitView() {}
       setCenter(center: Point) { snapshot.centers.push(center) }
       setZoomAndCenter(_zoom: number, center: Point) { snapshot.centers.push(center) }
@@ -92,7 +172,10 @@ export async function installMockAMap(page: Page): Promise<void> {
       }
       off(type: string, listener: () => void) { listeners.get(type)?.delete(listener) }
       resize() {}
-      destroy() { snapshot.mapDestroys += 1 }
+      destroy() {
+        snapshot.mapDestroys += 1
+        this.container.replaceChildren()
+      }
     }
 
     class MockDriving {
@@ -112,18 +195,61 @@ export async function installMockAMap(page: Page): Promise<void> {
     }
 
     class MockPolyline {
-      constructor(options: unknown) { void options }
-      setPath(path: Point[]) { void path }
+      readonly line = svgElement('polyline', { fill: 'none', 'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
+      path: Point[]
+
+      constructor(options: { path?: Point[]; strokeColor?: string; strokeWeight?: number; strokeOpacity?: number }) {
+        this.path = options.path ?? []
+        this.line.setAttribute('stroke', options.strokeColor ?? '#5b93ff')
+        this.line.setAttribute('stroke-width', String((options.strokeWeight ?? 6) * 1.35))
+        this.line.setAttribute('opacity', String(options.strokeOpacity ?? 1))
+        this.update()
+      }
+      mount(map: MockMap) { map.overlays.append(this.line) }
+      remove() { this.line.remove() }
+      setPath(path: Point[]) {
+        this.path = path
+        this.update()
+      }
+      update() {
+        this.line.setAttribute('points', this.path.map((raw) => project(point(raw)).join(',')).join(' '))
+      }
     }
 
     class MockMarker {
+      readonly marker = svgElement('g', {})
+      position?: Point
+      angle = 0
+
       constructor(options: { position?: Point; angle?: number }) {
+        this.position = options.position
+        this.angle = options.angle ?? 0
+        this.marker.append(
+          svgElement('circle', { r: '20', fill: '#397cff', opacity: '0.2', stroke: '#8eb8ff', 'stroke-width': '2' }),
+          svgElement('path', { d: 'M 0 -15 L 10 11 L 0 6 L -10 11 Z', fill: '#64a1ff', stroke: '#f4f8ff', 'stroke-width': '2' }),
+        )
         if (options.position) snapshot.markerPositions.push(options.position)
         if (typeof options.angle === 'number') snapshot.markerAngles.push(options.angle)
+        this.update()
       }
-      setPosition(position: Point) { snapshot.markerPositions.push(position) }
-      setAngle(angle: number) { snapshot.markerAngles.push(angle) }
+      mount(map: MockMap) { map.overlays.append(this.marker) }
+      remove() { this.marker.remove() }
+      setPosition(position: Point) {
+        this.position = position
+        snapshot.markerPositions.push(position)
+        this.update()
+      }
+      setAngle(angle: number) {
+        this.angle = angle
+        snapshot.markerAngles.push(angle)
+        this.update()
+      }
       setContent(content: string | HTMLElement) { void content }
+      update() {
+        if (!this.position) return
+        const [x, y] = project(point(this.position))
+        this.marker.setAttribute('transform', `translate(${x} ${y}) rotate(${this.angle})`)
+      }
     }
 
     class MockLngLat {

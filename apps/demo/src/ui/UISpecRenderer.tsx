@@ -707,6 +707,7 @@ function WeatherCard({ component }: { component: Extract<ComponentSpec, { type: 
  */
 function ScheduleCard({ component }: { component: Extract<ComponentSpec, { type: 'schedule-card' }> }) {
   const { props } = component
+  const statusLabels = { ended: '已结束', ongoing: '进行中', upcoming: '即将开始' } as const
   return (
     <ComponentSurface component={component} className="ui-schedule-card">
       <header className="ui-schedule-card__header">
@@ -724,6 +725,9 @@ function ScheduleCard({ component }: { component: Extract<ComponentSpec, { type:
             >
               <time className="ui-schedule-card__time" dateTime={event.startAt}>{formatTime(event.startAt)}</time>
               <span className="ui-schedule-card__title">{event.title}</span>
+              {event.status && (
+                <span className="ui-schedule-card__status" data-status={event.status}>{statusLabels[event.status]}</span>
+              )}
               {event.location && <span className="ui-schedule-card__location">{event.location}</span>}
               {event.atRisk && <span className="ui-schedule-card__risk">可能迟到</span>}
             </li>

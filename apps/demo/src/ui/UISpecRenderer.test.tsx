@@ -434,8 +434,8 @@ describe('UISpecRenderer', () => {
         props: {
           dateLabel: '今天',
           events: [
-            { eventId: 'e-1', title: '豆豆的睡前故事', startAt: '2026-07-22T21:30:00+08:00', location: '家' },
-            { eventId: 'e-2', title: '家庭电话', startAt: '2026-07-22T22:00:00+08:00' },
+            { eventId: 'e-1', title: '豆豆的睡前故事', startAt: '2026-07-22T21:30:00+08:00', location: '家', status: 'ongoing' },
+            { eventId: 'e-2', title: '家庭电话', startAt: '2026-07-22T22:00:00+08:00', status: 'upcoming' },
           ],
           moreCount: 3,
           freshness: 'fixture',
@@ -447,6 +447,8 @@ describe('UISpecRenderer', () => {
 
     const list = screen.getByRole('list', { name: '今日日程列表' })
     expect(list.textContent).toMatch(/21:30.*豆豆的睡前故事.*家.*22:00.*家庭电话/u)
+    expect(screen.getByText('进行中')).toHaveAttribute('data-status', 'ongoing')
+    expect(screen.getByText('即将开始')).toHaveAttribute('data-status', 'upcoming')
     expect(screen.getByText('还有 3 项')).toBeInTheDocument()
     expect(document.querySelector('.ui-schedule-card__empty')).not.toBeInTheDocument()
   })

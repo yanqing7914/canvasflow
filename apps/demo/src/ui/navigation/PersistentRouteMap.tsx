@@ -62,7 +62,7 @@ export function PersistentRouteMap({ sessionKey, routeKey, destination, progress
 
   useEffect(() => {
     if (!handle.current) return
-    void handle.current.setRoute({ ...sketch, progress }).then((replaced) => {
+    void handle.current.setRoute({ ...sketchRef.current, progress: progressRef.current }).then((replaced) => {
       if (!replaced) setSource('sketch')
     })
   }, [routeKey])

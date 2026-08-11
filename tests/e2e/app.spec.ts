@@ -1,5 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
-import path from 'node:path'
+import { expect, test, type Page, type TestInfo } from '@playwright/test'
 import { emitMockAMapInteraction, installMockAMap, mockAMapSnapshot } from './mock-amap'
 
 const legacyTaskText = '我现在要去机场接妈妈和豆豆'
@@ -132,7 +131,7 @@ async function expectNoHorizontalOverflow(page: Page) {
 /** Runs the real navigation reducer on explicit E2E time instead of wall time. */
 async function installControllableNavigationClock(page: Page) {
   await page.addInitScript(() => {
-    let nowMs = Date.now()
+    let nowMs = Date.parse('2026-08-11T09:30:00+08:00')
     const scheduled = new Set<() => void>()
     Object.assign(window, {
       __canvasflowNavigationClock: {
@@ -180,8 +179,10 @@ async function cockpitProgress(page: Page): Promise<number> {
   return Number(text.match(/(\d+)%/u)?.[1] ?? 0)
 }
 
-function cockpitArtifact(testInfo: { config: { rootDir: string } }, name: string) {
-  return path.join(testInfo.config.rootDir, '../../artifacts/cockpit-agent-v1', name)
+async function captureCockpitScreenshot(page: Page, testInfo: TestInfo, name: string) {
+  const screenshotPath = testInfo.outputPath(name)
+  await page.screenshot({ path: screenshotPath, fullPage: true })
+  await testInfo.attach(name, { path: screenshotPath, contentType: 'image/png' })
 }
 
 /**
@@ -344,7 +345,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(departedMap.centers.length).toBeGreaterThan(1)
   expect(departedMap.markerAngles.length).toBeGreaterThan(0)
   expect(departedMap.routeSearches[0]!.origin[0]).toBeGreaterThan(departedMap.routeSearches[0]!.destination[0])
-  await page.screenshot({ path: cockpitArtifact(testInfo, 'desktop-map-hud.png'), fullPage: true })
+  await captureCockpitScreenshot(page, testInfo, 'desktop-map-hud.png')
 
   await emitMockAMapInteraction(page, 'dragstart')
   await expect(page.getByRole('button', { name: '回到车辆位置' })).toBeVisible()
@@ -359,6 +360,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(calendar).toContainText('her开发日会')
   await expect(calendar).toContainText('新建her')
   await expect(calendar).toContainText('A2A调研')
+  await expect(calendar.getByText('即将开始')).toHaveCount(3)
 
   const progressBeforeSpeedUp = await cockpitProgress(page)
   await sendText(page, '跑快点')
@@ -368,12 +370,12 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(weather).toBeVisible()
   await expect(calendar).toBeVisible()
   expect((await mockAMapSnapshot(page)).mapCreates).toBe(1)
-  await page.screenshot({ path: cockpitArtifact(testInfo, 'desktop-map-windows.png'), fullPage: true })
+  await captureCockpitScreenshot(page, testInfo, 'desktop-map-windows.png')
 
   await advanceNavigationClock(page, 40_000)
   await expect(page.getByLabel('导航信息')).toContainText('已到达机场，等待接人')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'waiting-for-passengers')
-  await page.screenshot({ path: cockpitArtifact(testInfo, 'desktop-waiting-at-airport.png'), fullPage: true })
+  await captureCockpitScreenshot(page, testInfo, 'desktop-waiting-at-airport.png')
   await sendText(page, '接到人了')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'passengers-onboard')
   const passenger = await cockpitWindow(page, 'passenger-onboard')
@@ -427,7 +429,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(completedMap.mapDestroys).toBe(1)
   expect(completedMap.markerPositions.length).toBeGreaterThan(departedMap.markerPositions.length)
 
-  await page.screenshot({ path: cockpitArtifact(testInfo, 'desktop-completed.png'), fullPage: true })
+  await captureCockpitScreenshot(page, testInfo, 'desktop-completed.png')
 
   // Completion retires the cockpit session rather than leaving a hidden task to
   // receive the next utterance. A fresh request proves the opening prompt starts
@@ -480,7 +482,7 @@ test('keeps multiple cockpit windows inside a narrow viewport @cockpit @layout',
   await expect(vehicle.getByRole('button', { name: '还原车辆状态窗口' })).toBeVisible()
   await expect(vehicle.getByRole('button', { name: '关闭车辆状态窗口' })).toBeVisible()
   await expectNoHorizontalOverflow(page)
-  await page.screenshot({ path: cockpitArtifact(testInfo, 'mobile-windows.png'), fullPage: true })
+  await captureCockpitScreenshot(page, testInfo, 'mobile-windows.png')
 })
 
 test('renders the UISpec surface responsively and keeps primary controls keyboard accessible @layout', async ({ page }, testInfo) => {

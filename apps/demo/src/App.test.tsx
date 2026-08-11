@@ -1,4 +1,4 @@
-import type { ComponentProps } from 'react'
+import { StrictMode, type ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -201,9 +201,10 @@ describe('demo integration', () => {
     await user.type(input, '开始回家')
     await user.click(screen.getByRole('button', { name: '发送' }))
     await waitFor(() => expect(event).toHaveBeenCalledOnce())
-    expect(event).toHaveBeenCalledWith(expect.anything(), {
+    expect(event).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       type: 'user.input', text: '开始回家',
-    })
+    }))
+    expect(event.mock.calls[0]?.[1]).not.toHaveProperty('navigationSnapshot')
   })
 
   it('submits the terminal simulator snapshot with the arrival event', async () => {
@@ -251,6 +252,150 @@ describe('demo integration', () => {
         batteryPercent: 58, remainingDistanceKm: 0,
       }),
     })))
+  })
+
+  it('keeps a stable arrival event id and retries a 200 no-op handoff from the error window', async () => {
+    let nowMs = 1_000
+    let tick: (() => void) | undefined
+    const navigationClock: NavigationClock = {
+      now: () => nowMs,
+      schedule: (callback) => { tick = callback; return () => { tick = undefined } },
+    }
+    const task = {
+      ...createCockpitTask('arrival-retry-task'), phase: 'outbound-driving',
+      pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+      flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-08-11T15:30:00+08:00', terminal: 'T2' },
+      navigation: { routeId: 'arrival-retry-route', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'active' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: 'arrival-retry-route', distanceKm: 32, initialBatteryPercent: 72,
+        estimatedBatteryAtArrival: 58, profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+    } as AirportPickupTaskState
+    const waiting = apiResponse({ ...task, phase: 'waiting-for-passengers', navigation: { ...task.navigation!, status: 'arrived' } } as AirportPickupTaskState)
+    const event = vi.fn().mockResolvedValueOnce(apiResponse(task)).mockResolvedValueOnce(waiting)
+    const api = { create: vi.fn().mockResolvedValue(apiResponse(task)), event, action: vi.fn(), confirmation: vi.fn() }
+    const user = userEvent.setup()
+    render(<AppComponent api={api} voiceEnabled={false} navigationClock={navigationClock} initialText="开始" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    nowMs += 90_000
+    act(() => { tick?.() })
+    expect(await screen.findByLabelText('操作未完成窗口')).toHaveTextContent('到达确认未推进任务')
+    await user.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(screen.getByLabelText('导航信息')).toHaveTextContent('已到达机场，等待接人'))
+    expect(event).toHaveBeenCalledTimes(2)
+    expect(event.mock.calls[0]?.[1]).toMatchObject({ eventId: 'navigation-outbound-arrived-arrival-retry-task' })
+    expect(event.mock.calls[1]?.[1]).toMatchObject({ eventId: 'navigation-outbound-arrived-arrival-retry-task' })
+  })
+
+  it('does not let an older HTTP response roll back a newer SSE task or UI revision', async () => {
+    const initial = apiResponse(createInitialTask('pickup-race', '2026-07-22T12:00:00+08:00'))
+    let releaseEvent: ((value: AgentResponse) => void) | undefined
+    let onUpdate: ((value: TaskUpdateEnvelope) => void) | undefined
+    const stale = { ...initial, ui: { ...initial.ui, uiRevision: initial.ui.uiRevision + 1 } }
+    const newerTask = { ...initial.task, taskRevision: initial.task.taskRevision + 2, phase: 'preparing' as const }
+    const newerUi = { ...composePickupSpec(newerTask), uiRevision: initial.ui.uiRevision + 3 }
+    const api = {
+      create: vi.fn().mockResolvedValue(initial),
+      event: vi.fn(() => new Promise<AgentResponse>((resolve) => { releaseEvent = resolve })), action: vi.fn(), confirmation: vi.fn(),
+      subscribeTaskUpdates: vi.fn((_taskId: string, callback: (value: TaskUpdateEnvelope) => void) => { onUpdate = callback; return { close: vi.fn() } }),
+    }
+    const user = userEvent.setup()
+    render(<AppComponent api={api} voiceEnabled={false} initialText="开始" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(onUpdate).toBeTypeOf('function'))
+    const input = screen.getByLabelText('任务输入')
+    await user.clear(input)
+    await user.type(input, '补充信息')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    act(() => onUpdate?.({ type: 'task.updated', cursor: 2, taskId: 'pickup-race', snapshot: { task: newerTask, ui: newerUi } }))
+    await act(async () => { releaseEvent?.(stale) })
+
+    const drawer = await openControls(user)
+    expect(drawer).toHaveTextContent(`taskRevision ${newerTask.taskRevision}`)
+    expect(drawer).toHaveTextContent(`uiRevision ${newerUi.uiRevision}`)
+  })
+
+  it('keeps the live initial navigation reminder after StrictMode effect replay', async () => {
+    const speech = createFakeSpeech()
+    const task = {
+      ...createCockpitTask('reminder-task'), phase: 'outbound-driving',
+      pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+      flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-08-11T15:30:00+08:00', terminal: 'T2' },
+      navigation: { routeId: 'reminder-route', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'active' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: 'reminder-route', distanceKm: 32, initialBatteryPercent: 72,
+        estimatedBatteryAtArrival: 58, profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+    } as AirportPickupTaskState
+    const api = { create: vi.fn().mockResolvedValue(apiResponse(task)), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<StrictMode><AppComponent api={api} speech={speech.deps} initialTask={task} initialNavigationReminder="前方 300 米右转" /></StrictMode>)
+
+    await waitFor(() => expect(speech.synthesis.spoken.length).toBeGreaterThan(0))
+    const active = speech.synthesis.spoken.at(-1)
+    expect(active).toBeDefined()
+    act(() => { active?.onend?.() })
+  })
+
+  it('shows cockpit processing and retry windows without replacing the map', async () => {
+    const user = userEvent.setup()
+    let finishWeather: ((response: AgentResponse) => void) | undefined
+    const task: AirportPickupTaskState = {
+      ...createCockpitTask('operation-task'), phase: 'outbound-driving',
+      pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+      flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-08-11T15:30:00+08:00', terminal: 'T2' },
+      navigation: { routeId: 'operation-route', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'active' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: 'operation-route', distanceKm: 32,
+        initialBatteryPercent: 72, estimatedBatteryAtArrival: 58,
+        profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+    } as AirportPickupTaskState
+    const response = apiResponse(task)
+    const weatherResponse = {
+      ...response,
+      ui: {
+        ...response.ui,
+        uiRevision: response.ui.uiRevision + 1,
+        components: [...response.ui.components, { id: 'weather-result', type: 'weather-card' as const, props: { location: '延安西路', timeLabel: '现在', temperatureC: 29, condition: 'cloudy' as const, conditionLabel: '多云', freshness: 'fixture' as const } }],
+        windows: [{ id: 'weather-result-window', kind: 'weather' as const, title: '当前位置天气', componentIds: ['weather-result'], size: 'compact' as const, controls: { closable: true, minimizable: true, maximizable: true } }],
+      },
+    }
+    const event = vi.fn()
+      .mockImplementationOnce(() => new Promise<AgentResponse>((resolve) => { finishWeather = resolve }))
+      .mockRejectedValueOnce(Object.assign(new Error('天气服务暂时不可用'), { retryable: true }))
+      .mockResolvedValueOnce(weatherResponse)
+    const api = { create: vi.fn().mockResolvedValue(response), event, action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="开始" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    const map = await screen.findByLabelText('模拟导航地图')
+    const input = screen.getByLabelText('任务输入')
+    await user.clear(input)
+    await user.type(input, '查天气')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByLabelText('正在查询天气窗口')).toBeInTheDocument()
+    expect(screen.getByLabelText('模拟导航地图')).toBe(map)
+    await act(async () => { finishWeather?.(response) })
+
+    await user.clear(input)
+    await user.type(input, '查天气')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByLabelText('操作未完成窗口')).toHaveTextContent('天气服务暂时不可用')
+    await user.click(screen.getByRole('button', { name: '重试' }))
+    expect(await screen.findByLabelText('当前位置天气窗口')).toBeInTheDocument()
+    expect(event).toHaveBeenCalledTimes(3)
+    expect(screen.getByLabelText('模拟导航地图')).toBe(map)
   })
 
   /**

@@ -13,6 +13,7 @@ export type WindowManagerProps = {
   onAction: (actionId: string, componentId: string) => void
   clear: boolean
   preserveMissing?: boolean
+  onWindowClose?: (windowId: string) => void
 }
 
 type DragState = { id: string; startX: number; startY: number; originX: number; originY: number }
@@ -21,7 +22,7 @@ function viewport() {
   return { width: window.innerWidth, height: window.innerHeight }
 }
 
-export function WindowManager({ spec, pending, driving, vehicle, onAction, clear, preserveMissing = false }: WindowManagerProps) {
+export function WindowManager({ spec, pending, driving, vehicle, onAction, clear, preserveMissing = false, onWindowClose }: WindowManagerProps) {
   const [state, dispatch] = useReducer(windowManagerReducer, undefined, createWindowManagerState)
   const frozenSpecs = useRef(new Map<string, UISpec>())
   const previousFocus = useRef(new Map<string, HTMLElement | null>())
@@ -81,6 +82,7 @@ export function WindowManager({ spec, pending, driving, vehicle, onAction, clear
   function close(windowSpec: CockpitWindowSpec) {
     dispatch({ type: 'close', id: windowSpec.id })
     frozenSpecs.current.delete(windowSpec.id)
+    onWindowClose?.(windowSpec.id)
     queueMicrotask(() => previousFocus.current.get(windowSpec.id)?.focus())
   }
 
@@ -145,15 +147,57 @@ export function WindowManager({ spec, pending, driving, vehicle, onAction, clear
             {!minimized && (
               <div className="cockpit-window__body">
                 {window.spec.kind === 'vehicle-status' && <VehicleStatus vehicle={vehicle} />}
+                {window.spec.kind === 'processing' && <OperationStatus kind="processing" renderedSpec={renderedSpec} />}
+                {window.spec.kind === 'error' && <OperationStatus kind="error" renderedSpec={renderedSpec} onAction={onAction} pending={pending} />}
                 {window.spec.kind !== 'vehicle-status' && renderedSpec && renderedSpec.components.length > 0
+                  && window.spec.kind !== 'processing' && window.spec.kind !== 'error'
                   ? <UISpecRenderer driving={driving} pending={pending} spec={renderedSpec} onAction={onAction} />
-                  : window.spec.kind !== 'vehicle-status' && <WindowEmpty kind={window.spec.kind} />}
+                  : window.spec.kind !== 'vehicle-status' && window.spec.kind !== 'processing' && window.spec.kind !== 'error'
+                    && <WindowEmpty kind={window.spec.kind} />}
               </div>
             )}
           </article>
         )
       })}
     </section>
+  )
+}
+
+function OperationStatus({
+  kind,
+  renderedSpec,
+  onAction,
+  pending = false,
+}: {
+  kind: 'processing' | 'error'
+  renderedSpec?: UISpec
+  onAction?: WindowManagerProps['onAction']
+  pending?: boolean
+}) {
+  const component = renderedSpec?.components.find((candidate) => candidate.type === 'status-banner')
+  const action = kind === 'error' ? renderedSpec?.actions[0] : undefined
+  const title = component?.type === 'status-banner'
+    ? component.props.title
+    : kind === 'processing' ? '正在处理' : '操作未完成'
+  const message = component?.type === 'status-banner'
+    ? component.props.message
+    : kind === 'processing' ? '地图和车辆仍在继续。' : '地图和导航仍在继续。'
+  return (
+    <div className="cockpit-operation" role={kind === 'error' ? 'alert' : 'status'} aria-live={kind === 'error' ? 'assertive' : 'polite'}>
+      <span className="cockpit-operation__pulse" aria-hidden="true" />
+      <strong>{title}</strong>
+      {message && <p>{message}</p>}
+      {action && component && onAction ? (
+        <button
+          className="ui-action ui-action--primary"
+          type="button"
+          disabled={pending}
+          onClick={() => onAction(action.id, component.id)}
+        >
+          {action.label}
+        </button>
+      ) : null}
+    </div>
   )
 }
 

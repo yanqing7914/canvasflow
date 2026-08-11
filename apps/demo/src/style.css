@@ -321,6 +321,7 @@ a:focus-visible {
   overflow: visible;
 }
 .cockpit-window[data-kind='calendar'] .ui-schedule-card__list {
+  display: flex;
   width: 100%;
   flex-direction: column;
   align-items: stretch;
@@ -330,7 +331,7 @@ a:focus-visible {
 .cockpit-window[data-kind='calendar'] .ui-schedule-card__event {
   display: grid;
   width: 100%;
-  grid-template-columns: minmax(58px, auto) minmax(0, 1fr);
+  grid-template-columns: minmax(58px, auto) minmax(0, 1fr) auto;
   gap: 4px 10px;
   padding: 10px 0;
 }
@@ -348,6 +349,11 @@ a:focus-visible {
   border-top: 1px solid rgba(164, 190, 224, 0.15);
 }
 .cockpit-window__empty { margin: 0; color: #c3d0df; font-size: 17px; line-height: 1.6; }
+.cockpit-operation { display: grid; gap: 10px; }
+.cockpit-operation__pulse { width: 11px; height: 11px; border-radius: 50%; background: #6ea2ff; box-shadow: 0 0 0 7px rgba(110, 162, 255, 0.14), 0 0 18px rgba(110, 162, 255, 0.72); }
+.cockpit-operation strong { font-size: 20px; line-height: 1.25; }
+.cockpit-operation p { margin: 0; color: #c3d0df; line-height: 1.55; }
+.cockpit-window[data-kind='error'] .cockpit-operation__pulse { background: #f28b8b; box-shadow: 0 0 0 7px rgba(242, 139, 139, 0.14), 0 0 18px rgba(242, 139, 139, 0.7); }
 .vehicle-status-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 0; }
 .vehicle-status-grid > div { min-width: 0; border-radius: 12px; padding: 13px; background: rgba(42, 61, 85, 0.55); }
 .vehicle-status-grid dt { color: #9eafc3; font-size: 12px; font-weight: 650; }
@@ -2663,6 +2669,20 @@ a:focus-visible {
   color: var(--muted);
   white-space: nowrap;
 }
+
+.ui-schedule-card__status {
+  border: 1px solid color-mix(in srgb, var(--blue) 38%, transparent);
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.ui-schedule-card__status[data-status='ongoing'] { border-color: rgba(72, 205, 148, 0.45); color: #65dca4; }
+.ui-schedule-card__status[data-status='ended'] { opacity: 0.66; }
 
 /* An event the projected return would miss: the time keeps the strip's
    at-risk amber and a short chip says why, so the query card and the strip
