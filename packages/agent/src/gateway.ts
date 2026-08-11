@@ -21,6 +21,8 @@ import {
   type UISpec,
   type ProviderMode,
   type WeatherOutput,
+  type NavigationCommandSnapshot,
+  type VehicleContext,
 } from '@canvasflow/schema'
 import {
   buildLandingNotifyContent,
@@ -84,6 +86,48 @@ const returnTripPolicyErrorCodes = new Set([
   'VEHICLE_CONTEXT_REQUIRED',
   'VEHICLE_MOVING',
 ])
+
+type SanitizedCockpitSnapshot = {
+  vehicle: VehicleContext
+  remainingDistanceKm: number
+  eta?: string
+  roadName: string
+  weatherLocationId: string
+}
+
+function withinEnvelope(actual: number, expected: number, tolerance: number): boolean {
+  return Number.isFinite(actual) && Math.abs(actual - expected) <= tolerance
+}
+
+function cockpitLocationForSnapshot(task: AirportPickupTaskState, progress: number): {
+  roadName: string
+  weatherLocationId: string
+} {
+  const outbound = task.navigationSimulation?.leg === 'outbound'
+  const airportLocationId = task.pickupAirport?.code === 'PVG' ? 'destination-pudong-t2' : 'destination-hongqiao-t2'
+  if (progress >= 1) {
+    return outbound
+      ? { roadName: task.pickupAirport?.label ?? '机场接人点', weatherLocationId: airportLocationId }
+      : { roadName: '家', weatherLocationId: 'destination-home' }
+  }
+  if (progress < 0.34) return { roadName: '延安西路', weatherLocationId: 'navigation-segment-origin' }
+  if (progress < 0.67) return { roadName: '内环高架', weatherLocationId: 'navigation-segment-elevated' }
+  return outbound
+    ? { roadName: '虹桥路', weatherLocationId: 'navigation-segment-airport' }
+    : { roadName: '沪青平公路', weatherLocationId: 'navigation-segment-homeward' }
+}
+
+function returnBatteryAtArrival(
+  outbound: AirportPickupTaskState,
+  returnDistanceKm: number,
+  currentBatteryPercent: number,
+): number {
+  const seed = outbound.navigationSimulation
+  const perKm = seed && seed.distanceKm > 0
+    ? Math.max(0, (seed.initialBatteryPercent - seed.estimatedBatteryAtArrival) / seed.distanceKm)
+    : 0
+  return Math.max(0, Math.min(currentBatteryPercent, currentBatteryPercent - perKm * returnDistanceKm))
+}
 
 /**
  * The operation side answers are replayed under.
@@ -1529,6 +1573,9 @@ export class AgentGateway {
     const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
     const shouldSpeak = request.event.type === 'user.input' && request.event.source === 'voice' && supportsTts
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
+    const commandSnapshot = request.event.type === 'user.input' && request.event.navigationSnapshot
+      ? this.#sanitizeCockpitSnapshot(current, request.event.navigationSnapshot, timestamp)
+      : undefined
 
     if (request.event.type === 'user.input') {
       const plan = this.#planUserInput(request.event.text, current.task, request.event.eventId, timestamp)
@@ -1558,22 +1605,30 @@ export class AgentGateway {
       if (plan.intent === 'request-return') {
         if (current.task.phase !== 'passengers-onboard') return this.#cockpitNoop(current, request, startedAt, '请先确认乘客已经上车。')
         const routeReads = this.#orchestrator.resolveCockpitRoute?.(taskId, request.clientRequestId, {
-          leg: 'return', vehicle: current.requestContext?.vehicle,
+          leg: 'return', vehicle: commandSnapshot?.vehicle ?? current.requestContext?.vehicle,
         })
         if (!routeReads) throw new AgentGatewayError('PROVIDER_FAILED', 'Return route provider is unavailable', true, current)
+        const route = {
+          ...routeReads.route,
+          data: {
+            ...routeReads.route.data,
+            estimatedBatteryAtArrival: returnBatteryAtArrival(current.task, routeReads.route.data.distanceKm, routeReads.vehicle.data.batteryPercent),
+          },
+        }
         const next = requestCockpitReturn(current.task, {
-          route: routeReads.route.data, batteryPercent: routeReads.vehicle.data.batteryPercent, at: timestamp,
+          route: route.data,
+          batteryPercent: routeReads.vehicle.data.batteryPercent, at: timestamp,
         })
         const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
-          ...current.toolResults, 'navigation.plan-route': routeReads.route, 'vehicle.get-status': routeReads.vehicle,
+          ...current.toolResults, 'navigation.plan-route': route, 'vehicle.get-status': routeReads.vehicle,
         }, current.requestContext, current.effectReceipts)))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: '返程路线已准备好，请确认开始返程。', shouldSpeak })
       }
-      if (plan.intent === 'check-weather') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'weather')
+      if (plan.intent === 'check-weather') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'weather', commandSnapshot)
       if (plan.intent === 'check-schedule' || plan.intent === 'view-calendar') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'calendar')
       if (plan.intent === 'check-flight-detail') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'flight-detail')
-      if (plan.intent === 'check-vehicle-status') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'vehicle-status')
+      if (plan.intent === 'check-vehicle-status') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'vehicle-status', commandSnapshot)
       if (plan.intent === 'confirm-passengers-onboard' && plan.proposedEvents[0]?.type === 'passengers.onboard') {
         request.event = plan.proposedEvents[0]
       } else if (plan.intent === 'speed-up' || plan.intent === 'speed-down' || plan.intent === 'hide-navigation-info' || plan.intent === 'show-navigation-info') {
@@ -1717,12 +1772,14 @@ export class AgentGateway {
     request: SubmitEventRequest,
     startedAt: number,
     kind: 'weather' | 'calendar' | 'flight-detail' | 'vehicle-status',
+    commandSnapshot?: SanitizedCockpitSnapshot,
   ): AgentResponse {
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
     const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
     let component: UISpec['components'][number]
     if (kind === 'weather') {
-      const locationId = current.task.cockpit?.currentLocationId
+      const locationId = commandSnapshot?.weatherLocationId
+        ?? current.task.cockpit?.currentLocationId
         ?? (current.task.phase === 'return-driving' || current.task.phase === 'passengers-onboard' || current.task.phase === 'confirming-return'
           ? 'destination-home'
           : this.#arrivalWeatherLocationId(current))
@@ -1748,14 +1805,14 @@ export class AgentGateway {
         },
       }
     } else {
-      const vehicle = current.requestContext?.vehicle
+      const vehicle = commandSnapshot?.vehicle ?? current.requestContext?.vehicle
       const seed = current.task.navigationSimulation
       if (!vehicle) return this.#cockpitNoop(current, request, startedAt, '车辆状态暂时不可用。')
       component = {
         id: `vehicle-status-${request.event.eventId}`, type: 'vehicle-status', props: {
           speedKph: vehicle.speedKph, batteryPercent: vehicle.batteryPercent, remainingRangeKm: vehicle.remainingRangeKm,
-          roadName: current.task.cockpit?.currentRoad ?? '当前位置', destination: current.task.navigation?.destination ?? '当前位置',
-          remainingDistanceKm: seed?.distanceKm ?? 0, eta: current.task.navigation?.eta ?? timestamp,
+          roadName: commandSnapshot?.roadName ?? current.task.cockpit?.currentRoad ?? '当前位置', destination: current.task.navigation?.destination ?? '当前位置',
+          remainingDistanceKm: commandSnapshot?.remainingDistanceKm ?? seed?.distanceKm ?? 0, eta: commandSnapshot?.eta ?? current.task.navigation?.eta ?? timestamp,
           speedMode: current.task.cockpit?.speedMode ?? 'normal',
           drivingStatus: current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving' ? '正在导航' : '车辆已停稳', simulated: true,
         },
@@ -1782,6 +1839,64 @@ export class AgentGateway {
       text: `已打开${windowTitle}。`,
       shouldSpeak: request.event.type === 'user.input' && request.event.source === 'voice' && supportsTts,
     })
+  }
+
+  /**
+   * Command snapshots are ephemeral readings, never task facts. The browser can
+   * offer one only for its active deterministic route; the seed remains the
+   * authority for every value used by a read-only tool or the return hand-off.
+   */
+  #sanitizeCockpitSnapshot(current: StoredTask, snapshot: NavigationCommandSnapshot, serverTimestamp: string): SanitizedCockpitSnapshot {
+    const seed = current.task.navigationSimulation
+    const navigation = current.task.navigation
+    if (!seed || !navigation || (navigation.status !== 'active' && navigation.status !== 'arrived')) {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot is not accepted outside an active route', false, current)
+    }
+    const expectedLeg = current.task.phase === 'outbound-driving' || current.task.phase === 'waiting-for-passengers' || current.task.phase === 'passengers-onboard'
+      ? 'outbound'
+      : current.task.phase === 'return-driving'
+        ? 'return'
+        : undefined
+    if (!expectedLeg || snapshot.leg !== expectedLeg || snapshot.leg !== seed.leg || snapshot.routeId !== seed.routeId || snapshot.routeId !== navigation.routeId) {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot does not match the active route', false, current)
+    }
+    const arrived = navigation.status === 'arrived'
+    if ((arrived && snapshot.progress !== 1) || (!arrived && snapshot.progress >= 1)) {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot progress is outside the route state', false, current)
+    }
+    const profile = seed.profiles[current.task.cockpit?.speedMode ?? 'normal']
+    const expectedSpeed = arrived ? 0 : profile.displaySpeedKph
+    const expectedBattery = seed.initialBatteryPercent
+      - (seed.initialBatteryPercent - seed.estimatedBatteryAtArrival) * snapshot.progress
+    const expectedDistance = seed.distanceKm * (1 - snapshot.progress)
+    const baseVehicle = current.requestContext?.vehicle
+    const expectedRange = baseVehicle && baseVehicle.batteryPercent > 0
+      ? expectedBattery / baseVehicle.batteryPercent * baseVehicle.remainingRangeKm
+      : undefined
+    if (
+      !withinEnvelope(snapshot.speedKph, expectedSpeed, 0.1)
+      || !withinEnvelope(snapshot.batteryPercent, expectedBattery, 0.25)
+      || !withinEnvelope(snapshot.remainingDistanceKm, expectedDistance, 0.05)
+      || (expectedRange !== undefined && !withinEnvelope(snapshot.remainingRangeKm, expectedRange, 0.5))
+    ) {
+      throw new AgentGatewayError('POLICY_DENIED', 'Navigation snapshot is outside the deterministic route envelope', false, current)
+    }
+    const location = cockpitLocationForSnapshot(current.task, snapshot.progress)
+    return {
+      vehicle: {
+        speedKph: expectedSpeed,
+        batteryPercent: expectedBattery,
+        remainingRangeKm: expectedRange ?? snapshot.remainingRangeKm,
+        gear: expectedSpeed > 0 ? 'D' : 'P',
+        isNight: baseVehicle?.isNight ?? true,
+      },
+      remainingDistanceKm: expectedDistance,
+      eta: arrived
+        ? serverTimestamp
+        : new Date(Date.parse(serverTimestamp) + profile.durationSeconds * (1 - snapshot.progress) * 1_000).toISOString(),
+      roadName: location.roadName,
+      weatherLocationId: location.weatherLocationId,
+    }
   }
 
   #appendCockpitFlightWindow(

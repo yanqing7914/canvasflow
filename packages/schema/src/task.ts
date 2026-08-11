@@ -103,6 +103,25 @@ export const cockpitContextSchema = z.object({
   currentLocationId: z.string().min(1).optional(),
 }).strict()
 
+/**
+ * A command-time reading from the deterministic browser simulator.
+ *
+ * It is not GPS and cannot advance the task state. The Gateway validates it
+ * against the active simulation seed before using it for weather, vehicle
+ * status, or return-route battery continuity.
+ */
+export const navigationCommandSnapshotSchema = z.object({
+  routeId: z.string().trim().min(1),
+  leg: z.enum(['outbound', 'return']),
+  progress: z.number().min(0).max(1),
+  speedKph: z.number().min(0).max(200),
+  batteryPercent: z.number().min(0).max(100),
+  remainingRangeKm: z.number().min(0).max(2_000),
+  remainingDistanceKm: z.number().min(0).max(1_000),
+  eta: z.iso.datetime({ offset: true }).optional(),
+  currentRoad: z.string().trim().min(1).max(120),
+}).strict()
+
 export const airportPickupTaskStateSchema = z.object({
   taskId: z.string().min(1),
   surfaceId: z.string().min(1),
@@ -236,7 +255,12 @@ const eventBase = z.object({
 })
 
 export const airportPickupEventSchema = z.discriminatedUnion('type', [
-  eventBase.extend({ type: z.literal('user.input'), text: z.string().min(1), source: z.enum(['text', 'voice']).optional() }),
+  eventBase.extend({
+    type: z.literal('user.input'),
+    text: z.string().min(1),
+    source: z.enum(['text', 'voice']).optional(),
+    navigationSnapshot: navigationCommandSnapshotSchema.optional(),
+  }),
   eventBase.extend({ type: z.literal('pickup.airport-selected'), airport: pickupAirportSchema }),
   eventBase.extend({ type: z.literal('navigation.outbound-arrived') }),
   eventBase.extend({ type: z.literal('passengers.onboard') }),
@@ -262,6 +286,7 @@ export type AirportPickupPhase = z.infer<typeof airportPickupPhaseSchema>
 export type FlightState = z.infer<typeof flightStateSchema>
 export type ReturnTripState = z.infer<typeof returnTripStateSchema>
 export type CockpitContext = z.infer<typeof cockpitContextSchema>
+export type NavigationCommandSnapshot = z.infer<typeof navigationCommandSnapshotSchema>
 export type MemoryProposalState = z.infer<typeof memoryProposalStateSchema>
 export type AirportPickupTaskState = z.infer<typeof airportPickupTaskStateSchema>
 export type AirportPickupEvent = z.infer<typeof airportPickupEventSchema>

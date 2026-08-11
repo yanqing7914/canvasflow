@@ -25,6 +25,7 @@ import {
 import {
   ARRIVAL_CITY,
   createProviderRegistry,
+  DEMO_PICKUP_POINT,
   DEMO_ORIGIN,
   pickupDestinationForAirport,
   type ProviderRegistry,
@@ -344,7 +345,7 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
     return {
       route: this.#call(
         'navigation.plan-route', taskId, requestId,
-        { origin: this.#origin, destination }, toolResultSchema(routePlanOutputSchema),
+        { origin: input.leg === 'return' ? DEMO_PICKUP_POINT : this.#origin, destination }, toolResultSchema(routePlanOutputSchema),
       ),
       vehicle: this.#call(
         'vehicle.get-status', taskId, requestId,

@@ -35,4 +35,18 @@ describe('cockpit-compatible contracts', () => {
     expect(airportPickupEventSchema.parse({ eventId: 'arrive', type: 'navigation.outbound-arrived', timestamp: '2026-08-11T09:00:00+08:00' }).type).toBe('navigation.outbound-arrived')
     expect(airportPickupTaskStateSchema.shape.phase.parse('return-driving')).toBe('return-driving')
   })
+
+  it('requires a strict route-bound navigation command snapshot', () => {
+    const snapshot = {
+      routeId: 'route-airport-001', leg: 'outbound', progress: 0.5, speedKph: 55,
+      batteryPercent: 34.5, remainingRangeKm: 92, remainingDistanceKm: 16,
+      currentRoad: '延安西路',
+    }
+    expect(airportPickupEventSchema.parse({ eventId: 'weather', type: 'user.input', text: '查天气', navigationSnapshot: snapshot, timestamp: '2026-08-11T09:00:00+08:00' }))
+      .toMatchObject({ navigationSnapshot: { routeId: 'route-airport-001', leg: 'outbound' } })
+    const missingRoute = { ...snapshot }
+    delete (missingRoute as Partial<typeof snapshot>).routeId
+    expect(() => airportPickupEventSchema.parse({ eventId: 'missing-route', type: 'user.input', text: '查天气', navigationSnapshot: missingRoute, timestamp: '2026-08-11T09:00:00+08:00' })).toThrow()
+    expect(() => airportPickupEventSchema.parse({ eventId: 'extra', type: 'user.input', text: '查天气', navigationSnapshot: { ...snapshot, location: '伪造位置' }, timestamp: '2026-08-11T09:00:00+08:00' })).toThrow()
+  })
 })

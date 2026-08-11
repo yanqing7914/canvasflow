@@ -96,6 +96,24 @@ export type WeatherSnapshotRecord = WeatherOutput
  * competition fiction, not meteorology.
  */
 export const weatherSnapshots: Record<string, WeatherSnapshotRecord> = {
+  // Server-owned route segments. Command snapshots contain no location label;
+  // the Gateway derives these ids from the active leg and deterministic progress.
+  'navigation-segment-origin': {
+    locationId: 'navigation-segment-origin', locationName: '延安西路', temperatureC: 25,
+    condition: 'cloudy', windLevel: 2, precipitationChance: 20, observedAt: '2026-07-22T19:05:00+08:00',
+  },
+  'navigation-segment-elevated': {
+    locationId: 'navigation-segment-elevated', locationName: '内环高架', temperatureC: 24,
+    condition: 'overcast', windLevel: 3, precipitationChance: 35, observedAt: '2026-07-22T19:05:00+08:00',
+  },
+  'navigation-segment-airport': {
+    locationId: 'navigation-segment-airport', locationName: '虹桥路', temperatureC: 24,
+    condition: 'light-rain', windLevel: 3, precipitationChance: 60, observedAt: '2026-07-22T19:05:00+08:00',
+  },
+  'navigation-segment-homeward': {
+    locationId: 'navigation-segment-homeward', locationName: '沪青平公路', temperatureC: 25,
+    condition: 'cloudy', windLevel: 2, precipitationChance: 25, observedAt: '2026-07-22T19:05:00+08:00',
+  },
   'destination-hongqiao-t2': {
     locationId: 'destination-hongqiao-t2',
     locationName: '虹桥机场 T2',
@@ -305,6 +323,9 @@ export const arrivalBoard: { flightNumber: string; airlineName: string; originNa
 /** Canonical demo origin used by airport-pickup fixtures (fictional Shanghai CBD). */
 export const DEMO_ORIGIN = { latitude: 31.23, longitude: 121.47 } as const
 
+/** Fixed fictional airport pickup point used as the return-route origin. */
+export const DEMO_PICKUP_POINT = { latitude: 31.198, longitude: 121.336 } as const
+
 /**
  * Fixture routes keyed by origin, destination, optional via waypoints, and preference flags.
  * Requests that do not match a key must fail explicitly — never silently ignore constraints.
@@ -332,6 +353,14 @@ function demoRouteKey(partial: Omit<RouteFixtureKey, 'originLatitude' | 'originL
   })
 }
 
+function pickupRouteKey(partial: Omit<RouteFixtureKey, 'originLatitude' | 'originLongitude'>): string {
+  return routeFixtureKey({
+    originLatitude: DEMO_PICKUP_POINT.latitude,
+    originLongitude: DEMO_PICKUP_POINT.longitude,
+    ...partial,
+  })
+}
+
 /** Fictional landmark coordinates for static sketch-map demos (not real GIS). */
 const GEO = {
   origin: { latitude: DEMO_ORIGIN.latitude, longitude: DEMO_ORIGIN.longitude },
@@ -341,8 +370,7 @@ const GEO = {
   // two names, and the polylines below are the only thing actually authored here.
   airportT2: {
     ...arrivalAirports.SHA.destination,
-    latitude: 31.198,
-    longitude: 121.336,
+    ...DEMO_PICKUP_POINT,
   },
   // 浦东 sits east of the origin where 虹桥 sits west, so the two routes leave in
   // opposite directions. That contrast is the point: the map has to visibly answer
@@ -521,6 +549,29 @@ export const routes: Record<string, RoutePlanOutput> = {
     polyline: [
       GEO.origin,
       { latitude: 31.225, longitude: 121.45 },
+      { latitude: 31.22, longitude: 121.46 },
+      GEO.home,
+    ],
+  },
+  [pickupRouteKey({
+    destinationId: 'destination-home',
+    viaIds: [],
+    avoidHighway: false,
+    avoidTolls: false,
+  })]: {
+    routeId: 'route-home-from-pickup-001',
+    distanceKm: 32,
+    durationMinutes: 40,
+    arrivalTime: '2026-07-22T21:35:00+08:00',
+    estimatedBatteryAtArrival: 32,
+    summary: '从机场接人点返程回家',
+    waypoints: [
+      { id: 'pickup-demo', name: '机场接人点', ...DEMO_PICKUP_POINT },
+      GEO.home,
+    ],
+    polyline: [
+      DEMO_PICKUP_POINT,
+      { latitude: 31.21, longitude: 121.39 },
       { latitude: 31.22, longitude: 121.46 },
       GEO.home,
     ],

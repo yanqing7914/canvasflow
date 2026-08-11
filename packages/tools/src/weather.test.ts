@@ -27,6 +27,15 @@ describe('weather.get-current', () => {
     expect(later.data).toEqual(now.data)
   })
 
+  it('exposes deterministic server-owned mid-route segment fixtures', () => {
+    const result = getWeather(ctx, { locationId: 'navigation-segment-elevated' })
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: { locationId: 'navigation-segment-elevated', locationName: '内环高架', condition: 'overcast' },
+    })
+  })
+
   it('rejects an unknown location without retry', () => {
     const result = getWeather(ctx, { locationId: 'destination-atlantis' })
 
