@@ -15,11 +15,10 @@ The previous name was `carHer`, camel-cased; the owner renamed it on 2026-08-03
 and chose the all-lowercase form deliberately, so the case change is not a typo
 to be corrected.
 
-The name is also the hands-free wake phrase planned for P1: the team handbook's
-`你好 carHer` now reads `你好 pilotflow`. Wake-word detection is not implemented
-in this round (there is no KWS code in the repository), so nothing enforces the
-phrase today — it is recorded here so a later P1 implementation does not
-resurrect the old name from an out-of-date document.
+The visible product wordmark remains `pilotflow`. The cabin assistant's display
+name and wake phrase are **小南**. The browser listens through the standard
+`SpeechRecognition` / `webkitSpeechRecognition` entry after an explicit user
+gesture; it is a conservative browser-speech gate, not an on-device KWS model.
 
 The name appears in exactly four places:
 
@@ -47,16 +46,17 @@ from — which is how it entered the repository without review in the first plac
 - The non-advisory flow covers collecting information, preparing, driving to
   the airport, approaching, waiting for passengers, returning home, and
   completing the trip. Cancellation remains a supported terminal state.
-- The demo uses fictional fixture data. It does not connect to live flight,
-  map, or vehicle services, and it does not use a wake word. Speech recognition
-  and playback use the browser's own Web Speech API, with no server of ours.
+- The demo uses simulated flight, calendar, and vehicle data. Road geometry can
+  come from AMap, while speech recognition and playback use the browser's own
+  Web Speech API, with no speech server of ours.
 - A renderer action emits only the declared `action.id`. Agent or tool code
   owns authorization, confirmation, side effects, and parameter construction.
 - Missing, unknown, malformed, or offline UI data must produce a useful
   placeholder or fallback card. It must never blank the page.
-- The microphone runs a real voice turn: press to listen, review the recognised
-  text in an editable field, send, then hear a short spoken acknowledgement.
-  Pressing the microphone during playback barges in and starts a new turn.
+- The first microphone-lamp press authorizes browser speech recognition. After
+  authorization, only a prefix wake phrase (`小南` and a small reviewed alias
+  set) opens a voice command. Saying only `小南` opens a five-second follow-up;
+  explicit keyboard sends bypass the wake requirement.
 - The voice core produces a transcript and nothing more. Task interpretation
   belongs at the Agent boundary, and a transcript goes there unread: the browser
   sends the words and a `source` marker, never its own reading of them. A
@@ -78,8 +78,9 @@ from — which is how it entered the repository without review in the first plac
 - Every voice failure (no API, insecure context, denied microphone, nothing
   heard, engine error, timeout) states what happened and opens the text field.
   Voice is never the only way to continue.
-- Voice activity detection and an on-device wake word are P1. This round has no
-  always-on microphone and ships no model artifacts.
+- The wake session continuously restarts browser recognition while armed and
+  can interrupt queued TTS. It ships no on-device wake model or audio artifact;
+  browser permission and engine limits are surfaced honestly with text fallback.
 
 ## Driver-facing questions
 
@@ -130,7 +131,8 @@ This round does not add component types, alter schema validation, change the
 Composer's phase decisions, integrate external providers, or implement maps,
 navigation control, or vehicle control.
 
-Voice ships as a browser-only recognition and playback path. It does not add
-voice activity detection, an on-device wake word, an always-on microphone, or any
-server-side speech service, and it does not move task understanding into the
-frontend: the transcript goes to the Agent API unread.
+Voice remains a browser-only recognition and playback path. It does not add an
+on-device wake model or any server-side speech service, and it does not move
+airport-task understanding into the frontend: after the shell strips the wake
+phrase and handles the explicit reset confirmation, the command goes to the
+existing Agent API.

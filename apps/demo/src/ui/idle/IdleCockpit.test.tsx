@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { IdleCockpit } from './IdleCockpit'
 
@@ -22,6 +22,7 @@ describe('IdleCockpit', () => {
     expect(screen.getByLabelText('人民广场模拟车辆位置')).toHaveTextContent('模拟位置，非真实 GPS')
     expect(facts).not.toHaveTextContent('航班')
     expect(screen.queryByText(/模拟行程进度/)).not.toBeInTheDocument()
+    act(() => { vi.runOnlyPendingTimers() })
     vi.useRealTimers()
   })
 })

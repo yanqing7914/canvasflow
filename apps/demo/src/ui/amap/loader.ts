@@ -100,12 +100,12 @@ function loadAttempt(key: string, attemptIndex: number, loadGeneration: number):
   const amapWindow = window as AMapWindow
   return new Promise((resolve) => {
     let settled = false
-    let timer: number | undefined
+    const timer = window.setTimeout(() => finish(null), LOAD_TIMEOUT_MS)
     let script: HTMLScriptElement | null = null
     const finish = (value: AMapApi | null) => {
       if (settled) return
       settled = true
-      if (timer !== undefined) window.clearTimeout(timer)
+      window.clearTimeout(timer)
       const current = loadGeneration === generation && currentScript === script && currentScriptGeneration === loadGeneration
       if (!current) { resolve(null); return }
       if (value) { resolve(value); return }
@@ -127,7 +127,6 @@ function loadAttempt(key: string, attemptIndex: number, loadGeneration: number):
     currentScriptGeneration = loadGeneration
     script.addEventListener('load', () => finish(amapWindow.AMap ?? null))
     script.addEventListener('error', () => finish(null))
-    timer = window.setTimeout(() => finish(null), LOAD_TIMEOUT_MS)
     document.head.appendChild(script)
   })
 }
