@@ -12,6 +12,13 @@
       "requiresConfirmation": false
     },
     {
+      "id": "select-first-flight",
+      "file": "select-first-flight.wav",
+      "text": "选第一个",
+      "confidence": 0.97,
+      "requiresConfirmation": false
+    },
+    {
       "id": "flight-number",
       "file": "flight-number.wav",
       "text": "航班 MU5102",
@@ -24,6 +31,34 @@
       "text": "我现在要去机场接妈妈和豆豆",
       "confidence": 0.51,
       "requiresConfirmation": true
+    },
+    {
+      "id": "check-weather",
+      "file": "check-weather.wav",
+      "text": "到的时候天气怎么样",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "start-navigation",
+      "file": "start-navigation.wav",
+      "text": "开始导航",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "send-weather-reminder",
+      "file": "send-weather-reminder.wav",
+      "text": "提醒乘客带伞",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "dismiss-weather-advisory",
+      "file": "dismiss-weather-advisory.wav",
+      "text": "暂不处理",
+      "confidence": 0.98,
+      "requiresConfirmation": false
     }
   ]
 }

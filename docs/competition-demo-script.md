@@ -10,6 +10,10 @@ HTTP API. Do not call reducers or tool providers from browser developer tools.
 2. Open `http://127.0.0.1:4173` at 1920x720 and confirm `/health` is healthy.
 3. Keep the Event console and Effect receipts visible. Use Fixture mode unless
    a separately reviewed live Provider deployment is available.
+4. If browser recognition is unavailable or the venue network is unreliable,
+   use the matching `语音兜底回放` button in the drawer. Each recording parks its
+   fixed transcript in the input and still requires `发送`; state-bound buttons
+   enable only when their matching card/action is on screen.
 
 ## 0:00 - 0:45: Goal To Structured Task
 

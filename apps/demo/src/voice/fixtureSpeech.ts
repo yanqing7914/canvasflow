@@ -1,8 +1,13 @@
 import type { SpeechRecognitionLike } from '@canvasflow/voice'
 import transcripts from '../../../../fixtures/airport-pickup/voice/transcripts.json'
+import checkWeatherWav from '../../../../fixtures/airport-pickup/voice/check-weather.wav?url'
 import createAirportPickupWav from '../../../../fixtures/airport-pickup/voice/create-airport-pickup.wav?url'
+import dismissWeatherAdvisoryWav from '../../../../fixtures/airport-pickup/voice/dismiss-weather-advisory.wav?url'
 import flightNumberWav from '../../../../fixtures/airport-pickup/voice/flight-number.wav?url'
 import noisyCreateWav from '../../../../fixtures/airport-pickup/voice/noisy-create.wav?url'
+import selectFirstFlightWav from '../../../../fixtures/airport-pickup/voice/select-first-flight.wav?url'
+import sendWeatherReminderWav from '../../../../fixtures/airport-pickup/voice/send-weather-reminder.wav?url'
+import startNavigationWav from '../../../../fixtures/airport-pickup/voice/start-navigation.wav?url'
 
 /**
  * The offline voice fallback: each fixture sample pairs a pre-recorded WAV with
@@ -20,6 +25,8 @@ export type VoiceFixtureSample = {
   requiresConfirmation: boolean
   /** Chinese label shown on the demo drawer's replay button. */
   label: string
+  /** Human-readable precondition shown while a state-bound sample is disabled. */
+  unavailableHint?: string
   audioUrl: string
 }
 
@@ -34,15 +41,36 @@ export type FixtureAudioLike = {
 export type FixtureAudioFactory = (url: string) => FixtureAudioLike | null
 
 const audioUrls: Record<string, string> = {
+  'check-weather.wav': checkWeatherWav,
   'create-airport-pickup.wav': createAirportPickupWav,
+  'dismiss-weather-advisory.wav': dismissWeatherAdvisoryWav,
   'flight-number.wav': flightNumberWav,
   'noisy-create.wav': noisyCreateWav,
+  'select-first-flight.wav': selectFirstFlightWav,
+  'send-weather-reminder.wav': sendWeatherReminderWav,
+  'start-navigation.wav': startNavigationWav,
 }
 
 const sampleLabels: Record<string, string> = {
   'create-airport-pickup': '接机指令',
+  'select-first-flight': '选择第一个航班',
   'flight-number': '补充航班号',
   'noisy-create': '嘈杂样本（需确认）',
+  'check-weather': '查询到达天气',
+  'start-navigation': '语音回放：开始导航',
+  'send-weather-reminder': '语音回放：提醒带伞',
+  'dismiss-weather-advisory': '语音回放：暂不处理',
+}
+
+const sampleUnavailableHints: Record<string, string> = {
+  'create-airport-pickup': '仅在尚未创建任务时可用',
+  'select-first-flight': '需先显示到港航班选择板',
+  'flight-number': '需先创建一个缺少航班号的任务',
+  'noisy-create': '仅在尚未创建任务时可用',
+  'check-weather': '需先完成航班选择并进入准备或途中阶段',
+  'start-navigation': '需先进入准备出发并生成可执行路线',
+  'send-weather-reminder': '需先触发途中小雨提醒',
+  'dismiss-weather-advisory': '需先触发途中小雨提醒',
 }
 
 export const voiceFixtureSamples: VoiceFixtureSample[] = transcripts.samples.map((sample) => ({
@@ -51,6 +79,7 @@ export const voiceFixtureSamples: VoiceFixtureSample[] = transcripts.samples.map
   confidence: sample.confidence,
   requiresConfirmation: sample.requiresConfirmation,
   label: sampleLabels[sample.id] ?? sample.id,
+  unavailableHint: sampleUnavailableHints[sample.id],
   audioUrl: audioUrls[sample.file] ?? '',
 }))
 
@@ -169,18 +198,19 @@ export function createFixtureRecognition(
 export function playFixtureSampleAudio(
   sample: VoiceFixtureSample,
   createAudio: FixtureAudioFactory = defaultAudioFactory,
-): void {
+): FixtureAudioLike | null {
   let audio: FixtureAudioLike | null = null
   try {
     audio = createAudio(sample.audioUrl)
   } catch {
-    return
+    return null
   }
-  if (!audio) return
+  if (!audio) return null
   try {
     const played = audio.play()
     if (played && typeof played.then === 'function') void played.then(undefined, () => {})
   } catch {
     // Presentation only; the parked transcript carries the demo.
   }
+  return audio
 }
