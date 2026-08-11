@@ -1,93 +1,93 @@
-import { afterEach, describe, expect, it } from 'vitest'
-import { loadAMap, retryAMap, switchAMapKey, __resetAMapLoaderForTest, __setAMapKeysForTest } from './loader'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { amapLoaderSnapshot, invalidateAMap, loadAMap, retryAMap, switchAMapKey, __resetAMapLoaderForTest, __setAMapKeysForTest, type AMapApi } from './loader'
 
-/**
- * The suite runs with no `VITE_AMAP_JS_KEY`, which is exactly CI's state and the
- * demo's default. The loader must then stay entirely offline: resolve null,
- * inject no script, and reach the network not at all — the guarantee the route
- * panel leans on to show its sketch instead of a half-loaded map.
- */
-describe('loadAMap (keyless default)', () => {
+const amap = {} as AMapApi
+const amapWindow = window as typeof window & { AMap?: AMapApi; _AMapSecurityConfig?: unknown }
+const script = () => document.getElementById('amap-js-api') as HTMLScriptElement
+const succeed = (target = script()) => { amapWindow.AMap = amap; target.dispatchEvent(new Event('load')) }
+
+describe('loadAMap', () => {
   afterEach(() => {
-    __setAMapKeysForTest(undefined)
     __resetAMapLoaderForTest()
     document.getElementById('amap-js-api')?.remove()
-    delete (window as { _AMapSecurityConfig?: unknown })._AMapSecurityConfig
+    delete amapWindow.AMap
+    delete amapWindow._AMapSecurityConfig
+    vi.useRealTimers()
   })
 
-  it('resolves null without injecting a script when no key is configured', async () => {
+  it('stays offline and publishes failure when no key is configured', async () => {
+    __setAMapKeysForTest([])
     await expect(loadAMap()).resolves.toBeNull()
     expect(document.getElementById('amap-js-api')).toBeNull()
+    expect(amapLoaderSnapshot()).toEqual({ state: 'failed', keyCount: 0 })
   })
 
-  it('does not set the security service host in the keyless state', async () => {
-    await loadAMap()
-    expect((window as { _AMapSecurityConfig?: unknown })._AMapSecurityConfig).toBeUndefined()
-  })
-
-  it('is single-flight: repeated calls share one resolution', async () => {
+  it('keeps single-key compatibility and injects once for concurrent callers', async () => {
+    __setAMapKeysForTest(['single-key'])
     const first = loadAMap()
     const second = loadAMap()
     expect(first).toBe(second)
-    await expect(first).resolves.toBeNull()
-  })
-})
-
-describe('loadAMap key rotation', () => {
-  afterEach(() => {
-    __setAMapKeysForTest(undefined)
-    __resetAMapLoaderForTest()
-    delete (window as { AMap?: unknown }).AMap
+    expect(document.querySelectorAll('#amap-js-api')).toHaveLength(1)
+    expect(script().src).toContain('key=single-key')
+    succeed()
+    await expect(first).resolves.toBe(amap)
+    expect(amapLoaderSnapshot()).toMatchObject({ state: 'ready', keyIndex: 0, keyCount: 1 })
   })
 
-  it('keeps single-key compatibility and single-flight injection', async () => {
-    __setAMapKeysForTest(['first'])
-    const first = loadAMap()
-    const second = loadAMap()
-    expect(first).toBe(second)
-    const script = document.getElementById('amap-js-api') as HTMLScriptElement
-    expect(script.src).toContain('key=first')
-    ;(window as { AMap?: unknown }).AMap = { Map: class {} }
-    script.dispatchEvent(new Event('load'))
-    await expect(first).resolves.toBe((window as { AMap?: unknown }).AMap)
-  })
-
-  it('cleans the failed script and tries the next key', async () => {
-    __setAMapKeysForTest(['first', 'second'])
-    const result = loadAMap()
-    const first = document.getElementById('amap-js-api') as HTMLScriptElement
-    expect(first.src).toContain('key=first')
+  it('rotates automatically after a failed script', async () => {
+    __setAMapKeysForTest(['first-key', 'second-key'])
+    const loading = loadAMap()
+    const first = script()
     first.dispatchEvent(new Event('error'))
     await Promise.resolve()
-    const second = document.getElementById('amap-js-api') as HTMLScriptElement
-    expect(second).not.toBe(first)
-    expect(second.src).toContain('key=second')
-    ;(window as { AMap?: unknown }).AMap = { Map: class {} }
-    second.dispatchEvent(new Event('load'))
-    await expect(result).resolves.toBe((window as { AMap?: unknown }).AMap)
+    expect(script()).not.toBe(first)
+    expect(script().src).toContain('key=second-key')
+    succeed()
+    await expect(loading).resolves.toBe(amap)
+    expect(amapLoaderSnapshot()).toMatchObject({ state: 'ready', keyIndex: 1, keyCount: 2 })
   })
 
-  it('recovers after all keys fail through manual retry or switch', async () => {
-    __setAMapKeysForTest(['first', 'second'])
-    const failed = loadAMap()
-    document.getElementById('amap-js-api')?.dispatchEvent(new Event('error'))
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    const secondAttempt = document.getElementById('amap-js-api')
-    expect(secondAttempt).not.toBeNull()
-    secondAttempt?.dispatchEvent(new Event('error'))
-    await expect(failed).resolves.toBeNull()
+  it('resolves null and removes the script after all keys fail', async () => {
+    __setAMapKeysForTest(['first-key', 'second-key'])
+    const loading = loadAMap()
+    script().dispatchEvent(new Event('error'))
+    await Promise.resolve()
+    script().dispatchEvent(new Event('error'))
+    await expect(loading).resolves.toBeNull()
     expect(document.getElementById('amap-js-api')).toBeNull()
+    expect(amapLoaderSnapshot().state).toBe('failed')
+  })
 
-    const retried = switchAMapKey()
-    const script = document.getElementById('amap-js-api') as HTMLScriptElement
-    expect(script.src).toContain('key=second')
-    ;(window as { AMap?: unknown }).AMap = { Map: class {} }
-    script.dispatchEvent(new Event('load'))
-    await expect(retried).resolves.toBeTruthy()
-    const recovered = retryAMap()
-    const recoveryScript = document.getElementById('amap-js-api') as HTMLScriptElement
-    ;(window as { AMap?: unknown }).AMap = { Map: class {} }
-    recoveryScript.dispatchEvent(new Event('load'))
-    await expect(recovered).resolves.toBeTruthy()
+  it('supports manual retry on the same key and explicit key switching', async () => {
+    __setAMapKeysForTest(['first-key', 'second-key'])
+    const firstLoad = loadAMap()
+    script().dispatchEvent(new Event('error'))
+    await Promise.resolve()
+    script().dispatchEvent(new Event('error'))
+    await firstLoad
+    const retried = retryAMap()
+    expect(script().src).toContain('key=first-key')
+    invalidateAMap({ rotate: false })
+    await expect(retried).resolves.toBeNull()
+    const switched = switchAMapKey()
+    expect(script().src).toContain('key=second-key')
+    succeed()
+    await expect(switched).resolves.toBe(amap)
+  })
+
+  it('does not let stale timeout/error remove a newer successful generation', async () => {
+    vi.useFakeTimers()
+    __setAMapKeysForTest(['first-key', 'second-key'])
+    const stale = loadAMap()
+    const staleScript = script()
+    const fresh = switchAMapKey()
+    const freshScript = script()
+    succeed(freshScript)
+    await expect(fresh).resolves.toBe(amap)
+    staleScript.dispatchEvent(new Event('error'))
+    await vi.advanceTimersByTimeAsync(3_000)
+    await expect(stale).resolves.toBeNull()
+    expect(amapWindow.AMap).toBe(amap)
+    expect(document.getElementById('amap-js-api')).toBe(freshScript)
   })
 })
