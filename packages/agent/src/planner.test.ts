@@ -5,6 +5,33 @@ import { Planner, planAirportPickup } from './planner'
 const timestamp = '2026-07-22T20:00:00+08:00'
 
 describe('airport pickup Planner', () => {
+  it('does not treat a generic airport request as a named airport', () => {
+    const state = createInitialTask('cockpit-001', timestamp)
+    state.phase = 'collecting-airport'
+
+    expect(planAirportPickup({ text: '我现在要去机场接人', state, eventId: 'generic-airport' })).toMatchObject({
+      intent: 'create-airport-pickup',
+      slotUpdates: {},
+      missingSlots: ['airport'],
+      assistantText: expect.stringContaining('哪个机场'),
+    })
+  })
+
+  it.each([
+    ['虹桥机场', { label: '虹桥机场', code: 'SHA' }],
+    ['浦东国际机场', { label: '浦东机场', code: 'PVG' }],
+    ['去萧山机场接人', { label: '萧山机场' }],
+  ] as const)('keeps an explicitly named airport from %s', (text, airport) => {
+    const state = createInitialTask('cockpit-002', timestamp)
+    state.phase = 'collecting-airport'
+
+    expect(planAirportPickup({ text, state, eventId: 'named-airport' })).toMatchObject({
+      intent: 'provide-airport',
+      slotUpdates: { airport },
+      missingSlots: [],
+    })
+  })
+
   it('collects passengers and asks for a missing flight number', () => {
     const state = createInitialTask('pickup-001', timestamp)
     const before = structuredClone(state)

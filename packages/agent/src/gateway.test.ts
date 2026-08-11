@@ -63,7 +63,7 @@ describe('AgentGateway', () => {
       createId: () => 'cockpit',
     })
     const cockpitRequest = {
-      ...createRequest('去机场接人'),
+      ...createRequest('我现在要去机场接人'),
       clientRequestId: 'cockpit-create',
       clientCapabilities: { uiSchemaVersion: '1.0' as const, supportsSse: true, supportsTts: true, cockpitVersion: '1' as const },
     }

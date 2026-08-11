@@ -360,7 +360,16 @@ export function parsePickupAirport(text: string, state?: AirportPickupTaskState)
   if (/浦东(?:国际)?机场|上海浦东/.test(text)) return { label: '浦东机场', code: 'PVG' }
   if (state?.phase !== 'collecting-airport' && !/机场/.test(text)) return undefined
   const match = /([\p{Script=Han}A-Za-z0-9·]{2,24}机场)/u.exec(text)
-  return match ? { label: match[1]! } : undefined
+  if (!match) return undefined
+  // The broad custom-airport fallback must not turn the request scaffold into
+  // a fact. For example, "我现在要去机场接人" contains the characters 机场,
+  // but names no airport. Strip only common leading intent words, then require
+  // at least two characters of actual airport identity before the suffix.
+  const label = match[1]!.replace(
+    /^(?:(?:我)?(?:现在)?(?:要|想|准备)?(?:去|到|前往)|请(?:帮我)?|帮我|选择|是)+/u,
+    '',
+  )
+  return label.slice(0, -2).length >= 2 ? { label } : undefined
 }
 
 function pickupMissingSlots(
