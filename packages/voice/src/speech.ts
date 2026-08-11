@@ -269,7 +269,9 @@ export function createSpeechController(deps: SpeechControllerDeps = {}) {
         synth.cancel()
         synth.speak(utterance)
       } catch {
-        if (fresh()) handlers.onSpeakError?.()
+        // The caller owns the synchronous `false` path. Firing the async error
+        // callback here as well can complete a queued utterance twice and skip
+        // the command that was drained after the first completion.
         return false
       }
       return true

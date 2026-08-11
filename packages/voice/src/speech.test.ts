@@ -43,7 +43,11 @@ class FakeRecognition implements SpeechRecognitionLike {
 class FakeSynthesis implements SpeechSynthesisLike {
   spoken: SpeechUtteranceLike[] = []
   cancelled = 0
-  speak(utterance: SpeechUtteranceLike) { this.spoken.push(utterance) }
+  speakThrows = false
+  speak(utterance: SpeechUtteranceLike) {
+    if (this.speakThrows) throw new Error('synthesis start failed')
+    this.spoken.push(utterance)
+  }
   cancel() { this.cancelled += 1 }
 }
 
@@ -236,6 +240,15 @@ describe('speech controller — synthesis', () => {
     controller.speak('好的。')
     synthesis.spoken[0]!.onerror?.()
     expect(onSpeakError).toHaveBeenCalledTimes(1)
+  })
+
+  it('returns false without also firing the async error callback when start throws', () => {
+    const onSpeakError = vi.fn()
+    const { controller, synthesis } = setup({ onSpeakError })
+    synthesis.speakThrows = true
+
+    expect(controller.speak('好的。')).toBe(false)
+    expect(onSpeakError).not.toHaveBeenCalled()
   })
 })
 
