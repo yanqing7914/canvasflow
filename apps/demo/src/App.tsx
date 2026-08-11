@@ -354,6 +354,8 @@ export default function App({
   const wakeRecognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const wakeRecognitionSourceRef = useRef<VoiceRecognitionSource>('microphone')
   const wakeRestartRef = useRef(false)
+  const confirmProductResetRef = useRef<() => Promise<void>>(async () => {})
+  const openWakeRecognitionRef = useRef<() => boolean>(() => false)
   const voiceTurnConfigRef = useRef<VoiceTurnConfig>({
     autoSubmit: voiceAutoSubmit,
     recognitionSource: 'microphone',
@@ -601,6 +603,7 @@ export default function App({
     returnToIdle()
     enqueueSystemSpeech('已重新开始', 'reset')
   }
+  confirmProductResetRef.current = confirmProductReset
 
   /**
    * The single input path. Text and voice both arrive here, so voice never gets
@@ -888,12 +891,13 @@ export default function App({
     }
     return true
   }
+  openWakeRecognitionRef.current = openWakeRecognition
 
   useEffect(() => {
     const session = createWakeSession({
       effects: {
         requestRecognition: () => {
-          if (!openWakeRecognition()) {
+          if (!openWakeRecognitionRef.current()) {
             session.recognitionFailed()
             setWakeError('当前浏览器无法启用语音唤醒，请使用文字输入。')
           }
@@ -906,7 +910,7 @@ export default function App({
           })
         },
         speak: (copy) => enqueueSystemSpeech(copy, 'xiaonan'),
-        reset: () => { void confirmProductReset() },
+        reset: () => { void confirmProductResetRef.current() },
         onState: () => setWakeSession(session.snapshot()),
       },
     })

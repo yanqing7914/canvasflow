@@ -285,8 +285,15 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await installControllableNavigationClock(page)
   await page.goto('/')
 
-  // The production entry is genuinely empty: no passenger, airport, or sample
-  // sentence is allowed to leak into a fresh cockpit task.
+  // The production entry is a quiet cabin, not a pre-created task or form.
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByLabel('人民广场模拟车辆位置')).toContainText('模拟位置，非真实 GPS')
+  await expect(page.getByLabel('任务输入')).toHaveCount(0)
+  const idleMap = await mockAMapSnapshot(page)
+  expect(idleMap.mapCreates).toBeGreaterThanOrEqual(1)
+
+  // No passenger, airport, or sample sentence is allowed to leak into the first
+  // explicit keyboard turn.
   const input = await composer(page)
   await expect(input).toHaveValue('')
   const createRequestPromise = page.waitForRequest((request) => (
@@ -339,7 +346,9 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   }
 
   const departedMap = await mockAMapSnapshot(page)
-  expect(departedMap.mapCreates).toBe(1)
+  // The idle basemap is a separate session. Navigation creates exactly one new
+  // map and keeps that instance across HUD, windows, and both route legs.
+  expect(departedMap.mapCreates - idleMap.mapCreates).toBe(1)
   expect(departedMap.routeSearches).toHaveLength(1)
   expect(new Set(departedMap.markerPositions.map((position) => position.join(','))).size).toBeGreaterThan(2)
   expect(departedMap.centers.length).toBeGreaterThan(1)
@@ -369,7 +378,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect.poll(() => cockpitProgress(page)).toBeGreaterThan(progressBeforeSpeedUp)
   await expect(weather).toBeVisible()
   await expect(calendar).toBeVisible()
-  expect((await mockAMapSnapshot(page)).mapCreates).toBe(1)
+  expect((await mockAMapSnapshot(page)).mapCreates).toBe(departedMap.mapCreates)
   await captureCockpitScreenshot(page, testInfo, 'desktop-map-windows.png')
 
   await advanceNavigationClock(page, 40_000)
@@ -391,7 +400,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(page.getByLabel('导航信息')).toContainText('返程导航')
   await expect.poll(async () => (await mockAMapSnapshot(page)).routeSearches.length).toBeGreaterThanOrEqual(2)
   const returningMap = await mockAMapSnapshot(page)
-  expect(returningMap.mapCreates).toBe(1)
+  expect(returningMap.mapCreates).toBe(departedMap.mapCreates)
   const returnSearch = returningMap.routeSearches[returningMap.routeSearches.length - 1]!
   expect(returnSearch.origin[0]).toBeLessThan(returnSearch.destination[0])
   await advanceNavigationClock(page, 5_000)
@@ -415,18 +424,20 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(completedPayload.task).not.toHaveProperty('pickupAirport')
   expect(completedPayload.task).not.toHaveProperty('navigationSimulation')
   expect(completedPayload.task).not.toHaveProperty('cockpit')
-  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'completed')
+  const idleCockpit = page.getByRole('region', { name: '空闲座舱', exact: true })
+  await expect(idleCockpit).toBeVisible()
+  await expect(page.getByText('已到家')).toBeVisible()
   await expect(page.locator('.cockpit-window')).toHaveCount(0)
   await expect(page.locator('.navigation-workspace')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '接机任务已完成' })).toBeVisible()
-  await expect(page.locator('.task-surface')).not.toContainText(selectedFlight)
-  await expect(page.locator('.task-surface')).not.toContainText('虹桥机场')
+  await expect(page.locator('.task-surface')).toHaveCount(0)
+  await expect(idleCockpit).not.toContainText(selectedFlight)
+  await expect(idleCockpit).not.toContainText('虹桥机场')
   await expect(await composer(page)).toHaveValue('')
 
   const completedMap = await mockAMapSnapshot(page)
-  expect(completedMap.mapCreates).toBe(1)
+  expect(completedMap.mapCreates).toBe(departedMap.mapCreates + 1)
   expect(completedMap.routeSearches.length).toBeGreaterThanOrEqual(2)
-  expect(completedMap.mapDestroys).toBe(1)
+  expect(completedMap.mapDestroys).toBeGreaterThanOrEqual(2)
   expect(completedMap.markerPositions.length).toBeGreaterThan(departedMap.markerPositions.length)
 
   await captureCockpitScreenshot(page, testInfo, 'desktop-completed.png')

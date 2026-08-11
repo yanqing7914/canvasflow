@@ -132,10 +132,16 @@ export async function installMockAMap(page: Page): Promise<void> {
         }
         map.append(roads)
 
-        const labels = [
-          ['延安西路', '730', '145'], ['内环高架', '500', '294'], ['虹桥路', '230', '435'],
-          ['当前位置', '855', '205'], ['虹桥机场 T2', '88', '520'],
-        ]
+        const navigation = container.classList.contains('persistent-route-map__basemap')
+        const labels = navigation
+          ? [
+              ['延安西路', '730', '145'], ['内环高架', '500', '294'], ['虹桥路', '230', '435'],
+              ['当前位置', '855', '205'], ['虹桥机场 T2', '88', '520'],
+            ]
+          : [
+              ['人民大道', '710', '145'], ['西藏中路', '500', '294'], ['延安东路', '230', '435'],
+              ['当前位置', '530', '260'],
+            ]
         const labelLayer = svgElement('g', {
           fill: '#7990a8', 'font-family': 'sans-serif', 'font-size': '17', 'font-weight': '600', opacity: '0.86',
         })
