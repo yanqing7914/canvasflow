@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -54,6 +54,41 @@ describe('voice fixture manifest', () => {
       expect(createHash('sha256').update(value).digest('hex'), fixture.fixtureId).toBe(fixture.sha256)
       expect(wavDurationMs(value), fixture.fixtureId).toBe(fixture.durationMs)
     }
+  })
+
+  it('stays consistent with the browser replay catalog for any shared audio', () => {
+    // The replay drawer (transcripts.json) and this provider manifest serve
+    // different surfaces, so they may reference different WAV sets — but when
+    // both catalogs claim the same file or the same audio bytes, they must
+    // agree on the transcript, or the demo says one thing and the provider
+    // another. Every referenced file must also exist, and every committed WAV
+    // must be claimed by at least one catalog.
+    type ReplayCatalog = { samples: Array<{ id: string; file: string; text: string }> }
+    const replay = JSON.parse(
+      readFileSync(resolve(fixtureDirectory, 'transcripts.json'), 'utf8'),
+    ) as ReplayCatalog
+    const hashOf = (file: string) =>
+      createHash('sha256').update(readFileSync(resolve(fixtureDirectory, file))).digest('hex')
+
+    const providerByFile = new Map(manifest.fixtures.map((fixture) => [fixture.file, fixture]))
+    const providerByHash = new Map(manifest.fixtures.map((fixture) => [fixture.sha256, fixture]))
+    for (const sample of replay.samples) {
+      const digest = hashOf(sample.file)
+      const twin = providerByFile.get(sample.file) ?? providerByHash.get(digest)
+      if (!twin) continue
+      expect(twin.outcome.kind, `${sample.id} vs ${twin.fixtureId}`).toBe('success')
+      if (twin.outcome.kind === 'success') {
+        expect(twin.outcome.transcript, `${sample.id} vs ${twin.fixtureId}`).toBe(sample.text)
+      }
+    }
+
+    const claimed = new Set([
+      ...replay.samples.map((sample) => sample.file),
+      ...manifest.fixtures.map((fixture) => fixture.file),
+    ])
+    const committed = readdirSync(fixtureDirectory).filter((name) => name.endsWith('.wav'))
+    for (const file of claimed) expect(committed, file).toContain(file)
+    for (const file of committed) expect(claimed.has(file), `unclaimed WAV: ${file}`).toBe(true)
   })
 })
 
@@ -118,6 +153,17 @@ describe('fixture voice provider', () => {
     expect(result).toMatchObject({ ok: false, error: { code, retryable } })
   })
 
+  it('resolves reviewed audio by hash even when the supplied fixtureId is stale', async () => {
+    const result = await createVoiceProvider().transcribe(
+      { requestId: 'voice-stale-id' },
+      { audio: audio('clear-airport-pickup'), mimeType: 'audio/wav', fixtureId: 'timeout' },
+    )
+    expect(result).toMatchObject({
+      ok: true,
+      result: { fixtureId: 'clear-airport-pickup', transcript: '接妈妈和豆豆，航班 MU5102' },
+    })
+  })
+
   it('rejects unknown, empty, mismatched, and unsupported audio', async () => {
     const provider = createVoiceProvider()
     await expect(provider.transcribe(
@@ -130,8 +176,11 @@ describe('fixture voice provider', () => {
     )).resolves.toMatchObject({ ok: false, error: { code: 'TRANSCRIPTION_FAILED' } })
     await expect(provider.transcribe(
       { requestId: 'voice-mismatch' },
-      { audio: audio('clear-airport-pickup'), mimeType: 'audio/wav', fixtureId: 'timeout' },
-    )).resolves.toMatchObject({ ok: false, error: { code: 'TRANSCRIPTION_FAILED' } })
+      { audio: new Uint8Array([1, 2, 3]), mimeType: 'audio/wav', fixtureId: 'timeout' },
+    )).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'TRANSCRIPTION_FAILED', message: 'Fixture timeout 的音频摘要不匹配' },
+    })
     await expect(provider.transcribe(
       { requestId: 'voice-format' },
       { audio: audio('clear-airport-pickup'), mimeType: 'audio/webm', fixtureId: 'clear-airport-pickup' },

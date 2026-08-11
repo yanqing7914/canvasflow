@@ -91,13 +91,17 @@ export function createVoiceProvider(options: CreateVoiceProviderOptions = {}): V
         return failure('TRANSCRIPTION_FAILED', '音频内容为空', false)
       }
 
+      // The reviewed SHA-256 is the recognition authority: a valid upload keeps
+      // working even when the caller sends a stale or wrong `fixtureId`. The ID
+      // only narrows the error message when the bytes themselves are unknown.
       const digest = await sha256(input.audio)
-      const fixture = input.fixtureId ? byId.get(input.fixtureId) : byHash.get(digest)
+      const fixture = byHash.get(digest)
       if (!fixture) {
+        const claimed = input.fixtureId ? byId.get(input.fixtureId) : undefined
+        if (claimed) {
+          return failure('TRANSCRIPTION_FAILED', `Fixture ${claimed.fixtureId} 的音频摘要不匹配`, false)
+        }
         return failure('TRANSCRIPTION_FAILED', '音频不在已审核的 Fixture 清单中', false)
-      }
-      if (fixture.sha256 !== digest) {
-        return failure('TRANSCRIPTION_FAILED', `Fixture ${fixture.fixtureId} 的音频摘要不匹配`, false)
       }
       if (fixture.mimeType !== mimeType.data) {
         return failure('UNSUPPORTED_AUDIO_FORMAT', `Fixture ${fixture.fixtureId} 需要 ${fixture.mimeType}`, false)
