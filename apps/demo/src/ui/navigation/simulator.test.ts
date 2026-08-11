@@ -21,8 +21,8 @@ describe('navigation simulator', () => {
     if (speedTier !== 'normal') state = navigationSimulatorReducer(state, { type: 'set-speed', speedTier, nowMs: 0 })
     expect(simulatorSnapshot(state, durationSeconds * 500).progress).toBeCloseTo(0.5)
     state = navigationSimulatorReducer(state, { type: 'tick', nowMs: durationSeconds * 1000 })
-    expect(state.progress).toBe(1)
-    expect(state.runState).toBe('arrived')
+    expect(state.simulation?.progress).toBe(1)
+    expect(state.simulation?.arrived).toBe(true)
     expect(simulatorSnapshot(state, durationSeconds * 2000).progress).toBe(1)
   })
 
@@ -32,7 +32,7 @@ describe('navigation simulator', () => {
     })
     const before = simulatorSnapshot(state, 30_000).progress
     state = navigationSimulatorReducer(state, { type: 'set-speed', speedTier: 'fast', nowMs: 30_000 })
-    expect(state.progress).toBeCloseTo(before)
+    expect(state.simulation?.progress).toBeCloseTo(before)
     expect(simulatorSnapshot(state, 30_000).progress).toBeCloseTo(before)
     expect(simulatorSnapshot(state, 45_000).progress).toBeGreaterThan(before)
   })

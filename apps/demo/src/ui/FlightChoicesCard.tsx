@@ -57,39 +57,49 @@ export function FlightChoicesCard({
       </header>
       <ol className="ui-flight-choices__list" aria-label={`${props.arrivalCityName}到达航班`}>
         {props.choices.map((choice, index) => {
-          const available = actionById.has(choice.actionId)
+          const actionId = choice.actionId
+          const available = actionId !== undefined && actionById.has(actionId)
+          const content = (
+            <>
+              <span className="ui-flight-choices__rank" aria-hidden="true">{index + 1}</span>
+              <span className="ui-flight-choices__identity">
+                <span className="ui-flight-choices__number">{choice.flightNumber}</span>
+                <span className="ui-flight-choices__origin">{choice.airlineName} · {choice.originName}</span>
+              </span>
+              <span className="ui-flight-choices__timing">
+                <span className="ui-flight-choices__time">{choice.arrivalTimeLabel}</span>
+                {choice.revisedTimeLabel && (
+                  <span
+                    className="ui-flight-choices__revised"
+                    data-direction={choice.revisedDirection ?? 'later'}
+                  >
+                    {choice.revisedTimeLabel}
+                  </span>
+                )}
+              </span>
+              <span className="ui-flight-choices__terminal">{choice.airportName} {choice.terminal}</span>
+              <span className={`ui-status ui-status--${choice.status}`}>{choice.statusLabel}</span>
+              {available && <span className="ui-flight-choices__pick" aria-hidden="true"><ArrowRightIcon size={18} /></span>}
+            </>
+          )
           return (
             <li className="ui-flight-choices__item" key={choice.flightNumber}>
-              <button
-                className="ui-flight-choices__row"
-                type="button"
-                data-action-id={choice.actionId}
-                data-flight-number={choice.flightNumber}
-                disabled={pending || !available}
-                onClick={() => onAction(choice.actionId, component.id)}
-              >
-                <span className="ui-flight-choices__rank" aria-hidden="true">{index + 1}</span>
-                <span className="ui-flight-choices__identity">
-                  <span className="ui-flight-choices__number">{choice.flightNumber}</span>
-                  <span className="ui-flight-choices__origin">{choice.airlineName} · {choice.originName}</span>
-                </span>
-                <span className="ui-flight-choices__timing">
-                  <span className="ui-flight-choices__time">{choice.arrivalTimeLabel}</span>
-                  {choice.revisedTimeLabel && (
-                    <span
-                      className="ui-flight-choices__revised"
-                      data-direction={choice.revisedDirection ?? 'later'}
-                    >
-                      {choice.revisedTimeLabel}
-                    </span>
-                  )}
-                </span>
-                <span className="ui-flight-choices__terminal">{choice.airportName} {choice.terminal}</span>
-                {/* Toned by the status value itself, the way every other card's
-                    pill is, so 延误 and 已取消 read the same colour everywhere. */}
-                <span className={`ui-status ui-status--${choice.status}`}>{choice.statusLabel}</span>
-                <span className="ui-flight-choices__pick" aria-hidden="true"><ArrowRightIcon size={18} /></span>
-              </button>
+              {actionId ? (
+                <button
+                  className="ui-flight-choices__row"
+                  type="button"
+                  data-action-id={actionId}
+                  data-flight-number={choice.flightNumber}
+                  disabled={pending || !available}
+                  onClick={() => onAction(actionId, component.id)}
+                >
+                  {content}
+                </button>
+              ) : (
+                <div className="ui-flight-choices__row ui-flight-choices__row--readonly" data-flight-number={choice.flightNumber}>
+                  {content}
+                </div>
+              )}
             </li>
           )
         })}

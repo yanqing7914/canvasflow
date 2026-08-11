@@ -13,15 +13,21 @@ import type {
   UISpec,
   VehicleContext,
 } from '@canvasflow/schema'
-import type { SpeechControllerDeps } from '@canvasflow/voice'
-import { createBrowserRecognition, isRecognitionSupported, isSecureContextOk } from '@canvasflow/voice'
+import type { NavigationSpeechCoordinator, NavigationVoiceCommand, SpeechControllerDeps } from '@canvasflow/voice'
+import {
+  createBrowserRecognition,
+  createNavigationSpeechCoordinator,
+  createSpeechController,
+  isRecognitionSupported,
+  isSecureContextOk,
+} from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, demoVehicleContext, isNightAt } from './agent-client'
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
 import { NavigationWorkspace } from './ui/navigation/NavigationWorkspace'
 import { cockpitContractPhase, runtimeWindows, type RuntimeNavigationTask } from './ui/navigation/contracts'
-import type { NavigationClock, NavigationLeg } from './ui/navigation/simulator'
+import type { NavigationClock, NavigationLeg, NavigationSnapshot } from './ui/navigation/simulator'
 import { WindowManager } from './ui/navigation/WindowManager'
 import { GLASS_TIERS, useGlassTier } from './ui/glass-capability'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
@@ -51,6 +57,13 @@ const playableEventCount = playableEventIds.size
  * enum itself stays in the demo drawer where an engineer looks for it.
  */
 const phaseIdentityLabels: Record<AirportPickupTaskState['phase'], string> = {
+  'collecting-airport': '确认机场',
+  'choosing-flight': '选择航班',
+  'confirming-outbound': '确认出发',
+  'outbound-driving': '前往机场',
+  'passengers-onboard': '乘客已上车',
+  'confirming-return': '确认返程',
+  'return-driving': '返回家中',
   'collecting-information': '准备接机',
   preparing: '准备出发',
   'driving-to-airport': '途中',
@@ -123,7 +136,7 @@ function hasFlightChoiceCapability(spec: UISpec, driving: boolean): boolean {
   const component = visibleComponent(spec, 'flight-choices', driving)
   if (component?.type !== 'flight-choices') return false
   const firstChoice = component.props.choices[0]
-  if (!firstChoice) return false
+  if (!firstChoice?.actionId) return false
   const action = registeredAction(spec, firstChoice.actionId)
   return action?.event.type === 'agent-message'
     && action.event.text.replace(/\s+/g, '') === `航班号${firstChoice.flightNumber}`
@@ -143,6 +156,49 @@ function hasWeatherAdvisoryCapability(
 
 /** Whether the Gateway accepted the input, plus any reply worth speaking. */
 type InputOutcome = { sent: boolean; speak?: string }
+type NavigationVoiceIntent =
+  | 'speed-up'
+  | 'speed-down'
+  | 'weather'
+  | 'calendar'
+  | 'flight-detail'
+  | 'vehicle-status'
+  | 'hide-hud'
+  | 'show-hud'
+  | 'passengers-onboard'
+  | 'start-return'
+  | 'other'
+type QueuedNavigationCommand = NavigationVoiceCommand<NavigationVoiceIntent>
+type VoiceTurnConfig = {
+  autoSubmit: boolean
+  recognitionSource: 'fixture' | 'microphone'
+}
+type NavigationCommandSnapshot = {
+  routeId: string
+  leg: NavigationLeg
+  progress: number
+  speedKph: number
+  batteryPercent: number
+  remainingRangeKm: number
+  remainingDistanceKm: number
+  eta: string
+  currentRoad: string
+}
+
+function navigationVoiceIntent(text: string): NavigationVoiceIntent {
+  const compact = text.replace(/\s+/g, '')
+  if (/跑快点|快一点|加速/.test(compact)) return 'speed-up'
+  if (/跑慢点|慢一点|减速/.test(compact)) return 'speed-down'
+  if (/天气/.test(compact)) return 'weather'
+  if (/日历|日程/.test(compact)) return 'calendar'
+  if (/航班详情/.test(compact)) return 'flight-detail'
+  if (/车辆状态|电量/.test(compact)) return 'vehicle-status'
+  if (/隐藏导航信息/.test(compact)) return 'hide-hud'
+  if (/显示导航信息/.test(compact)) return 'show-hud'
+  if (/接到人|上车/.test(compact)) return 'passengers-onboard'
+  if (/开始回家|送我们回家/.test(compact)) return 'start-return'
+  return 'other'
+}
 
 /**
  * Why the composer is on screen. The composer is not a permanent input row: it
@@ -164,7 +220,7 @@ type ComposerReason = 'transcript' | 'unavailable' | 'error' | 'text'
 const voiceButtonLabels = {
   unavailable: { aria: '语音入口暂不可用', text: '语音不可用' },
   idle: { aria: '开始语音输入', text: '语音' },
-  listening: { aria: '停止语音输入', text: '正在聆听' },
+  listening: { aria: '取消聆听', text: '取消聆听' },
   transcribing: { aria: '放弃这次语音输入', text: '待确认' },
   submitting: { aria: '正在提交语音内容', text: '提交中' },
   speaking: { aria: '打断语音播报并重新输入', text: '正在播报' },
@@ -182,6 +238,7 @@ export default function App({
   navigationClock,
   onNavigationLegComplete,
   initialText = '',
+  voiceAutoSubmit = true,
 }: {
   api?: DemoAgentApi
   initialTask?: AirportPickupTaskState
@@ -196,9 +253,11 @@ export default function App({
   /** Deterministic scheduler seam for the continuous navigation simulator. */
   navigationClock?: NavigationClock
   /** Main integrates this typed completion with outbound/return arrival events. */
-  onNavigationLegComplete?: (leg: NavigationLeg) => void
+  onNavigationLegComplete?: (leg: NavigationLeg) => boolean | void | Promise<boolean | void>
   /** Explicit preview/test seed; the shipped cockpit starts empty. */
   initialText?: string
+  /** Test/legacy seam; production voice turns submit hands-free. */
+  voiceAutoSubmit?: boolean
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
   const [startingVehicleContext] = useState<VehicleContext>(() => initialVehicleContext ?? demoVehicleContext())
@@ -218,6 +277,14 @@ export default function App({
   const [keyboardRequested, setKeyboardRequested] = useState(false)
   const pendingRef = useRef(false)
   const responseRef = useRef<AgentResponse | undefined>(undefined)
+  const navigationActiveRef = useRef(false)
+  const navigationSnapshotRef = useRef<NavigationCommandSnapshot | undefined>(undefined)
+  const speechCoordinatorRef = useRef<NavigationSpeechCoordinator<QueuedNavigationCommand> | null>(null)
+  const systemUtteranceSequenceRef = useRef(0)
+  const voiceTurnConfigRef = useRef<VoiceTurnConfig>({
+    autoSubmit: voiceAutoSubmit,
+    recognitionSource: 'microphone',
+  })
   const streamCursorRef = useRef(0)
   const controlsTriggerRef = useRef<HTMLButtonElement>(null)
   const controlsDrawerRef = useRef<HTMLElement>(null)
@@ -270,6 +337,7 @@ export default function App({
       || runtimeTask.phase === 'passengers-onboard'
       || runtimeTask.phase === 'confirming-return'
       || runtimeTask.phase === 'return-driving'))
+  navigationActiveRef.current = navigationActive
 
   useEffect(() => {
     if (localOnly || !remoteTaskId || !api.subscribeTaskUpdates) return
@@ -284,7 +352,9 @@ export default function App({
         const uiChanged = update.snapshot.ui.uiRevision > current.ui.uiRevision
         if (!taskChanged && !uiChanged) return current
         // SSE snapshots intentionally omit mutation effects; do not show stale receipts.
-        return { ...current, task: update.snapshot.task, ui: update.snapshot.ui, effects: [] }
+        const next = { ...current, task: update.snapshot.task, ui: update.snapshot.ui, effects: [] }
+        responseRef.current = next
+        return next
       })
     })
     return () => subscription.close()
@@ -297,6 +367,7 @@ export default function App({
     setError(undefined)
     try {
       const next = await operation()
+      responseRef.current = next
       setResponse(next)
       return next
     } catch (cause) {
@@ -321,7 +392,11 @@ export default function App({
   async function sendInput(value: string, meta?: VoiceSubmitMeta): Promise<InputOutcome> {
     const trimmed = value.trim()
     if (!trimmed || pendingRef.current) return { sent: false }
-    if (!response && !localOnly) {
+    const currentResponse = responseRef.current
+    const createNewTask = !currentResponse
+      || currentResponse.task.phase === 'completed'
+      || currentResponse.task.phase === 'cancelled'
+    if (createNewTask && !localOnly) {
       // Auto follows the clock at submission time, not at page-load time. A demo
       // left open across the day/night boundary must report the current cabin.
       const createVehicleContext = lighting === 'auto'
@@ -338,7 +413,7 @@ export default function App({
       setDraftProtected(false)
       return { sent: true, speak: spokenReply(created) }
     }
-    if (!response) {
+    if (!currentResponse) {
       setLocalTask((current) => current ? applyEvent(current, {
         eventId: `demo-input-${Date.now()}`,
         type: 'user.input',
@@ -350,17 +425,17 @@ export default function App({
       return { sent: true }
     }
     const registeredStartNavigation = hasStartNavigationCapability(
-      response.ui,
+      currentResponse.ui,
       isDrivingVehicle(vehicleContext),
     )
     if (/^开始导航[。！!]?$/.test(trimmed.replace(/\s+/g, '')) && registeredStartNavigation) {
       const nextTimelineIndex = nextIndexForTimelineEvent('navigation.started')
-      const next = await run(() => api.action(response, 'start-navigation', 'navigation-plan'))
+      const next = await run(() => api.action(currentResponse, 'start-navigation', 'navigation-plan'))
       if (!next) return { sent: false }
       // An HTTP 200 with an unchanged task is a provider failure surfaced as a
       // fallback brief, not a started drive. The words stay in the field so 发送
       // can retry them — the same protection the drawer and card paths have.
-      if (!navigationStarted(response, next)) return { sent: false }
+      if (!navigationStarted(currentResponse, next)) return { sent: false }
       if (nextTimelineIndex !== undefined) {
         setStepIndex(consumeAdvisoryContext(nextTimelineIndex))
       }
@@ -369,23 +444,44 @@ export default function App({
       return { sent: true, speak: spokenReply(next) }
     }
     let nextTimelineIndex = timelineIndexForInput(trimmed)
+    const activeNavigationSnapshot = navigationActiveRef.current
+      && navigationSnapshotRef.current?.routeId === currentResponse.task.navigation?.routeId
+      && (currentResponse.task.navigation?.status === 'active' || currentResponse.task.navigation?.status === 'arrived')
+      ? navigationSnapshotRef.current
+      : undefined
     const next = await run(() => (api.event as unknown as (
       task: AirportPickupTaskState,
-      event: { type: 'user.input'; text: string; source?: 'text' | 'voice' },
-    ) => Promise<AgentResponse>)(response.task, {
+      event: {
+        type: 'user.input'
+        text: string
+        source?: 'text' | 'voice'
+        navigationSnapshot?: NavigationCommandSnapshot
+      },
+    ) => Promise<AgentResponse>)(currentResponse.task, {
       type: 'user.input', text: trimmed, ...(meta ? { source: meta.source } : {}),
+      ...(activeNavigationSnapshot
+        ? { navigationSnapshot: activeNavigationSnapshot }
+        : {}),
     }))
     if (!next) return { sent: false }
-    if (nextTimelineIndex === undefined && attachedFlight(response, next)) {
+    if (nextTimelineIndex === undefined && attachedFlight(currentResponse, next)) {
       nextTimelineIndex = nextIndexForTimelineEvent('user.input')
     }
-    if (nextTimelineIndex !== undefined && movedTheTrip(response, next)) setStepIndex(nextTimelineIndex)
+    if (nextTimelineIndex !== undefined && movedTheTrip(currentResponse, next)) setStepIndex(nextTimelineIndex)
     setText('')
     setDraftProtected(false)
     return { sent: true, speak: spokenReply(next) }
   }
 
   async function submitVoiceTranscript(transcript: string, meta: VoiceSubmitMeta) {
+    if (navigationActiveRef.current && speechCoordinatorRef.current) {
+      speechCoordinatorRef.current.enqueueCommand({
+        intent: navigationVoiceIntent(transcript),
+        transcript,
+        meta: { ...meta, recognitionSource: meta.recognitionSource ?? 'microphone' },
+      })
+      return undefined
+    }
     const outcome = await sendInput(transcript, meta)
     // A refused turn must not lose what the driver said: park the transcript in
     // the text field so 发送 can retry it without speaking again. The field has
@@ -402,11 +498,53 @@ export default function App({
   // turn read from the recording instead of the microphone; the turn after
   // falls back to the real engine on its own.
   const armedFixtureRef = useRef<VoiceFixtureSample | null>(null)
-  const fixtureRequiresConfirmationRef = useRef(false)
-  const fixtureAutoSubmit = useCallback(() => !fixtureRequiresConfirmationRef.current, [])
   const fixtureAudioRef = useRef(fixtureAudio)
   const degradedFixtureAudioRef = useRef<ReturnType<typeof playFixtureSampleAudio>>(null)
   fixtureAudioRef.current = fixtureAudio
+
+  useEffect(() => {
+    const controller = createSpeechController({
+      ...speech,
+      createRecognition: () => null,
+      handlers: {
+        onSpeakEnd: () => speechCoordinatorRef.current?.utteranceEnd(),
+        onSpeakError: () => speechCoordinatorRef.current?.utteranceError(),
+      },
+    })
+    const coordinator = createNavigationSpeechCoordinator<QueuedNavigationCommand>({
+      speak: ({ text: utterance }) => controller.speak(utterance),
+      stopSpeaking: () => controller.stopSpeaking(),
+      executeCommand: async (command) => {
+        const outcome = await sendInput(command.transcript, command.meta)
+        if (outcome.speak) {
+          systemUtteranceSequenceRef.current += 1
+          speechCoordinatorRef.current?.enqueueSystemUtterance({
+            id: `assistant-${systemUtteranceSequenceRef.current}`,
+            text: outcome.speak,
+          })
+        }
+      },
+    })
+    speechCoordinatorRef.current = coordinator
+    return () => {
+      coordinator.dispose()
+      controller.dispose()
+      speechCoordinatorRef.current = null
+    }
+  // The controller reads the current command implementation through refs and
+  // the injected speech peripherals are fixed for one mounted App instance.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [speech])
+
+  useEffect(() => {
+    speechCoordinatorRef.current?.clear()
+  }, [remoteTaskId])
+
+  useEffect(() => {
+    if (task?.phase === 'completed' || task?.phase === 'cancelled') {
+      speechCoordinatorRef.current?.clear()
+    }
+  }, [task?.phase])
 
   function stopDegradedFixtureAudio() {
     try {
@@ -432,11 +570,7 @@ export default function App({
       createRecognition: () => {
         const armed = armedFixtureRef.current
         armedFixtureRef.current = null
-        if (armed) {
-          fixtureRequiresConfirmationRef.current = armed.requiresConfirmation
-          return createFixtureRecognition(armed, fixtureAudioRef.current ?? undefined)
-        }
-        fixtureRequiresConfirmationRef.current = false
+        if (armed) return createFixtureRecognition(armed, fixtureAudioRef.current ?? undefined)
         return createReal()
       },
     }
@@ -446,7 +580,19 @@ export default function App({
     enabled: voiceEnabled,
     onTranscript: submitVoiceTranscript,
     speech: voiceSpeech,
-    autoSubmit: fixtureAutoSubmit,
+    // The recognition factory consumes the armed sample. Freeze its policy before
+    // that happens so this machine turn retains fixture provenance and confirmation.
+    autoSubmit: () => voiceTurnConfigRef.current.autoSubmit,
+    recognitionSource: () => voiceTurnConfigRef.current.recognitionSource,
+    speakReply: navigationActive
+      ? (reply) => {
+          systemUtteranceSequenceRef.current += 1
+          speechCoordinatorRef.current?.enqueueSystemUtterance({
+            id: `assistant-${systemUtteranceSequenceRef.current}`,
+            text: reply,
+          })
+        }
+      : undefined,
   })
   const voiceTranscript = voice.state === 'transcribing' ? voice.transcript : undefined
   // The microphone owns the turn while it is capturing or while a confirmed
@@ -498,23 +644,40 @@ export default function App({
   }
 
   function pressMicrophone() {
+    if (voice.state === 'listening') {
+      voice.cancel()
+      setText('')
+      setDraftProtected(false)
+      setKeyboardRequested(false)
+      return
+    }
     // Confirming is 发送's job, so here the button only leaves the voice turn.
-    // The transcript stays in the text field on purpose, so the field stays too.
+    // Explicitly abandoning a confirmed transcript clears it just like cancelling
+    // a live listening turn; fixture confirmation still keeps it until this action.
     if (voice.state === 'transcribing') {
       voice.cancel()
-      setKeyboardRequested(true)
+      setText('')
+      setDraftProtected(false)
+      setKeyboardRequested(false)
       return
     }
     // Starting a fresh voice turn is a decision to speak, so the keyboard the
     // driver may have opened earlier steps back out of the way.
     setKeyboardRequested(false)
+    voiceTurnConfigRef.current = { autoSubmit: voiceAutoSubmit, recognitionSource: 'microphone' }
     voice.press()
   }
 
-  function completeNavigationLeg(leg: NavigationLeg) {
-    onNavigationLegComplete?.(leg)
+  async function completeNavigationLeg(leg: NavigationLeg): Promise<boolean> {
+    if (onNavigationLegComplete) {
+      try {
+        return (await onNavigationLegComplete(leg)) !== false
+      } catch {
+        return false
+      }
+    }
     const currentResponse = responseRef.current
-    if (!currentResponse || onNavigationLegComplete) return
+    if (!currentResponse) return true
     const event = leg === 'outbound'
       ? { type: 'navigation.outbound-arrived' as const }
       : { type: 'navigation.return-arrived' as const }
@@ -522,10 +685,40 @@ export default function App({
     // expose them in their generated union yet, so the runtime call stays
     // guarded behind an active remote response and degrades to a parked map.
     const currentTask = currentResponse.task
-    void run(() => (api.event as unknown as (
+    const next = await run(() => (api.event as unknown as (
       task: AirportPickupTaskState,
       event: { type: 'navigation.outbound-arrived' | 'navigation.return-arrived' },
     ) => Promise<AgentResponse>)(currentTask, event))
+    return next !== undefined
+  }
+
+  function enqueueNavigationReminder(text: string) {
+    systemUtteranceSequenceRef.current += 1
+    speechCoordinatorRef.current?.enqueueSystemUtterance({
+      id: `navigation-${systemUtteranceSequenceRef.current}`,
+      text,
+    })
+  }
+
+  function updateNavigationSnapshot(snapshot: NavigationSnapshot) {
+    const routeId = snapshot.routeId
+      ?? runtimeTask?.navigationSimulation?.routeId
+      ?? runtimeTask?.navigation?.routeId
+    if (!snapshot.leg || !routeId) {
+      navigationSnapshotRef.current = undefined
+      return
+    }
+    navigationSnapshotRef.current = {
+      routeId,
+      leg: snapshot.leg,
+      progress: snapshot.progress,
+      speedKph: snapshot.speedKph,
+      batteryPercent: snapshot.batteryPercent,
+      remainingRangeKm: snapshot.remainingRangeKm,
+      remainingDistanceKm: snapshot.remainingDistanceKm,
+      eta: new Date(snapshot.etaMs ?? Date.now()).toISOString(),
+      currentRoad: snapshot.road,
+    }
   }
 
   function setHudVisibility(visible: boolean) {
@@ -592,6 +785,10 @@ export default function App({
       stopDegradedFixtureAudio()
       setKeyboardRequested(false)
       armedFixtureRef.current = sample
+      voiceTurnConfigRef.current = {
+        autoSubmit: voiceAutoSubmit && !sample.requiresConfirmation,
+        recognitionSource: 'fixture',
+      }
       voice.press()
       return
     }
@@ -929,7 +1126,9 @@ export default function App({
             pending={pending}
             onAction={handleAction}
             onVehicleSnapshot={setVehicleContext}
+            onSnapshot={updateNavigationSnapshot}
             onLegComplete={completeNavigationLeg}
+            onReminder={enqueueNavigationReminder}
             onHudVisibilityChange={setHudVisibility}
           />
           <section className="navigation-command" aria-label="导航语音与文字控制">

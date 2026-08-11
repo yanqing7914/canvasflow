@@ -238,6 +238,63 @@ function FlightStatusCard({ component }: { component: Extract<ComponentSpec, { t
   )
 }
 
+function FlightDetailCard({ component }: { component: Extract<ComponentSpec, { type: 'flight-detail' }> }) {
+  const { props } = component
+  const changedArrival = props.scheduledArrival !== props.estimatedArrival
+  return (
+    <ComponentSurface component={component} className="ui-flight-brief">
+      <header className="ui-flight-brief__header">
+        <span className="ui-flight-brief__glyph" aria-hidden="true"><AirplaneIcon /></span>
+        <div>
+          <p className="ui-flight-brief__source">{freshnessLabels[props.freshness]}</p>
+          <h2 className="ui-flight-brief__number">{props.flightNumber}</h2>
+        </div>
+        <StatusPill label={flightStatusLabels[props.status]} tone={props.status} />
+      </header>
+      <p className="ui-card__summary">{props.airlineName} · {props.originName} → {props.arrivalAirportName}</p>
+      <div className="vehicle-status-grid">
+        <Metric label="预计到达" value={formatTime(props.estimatedArrival)} />
+        <Metric label="计划到达" value={formatTime(props.scheduledArrival)} detail={changedArrival ? '时间已更新' : undefined} />
+        <Metric label="航站楼" value={props.terminal} />
+      </div>
+    </ComponentSurface>
+  )
+}
+
+function RouteConfirmationCard({ component }: { component: Extract<ComponentSpec, { type: 'route-confirmation' }> }) {
+  const { props } = component
+  const outbound = props.leg === 'outbound'
+  return (
+    <ComponentSurface component={component} className="ui-navigation-brief">
+      <header className="ui-navigation-brief__header">
+        <span className="ui-navigation-brief__glyph" aria-hidden="true"><NavigationIcon /></span>
+        <div>
+          <p className="ui-navigation-brief__eyebrow">{outbound ? '去程方案' : '返程方案'}</p>
+          <h2 className="ui-navigation-brief__destination">{props.destination}</h2>
+        </div>
+        <StatusPill label="模拟路线" tone="neutral" />
+      </header>
+      {outbound && props.flightNumber && (
+        <div className="ui-detail-row">
+          <span>已选航班</span>
+          <strong>{props.flightNumber}</strong>
+          {props.flightEstimatedArrival && (
+            <time dateTime={props.flightEstimatedArrival}>预计 {formatTime(props.flightEstimatedArrival)} 到达</time>
+          )}
+        </div>
+      )}
+      <div className="vehicle-status-grid">
+        <Metric label="预计驾车" value={`${Math.round(props.durationMinutes)} 分钟`} />
+        <Metric label="预计到达" value={formatTime(props.arrivalTime)} />
+        <Metric label="距离" value={formatDistance(props.distanceKm)} />
+        <Metric label="当前电量" value={formatPercent(props.currentBatteryPercent)} />
+        <Metric label={outbound ? '预计到达电量' : '预计到家电量'} value={formatPercent(props.estimatedBatteryAtArrival)} />
+      </div>
+      <p className="ui-card__status-line">模拟行驶位置，非真实 GPS</p>
+    </ComponentSurface>
+  )
+}
+
 /**
  * The trip's navigation brief, and — where it floats over a map — the one card
  * the driver can put away.
@@ -774,7 +831,9 @@ function ComponentCard({
   switch (result.data.type) {
     case 'pickup-overview': return <PickupOverviewCard component={result.data} />
     case 'flight-status': return <FlightStatusCard component={result.data} />
+    case 'flight-detail': return <FlightDetailCard component={result.data} />
     case 'navigation-summary': return <NavigationSummaryCard component={result.data} floating={floating} />
+    case 'route-confirmation': return <RouteConfirmationCard component={result.data} />
     case 'route-map': {
       // Geometry that survived the schema can still be undrawable — every point on
       // one spot, say. A map with no line in it is an empty frame, so the slot goes
@@ -804,6 +863,7 @@ function ComponentCard({
     case 'departure-plan': return <DeparturePlanCard component={result.data} />
     case 'alert': return <AlertCard component={result.data} />
     case 'status-banner': return <StatusBannerCard component={result.data} />
+    case 'vehicle-status': return <ComponentFallback component={component} slotId={slotId} />
   }
 }
 
@@ -862,7 +922,9 @@ function componentActionIds(component: unknown): string[] {
 function cardOwnedActionIds(component: ComponentSpec): string[] {
   return component.type === 'flight-choices'
     ? [
-        ...component.props.choices.map((choice) => choice.actionId),
+        ...component.props.choices
+          .map((choice) => choice.actionId)
+          .filter((actionId): actionId is string => actionId !== undefined),
         // The refresh pill is drawn in the card's own header, so it belongs here
         // too — left off this list it would appear twice, once as a pill and once
         // as a full-height button in the slot's group.

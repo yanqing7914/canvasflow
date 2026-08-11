@@ -62,7 +62,9 @@ export function PersistentRouteMap({ sessionKey, routeKey, destination, progress
 
   useEffect(() => {
     if (!handle.current) return
-    void handle.current.setRoute({ ...sketch, progress })
+    void handle.current.setRoute({ ...sketch, progress }).then((replaced) => {
+      if (!replaced) setSource('sketch')
+    })
   }, [routeKey])
 
   function recenter() {

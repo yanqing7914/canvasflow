@@ -74,6 +74,28 @@ describe('NavigationWorkspace', () => {
     expect(onComplete).toHaveBeenCalledOnce()
   })
 
+  it('retries a failed arrival handoff without overlapping requests', async () => {
+    const clock = manualClock()
+    let finishFirst: ((completed: boolean) => void) | undefined
+    const onComplete = vi.fn()
+      .mockImplementationOnce(() => new Promise<boolean>((resolve) => { finishFirst = resolve }))
+      .mockResolvedValueOnce(true)
+    render(
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onAction={vi.fn()} onLegComplete={onComplete} />,
+    )
+
+    act(() => clock.advance(90_000))
+    expect(onComplete).toHaveBeenCalledOnce()
+    act(() => clock.advance(1_000))
+    expect(onComplete).toHaveBeenCalledOnce()
+
+    await act(async () => { finishFirst?.(false) })
+    act(() => clock.advance(1_000))
+    expect(onComplete).toHaveBeenCalledTimes(2)
+    act(() => clock.advance(1_000))
+    expect(onComplete).toHaveBeenCalledTimes(2)
+  })
+
   it('keeps the map mounted while HUD and windows change', () => {
     const clock = manualClock()
     const first = spec()

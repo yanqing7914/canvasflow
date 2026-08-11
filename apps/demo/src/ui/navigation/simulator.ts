@@ -1,3 +1,11 @@
+import {
+  advanceNavigationSimulation,
+  createNavigationSimulation,
+  NAVIGATION_SIMULATION_PROFILES,
+  setNavigationSimulationSpeed,
+  type NavigationSimulationState,
+} from '@canvasflow/tools'
+
 export type NavigationLeg = 'outbound' | 'return'
 export type SpeedTier = 'slow' | 'normal' | 'fast'
 export type NavigationRunState = 'idle' | 'driving' | 'arrived'
@@ -17,18 +25,13 @@ export type NavigationSimulatorConfig = {
 }
 
 export type NavigationSimulatorState = {
-  leg?: NavigationLeg
-  runState: NavigationRunState
-  speedTier: SpeedTier
-  progress: number
-  anchorProgress: number
-  anchorTimeMs: number
-  batteryAtLegStart: number
-  completedDistanceKm: number
+  simulation?: NavigationSimulationState
   remindedManeuvers: string[]
 }
 
 export type NavigationSnapshot = {
+  /** The active simulation route, forwarded only with a later user command. */
+  routeId?: string
   leg?: NavigationLeg
   runState: NavigationRunState
   speedTier: SpeedTier
@@ -49,9 +52,9 @@ export type NavigationSnapshot = {
 }
 
 export const SPEED_TIERS: Record<SpeedTier, NavigationSpeedProfile> = {
-  slow: { durationSeconds: 150, speedKph: 35, label: '慢速' },
-  normal: { durationSeconds: 90, speedKph: 55, label: '正常' },
-  fast: { durationSeconds: 45, speedKph: 75, label: '快速' },
+  slow: { durationSeconds: NAVIGATION_SIMULATION_PROFILES.slow.durationSeconds, speedKph: NAVIGATION_SIMULATION_PROFILES.slow.displaySpeedKph, label: '慢速' },
+  normal: { durationSeconds: NAVIGATION_SIMULATION_PROFILES.normal.durationSeconds, speedKph: NAVIGATION_SIMULATION_PROFILES.normal.displaySpeedKph, label: '正常' },
+  fast: { durationSeconds: NAVIGATION_SIMULATION_PROFILES.fast.durationSeconds, speedKph: NAVIGATION_SIMULATION_PROFILES.fast.displaySpeedKph, label: '快速' },
 } as const
 
 export const DEFAULT_SIMULATOR_CONFIG: NavigationSimulatorConfig = {
@@ -95,23 +98,28 @@ export const browserNavigationClock: NavigationClock = {
   },
 }
 
-export function createNavigationSimulatorState(nowMs = 0): NavigationSimulatorState {
-  return {
-    runState: 'idle',
-    speedTier: 'normal',
-    progress: 0,
-    anchorProgress: 0,
-    anchorTimeMs: nowMs,
-    batteryAtLegStart: DEFAULT_SIMULATOR_CONFIG.initialBatteryPercent,
-    completedDistanceKm: 0,
-    remindedManeuvers: [],
+declare global {
+  interface Window {
+    /** E2E seam installed before the app loads; production never defines it. */
+    __canvasflowNavigationClock?: NavigationClock
   }
 }
 
+export function resolveNavigationClock(): NavigationClock {
+  return typeof window !== 'undefined' && window.__canvasflowNavigationClock
+    ? window.__canvasflowNavigationClock
+    : browserNavigationClock
+}
+
+export function createNavigationSimulatorState(_nowMs?: number): NavigationSimulatorState {
+  void _nowMs
+  return { remindedManeuvers: [] }
+}
+
 export type NavigationSimulatorAction =
-  | { type: 'start-leg'; leg: NavigationLeg; nowMs: number; batteryPercent?: number }
-  | { type: 'tick'; nowMs: number; durationSeconds?: number }
-  | { type: 'set-speed'; speedTier: SpeedTier; nowMs: number; currentDurationSeconds?: number }
+  | { type: 'start-leg'; leg: NavigationLeg; nowMs: number; batteryPercent?: number; config?: NavigationSimulatorConfig; routeId?: string }
+  | { type: 'tick'; nowMs: number }
+  | { type: 'set-speed'; speedTier: SpeedTier; nowMs: number }
   | { type: 'mark-reminded'; maneuverId: string }
   | { type: 'reset'; nowMs: number }
 
@@ -122,45 +130,28 @@ export function navigationSimulatorReducer(
   switch (action.type) {
     case 'start-leg':
       return {
-        leg: action.leg,
-        runState: 'driving',
-        speedTier: 'normal',
-        progress: 0,
-        anchorProgress: 0,
-        anchorTimeMs: action.nowMs,
-        batteryAtLegStart: action.batteryPercent ?? currentBattery(state),
-        completedDistanceKm: state.completedDistanceKm,
+        simulation: createNavigationSimulation({
+          leg: action.leg,
+          routeId: action.routeId ?? action.leg,
+          distanceKm: (action.config ?? DEFAULT_SIMULATOR_CONFIG).distanceKm[action.leg],
+          initialBatteryPercent: action.batteryPercent ?? currentBattery(state, action.config),
+          estimatedBatteryAtArrival: estimatedArrivalBattery(
+            action.batteryPercent ?? currentBattery(state, action.config),
+            action.leg,
+            action.config,
+          ),
+          nowMs: action.nowMs,
+          profiles: toolProfiles(action.config),
+        }),
         remindedManeuvers: [],
       }
     case 'tick': {
-      if (state.runState !== 'driving' || !state.leg) return state
-      const progress = projectedProgressForDuration(
-        state,
-        action.nowMs,
-        action.durationSeconds ?? SPEED_TIERS[state.speedTier].durationSeconds,
-      )
-      return {
-        ...state,
-        progress,
-        runState: progress >= 1 ? 'arrived' : 'driving',
-        ...(progress >= 1 ? { anchorProgress: 1, anchorTimeMs: action.nowMs } : {}),
-      }
+      if (!state.simulation || state.simulation.arrived) return state
+      return { ...state, simulation: snapshotState(advanceNavigationSimulation(state.simulation, action.nowMs)) }
     }
     case 'set-speed': {
-      if (state.runState !== 'driving' || state.speedTier === action.speedTier) return state
-      const progress = projectedProgressForDuration(
-        state,
-        action.nowMs,
-        action.currentDurationSeconds ?? SPEED_TIERS[state.speedTier].durationSeconds,
-      )
-      return {
-        ...state,
-        speedTier: action.speedTier,
-        progress,
-        anchorProgress: progress,
-        anchorTimeMs: action.nowMs,
-        runState: progress >= 1 ? 'arrived' : 'driving',
-      }
+      if (!state.simulation) return state
+      return { ...state, simulation: setNavigationSimulationSpeed(state.simulation, action.speedTier, action.nowMs).state }
     }
     case 'mark-reminded':
       return state.remindedManeuvers.includes(action.maneuverId)
@@ -180,22 +171,10 @@ export function nextSpeedTier(current: SpeedTier, direction: 'faster' | 'slower'
 export function projectedProgress(
   state: NavigationSimulatorState,
   nowMs: number,
-  config: NavigationSimulatorConfig = DEFAULT_SIMULATOR_CONFIG,
+  _config?: NavigationSimulatorConfig,
 ): number {
-  if (state.runState !== 'driving') return clampProgress(state.progress)
-  const elapsedSeconds = Math.max(0, nowMs - state.anchorTimeMs) / 1000
-  const gained = elapsedSeconds / config.profiles[state.speedTier].durationSeconds
-  return clampProgress(state.anchorProgress + gained)
-}
-
-function projectedProgressForDuration(
-  state: NavigationSimulatorState,
-  nowMs: number,
-  durationSeconds: number,
-): number {
-  if (state.runState !== 'driving') return clampProgress(state.progress)
-  const elapsedSeconds = Math.max(0, nowMs - state.anchorTimeMs) / 1000
-  return clampProgress(state.anchorProgress + elapsedSeconds / durationSeconds)
+  void _config
+  return state.simulation ? advanceNavigationSimulation(state.simulation, nowMs).progress : 0
 }
 
 export function simulatorSnapshot(
@@ -203,21 +182,23 @@ export function simulatorSnapshot(
   nowMs: number,
   config: NavigationSimulatorConfig = DEFAULT_SIMULATOR_CONFIG,
 ): NavigationSnapshot {
-  const leg = state.leg
-  const progress = projectedProgress(state, nowMs, config)
-  const distanceKm = leg ? config.distanceKm[leg] : 0
-  const travelledKm = distanceKm * progress
-  const batteryPercent = Math.max(0, state.batteryAtLegStart - travelledKm * config.consumptionPercentPerKm)
-  const remainingDistanceKm = Math.max(0, distanceKm - travelledKm)
-  const remainingSeconds = state.runState === 'driving'
-    ? Math.max(0, (1 - progress) * config.profiles[state.speedTier].durationSeconds)
-    : 0
+  const core = state.simulation ? advanceNavigationSimulation(state.simulation, nowMs) : undefined
+  const leg = core?.leg
+  const progress = core?.progress ?? 0
+  const distanceKm = core?.distanceKm ?? 0
+  const travelledKm = core?.traveledDistanceKm ?? 0
+  const batteryPercent = core?.batteryPercent ?? config.initialBatteryPercent
+  const remainingDistanceKm = core?.remainingDistanceKm ?? 0
+  const remainingSeconds = core?.remainingSeconds ?? 0
+  const runState: NavigationRunState = !core ? 'idle' : core.arrived ? 'arrived' : 'driving'
+  const speedTier = core?.speedMode ?? 'normal'
   const road = leg ? roadAt(leg, progress, distanceKm) : undefined
   return {
+    ...(core?.routeId ? { routeId: core.routeId } : {}),
     leg,
-    runState: state.runState,
-    speedTier: state.speedTier,
-    speedKph: state.runState === 'driving' ? config.profiles[state.speedTier].speedKph : 0,
+    runState,
+    speedTier,
+    speedKph: core?.speedKph ?? 0,
     progress,
     distanceKm,
     travelledKm,
@@ -225,7 +206,7 @@ export function simulatorSnapshot(
     batteryPercent,
     remainingRangeKm: Math.max(0, (batteryPercent / 100) * config.fullRangeKm),
     remainingSeconds,
-    ...(state.runState === 'driving' ? { etaMs: nowMs + remainingSeconds * 1000 } : {}),
+    ...(runState === 'driving' ? { etaMs: core?.etaMs } : {}),
     road: road?.road ?? '当前位置',
     maneuver: road?.maneuver ?? '等待开始导航',
     ...(road?.maneuverId ? { maneuverId: road.maneuverId } : {}),
@@ -238,8 +219,9 @@ export function currentBattery(
   state: NavigationSimulatorState,
   config: NavigationSimulatorConfig = DEFAULT_SIMULATOR_CONFIG,
 ): number {
-  if (!state.leg) return state.batteryAtLegStart
-  return Math.max(0, state.batteryAtLegStart - config.distanceKm[state.leg] * state.progress * config.consumptionPercentPerKm)
+  if (!state.simulation) return config.initialBatteryPercent
+  const drop = state.simulation.initialBatteryPercent - state.simulation.estimatedBatteryAtArrival
+  return Math.max(0, state.simulation.initialBatteryPercent - drop * state.simulation.progress)
 }
 
 export function pendingManeuverReminder(
@@ -269,7 +251,34 @@ function reminderText(maneuver: string): string {
   return `前方 300 米${normalized}`
 }
 
-function clampProgress(value: number): number {
-  if (!Number.isFinite(value)) return 0
-  return Math.min(1, Math.max(0, value))
+function toolProfiles(config: NavigationSimulatorConfig = DEFAULT_SIMULATOR_CONFIG) {
+  return {
+    slow: { durationSeconds: config.profiles.slow.durationSeconds, displaySpeedKph: config.profiles.slow.speedKph },
+    normal: { durationSeconds: config.profiles.normal.durationSeconds, displaySpeedKph: config.profiles.normal.speedKph },
+    fast: { durationSeconds: config.profiles.fast.durationSeconds, displaySpeedKph: config.profiles.fast.speedKph },
+  }
+}
+
+function estimatedArrivalBattery(
+  initialBatteryPercent: number,
+  leg: NavigationLeg,
+  config: NavigationSimulatorConfig = DEFAULT_SIMULATOR_CONFIG,
+): number {
+  return Math.max(0, initialBatteryPercent - config.distanceKm[leg] * config.consumptionPercentPerKm)
+}
+
+function snapshotState(snapshot: ReturnType<typeof advanceNavigationSimulation>): NavigationSimulationState {
+  return {
+    leg: snapshot.leg,
+    routeId: snapshot.routeId,
+    distanceKm: snapshot.distanceKm,
+    initialBatteryPercent: snapshot.initialBatteryPercent,
+    estimatedBatteryAtArrival: snapshot.estimatedBatteryAtArrival,
+    speedMode: snapshot.speedMode,
+    progress: snapshot.progress,
+    anchoredAtMs: snapshot.anchoredAtMs,
+    anchoredProgress: snapshot.anchoredProgress,
+    arrived: snapshot.arrived,
+    profiles: snapshot.profiles,
+  }
 }

@@ -4,18 +4,18 @@ import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import AppComponent from './App'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
-import { applyEvent, createInitialTask } from '@canvasflow/agent'
+import { applyEvent, createCockpitTask, createInitialTask } from '@canvasflow/agent'
 import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, TaskUpdateEnvelope, UISpec, VehicleContext } from '@canvasflow/schema'
 import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
 import { createFakeSpeech } from './test/speech'
-import type { CockpitUISpec, RuntimeNavigationTask } from './ui/navigation/contracts'
+import type { CockpitUISpec } from './ui/navigation/contracts'
 import type { NavigationClock } from './ui/navigation/simulator'
 
 // Legacy cases intentionally start from the historical typed draft. Production
 // and the dedicated empty-input test below render AppComponent directly.
 function App(props: ComponentProps<typeof AppComponent>) {
-  return <AppComponent initialText="我现在要去机场接妈妈和豆豆" {...props} />
+  return <AppComponent initialText="我现在要去机场接妈妈和豆豆" voiceAutoSubmit={false} {...props} />
 }
 
 describe('demo integration', () => {
@@ -64,11 +64,148 @@ describe('demo integration', () => {
     expect(api.action).toHaveBeenCalledWith(expect.anything(), 'pick-cockpit-MU5102', 'flight-choices-cockpit')
   })
 
+  it('renders the complete outbound confirmation summary inside its pre-navigation window', async () => {
+    const user = userEvent.setup()
+    const task = {
+      ...createCockpitTask('confirm-outbound'), phase: 'confirming-outbound',
+      pickupAirport: { label: '虹桥机场', code: 'SHA' },
+      flight: {
+        flightNumber: 'MU4490', airlineName: '东方航空', originName: '北京首都', status: 'in-air',
+        scheduledArrival: '2026-08-11T15:20:00+08:00', estimatedArrival: '2026-08-11T15:30:00+08:00',
+        arrivalAirport: 'SHA', arrivalAirportName: '虹桥机场', terminal: 'T2', trusted: true,
+      },
+      navigation: { routeId: 'outbound-route', destination: '虹桥机场', eta: '2026-08-11T14:40:00+08:00', status: 'planned' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: 'outbound-route', distanceKm: 32, initialBatteryPercent: 42,
+        estimatedBatteryAtArrival: 29, profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+    } as AirportPickupTaskState
+    const composed = composePickupSpec(task) as CockpitUISpec
+    const confirmationComponent = {
+      id: 'outbound-confirmation', type: 'route-confirmation' as const,
+      props: {
+        leg: 'outbound' as const, destination: '虹桥机场', flightNumber: 'MU4490',
+        flightEstimatedArrival: '2026-08-11T15:30:00+08:00', durationMinutes: 20,
+        arrivalTime: '2026-08-11T14:40:00+08:00', distanceKm: 32,
+        currentBatteryPercent: 42, estimatedBatteryAtArrival: 29, simulated: true as const,
+      },
+    }
+    const ui = {
+      ...composed,
+      components: [...composed.components, confirmationComponent],
+      actions: [{ id: 'start-outbound', label: '现在出发', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'start-outbound' } }],
+      windows: [{ id: 'outbound-confirmation-1', kind: 'outbound-confirmation' as const, title: '现在出发', componentIds: [confirmationComponent!.id], actionIds: ['start-outbound'], size: 'medium' as const, controls: { closable: true, minimizable: true, maximizable: true } }],
+    } as CockpitUISpec
+    const response = { requestId: 'confirm-response', task, ui, effects: [], meta: { mode: 'fixture' as const, durationMs: 1, fallbackUsed: false } }
+    const api = { create: vi.fn().mockResolvedValue(response), event: vi.fn(), action: vi.fn().mockResolvedValue(response), confirmation: vi.fn() }
+
+    render(<AppComponent api={api} voiceEnabled={false} initialText="选择航班" />)
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    const confirmation = await screen.findByLabelText('现在出发窗口')
+    expect(confirmation).toHaveTextContent('MU4490')
+    expect(confirmation).toHaveTextContent('虹桥机场')
+    expect(confirmation).toHaveTextContent('32.0 km')
+    expect(confirmation).toHaveTextContent('42%')
+    expect(confirmation).toHaveTextContent('29%')
+    expect(confirmation).toHaveTextContent('20 分钟')
+    expect(confirmation.querySelector('[data-action-id="start-outbound"]')).not.toBeNull()
+  })
+
   it('keeps legacy waiting screens outside the cockpit workspace', () => {
     render(<App initialTask={{ ...createInitialTask(), phase: 'waiting-for-passengers' }} />)
     expect(screen.getByRole('region', { name: '当前行程' })).toBeInTheDocument()
     expect(screen.queryByLabelText('模拟导航地图')).not.toBeInTheDocument()
   })
+
+  it('keeps the completed feedback until a new input creates a fresh task', async () => {
+    const user = userEvent.setup()
+    const completed = { ...createCockpitTask('completed-task'), phase: 'completed' } as AirportPickupTaskState
+    const fresh = apiResponse(createCockpitTask('fresh-task'))
+    const api = {
+      create: vi.fn().mockResolvedValueOnce(apiResponse(completed)).mockResolvedValueOnce(fresh),
+      event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+    }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="完成第一趟" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(await screen.findByText('行程结束')).toBeInTheDocument()
+    const input = screen.getByLabelText('任务输入')
+    await user.clear(input)
+    await user.type(input, '下一趟去浦东机场接人')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(api.create).toHaveBeenNthCalledWith(2, '下一趟去浦东机场接人', expect.objectContaining({ vehicleContext: expect.anything() }))
+  })
+
+  it('piggybacks only the latest active navigation snapshot on user input', async () => {
+    const user = userEvent.setup()
+    let nowMs = 1_000
+    let tick: (() => void) | undefined
+    const navigationClock: NavigationClock = {
+      now: () => nowMs,
+      schedule: (callback) => {
+        tick = callback
+        return () => { tick = undefined }
+      },
+    }
+    const task: AirportPickupTaskState = {
+      ...createCockpitTask('snapshot-task'),
+      phase: 'outbound-driving',
+      pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      flight: { flightNumber: 'MU5102', status: 'in-air', estimatedArrival: '2026-08-11T15:30:00+08:00', terminal: 'T2' },
+      navigation: { routeId: 'route-snapshot-1', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'active' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: 'route-snapshot-1', distanceKm: 32, initialBatteryPercent: 72,
+        estimatedBatteryAtArrival: 58,
+        profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 },
+          normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+    } as AirportPickupTaskState
+    const returnTask = {
+      ...task,
+      phase: 'confirming-return',
+      navigation: { routeId: 'route-return-2', destination: '家', eta: '2026-08-11T16:20:00+08:00', status: 'planned' },
+    } as AirportPickupTaskState
+    const response = apiResponse(task)
+    const returnResponse = apiResponse(returnTask)
+    const event = vi.fn().mockResolvedValueOnce(returnResponse).mockResolvedValue(returnResponse)
+    const api = { create: vi.fn().mockResolvedValue(response), event, action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} navigationClock={navigationClock} initialText="接着走" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(event).not.toHaveBeenCalled()
+    nowMs = 2_000
+    act(() => { tick?.() })
+    expect(event).not.toHaveBeenCalled()
+
+    const input = screen.getByLabelText('任务输入')
+    await user.clear(input)
+    await user.type(input, '到达天气怎么样')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(event).toHaveBeenCalledOnce())
+    expect(event).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      type: 'user.input',
+      text: '到达天气怎么样',
+      navigationSnapshot: expect.objectContaining({ routeId: 'route-snapshot-1' }),
+    }))
+
+    event.mockClear()
+    await user.clear(input)
+    await user.type(input, '开始回家')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(event).toHaveBeenCalledOnce())
+    expect(event).toHaveBeenCalledWith(expect.anything(), {
+      type: 'user.input', text: '开始回家',
+    })
+  })
+
   /**
    * Engineering metadata and the demo player live in the controls drawer, never on
    * the driver-facing brief. Tests that assert a raw phase or press 推进下一事件
@@ -1279,7 +1416,7 @@ describe('demo integration', () => {
         const speech = createFakeSpeech()
         const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
         const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
-        render(<App api={api} speech={speech.deps} />)
+        render(<AppComponent api={api} speech={speech.deps} />)
 
         act(() => { screen.getByRole('button', { name: '开始语音输入' }).click() })
         emit(() => speech.engine().emit('去虹桥机场接人', true, 0.9))
@@ -1440,10 +1577,10 @@ describe('demo integration', () => {
       expect(speech.synthesis.cancelled).toBeGreaterThan(cancelledBefore)
       expect(speech.engines).toHaveLength(2)
       expect(speech.engine().started).toBe(1)
-      expect(screen.getByRole('button', { name: '停止语音输入' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '取消聆听' })).toBeInTheDocument()
     })
 
-    it('abandons a transcript on a second press but keeps the words in the field', async () => {
+    it('cancels a confirmed transcript without retaining or submitting its words', async () => {
       const user = userEvent.setup()
       const create = vi.fn()
       const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
@@ -1455,7 +1592,26 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '放弃这次语音输入' }))
 
       expect(screen.getByRole('button', { name: '开始语音输入' })).toBeInTheDocument()
-      expect(screen.getByLabelText('任务输入')).toHaveValue('去机场接妈妈')
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+      expect(create).not.toHaveBeenCalled()
+    })
+
+    it('cancels listening immediately, clears partial words, and never calls the Agent', async () => {
+      const user = userEvent.setup()
+      const create = vi.fn()
+      const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      const speech = createFakeSpeech()
+      render(<App api={api} speech={speech.deps} />)
+
+      await user.click(screen.getByRole('button', { name: '开始语音输入' }))
+      emit(() => speech.engine().emit('去虹桥机场', false))
+      expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('去虹桥机场')
+      await user.click(screen.getByRole('button', { name: '取消聆听' }))
+
+      expect(speech.engine().aborted).toBeGreaterThan(0)
+      expect(screen.getByRole('button', { name: '开始语音输入' })).toBeInTheDocument()
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+      expect(screen.getByRole('status', { name: '语音状态' })).toHaveTextContent('')
       expect(create).not.toHaveBeenCalled()
     })
 
@@ -1617,7 +1773,7 @@ describe('demo integration', () => {
       expect(screen.getByRole('button', { name: '收起文字输入' })).toBeDisabled()
     })
 
-    it('keeps an abandoned transcript on screen instead of parking it out of sight', async () => {
+    it('clears an abandoned transcript before starting another voice turn', async () => {
       const user = userEvent.setup()
       const speech = createFakeSpeech()
       const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
@@ -1627,11 +1783,8 @@ describe('demo integration', () => {
       emit(() => speech.engine().emit('去机场接妈妈', true))
       await user.click(screen.getByRole('button', { name: '放弃这次语音输入' }))
 
-      // Leaving the voice turn keeps the words; hiding the field would keep them
-      // somewhere the driver cannot see, correct, or send.
-      expect(screen.getByLabelText('任务输入')).toHaveValue('去机场接妈妈')
+      expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
 
-      // Choosing to speak again is a decision to stop typing, so the field goes.
       await user.click(screen.getByRole('button', { name: '开始语音输入' }))
       expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
     })
@@ -1703,7 +1856,7 @@ describe('demo integration', () => {
       // The stage is back and the recording is playing into a listening turn.
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
       expect(audio.current().played).toBe(1)
-      expect(screen.getByRole('button', { name: '停止语音输入' })).toBeInTheDocument()
+      expect(screen.getByRole('button', { name: '取消聆听' })).toBeInTheDocument()
 
       // The recording ends; its canonical transcript waits in the field like
       // any other turn's words. Nothing has been submitted.

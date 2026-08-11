@@ -6,10 +6,15 @@ import {
   isSecureContextOk,
   voiceError,
   type SpeechControllerDeps,
+  type VoiceRecognitionSource,
   type VoiceMachineSnapshot,
 } from '@canvasflow/voice'
 
-export type VoiceSubmitMeta = { source: 'voice'; confidence?: number }
+export type VoiceSubmitMeta = {
+  source: 'voice'
+  confidence?: number
+  recognitionSource?: VoiceRecognitionSource
+}
 
 /** Optional copy to speak back once the transcript has been handled. */
 type TranscriptReply = string | undefined | void
@@ -29,6 +34,10 @@ export type UseVoiceOptions = {
   autoSubmit?: boolean | (() => boolean)
   /** Injectable timer seam for deterministic silence handling. */
   silenceMs?: number
+  /** Provenance for a recognition turn, used to reject trusted system TTS echoes. */
+  recognitionSource?: VoiceRecognitionSource | (() => VoiceRecognitionSource)
+  /** Optional shared playback queue. When present, replies leave this FSM idle immediately. */
+  speakReply?: (text: string) => void
 }
 
 const INITIAL_SNAPSHOT: VoiceMachineSnapshot = {
@@ -44,15 +53,28 @@ const INITIAL_SNAPSHOT: VoiceMachineSnapshot = {
  * `onTranscript`; this hook only moves text.
  */
 export function useVoice(options: UseVoiceOptions = {}) {
-  const { enabled = true, onTranscript, speech, autoSubmit = true, silenceMs = 5_000 } = options
+  const { enabled = true, onTranscript, speech, autoSubmit = true, silenceMs = 5_000, recognitionSource, speakReply } = options
   const [snapshot, setSnapshot] = useState<VoiceMachineSnapshot>(INITIAL_SNAPSHOT)
 
   // Keep the seam and the engine factories in refs so a new object identity on
   // either one never tears down a live listening turn.
   const onTranscriptRef = useRef(onTranscript)
   onTranscriptRef.current = onTranscript
+  const speakReplyRef = useRef(speakReply)
+  speakReplyRef.current = speakReply
+  const autoSubmitRef = useRef(autoSubmit)
+  autoSubmitRef.current = autoSubmit
+  const recognitionSourceRef = useRef(recognitionSource)
+  recognitionSourceRef.current = recognitionSource
   const speechRef = useRef(speech)
   speechRef.current = speech
+  const initialAutoSubmit = typeof autoSubmit === 'function' ? autoSubmit() : autoSubmit
+  const initialRecognitionSource = typeof recognitionSource === 'function' ? recognitionSource() : recognitionSource
+  const [turnConfig, setTurnConfig] = useState({
+    autoSubmit: initialAutoSubmit,
+    recognitionSource: initialRecognitionSource,
+  })
+  const pendingTurnConfigRef = useRef<typeof turnConfig | undefined>(undefined)
 
   const injected = Boolean(speech?.createRecognition)
   const supported = useMemo(() => injected || isRecognitionSupported(), [injected])
@@ -63,27 +85,6 @@ export function useVoice(options: UseVoiceOptions = {}) {
     machine: ReturnType<typeof createVoiceMachine>
     controller: ReturnType<typeof createSpeechController>
   } | null>(null)
-  const silenceTimerRef = useRef<number | undefined>(undefined)
-
-  const clearSilenceTimer = useCallback(() => {
-    if (silenceTimerRef.current === undefined) return
-    window.clearTimeout(silenceTimerRef.current)
-    silenceTimerRef.current = undefined
-  }, [])
-
-  const scheduleAutoSubmit = useCallback(() => {
-    clearSilenceTimer()
-    const enabledForTurn = typeof autoSubmit === 'function' ? autoSubmit() : autoSubmit
-    if (!enabledForTurn) return
-    silenceTimerRef.current = window.setTimeout(() => {
-      silenceTimerRef.current = undefined
-      const machine = loopRef.current?.machine
-      if (!machine || machine.snapshot().state !== 'transcribing') return
-      machine.submit()
-      setSnapshot(machine.snapshot())
-    }, silenceMs)
-  }, [autoSubmit, clearSilenceTimer, silenceMs])
-
   useEffect(() => {
     if (!available) {
       loopRef.current = null
@@ -107,28 +108,42 @@ export function useVoice(options: UseVoiceOptions = {}) {
     const controller = createSpeechController({
       ...speechRef.current,
       handlers: {
-        onPartial: on<[string]>((machine, text) => {
-          clearSilenceTimer()
-          machine.asrPartial(text)
-        }),
-        onFinal: on<[string, number | undefined]>((machine, text, confidence) => {
-          machine.asrFinal(text, confidence)
-          scheduleAutoSubmit()
-        }),
+        onPartial: on<[string]>((machine, text) => machine.asrPartial(text)),
+        onFinal: on<[string, number | undefined]>((machine, text, confidence) =>
+          machine.asrFinal(text, confidence)),
         onError: on<[Parameters<ReturnType<typeof createVoiceMachine>['asrError']>[0]]>(
           (machine, kind) => machine.asrError(kind)),
-        onEnd: on((machine) => {
-          machine.asrEnd()
-          scheduleAutoSubmit()
-        }),
+        onEnd: on((machine) => machine.asrEnd()),
         onSpeakEnd: on((machine) => machine.speakEnd()),
         onSpeakError: on((machine) => machine.speakError()),
       },
     })
 
     const machine = createVoiceMachine({
+      config: {
+        autoSubmit: turnConfig.autoSubmit,
+        silenceMs,
+      },
+      recognitionSource: turnConfig.recognitionSource,
       effects: {
         openAsr: () => {
+          const turnAutoSubmit = autoSubmitRef.current
+          const turnRecognitionSource = recognitionSourceRef.current
+          const nextAutoSubmit = typeof turnAutoSubmit === 'function' ? turnAutoSubmit() : turnAutoSubmit
+          const nextRecognitionSource = typeof turnRecognitionSource === 'function'
+            ? turnRecognitionSource()
+            : turnRecognitionSource
+          if (nextAutoSubmit !== turnConfig.autoSubmit || nextRecognitionSource !== turnConfig.recognitionSource) {
+            pendingTurnConfigRef.current = {
+              autoSubmit: nextAutoSubmit,
+              recognitionSource: nextRecognitionSource,
+            }
+            queueMicrotask(() => setTurnConfig({
+              autoSubmit: nextAutoSubmit,
+              recognitionSource: nextRecognitionSource,
+            }))
+            return
+          }
           if (!controller.startListening()) {
             // Report asynchronously: the machine is mid-transition into listening.
             queueMicrotask(on((current) => current.asrError('recognition')))
@@ -153,7 +168,14 @@ export function useVoice(options: UseVoiceOptions = {}) {
             return
           }
           void Promise.resolve(result).then(
-            (reply) => finish(typeof reply === 'string' ? reply : undefined),
+          (reply) => {
+            if (typeof reply === 'string' && speakReplyRef.current) {
+              speakReplyRef.current(reply)
+              finish(undefined)
+              return
+            }
+            finish(typeof reply === 'string' ? reply : undefined)
+          },
             () => finish(undefined),
           )
         },
@@ -164,15 +186,24 @@ export function useVoice(options: UseVoiceOptions = {}) {
     loopRef.current = { machine, controller }
     setSnapshot(machine.snapshot())
 
+    if (pendingTurnConfigRef.current) {
+      pendingTurnConfigRef.current = undefined
+      queueMicrotask(() => {
+        const current = loopRef.current?.machine
+        if (!current || current.snapshot().state !== 'idle') return
+        current.press()
+        setSnapshot(current.snapshot())
+      })
+    }
+
     return () => {
       // Clearing the holder makes every queued callback a no-op after teardown.
       holder.machine = undefined
       loopRef.current = null
-      clearSilenceTimer()
       machine.dispose()
       controller.dispose()
     }
-  }, [available, clearSilenceTimer, scheduleAutoSubmit])
+  }, [available, silenceMs, turnConfig.autoSubmit, turnConfig.recognitionSource])
 
   const act = useCallback((run: (machine: ReturnType<typeof createVoiceMachine>) => void) => {
     const loop = loopRef.current
@@ -181,11 +212,11 @@ export function useVoice(options: UseVoiceOptions = {}) {
     setSnapshot(loop.machine.snapshot())
   }, [])
 
-  const press = useCallback(() => { clearSilenceTimer(); act((machine) => machine.press()) }, [act, clearSilenceTimer])
-  const cancel = useCallback(() => { clearSilenceTimer(); act((machine) => machine.cancel()) }, [act, clearSilenceTimer])
+  const press = useCallback(() => { act((machine) => machine.press()) }, [act])
+  const cancel = useCallback(() => { act((machine) => machine.cancel()) }, [act])
   const reset = useCallback(() => { act((machine) => machine.reset()) }, [act])
-  const edit = useCallback((text: string) => { clearSilenceTimer(); act((machine) => machine.edit(text)) }, [act, clearSilenceTimer])
-  const submit = useCallback((text?: string) => { clearSilenceTimer(); act((machine) => machine.submit(text)) }, [act, clearSilenceTimer])
+  const edit = useCallback((text: string) => { act((machine) => machine.edit(text)) }, [act])
+  const submit = useCallback((text?: string) => { act((machine) => machine.submit(text)) }, [act])
 
   /**
    * The error shown when voice is unavailable. Derived rather than stored so the

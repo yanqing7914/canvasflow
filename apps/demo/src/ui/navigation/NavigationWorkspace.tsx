@@ -5,17 +5,17 @@ import { NavigationHUD } from './NavigationHUD'
 import { WindowManager } from './WindowManager'
 import {
   DEFAULT_SIMULATOR_CONFIG,
-  browserNavigationClock,
   createNavigationSimulatorState,
   currentBattery,
   navigationSimulatorReducer,
   pendingManeuverReminder,
+  resolveNavigationClock,
   simulatorSnapshot,
   type NavigationClock,
   type NavigationLeg,
   type NavigationSnapshot,
 } from './simulator'
-import { drivingLegForPhase, runtimeWindows, type RuntimeNavigationTask } from './contracts'
+import { drivingLegForPhase, type RuntimeNavigationTask } from './contracts'
 
 export type NavigationWorkspaceProps = {
   task: RuntimeNavigationTask
@@ -25,7 +25,8 @@ export type NavigationWorkspaceProps = {
   pending: boolean
   onAction: (actionId: string, componentId: string) => void
   onVehicleSnapshot?: (vehicle: VehicleContext) => void
-  onLegComplete?: (leg: NavigationLeg) => void
+  onSnapshot?: (snapshot: NavigationSnapshot) => void
+  onLegComplete?: (leg: NavigationLeg) => boolean | void | Promise<boolean | void>
   onReminder?: (text: string) => void
   onHudVisibilityChange?: (visible: boolean) => void
 }
@@ -55,25 +56,30 @@ export function NavigationWorkspace({
   task,
   spec,
   initialVehicle,
-  clock = browserNavigationClock,
+  clock,
   pending,
   onAction,
   onVehicleSnapshot,
+  onSnapshot,
   onLegComplete,
   onReminder,
   onHudVisibilityChange,
 }: NavigationWorkspaceProps) {
-  const [state, dispatch] = useReducer(navigationSimulatorReducer, clock.now(), createNavigationSimulatorState)
-  const [nowMs, setNowMs] = useState(clock.now)
+  const activeClock = useMemo(() => clock ?? resolveNavigationClock(), [clock])
+  const [state, dispatch] = useReducer(navigationSimulatorReducer, activeClock.now(), createNavigationSimulatorState)
+  const [nowMs, setNowMs] = useState(activeClock.now)
   const [localHudExpanded, setLocalHudExpanded] = useState(true)
   const [reminderText, setReminderText] = useState<string>()
   const completedLeg = useRef<NavigationLeg | undefined>(undefined)
+  const completingLeg = useRef<NavigationLeg | undefined>(undefined)
   const onVehicleSnapshotRef = useRef(onVehicleSnapshot)
   onVehicleSnapshotRef.current = onVehicleSnapshot
+  const onSnapshotRef = useRef(onSnapshot)
+  onSnapshotRef.current = onSnapshot
   const phaseLeg = drivingLegForPhase(task.phase)
   const routeComponent = spec.components.find((component) => component.type === 'route-map')
   const sourceSketch = routeComponent?.type === 'route-map' ? routeComponent.props.routeSketch : undefined
-  const leg = state.leg ?? phaseLeg ?? (task.phase === 'return-driving' ? 'return' : 'outbound')
+  const leg = state.simulation?.leg ?? phaseLeg ?? (task.phase === 'return-driving' ? 'return' : 'outbound')
   const sketch = sourceSketch ?? (leg === 'return' ? RETURN_SKETCH : OUTBOUND_SKETCH)
   const destination = leg === 'return' ? '家' : task.pickupAirport?.label ?? task.navigation?.destination ?? '机场接人点'
   const simulatorConfig = useMemo(() => {
@@ -98,34 +104,33 @@ export function NavigationWorkspace({
     ...simulatorSnapshot(state, nowMs, simulatorConfig), destination,
   }), [destination, nowMs, simulatorConfig, state])
 
-  useEffect(() => clock.schedule(() => {
-    const tick = clock.now()
+  useEffect(() => activeClock.schedule(() => {
+    const tick = activeClock.now()
     setNowMs(tick)
-    dispatch({
-      type: 'tick', nowMs: tick,
-      durationSeconds: simulatorConfig.profiles[state.speedTier].durationSeconds,
-    })
-  }), [clock, simulatorConfig.profiles, state.speedTier])
+    dispatch({ type: 'tick', nowMs: tick })
+  }), [activeClock])
 
   useEffect(() => {
-    if (!phaseLeg || state.leg === phaseLeg) return
+    if (!phaseLeg || state.simulation?.leg === phaseLeg) return
     const batteryPercent = task.navigationSimulation?.leg === phaseLeg
       ? task.navigationSimulation.initialBatteryPercent
-      : state.leg ? currentBattery(state, simulatorConfig) : initialVehicle.batteryPercent
-    dispatch({ type: 'start-leg', leg: phaseLeg, nowMs: clock.now(), batteryPercent })
+      : state.simulation ? currentBattery(state, simulatorConfig) : initialVehicle.batteryPercent
+    dispatch({
+      type: 'start-leg', leg: phaseLeg, nowMs: activeClock.now(), batteryPercent,
+      config: simulatorConfig, routeId: task.navigationSimulation?.routeId ?? task.navigation?.routeId,
+    })
     completedLeg.current = undefined
-  }, [clock, initialVehicle.batteryPercent, phaseLeg, simulatorConfig, state, task.navigationSimulation])
+    completingLeg.current = undefined
+  }, [activeClock, initialVehicle.batteryPercent, phaseLeg, simulatorConfig, state.simulation, task.navigation?.routeId, task.navigationSimulation])
 
   useEffect(() => {
     const speedTier = task.cockpit?.speedMode
-    if (!speedTier || speedTier === state.speedTier || state.runState !== 'driving') return
-    dispatch({
-      type: 'set-speed', speedTier, nowMs: clock.now(),
-      currentDurationSeconds: simulatorConfig.profiles[state.speedTier].durationSeconds,
-    })
-  }, [clock, simulatorConfig.profiles, state.runState, state.speedTier, task.cockpit?.speedMode])
+    if (!speedTier || speedTier === state.simulation?.speedMode || state.simulation?.arrived !== false) return
+    dispatch({ type: 'set-speed', speedTier, nowMs: activeClock.now() })
+  }, [activeClock, state.simulation?.arrived, state.simulation?.speedMode, task.cockpit?.speedMode])
 
   useEffect(() => {
+    onSnapshotRef.current?.(snapshot)
     onVehicleSnapshotRef.current?.({
       ...initialVehicle,
       speedKph: snapshot.speedKph,
@@ -133,13 +138,25 @@ export function NavigationWorkspace({
       remainingRangeKm: snapshot.remainingRangeKm,
       gear: snapshot.runState === 'driving' ? 'D' : 'P',
     })
-  }, [initialVehicle, snapshot.batteryPercent, snapshot.remainingRangeKm, snapshot.runState, snapshot.speedKph])
+  }, [initialVehicle, snapshot])
 
   useEffect(() => {
-    if (snapshot.runState !== 'arrived' || !snapshot.leg || completedLeg.current === snapshot.leg) return
-    completedLeg.current = snapshot.leg
-    onLegComplete?.(snapshot.leg)
-  }, [onLegComplete, snapshot.leg, snapshot.runState])
+    if (snapshot.runState !== 'arrived' || !snapshot.leg
+      || completedLeg.current === snapshot.leg || completingLeg.current === snapshot.leg) return
+    const arrivingLeg = snapshot.leg
+    if (!onLegComplete) {
+      completedLeg.current = arrivingLeg
+      return
+    }
+    completingLeg.current = arrivingLeg
+    void Promise.resolve(onLegComplete(arrivingLeg)).then(
+      (completed) => {
+        if (completed !== false) completedLeg.current = arrivingLeg
+        completingLeg.current = undefined
+      },
+      () => { completingLeg.current = undefined },
+    )
+  }, [nowMs, onLegComplete, snapshot.leg, snapshot.runState])
 
   useEffect(() => {
     const reminder = pendingManeuverReminder(state, snapshot)
@@ -182,7 +199,7 @@ export function NavigationWorkspace({
         vehicle={snapshot}
         onAction={onAction}
         clear={task.phase === 'completed'}
-        preserveMissing={runtimeWindows(spec).length === 0}
+        preserveMissing={(spec as unknown as { windows?: unknown }).windows === undefined}
       />
     </section>
   )

@@ -1643,7 +1643,7 @@ describe('UISpecRenderer flight choices board', () => {
   }
 
   const renderer = () => screen.getByRole('region', { name: 'Generated task interface' })
-  const rows = () => Array.from(renderer().querySelectorAll<HTMLButtonElement>('.ui-flight-choices__row'))
+  const rows = () => Array.from(renderer().querySelectorAll<HTMLButtonElement>('button.ui-flight-choices__row'))
   const refreshPill = () => renderer().querySelector<HTMLButtonElement>('.ui-flight-choices__refresh')
 
   it('numbers every arrival and shows what tells two of them apart', () => {
@@ -1762,8 +1762,6 @@ describe('UISpecRenderer flight choices board', () => {
       [choices[0]],
       'not-a-list',
       undefined,
-      // A row that names no action would be a choice the driver cannot make.
-      choices.map((choice) => ({ ...choice, actionId: undefined })),
       // Six rows: past the point where a driver picks rather than reads.
       [...choices, ...choices],
     ]
@@ -1775,6 +1773,18 @@ describe('UISpecRenderer flight choices board', () => {
       expect(renderer().querySelector('.ui-card--fallback')).toBeInTheDocument()
       unmount()
     }
+  })
+
+  it('renders a board without action ids as read-only information', () => {
+    render(<UISpecRenderer
+      spec={boardSpec({ choices: choices.map((choice) => ({ ...choice, actionId: undefined })), actionIds: [], definedActionIds: [] })}
+      onAction={vi.fn()}
+      pending={false}
+    />)
+
+    expect(renderer().querySelector('.ui-flight-choices')).toBeInTheDocument()
+    expect(rows()).toHaveLength(0)
+    expect(renderer().querySelectorAll('.ui-flight-choices__row--readonly')).toHaveLength(3)
   })
 
   it('keeps action ids and internal names out of what the driver reads', () => {
