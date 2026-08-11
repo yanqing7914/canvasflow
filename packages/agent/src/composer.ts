@@ -1235,6 +1235,7 @@ export const weatherConditionLabels: Record<WeatherOutput['condition'], string> 
 export function weatherCardComponent(
   task: AirportPickupTaskState,
   data: WeatherOutput,
+  options: { timeLabel?: string } = {},
 ): UISpec['components'][number] {
   const arrivalAhead = !task.passengers.confirmedOnboard
     && task.flight !== undefined
@@ -1250,7 +1251,7 @@ export function weatherCardComponent(
     type: 'weather-card',
     props: {
       location: data.locationName,
-      timeLabel: arrivalClock ? `${arrivalClock} 到达时` : '现在',
+      timeLabel: options.timeLabel ?? (arrivalClock ? `${arrivalClock} 到达时` : '现在'),
       temperatureC: data.temperatureC,
       condition: data.condition,
       conditionLabel: weatherConditionLabels[data.condition],

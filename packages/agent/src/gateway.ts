@@ -333,6 +333,36 @@ export class AgentGateway {
     const airport = plan.slotUpdates.airport
     let toolResults: ReadToolResults = {}
     let assistantText = plan.assistantText
+    if (plan.intent === 'check-weather') {
+      try {
+        const weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, {
+          locationId: 'navigation-segment-origin',
+        })
+        if (weather) {
+          const published = this.#publish(task, toolResults, requestContext)
+          const component = {
+            ...weatherCardComponent(task, weather.data, { timeLabel: '现在' }),
+            id: `weather-${request.clientRequestId}:input`,
+          }
+          const ui = this.#appendCockpitInfoWindow(
+            taskId, published.ui, component, 'weather', `${request.clientRequestId}:input`, timestamp,
+          )
+          const stored = this.#store.create({
+            ...published,
+            task: { ...published.task, uiRevision: ui.uiRevision },
+            ui,
+          }, request.clientRequestId)
+          return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+            text: '已打开天气。',
+            shouldSpeak: request.input.source === 'voice' && request.clientCapabilities.supportsTts,
+          })
+        }
+        assistantText = '天气服务暂时不可用，稍后可以再问我。'
+      } catch (error) {
+        if (!(error instanceof ReadToolOrchestrationError)) this.#throwProviderError(error)
+        assistantText = '天气服务暂时不可用，稍后可以再问我。'
+      }
+    }
     if (airport) {
       task = applyEvent(task, {
         eventId: `${request.clientRequestId}:airport`, type: 'pickup.airport-selected', airport, timestamp,
@@ -1636,7 +1666,17 @@ export class AgentGateway {
         request.event = plan.proposedEvents[0]
       } else if (plan.intent === 'speed-up' || plan.intent === 'speed-down' || plan.intent === 'hide-navigation-info' || plan.intent === 'show-navigation-info') {
         const next = this.#applyCockpitLocalControl(current.task, plan.intent, timestamp)
-        if (next === current.task) return this.#cockpitNoop(current, request, startedAt, plan.assistantText)
+        if (next === current.task) {
+          const driving = current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving'
+          const text = plan.intent === 'speed-up' || plan.intent === 'speed-down'
+            ? !driving
+              ? '当前没有正在行驶的车辆'
+              : plan.intent === 'speed-up'
+                ? '已经是最快档位'
+                : '已经是最慢档位'
+            : plan.assistantText
+          return this.#cockpitNoop(current, request, startedAt, text)
+        }
         const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, current.toolResults, current.requestContext, current.effectReceipts)))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: plan.assistantText, shouldSpeak })
@@ -1798,15 +1838,38 @@ export class AgentGateway {
         || current.task.phase === 'confirming-return'
       const locationId = commandSnapshot?.weatherLocationId
         ?? (atAirport ? this.#arrivalWeatherLocationId(current) : 'navigation-segment-origin')
-      const weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, { locationId })
-      if (!weather) return this.#cockpitNoop(current, request, startedAt, '天气服务暂时不可用。')
-      component = { ...weatherCardComponent(current.task, weather.data), id: `weather-${request.event.eventId}` }
+      try {
+        const weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, { locationId })
+        if (!weather) {
+          throw new AgentGatewayError('PROVIDER_FAILED', '天气服务暂时不可用，请稍后重试。', true, current)
+        }
+        component = {
+          ...weatherCardComponent(current.task, weather.data, { timeLabel: '现在' }),
+          id: `weather-${request.event.eventId}`,
+        }
+      } catch (error) {
+        if (error instanceof AgentGatewayError) throw error
+        if (error instanceof ReadToolOrchestrationError) {
+          throw new AgentGatewayError(error.code, '天气服务暂时不可用，请稍后重试。', error.retryable, current)
+        }
+        this.#throwProviderError(error, current)
+      }
     } else if (kind === 'calendar') {
-      const calendar = this.#orchestrator.resolveSchedule?.(taskId, request.clientRequestId, {
-        date: timestamp.slice(0, 10), now: timestamp,
-      })
-      if (!calendar) return this.#cockpitNoop(current, request, startedAt, '日程服务暂时不可用。')
-      component = { ...scheduleCardComponent(calendar.data.events), id: `calendar-${request.event.eventId}` }
+      try {
+        const calendar = this.#orchestrator.resolveSchedule?.(taskId, request.clientRequestId, {
+          date: timestamp.slice(0, 10), now: timestamp,
+        })
+        if (!calendar) {
+          throw new AgentGatewayError('PROVIDER_FAILED', '日程服务暂时不可用，请稍后重试。', true, current)
+        }
+        component = { ...scheduleCardComponent(calendar.data.events), id: `calendar-${request.event.eventId}` }
+      } catch (error) {
+        if (error instanceof AgentGatewayError) throw error
+        if (error instanceof ReadToolOrchestrationError) {
+          throw new AgentGatewayError(error.code, '日程服务暂时不可用，请稍后重试。', error.retryable, current)
+        }
+        this.#throwProviderError(error, current)
+      }
     } else if (kind === 'flight-detail') {
       const flight = current.task.flight
       if (!flight?.airlineName || !flight.originName || !flight.arrivalAirportName) {
@@ -1833,26 +1896,36 @@ export class AgentGateway {
         },
       }
     }
-    const windowKind = kind === 'calendar' ? 'calendar' : kind
     const windowTitle = kind === 'weather' ? '天气' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
-    const baseUi = current.ui
-    const existingComponents = baseUi.components
-    const ui = uiSpecSchema.parse({
-      ...baseUi,
-      uiRevision: baseUi.uiRevision + 1,
-      components: [...existingComponents, component],
-      windows: [...(baseUi.windows ?? []), {
-        id: `${kind}-${request.event.eventId}`, kind: windowKind, title: windowTitle, componentIds: [component.id],
-        size: kind === 'calendar' ? 'large' : 'medium', controls: { closable: true, minimizable: true, maximizable: true },
-      }],
-      meta: { ...baseUi.meta, generatedAt: timestamp, traceId: `trace-${taskId}-${request.event.eventId}` },
-    })
+    const ui = this.#appendCockpitInfoWindow(taskId, current.ui, component, kind, request.event.eventId, timestamp)
     const answered: StoredTask = { ...current, task: { ...current.task, uiRevision: ui.uiRevision }, ui }
     const stored = this.#store.save(answered)
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
     return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
       text: `已打开${windowTitle}。`,
       shouldSpeak: request.event.type === 'user.input' && request.event.source === 'voice' && supportsTts,
+    })
+  }
+
+  #appendCockpitInfoWindow(
+    taskId: string,
+    baseUi: UISpec,
+    component: UISpec['components'][number],
+    kind: 'weather' | 'calendar' | 'flight-detail' | 'vehicle-status',
+    eventId: string,
+    timestamp: string,
+  ): UISpec {
+    const windowKind = kind === 'calendar' ? 'calendar' : kind
+    const windowTitle = kind === 'weather' ? '天气' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
+    return uiSpecSchema.parse({
+      ...baseUi,
+      uiRevision: baseUi.uiRevision + 1,
+      components: [...baseUi.components, component],
+      windows: [...(baseUi.windows ?? []), {
+        id: `${kind}-${eventId}`, kind: windowKind, title: windowTitle, componentIds: [component.id],
+        size: kind === 'calendar' ? 'large' : 'medium', controls: { closable: true, minimizable: true, maximizable: true },
+      }],
+      meta: { ...baseUi.meta, generatedAt: timestamp, traceId: `trace-${taskId}-${eventId}` },
     })
   }
 

@@ -25,6 +25,36 @@ function createRequest(text = '我现在要去机场接妈妈和豆豆') {
   }
 }
 
+function createCockpitRequest(text: string, clientRequestId: string) {
+  return {
+    ...createRequest(text),
+    clientRequestId,
+    clientCapabilities: {
+      uiSchemaVersion: '1.0' as const,
+      supportsSse: true,
+      supportsTts: true,
+      cockpitVersion: '1' as const,
+    },
+  }
+}
+
+function startCockpitOutbound(gateway: AgentGateway, prefix: string) {
+  const flights = gateway.createTask(createCockpitRequest('去虹桥机场接人', `${prefix}-create`))
+  const board = flights.ui.components.find((component) => component.type === 'flight-choices')
+  if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
+  const actionId = board.props.choices[0]?.actionId
+  if (!actionId) throw new Error('expected cockpit flight action')
+  const selected = gateway.submitAction(flights.task.taskId, {
+    clientRequestId: `${prefix}-pick`, expectedTaskRevision: flights.task.taskRevision,
+    expectedUiRevision: flights.ui.uiRevision, actionId, componentId: board.id, idempotencyKey: `${prefix}-pick`,
+  })
+  return gateway.submitAction(selected.task.taskId, {
+    clientRequestId: `${prefix}-start`, expectedTaskRevision: selected.task.taskRevision,
+    expectedUiRevision: selected.ui.uiRevision, actionId: 'start-outbound',
+    componentId: 'outbound-confirmation', idempotencyKey: `${prefix}-start`,
+  })
+}
+
 function failedLandingMessageTask(gateway: AgentGateway) {
   const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
   const started = gateway.submitAction(created.task.taskId, {
@@ -55,25 +85,152 @@ function failedLandingMessageTask(gateway: AgentGateway) {
 }
 
 describe('AgentGateway', () => {
-  it('uses the fixed origin for cockpit weather before departure', () => {
+  it('opens first-turn cockpit weather at the fixed origin and labels it as now', () => {
     const orchestrator = new ReadToolOrchestrator()
     const resolveWeather = vi.spyOn(orchestrator, 'resolveWeather')
     const gateway = new AgentGateway({
       store: new MemoryTaskStore(), now: () => now, createId: () => 'origin', orchestrator,
     })
-    const created = gateway.createTask({
-      ...createRequest('我现在要去机场接人'),
-      clientRequestId: 'origin-create',
-      clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true, cockpitVersion: '1' },
-    })
+    const weather = gateway.createTask(createCockpitRequest('查天气', 'origin-weather'))
 
-    const weather = gateway.submitEvent(created.task.taskId, {
-      clientRequestId: 'origin-weather', expectedTaskRevision: created.task.taskRevision,
-      event: { eventId: 'origin-weather', type: 'user.input', text: '查天气', source: 'text', timestamp: now },
-    })
-
-    expect(resolveWeather).toHaveBeenCalledWith(created.task.taskId, 'origin-weather', { locationId: 'navigation-segment-origin' })
+    expect(weather.task.phase).toBe('collecting-airport')
+    expect(resolveWeather).toHaveBeenCalledWith(weather.task.taskId, 'origin-weather', { locationId: 'navigation-segment-origin' })
     expect(weather.ui.windows?.at(-1)?.kind).toBe('weather')
+    const card = weather.ui.components.find((component) => component.type === 'weather-card')
+    if (card?.type !== 'weather-card') throw new Error('expected weather card')
+    expect(card.props.timeLabel).toBe('现在')
+  })
+
+  it('keeps first-turn cockpit weather in airport collection with an explicit provider failure', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    const failing: ReadToolOrchestration = {
+      resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+      prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+      resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+      resolveWeather: () => {
+        throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'weather timed out', true)
+      },
+    }
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => 'origin-failure', orchestrator: failing,
+    })
+
+    const created = gateway.createTask(createCockpitRequest('查天气', 'origin-weather-failure'))
+
+    expect(created.task.phase).toBe('collecting-airport')
+    expect(created.ui.windows ?? []).toHaveLength(0)
+    expect(created.assistant?.text).toBe('天气服务暂时不可用，稍后可以再问我。')
+  })
+
+  it('uses exact speed-control boundary copy without changing a parked cockpit task', () => {
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => 'parked-speed' })
+    const created = gateway.createTask(createCockpitRequest('我现在要去机场接人', 'parked-speed-create'))
+
+    for (const [index, text] of ['跑快点', '跑慢点'].entries()) {
+      const answered = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: `parked-speed-${index}`, expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: `parked-speed-${index}`, type: 'user.input', text, source: 'text', timestamp: now },
+      })
+      expect(answered.task).toEqual(created.task)
+      expect(answered.assistant?.text).toBe('当前没有正在行驶的车辆')
+    }
+  })
+
+  it('uses exact fastest and slowest boundary copy while preserving the active drive', () => {
+    const gateway = new AgentGateway({ store: new MemoryTaskStore(), now: () => now, createId: () => 'speed-boundary' })
+    const driving = startCockpitOutbound(gateway, 'speed-boundary')
+    const fast = gateway.submitEvent(driving.task.taskId, {
+      clientRequestId: 'speed-fast', expectedTaskRevision: driving.task.taskRevision,
+      event: { eventId: 'speed-fast', type: 'user.input', text: '跑快点', source: 'text', timestamp: now },
+    })
+    const fastest = gateway.submitEvent(fast.task.taskId, {
+      clientRequestId: 'speed-fastest', expectedTaskRevision: fast.task.taskRevision,
+      event: { eventId: 'speed-fastest', type: 'user.input', text: '跑快点', source: 'text', timestamp: now },
+    })
+    expect(fastest.task).toEqual(fast.task)
+    expect(fastest.assistant?.text).toBe('已经是最快档位')
+
+    const normal = gateway.submitEvent(fastest.task.taskId, {
+      clientRequestId: 'speed-normal', expectedTaskRevision: fastest.task.taskRevision,
+      event: { eventId: 'speed-normal', type: 'user.input', text: '跑慢点', source: 'text', timestamp: now },
+    })
+    const slow = gateway.submitEvent(normal.task.taskId, {
+      clientRequestId: 'speed-slow', expectedTaskRevision: normal.task.taskRevision,
+      event: { eventId: 'speed-slow', type: 'user.input', text: '跑慢点', source: 'text', timestamp: now },
+    })
+    const slowest = gateway.submitEvent(slow.task.taskId, {
+      clientRequestId: 'speed-slowest', expectedTaskRevision: slow.task.taskRevision,
+      event: { eventId: 'speed-slowest', type: 'user.input', text: '跑慢点', source: 'text', timestamp: now },
+    })
+    expect(slowest.task).toEqual(slow.task)
+    expect(slowest.assistant?.text).toBe('已经是最慢档位')
+  })
+
+  it('retries cockpit weather after a provider timeout without caching the failed event', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    let attempts = 0
+    const resolveWeather = vi.fn((taskId: string, requestId: string, input: { locationId: string; at?: string }) => {
+      attempts += 1
+      if (attempts === 1) throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'weather timed out', true)
+      return orchestrator.resolveWeather(taskId, requestId, input)
+    })
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => 'weather-retry',
+      orchestrator: {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveWeather,
+      },
+    })
+    const created = gateway.createTask(createCockpitRequest('我现在要去机场接人', 'weather-retry-create'))
+    const request = {
+      clientRequestId: 'weather-retry-first', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'weather-retry-event', type: 'user.input' as const, text: '查天气', source: 'text' as const, timestamp: now },
+    }
+
+    expect(() => gateway.submitEvent(created.task.taskId, request)).toThrowError(expect.objectContaining({
+      code: 'PROVIDER_TIMEOUT', retryable: true, latest: expect.objectContaining({ task: created.task }),
+    }))
+    const retried = gateway.submitEvent(created.task.taskId, request)
+
+    expect(resolveWeather).toHaveBeenCalledTimes(2)
+    expect(retried.ui.windows?.at(-1)?.kind).toBe('weather')
+    const card = retried.ui.components.find((component) => component.type === 'weather-card')
+    if (card?.type !== 'weather-card') throw new Error('expected weather card')
+    expect(card.props.timeLabel).toBe('现在')
+  })
+
+  it('retries cockpit calendar after a provider timeout without caching the failed event', () => {
+    const orchestrator = new ReadToolOrchestrator()
+    let attempts = 0
+    const resolveSchedule = vi.fn((taskId: string, requestId: string, input: { date: string; now?: string }) => {
+      attempts += 1
+      if (attempts === 1) throw new ReadToolOrchestrationError('PROVIDER_TIMEOUT', 'calendar timed out', true)
+      return orchestrator.resolveSchedule(taskId, requestId, input)
+    })
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(), now: () => now, createId: () => 'calendar-retry',
+      orchestrator: {
+        resolveInitialPassengers: orchestrator.resolveInitialPassengers.bind(orchestrator),
+        prepareTrip: orchestrator.prepareTrip.bind(orchestrator),
+        resolveReturnTripPreferences: orchestrator.resolveReturnTripPreferences.bind(orchestrator),
+        resolveSchedule,
+      },
+    })
+    const created = gateway.createTask(createCockpitRequest('我现在要去机场接人', 'calendar-retry-create'))
+    const request = {
+      clientRequestId: 'calendar-retry-first', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'calendar-retry-event', type: 'user.input' as const, text: '查日历', source: 'text' as const, timestamp: now },
+    }
+
+    expect(() => gateway.submitEvent(created.task.taskId, request)).toThrowError(expect.objectContaining({
+      code: 'PROVIDER_TIMEOUT', retryable: true, latest: expect.objectContaining({ task: created.task }),
+    }))
+    const retried = gateway.submitEvent(created.task.taskId, { ...request, clientRequestId: 'calendar-retry-second' })
+
+    expect(resolveSchedule).toHaveBeenCalledTimes(2)
+    expect(retried.ui.windows?.at(-1)?.kind).toBe('calendar')
   })
 
   it('runs the opt-in cockpit flow through guarded create, event, and action paths', () => {
