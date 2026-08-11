@@ -77,6 +77,14 @@ describe('speech controller — recognition lifecycle', () => {
     expect(engine().started).toBe(1)
   })
 
+  it('forwards native onstart so authorization can enter waiting-wake', () => {
+    const onStart = vi.fn()
+    const { controller, engine } = setup({ onStart })
+    controller.startListening()
+    engine().onstart?.()
+    expect(onStart).toHaveBeenCalledTimes(1)
+  })
+
   it('forwards partial and final results with clamped confidence', () => {
     const onPartial = vi.fn()
     const onFinal = vi.fn()
@@ -182,6 +190,17 @@ describe('speech controller — generation guards', () => {
 
     retained?.({ error: 'not-allowed' })
     expect(onError).not.toHaveBeenCalled()
+  })
+
+  it('drops a late onstart after stopListening', () => {
+    const onStart = vi.fn()
+    const { controller, engines } = setup({ onStart })
+    controller.startListening()
+    const retained = engines[0]!.onstart
+    controller.stopListening()
+
+    retained?.()
+    expect(onStart).not.toHaveBeenCalled()
   })
 })
 

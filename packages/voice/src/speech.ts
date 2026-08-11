@@ -50,6 +50,7 @@ export type SpeechSynthesisLike = {
 }
 
 export type SpeechControllerHandlers = {
+  onStart?: () => void
   onPartial?: (text: string) => void
   onFinal?: (text: string, confidence?: number) => void
   onError?: (kind: Extract<VoiceErrorKind, 'permission' | 'no-speech' | 'recognition'>) => void
@@ -216,6 +217,10 @@ export function createSpeechController(deps: SpeechControllerDeps = {}) {
             handlers.onPartial?.(alternative.transcript)
           }
         }
+      }
+      engine.onstart = () => {
+        if (!fresh()) return
+        handlers.onStart?.()
       }
       engine.onerror = (event) => {
         if (!fresh()) return
