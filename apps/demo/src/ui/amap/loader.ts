@@ -69,6 +69,41 @@ const SCRIPT_ID = 'amap-js-api'
 const LOAD_TIMEOUT_MS = 3000
 
 let pending: Promise<AMapApi | null> | null = null
+let activeKeyIndex = 0
+let testKeys: string[] | undefined
+
+export type AMapLoaderSnapshot = {
+  state: 'idle' | 'loading' | 'ready' | 'failed'
+  keyIndex?: number
+  keyCount: number
+}
+
+type LoaderListener = (snapshot: AMapLoaderSnapshot) => void
+const listeners = new Set<LoaderListener>()
+let snapshot: AMapLoaderSnapshot = { state: 'idle', keyCount: 0 }
+
+function configuredKeys(): string[] {
+  if (testKeys) return [...testKeys]
+  const multi = (import.meta.env.VITE_AMAP_JS_KEYS ?? '')
+    .split(',')
+    .map((key: string) => key.trim())
+    .filter(Boolean)
+  if (multi.length > 0) return multi
+  const single = import.meta.env.VITE_AMAP_JS_KEY?.trim()
+  return single ? [single] : []
+}
+
+function publish(next: AMapLoaderSnapshot) {
+  snapshot = next
+  for (const listener of listeners) listener(next)
+}
+
+export function amapLoaderSnapshot(): AMapLoaderSnapshot { return snapshot }
+export function subscribeAMapLoader(listener: LoaderListener): () => void {
+  listeners.add(listener)
+  listener(snapshot)
+  return () => listeners.delete(listener)
+}
 
 /**
  * Resolve the AMap API, or null if it cannot be loaded. Single-flight: repeated
@@ -76,44 +111,57 @@ let pending: Promise<AMapApi | null> | null = null
  */
 export function loadAMap(): Promise<AMapApi | null> {
   if (pending) return pending
-  pending = inject()
+  const keys = configuredKeys()
+  publish({ state: 'loading', keyIndex: keys.length ? activeKeyIndex : undefined, keyCount: keys.length })
+  pending = inject(keys).then((amap) => {
+    publish(amap
+      ? { state: 'ready', keyIndex: activeKeyIndex, keyCount: keys.length }
+      : { state: 'failed', keyIndex: keys.length ? activeKeyIndex : undefined, keyCount: keys.length })
+    return amap
+  })
   return pending
 }
 
-function inject(): Promise<AMapApi | null> {
+async function inject(keys: string[]): Promise<AMapApi | null> {
   if (typeof window === 'undefined' || typeof document === 'undefined') return Promise.resolve(null)
   const amapWindow = window as AMapWindow
   if (amapWindow.AMap) return Promise.resolve(amapWindow.AMap)
-
-  const key = import.meta.env.VITE_AMAP_JS_KEY
   // No key: stay entirely offline. No script, no request, no security config.
-  if (!key) return Promise.resolve(null)
+  if (keys.length === 0) return null
+
+  for (let offset = 0; offset < keys.length; offset += 1) {
+    const keyIndex = (activeKeyIndex + offset) % keys.length
+    const amap = await injectKey(keys[keyIndex]!, keyIndex)
+    if (amap) {
+      activeKeyIndex = keyIndex
+      return amap
+    }
+  }
+  return null
+}
+
+function injectKey(key: string, keyIndex: number): Promise<AMapApi | null> {
+  const amapWindow = window as AMapWindow
+  cleanupFailedAttempt()
 
   return new Promise<AMapApi | null>((resolve) => {
     // Route AMap's own service calls through our proxy so the jscode stays server-side.
     amapWindow._AMapSecurityConfig = { serviceHost: `${window.location.origin}/_AMapService` }
 
-    const existing = document.getElementById(SCRIPT_ID)
     let settled = false
     const finish = (value: AMapApi | null) => {
       if (settled) return
       settled = true
       window.clearTimeout(timer)
+      if (!value) cleanupFailedAttempt()
       resolve(value)
     }
 
-    // No retry: one attempt, and a slow or blocked script degrades to the sketch.
     const timer = window.setTimeout(() => finish(null), LOAD_TIMEOUT_MS)
-
-    if (existing) {
-      existing.addEventListener('load', () => finish(amapWindow.AMap ?? null))
-      existing.addEventListener('error', () => finish(null))
-      if (amapWindow.AMap) finish(amapWindow.AMap)
-      return
-    }
 
     const script = document.createElement('script')
     script.id = SCRIPT_ID
+    script.dataset.keyIndex = String(keyIndex)
     script.async = true
     script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}&plugin=AMap.Driving`
     script.addEventListener('load', () => finish(amapWindow.AMap ?? null))
@@ -123,7 +171,31 @@ function inject(): Promise<AMapApi | null> {
   })
 }
 
+function cleanupFailedAttempt() {
+  document.getElementById(SCRIPT_ID)?.remove()
+  delete (window as AMapWindow).AMap
+}
+
+export function retryAMap(): Promise<AMapApi | null> {
+  pending = null
+  cleanupFailedAttempt()
+  return loadAMap()
+}
+
+export function switchAMapKey(): Promise<AMapApi | null> {
+  const count = configuredKeys().length
+  if (count > 0) activeKeyIndex = (activeKeyIndex + 1) % count
+  return retryAMap()
+}
+
 /** Test-only: drop the single-flight cache so a fresh load can be observed. */
 export function __resetAMapLoaderForTest(): void {
   pending = null
+  activeKeyIndex = 0
+  snapshot = { state: 'idle', keyCount: 0 }
+  cleanupFailedAttempt()
+}
+
+export function __setAMapKeysForTest(keys?: string[]): void {
+  testKeys = keys
 }

@@ -15,17 +15,46 @@ import type { NavigationClock } from './ui/navigation/simulator'
 // Legacy cases intentionally start from the historical typed draft. Production
 // and the dedicated empty-input test below render AppComponent directly.
 function App(props: ComponentProps<typeof AppComponent>) {
-  return <AppComponent initialText="我现在要去机场接妈妈和豆豆" voiceAutoSubmit={false} {...props} />
+  return <AppComponent initialText="我现在要去机场接妈妈和豆豆" voiceAutoSubmit={false} wakeWordEnabled={false} {...props} />
 }
 
 describe('demo integration', () => {
-  it('starts with an empty task input and never supplies an example sentence', async () => {
+  it('starts in a quiet idle cockpit without creating a task or showing a large composer', async () => {
     const user = userEvent.setup()
-    render(<AppComponent voiceEnabled={false} />)
-    const input = screen.getByLabelText('任务输入')
-    expect(input).toHaveValue('')
-    await user.click(screen.getByRole('button', { name: '发送' }))
-    expect(input).toHaveValue('')
+    const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} />)
+    expect(screen.getByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.getByLabelText('人民广场模拟车辆位置')).toHaveTextContent('模拟位置，非真实 GPS')
+    expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
+    expect(screen.queryByText(/航班/)).not.toBeInTheDocument()
+    expect(api.create).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+    expect(screen.getByLabelText('任务输入')).toHaveValue('')
+  })
+
+  it('requires Xiaonan for speech but lets explicit text send create the task', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const created = apiResponse(createCockpitTask('wake-created'))
+    const api = { create: vi.fn().mockResolvedValue(created), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0)
+    act(() => { speech.engine().emit('我要去机场接人', true, 0.9) })
+    expect(api.create).not.toHaveBeenCalled()
+    act(() => { speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledWith('我要去机场接人', expect.objectContaining({ source: 'voice' })))
+
+    const typedApi = { ...api, create: vi.fn().mockResolvedValue(created) }
+    const typed = render(<AppComponent api={typedApi} voiceEnabled={false} />)
+    await user.click(screen.getAllByRole('button', { name: '改用文字输入' }).at(-1)!)
+    await user.type(screen.getAllByLabelText('任务输入').at(-1)!, '查天气')
+    await user.click(screen.getAllByRole('button', { name: '发送' }).at(-1)!)
+    typed.unmount()
+    expect(typedApi.create).toHaveBeenCalledWith('查天气', expect.objectContaining({ vehicleContext: expect.anything() }))
   })
 
   it('renders cockpit-owned flight and confirmation windows before navigation', async () => {
@@ -1608,7 +1637,7 @@ describe('demo integration', () => {
         const speech = createFakeSpeech()
         const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
         const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
-        render(<AppComponent api={api} speech={speech.deps} />)
+        render(<AppComponent api={api} speech={speech.deps} wakeWordEnabled={false} />)
 
         act(() => { screen.getByRole('button', { name: '开始语音输入' }).click() })
         emit(() => speech.engine().emit('去虹桥机场接人', true, 0.9))
@@ -1643,7 +1672,7 @@ describe('demo integration', () => {
       } as AirportPickupTaskState
       const event = vi.fn().mockRejectedValue(new Error('天气服务暂时不可用'))
       const api = { create: vi.fn().mockResolvedValue(apiResponse(task)), event, action: vi.fn(), confirmation: vi.fn() }
-      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} />)
+      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} wakeWordEnabled={false} />)
 
       await user.click(screen.getByRole('button', { name: '改用文字输入' }))
       await user.click(screen.getByRole('button', { name: '发送' }))
@@ -1677,7 +1706,7 @@ describe('demo integration', () => {
       } as AirportPickupTaskState
       const event = vi.fn()
       const api = { create: vi.fn().mockResolvedValue(apiResponse(task)), event, action: vi.fn(), confirmation: vi.fn() }
-      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} />)
+      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} wakeWordEnabled={false} />)
 
       await user.click(screen.getByRole('button', { name: '改用文字输入' }))
       await user.click(screen.getByRole('button', { name: '发送' }))

@@ -55,6 +55,34 @@ function startCockpitOutbound(gateway: AgentGateway, prefix: string) {
   })
 }
 
+describe('cockpit task cancellation', () => {
+  it.each(['choosing-flight', 'outbound-driving'] as const)('cancels a %s cockpit task through the terminal cleanup path', (phase) => {
+    const gateway = createGateway()
+    const current = phase === 'outbound-driving'
+      ? startCockpitOutbound(gateway, `cancel-${phase}`)
+      : gateway.createTask(createCockpitRequest('去虹桥机场接人', `cancel-${phase}`))
+
+    const cancelled = gateway.cancelTask(current.task.taskId, {
+      clientRequestId: `cancel-${phase}-request`,
+      expectedTaskRevision: current.task.taskRevision,
+      eventId: `cancel-${phase}-event`,
+      reason: '用户确认重新开始',
+    })
+    const replay = gateway.cancelTask(current.task.taskId, {
+      clientRequestId: `cancel-${phase}-retry`,
+      expectedTaskRevision: current.task.taskRevision,
+      eventId: `cancel-${phase}-event`,
+      reason: '用户确认重新开始',
+    })
+
+    expect(cancelled.task.phase).toBe('cancelled')
+    expect(cancelled.task.pendingConfirmation).toBeUndefined()
+    expect(cancelled.ui.phase).toBe('cancelled')
+    expect(replay.task).toEqual(cancelled.task)
+    expect(replay.ui).toEqual(cancelled.ui)
+  })
+})
+
 function failedLandingMessageTask(gateway: AgentGateway) {
   const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
   const started = gateway.submitAction(created.task.taskId, {

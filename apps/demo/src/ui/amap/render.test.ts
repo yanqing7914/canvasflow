@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RouteSketch } from '@canvasflow/schema'
 import type { AMapApi, AMapMarker, AMapPolyline } from './loader'
-import { renderAMapRoute } from './render'
+import { renderAMapPosition, renderAMapRoute } from './render'
 
 const sketch: RouteSketch = {
   waypoints: [
@@ -109,6 +109,21 @@ describe('renderAMapRoute themes', () => {
 
     handle?.destroy()
     expect(fake.remove).toHaveBeenCalled()
+    expect(fake.destroy).toHaveBeenCalledOnce()
+  })
+})
+
+describe('renderAMapPosition', () => {
+  it('renders one fixed vehicle without requesting a route and cleans it up', () => {
+    const fake = fakeAMap()
+    const handle = renderAMapPosition(fake.amap, document.createElement('div'), {
+      position: { latitude: 31.2304, longitude: 121.4737 }, theme: 'dark',
+    })
+    expect(handle).not.toBeNull()
+    expect(fake.markerPositions).toEqual([[121.4737, 31.2304]])
+    expect(fake.polylineOptions).toHaveLength(0)
+    handle?.destroy()
+    expect(fake.remove).toHaveBeenCalledOnce()
     expect(fake.destroy).toHaveBeenCalledOnce()
   })
 })

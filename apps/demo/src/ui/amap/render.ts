@@ -41,6 +41,36 @@ export type AMapRouteHandle = {
   destroy: () => void
 }
 
+export type AMapPositionHandle = { destroy: () => void }
+
+export function renderAMapPosition(
+  amap: AMapApi,
+  container: HTMLElement,
+  options: { position: { latitude: number; longitude: number }; theme: 'light' | 'dark' },
+): AMapPositionHandle | null {
+  if (!plottable(options.position)) return null
+  let map: AMapMap
+  let marker: AMapOverlay
+  try {
+    const palette = THEMES[options.theme]
+    map = new amap.Map(container, { zoom: 14, center: tuple(options.position), ...(palette.mapStyle ? { mapStyle: palette.mapStyle } : {}) })
+    marker = new amap.Marker({
+      position: tuple(options.position),
+      zIndex: 70,
+      anchor: 'center',
+      content: '<span class="amap-cockpit-car" aria-hidden="true"><span></span></span>',
+    })
+    map.add(marker)
+    map.setZoomAndCenter(14, tuple(options.position))
+  } catch {
+    try { map!.destroy() } catch { /* failed construction has nothing else to release */ }
+    return null
+  }
+  return { destroy: () => {
+    try { map.remove(marker); map.destroy() } catch { /* unmount cleanup is best-effort */ }
+  } }
+}
+
 export type AMapRouteOptions = {
   sketch: RouteSketch
   mode: 'overview' | 'follow'

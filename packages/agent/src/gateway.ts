@@ -610,7 +610,11 @@ export class AgentGateway {
     const startedAt = performance.now()
     const request = submitEventRequestSchema.parse(input)
     const current = this.#requireTask(taskId)
-    if (current.requestContext?.clientCapabilities.cockpitVersion === '1') {
+    // Cancellation is a generic terminal transition even for cockpit tasks.
+    // Keep it on the established cleanup/idempotency path; cockpit typed-event
+    // dispatch intentionally only accepts the domain events used by the flow.
+    if (current.requestContext?.clientCapabilities.cockpitVersion === '1'
+      && request.event.type !== 'user.cancelled-task') {
       return this.#submitCockpitEvent(taskId, current, request, startedAt)
     }
     if (request.event.type === 'navigation.started') {
