@@ -346,7 +346,6 @@ function RouteSketchBand({
       >
         <span className="ui-navigation-brief__route-start" />
         <span className="ui-navigation-brief__route-line" />
-        <span className="ui-navigation-brief__route-end" />
       </div>
     )
   }

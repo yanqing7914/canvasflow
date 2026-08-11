@@ -632,6 +632,9 @@ describe('UISpecRenderer', () => {
     expect(renderer.querySelector('.ui-flight-brief__facts')).toHaveTextContent('行李转盘')
     expect(renderer.querySelector('.ui-navigation-brief__route-rule')).toHaveAttribute('aria-hidden', 'true')
     expect(renderer.querySelector('.ui-navigation-brief__route-rule')).toHaveAttribute('data-route-progress', 'unavailable')
+    // A dot and a line, and nothing hidden beside them: the stroke renders only
+    // the parts it paints, so every part of it is a part the stylesheet measures.
+    expect(renderer.querySelectorAll('.ui-navigation-brief__route-rule > *')).toHaveLength(2)
     expect(renderer.querySelector('.ui-charge-brief__recommendation')).toHaveTextContent('补能约 12 分钟')
     expect(renderer.querySelector('.ui-message-brief__copy')).toHaveTextContent('我已到达机场，正在接你们。')
     expect(renderer.querySelector('.ui-passenger-brief__meeting-point')).toHaveTextContent('P2 停车场到达层 3 号门')

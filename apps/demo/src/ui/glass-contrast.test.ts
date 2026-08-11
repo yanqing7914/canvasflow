@@ -37,6 +37,8 @@ const stylesheet = readFileSync(
 
 const AAA = 7
 const AA = 4.5
+/** What a graphic owes, where text owes 4.5:1 — WCAG 1.4.11. */
+const GRAPHIC = 3
 /** The alpha the fold control repaints the panel's own base at. */
 const FOLD_FILL = 0.5
 
@@ -108,6 +110,27 @@ describe('floating navigation panel contrast', () => {
     expect(stylesheet).toContain('background: rgb(var(--glass-base));')
   })
 
+  it('paints the whole activity stroke from the colour the glass overrides', () => {
+    // Both parts have to inherit, or repainting the rule moves only half the
+    // mark and the measured token governs a dot beside an unmeasured line.
+    const stroke = stylesheet.match(/\.ui-navigation-brief__route-start\s*\{([^}]*)\}/)?.[1]
+    const line = stylesheet.match(/\.ui-navigation-brief__route-line\s*\{([^}]*)\}/)?.[1]
+    expect(stroke).toContain('background: currentColor;')
+    expect(line).toContain('background: currentColor;')
+    // And nothing may re-pin either one to a literal blue at a specificity the
+    // glass override cannot reach.
+    expect(stylesheet).not.toMatch(/route-(start|line)[^{]*\{[^}]*background:\s*var\(--blue\)/)
+    expect(stylesheet).toContain('color: var(--glass-stroke);')
+  })
+
+  it('carries no rule for a stop the brief does not render', () => {
+    // `__route-end` was styled — including a dark-theme colour at 1.01:1 on the
+    // night panel — for a span that only ever rendered inside the one state that
+    // set `display: none` on it. Dead declarations cannot be measured, so the
+    // guard is that they are gone rather than that they pass.
+    expect(stylesheet).not.toContain('route-end')
+  })
+
   describe.each(themes)('$name theme', ({ name, over }) => {
     const block = themeBlock(name)
     const base = token(block, 'glass-base').split(/\s+/).map(Number)
@@ -136,6 +159,17 @@ describe('floating navigation panel contrast', () => {
       // same floor; the reduced-transparency branch drops the alpha entirely and
       // clears it trivially.
       expect(Number.parseFloat(token(block, 'glass-fill-solid'))).toBeGreaterThanOrEqual(fill)
+    })
+
+    it('keeps the activity stroke above the graphic floor on the glass', () => {
+      // The stroke is a dot and a line, so 3:1 rather than the text floor above.
+      // It is measured separately from the ink because it is the one mark on the
+      // panel that used to be painted from `--blue`, which does not clear 3:1 on
+      // light glass — the panel's small type had been given a token of its own
+      // and the graphic beside it had not.
+      const stroke = token(block, 'glass-stroke')
+      expect(stroke).toMatch(/^#[0-9a-f]{6}$/i)
+      expect(contrastRatio(stroke, backdrop)).toBeGreaterThanOrEqual(GRAPHIC)
     })
 
     it('keeps the fold control at least as readable as the panel it sits on', () => {
