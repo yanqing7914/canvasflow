@@ -342,6 +342,9 @@ export default function App({
   const [controlsOpen, setControlsOpen] = useState(false)
   const [keyboardRequested, setKeyboardRequested] = useState(false)
   const pendingRef = useRef(false)
+  const mutationGenerationRef = useRef(0)
+  const pendingMutationRef = useRef<Promise<void>>(Promise.resolve())
+  const resetInFlightRef = useRef(false)
   const responseRef = useRef<AgentResponse | undefined>(undefined)
   const navigationActiveRef = useRef(false)
   const navigationSnapshotRef = useRef<NavigationCommandSnapshot | undefined>(undefined)
@@ -444,23 +447,29 @@ export default function App({
 
   async function run(operation: () => Promise<AgentResponse>): Promise<AgentResponse | undefined> {
     if (pendingRef.current) return undefined
+    const generation = mutationGenerationRef.current
+    let settleMutation = () => {}
+    pendingMutationRef.current = new Promise<void>((resolve) => { settleMutation = resolve })
     pendingRef.current = true
     setPending(true)
     setError(undefined)
     const baselineTaskId = responseRef.current?.task.taskId
     try {
       const candidate = await operation()
+      if (generation !== mutationGenerationRef.current) return undefined
       const next = mergeResponseCandidate(candidate, baselineTaskId)
       if (!next) return undefined
       responseRef.current = next
       setResponse(next)
       return next
     } catch (cause) {
+      if (generation !== mutationGenerationRef.current) return undefined
       setError(cause instanceof Error ? cause.message : '请求失败')
       return undefined
     } finally {
       pendingRef.current = false
       setPending(false)
+      settleMutation()
     }
   }
 
@@ -470,6 +479,9 @@ export default function App({
     existing?: CockpitOperation,
   ): Promise<AgentResponse | undefined> {
     if (pendingRef.current) return undefined
+    const generation = mutationGenerationRef.current
+    let settleMutation = () => {}
+    pendingMutationRef.current = new Promise<void>((resolve) => { settleMutation = resolve })
     const id = existing?.id ?? `cockpit-operation-${++cockpitOperationSequenceRef.current}`
     const attempt = (existing?.attempt ?? 0) + 1
     const taskId = existing?.taskId ?? responseRef.current?.task.taskId ?? 'new-task'
@@ -483,6 +495,7 @@ export default function App({
     const baselineTaskId = responseRef.current?.task.taskId
     try {
       const candidate = await operation()
+      if (generation !== mutationGenerationRef.current) return undefined
       const next = mergeResponseCandidate(candidate, baselineTaskId)
       if (!next) return undefined
       responseRef.current = next
@@ -490,6 +503,7 @@ export default function App({
       setCockpitOperation(undefined)
       return next
     } catch (cause) {
+      if (generation !== mutationGenerationRef.current) return undefined
       if (cause instanceof AgentApiError && cause.latest) {
         const current = responseRef.current
         const next = current
@@ -514,6 +528,7 @@ export default function App({
     } finally {
       pendingRef.current = false
       setPending(false)
+      settleMutation()
     }
   }
 
@@ -586,6 +601,7 @@ export default function App({
   }
 
   async function confirmProductReset() {
+    if (resetInFlightRef.current) return
     const current = responseRef.current
     if (!current) {
       returnToIdle()
@@ -595,13 +611,53 @@ export default function App({
       setWakeError('当前运行环境无法重置任务，请改用文字输入或稍后重试。')
       return
     }
-    const cancelled = await runCockpitOperation(
-      { kind: 'generic', title: '正在重新开始', message: '正在清理当前任务和临时窗口。' },
-      () => api.cancel!(responseRef.current?.task ?? current.task, '用户确认重新开始'),
-    )
-    if (cancelled?.task.phase !== 'cancelled') return
-    returnToIdle()
-    enqueueSystemSpeech('已重新开始', 'reset')
+    resetInFlightRef.current = true
+    mutationGenerationRef.current += 1
+    const pendingMutation = pendingMutationRef.current
+    setCockpitOperation({
+      id: `cockpit-operation-${++cockpitOperationSequenceRef.current}`,
+      attempt: 1,
+      state: 'processing',
+      kind: 'generic',
+      title: '正在重新开始',
+      message: '正在等待当前操作结束并清理任务。',
+      retryable: false,
+      taskId: current.task.taskId,
+      retry: () => api.cancel!(responseRef.current?.task ?? current.task, '用户确认重新开始'),
+    })
+    try {
+      await pendingMutation
+      pendingRef.current = true
+      setPending(true)
+      setError(undefined)
+      const resetTarget = responseRef.current?.task.taskId === current.task.taskId
+        ? responseRef.current.task
+        : current.task
+      const cancelled = await api.cancel(resetTarget, '用户确认重新开始')
+      if (cancelled.task.taskId !== current.task.taskId || cancelled.task.phase !== 'cancelled') {
+        throw new Error('任务未能取消，请重试重新开始。')
+      }
+      returnToIdle()
+      enqueueSystemSpeech('已重新开始', 'reset')
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : '重新开始失败，请稍后重试。'
+      setError(message)
+      setCockpitOperation({
+        id: `cockpit-operation-${cockpitOperationSequenceRef.current}`,
+        attempt: 1,
+        state: 'error',
+        kind: 'generic',
+        title: '重新开始未完成',
+        message,
+        retryable: false,
+        taskId: current.task.taskId,
+        retry: () => api.cancel!(responseRef.current?.task ?? current.task, '用户确认重新开始'),
+      })
+    } finally {
+      pendingRef.current = false
+      setPending(false)
+      resetInFlightRef.current = false
+    }
   }
   confirmProductResetRef.current = confirmProductReset
 

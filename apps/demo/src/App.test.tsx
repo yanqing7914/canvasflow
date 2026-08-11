@@ -83,6 +83,44 @@ describe('demo integration', () => {
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
   })
 
+  it('finishes a confirmed reset after an in-flight cockpit request without restoring its stale response', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const active = apiResponse(createCockpitTask('reset-pending'))
+    const staleWeather = {
+      ...active,
+      ui: {
+        ...active.ui,
+        uiRevision: active.ui.uiRevision + 1,
+        title: '旧天气响应',
+      },
+    }
+    const cancelled = apiResponse({ ...active.task, phase: 'cancelled', taskRevision: active.task.taskRevision + 1 })
+    let finishWeather: ((value: AgentResponse) => void) | undefined
+    const event = vi.fn().mockImplementation(() => new Promise<AgentResponse>((resolve) => { finishWeather = resolve }))
+    const api = {
+      create: vi.fn().mockResolvedValue(active), event, action: vi.fn(), confirmation: vi.fn(),
+      cancel: vi.fn().mockResolvedValue(cancelled),
+    }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    act(() => { speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledOnce())
+    act(() => { speech.engine().emit('小南，查天气', true, 0.9) })
+    await waitFor(() => expect(event).toHaveBeenCalledOnce())
+
+    act(() => { speech.engine().emit('小南，重新开始', true, 0.9) })
+    act(() => { speech.engine().emit('确定', true, 0.9) })
+    expect(api.cancel).not.toHaveBeenCalled()
+
+    await act(async () => { finishWeather?.(staleWeather) })
+    await waitFor(() => expect(api.cancel).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'reset-pending' }), '用户确认重新开始'))
+    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.queryByText('旧天气响应')).not.toBeInTheDocument()
+  })
+
   it('restarts continuous wake recognition after a browser-ended session', async () => {
     vi.useFakeTimers()
     const speech = createFakeSpeech()
