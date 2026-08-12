@@ -105,6 +105,7 @@ export function renderAMapWorkspace(
   let routeOverlays: AMapOverlay[] = []
   let moveTo: ((progress: number) => void) | undefined
   let currentProgress: number | undefined
+  let pendingProgress: number | undefined
   let following = options.mode === 'route'
   let destroyed = false
   let routeGeneration = 0
@@ -143,10 +144,12 @@ export function renderAMapWorkspace(
     const xy = path.map((point) => ({ x: point.lng, y: point.lat }))
     const lengths = segmentLengths(xy)
     if (!lengths.some((length) => length > 0)) { map.setFitView(routeOverlays); return }
-    const markerPoint = pointAtProgress(xy, lengths, normalized)
-    currentProgress = normalized
+    const effectiveProgress = pendingProgress ?? normalized
+    pendingProgress = undefined
+    const markerPoint = pointAtProgress(xy, lengths, effectiveProgress)
+    currentProgress = effectiveProgress
     const tail = new amap.Polyline({
-      path: traversedPath(xy, lengths, normalized).map((point) => [point.x, point.y]),
+      path: traversedPath(xy, lengths, effectiveProgress).map((point) => [point.x, point.y]),
       strokeColor: palette.traversed, strokeWeight: 6, strokeOpacity: 0.9, zIndex: 60,
     })
     const marker = new amap.Marker({
@@ -161,8 +164,8 @@ export function renderAMapWorkspace(
       currentProgress = valid
       const point = pointAtProgress(xy, lengths, valid)
       marker.setPosition([point.x, point.y])
-      marker.setAngle?.(headingAtProgress(xy, lengths, valid))
-      tail.setPath(traversedPath(xy, lengths, valid).map((covered) => [covered.x, covered.y]))
+        marker.setAngle?.(headingAtProgress(xy, lengths, valid))
+        tail.setPath(traversedPath(xy, lengths, valid).map((covered) => [covered.x, covered.y]))
       if (following) {
         if (map.setCenter) map.setCenter([point.x, point.y], false)
         else map.setZoomAndCenter(14, [point.x, point.y])
@@ -200,6 +203,7 @@ export function renderAMapWorkspace(
     setMode: async (mode, sketch, progress) => {
       if (mode === 'idle') {
         routeGeneration += 1
+        pendingProgress = undefined
         clearRoute()
         if (idleMarker) map.add(idleMarker)
         map.setZoomAndCenter(14, [121.4737, 31.2304])
@@ -211,7 +215,12 @@ export function renderAMapWorkspace(
     setRoute,
     setProgress: (progress) => {
       if (destroyed || normalizedProgress(progress) === undefined) return
-      moveTo?.(progress)
+      if (moveTo) {
+        pendingProgress = undefined
+        moveTo(progress)
+      } else {
+        pendingProgress = progress
+      }
     },
     setFollow: (follow) => { following = follow },
     recenter: () => {

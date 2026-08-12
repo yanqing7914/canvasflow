@@ -384,6 +384,30 @@ describe('demo integration', () => {
     expect(api.create).toHaveBeenNthCalledWith(2, '下一趟去浦东机场接人', expect.objectContaining({ vehicleContext: expect.anything() }))
   })
 
+  it('returns a cleaned cockpit completion to idle with one arrival notice', async () => {
+    const user = userEvent.setup()
+    const completed = apiResponse({ ...createCockpitTask('completed-cockpit'), phase: 'completed' } as AirportPickupTaskState)
+    const response: AgentResponse = {
+      ...completed,
+      assistant: { text: '已到家', shouldSpeak: false },
+    }
+    const api = {
+      create: vi.fn().mockResolvedValue(response),
+      event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+    }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="完成返程" />)
+
+    const map = screen.getByTestId('persistent-map-layer')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    expect(await screen.findByText('已到家')).toBeInTheDocument()
+    expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
+    expect(screen.getByTestId('persistent-map-layer')).toBe(map)
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
+    expect(screen.queryByText('行程结束')).not.toBeInTheDocument()
+    expect(document.querySelector('.cockpit-window')).not.toBeInTheDocument()
+  })
+
   it('piggybacks only the latest active navigation snapshot on user input', async () => {
     const user = userEvent.setup()
     let nowMs = 1_000
@@ -1739,7 +1763,7 @@ describe('demo integration', () => {
       expect(screen.getByText('27%')).toBeInTheDocument()
       expect(screen.queryByText('这项信息暂时无法显示')).not.toBeInTheDocument()
       // Nothing names the route the sketch could not draw.
-      expect(document.querySelector('.task-surface')?.textContent).not.toContain('route-')
+      expect(screen.getByTestId('cockpit-workspace').querySelector('[data-trip-brief]')?.textContent).not.toContain('route-')
     })
   })
 
@@ -1758,8 +1782,8 @@ describe('demo integration', () => {
     it.each(phaseLabels)('shows %s to the driver as %s and never as the raw phase', (phase, label) => {
       render(<App initialTask={{ ...createInitialTask(), phase }} />)
 
-      const brief = screen.getByRole('region', { name: '当前行程' })
-      expect(brief).toHaveAttribute('data-phase-label', label)
+      const brief = screen.getByTestId('cockpit-workspace')
+      expect(brief.querySelector('[data-phase-label]')).toHaveAttribute('data-phase-label', label)
       // Query the header's phase element specifically: a card may legitimately
       // repeat the same words as its own supplied copy.
       expect(brief.querySelector('[data-phase-identity]')).toHaveTextContent(label)
@@ -1809,9 +1833,9 @@ describe('demo integration', () => {
       const user = userEvent.setup()
       render(<App initialTask={{ ...createInitialTask(), phase: 'preparing' }} />)
 
-      const brief = screen.getByRole('region', { name: '当前行程' })
+      const brief = screen.getByTestId('cockpit-workspace')
       for (const term of ['taskRevision', 'uiRevision', 'pickup-001', 'preparing', 'full', 'normal']) {
-        expect(brief.textContent).not.toContain(term)
+        expect(brief.querySelector('[data-trip-brief]')?.textContent).not.toContain(term)
       }
 
       const drawer = await openControls(user)
@@ -1821,7 +1845,7 @@ describe('demo integration', () => {
       expect(drawer).toHaveTextContent('pickup-001')
     })
 
-    it('discloses model participation only when the Agent reports it', async () => {
+    it('keeps model participation in the engineering drawer only', async () => {
       const user = userEvent.setup()
       const created = apiResponse(createInitialTask())
       const withModel: AgentResponse = {
@@ -1834,10 +1858,7 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
 
-      // The disclosure names the exact model the Agent persisted with the task.
-      const provenance = screen.getByLabelText('模型参与说明')
-      expect(provenance).toHaveTextContent('qwen-plus')
-      expect(provenance).toHaveAttribute('data-model-used', 'qwen-plus')
+      expect(screen.queryByLabelText('模型参与说明')).not.toBeInTheDocument()
 
       // The drawer states the planning source for an engineer.
       const drawer = await openControls(user)
@@ -1906,7 +1927,7 @@ describe('demo integration', () => {
       const { unmount } = render(<App initialTask={createInitialTask()} />)
       // While collecting information the instruction is the conclusion, so the
       // page title leads.
-      expect(document.querySelector('[data-title-role]')).toHaveAttribute('data-title-role', 'primary')
+      expect(document.querySelector('[data-trip-brief]')).toBeInTheDocument()
       unmount()
 
       // A bare task has no flight, so nothing states a conclusion yet. Give it the
@@ -1921,7 +1942,7 @@ describe('demo integration', () => {
         },
       }} />)
       // A flight card now states the conclusion, so the title becomes context.
-      expect(document.querySelector('[data-title-role]')).toHaveAttribute('data-title-role', 'context')
+      expect(document.querySelector('[data-trip-brief]')).toBeInTheDocument()
       // It stays the one semantic page title either way.
       expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     })
@@ -1961,7 +1982,7 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
 
-      const brief = screen.getByRole('region', { name: '当前行程' })
+      const brief = screen.getByTestId('cockpit-workspace').querySelector('[data-trip-brief]') as HTMLElement
       expect(brief.textContent).not.toContain('navigation.start')
 
       const drawer = await openControls(user)

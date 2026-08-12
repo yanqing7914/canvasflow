@@ -49,7 +49,11 @@ export type AgentApiClientOptions = {
   eventSource?: (url: string) => TaskUpdateSource
   vehicleContext?: CreateTaskRequest['vehicleContext']
   clientCapabilities?: CreateTaskRequest['clientCapabilities']
+  requestTimeoutMs?: number
 }
+
+export const REQUEST_TIMEOUT = 'REQUEST_TIMEOUT'
+export const DEFAULT_REQUEST_TIMEOUT_MS = 10_000
 
 export const defaultDemoVehicleContext: CreateTaskRequest['vehicleContext'] = {
   speedKph: 0,
@@ -151,6 +155,7 @@ export class AgentApiClient {
   readonly #eventSource: (url: string) => TaskUpdateSource
   readonly #vehicleContext: CreateTaskRequest['vehicleContext']
   readonly #clientCapabilities: CreateTaskRequest['clientCapabilities']
+  readonly #requestTimeoutMs: number
 
   constructor(baseUrl = '/v1', options: AgentApiClientOptions = {}) {
     this.#tasksUrl = tasksUrl(baseUrl)
@@ -160,6 +165,7 @@ export class AgentApiClient {
     this.#eventSource = options.eventSource ?? ((url) => new EventSource(url))
     this.#vehicleContext = options.vehicleContext ?? defaultDemoVehicleContext
     this.#clientCapabilities = options.clientCapabilities ?? defaultClientCapabilities
+    this.#requestTimeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
   }
 
   create(text: string, options: CreateOptions = {}): Promise<AgentResponse> {
@@ -317,15 +323,30 @@ export class AgentApiClient {
     url: string,
     input: { method: 'GET' | 'POST'; requestId: string; body?: unknown },
   ): Promise<AgentResponse> {
-    const response = await this.#fetch(url, {
-      method: input.method,
-      headers: {
-        accept: 'application/json',
-        'x-request-id': input.requestId,
-        ...(input.body === undefined ? {} : { 'content-type': 'application/json' }),
-      },
-      ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
-    })
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(REQUEST_TIMEOUT), this.#requestTimeoutMs)
+    let response: Response
+    try {
+      response = await this.#fetch(url, {
+        method: input.method,
+        signal: controller.signal,
+        headers: {
+          accept: 'application/json',
+          'x-request-id': input.requestId,
+          ...(input.body === undefined ? {} : { 'content-type': 'application/json' }),
+        },
+        ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
+      })
+    } catch (cause) {
+      if (controller.signal.aborted) {
+        const error = new Error('请求超时，请重试。')
+        error.name = REQUEST_TIMEOUT
+        throw error
+      }
+      throw cause
+    } finally {
+      clearTimeout(timeout)
+    }
 
     let payload: unknown
     try {

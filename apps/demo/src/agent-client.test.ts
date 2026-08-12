@@ -9,6 +9,7 @@ import {
   AgentApiClient,
   AgentApiError,
   AgentApiProtocolError,
+  REQUEST_TIMEOUT,
   demoVehicleContext,
   isNightAt,
   type TaskUpdateSource,
@@ -73,6 +74,23 @@ describe('AgentApiClient', () => {
       clientCapabilities: { uiSchemaVersion: '1.0', supportsSse: true, supportsTts: true, cockpitVersion: '1' },
       destination: { id: 'destination-hongqiao-t2', name: '虹桥接机点' },
     })
+  })
+
+  it('aborts a request with the stable REQUEST_TIMEOUT error', async () => {
+    vi.useFakeTimers()
+    const fetchMock = vi.fn((_url: string, init: RequestInit) => new Promise<Response>((_, reject) => {
+      init.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+    }))
+    const api = new AgentApiClient('/v1', {
+      fetch: fetchMock as unknown as typeof fetch,
+      requestTimeoutMs: 100,
+      createId: () => 'timeout',
+    })
+    const request = api.create('查天气')
+    const assertion = expect(request).rejects.toMatchObject({ name: REQUEST_TIMEOUT, message: '请求超时，请重试。' })
+    await vi.advanceTimersByTimeAsync(100)
+    await assertion
+    vi.useRealTimers()
   })
 
   it('routes get, event, action, confirmation, cancel, and reset through canonical endpoints', async () => {

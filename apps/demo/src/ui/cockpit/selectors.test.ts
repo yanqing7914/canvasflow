@@ -29,6 +29,16 @@ describe('deriveCockpitView', () => {
     expect(view.auxiliaryWindows).toEqual([weather])
   })
 
+  it('advances the primary window by phase without reopening historical task windows', () => {
+    const flights = { id: 'flights', kind: 'flight-list' as const, title: '到达航班', componentIds: [], size: 'large' as const, controls }
+    const confirmation = { id: 'outbound', kind: 'outbound-confirmation' as const, title: '现在出发', componentIds: [], size: 'medium' as const, controls }
+    const weather = { id: 'weather', kind: 'weather' as const, title: '天气', componentIds: [], size: 'compact' as const, controls }
+    const view = deriveCockpitView(spec('confirming-outbound', [flights, weather, confirmation]))
+
+    expect(view.primaryWindow).toEqual(confirmation)
+    expect(view.auxiliaryWindows).toEqual([weather])
+  })
+
   it('prioritizes navigation and terminal modes over window contents', () => {
     const weather = { id: 'weather', kind: 'weather' as const, title: '天气', componentIds: [], size: 'compact' as const, controls }
     expect(deriveCockpitView(spec('driving-to-airport', [weather])).mode).toBe('navigation')

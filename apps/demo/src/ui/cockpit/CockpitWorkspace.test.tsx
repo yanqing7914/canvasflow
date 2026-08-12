@@ -11,7 +11,7 @@ describe('CockpitWorkspace', () => {
     expect(screen.getByLabelText('座舱状态')).toBeInTheDocument()
     expect(screen.getByLabelText('Agent反馈')).toBeInTheDocument()
     expect(screen.getByLabelText('主任务窗口')).toBeInTheDocument()
-    expect(screen.getByLabelText('导航信息')).toBeInTheDocument()
+    expect(screen.getByLabelText('导航层')).toBeInTheDocument()
     expect(screen.getByLabelText('辅助信息窗口')).toBeInTheDocument()
     expect(screen.getByLabelText('文字和语音入口')).toBeInTheDocument()
   })

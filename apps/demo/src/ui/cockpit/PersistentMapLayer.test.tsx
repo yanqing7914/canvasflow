@@ -9,7 +9,9 @@ const stub = vi.hoisted(() => ({
 }))
 
 vi.mock('../amap/loader', () => ({
-  amapLoaderSnapshot: () => ({ state: 'ready', keyCount: 1, keyIndex: 0 }),
+  // The loader snapshot starts uninitialized in production; loadAMap is the
+  // authoritative place that reads build-time key configuration.
+  amapLoaderSnapshot: () => ({ state: 'idle', keyCount: 0 }),
   invalidateAMap: vi.fn(),
   loadAMap: () => stub.loadAMap(),
 }))

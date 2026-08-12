@@ -52,7 +52,6 @@ const AGREE = [
   'schedule-checked',
   'task-created',
   'trip-completed',
-  'waiting-for-passengers',
   'weather-checked',
 ] as const
 
@@ -104,6 +103,17 @@ describe('composeAgentSpec fixture conformance', () => {
     expect(componentTypes(spec)).toEqual(['passenger-status'])
   })
 
+  it('waiting-for-passengers: cockpit adds the real passenger-onboard action', () => {
+    const { parsed, spec } = load('waiting-for-passengers')
+    expect(componentTypes(spec)).toEqual(componentTypes(parsed.expectedUISpec))
+    expect(spec.components[0]?.actions).toEqual(['confirm-passengers-onboard'])
+    expect(spec.actions).toEqual([expect.objectContaining({
+      id: 'confirm-passengers-onboard',
+      label: '乘客已上车',
+      event: { type: 'agent-message', text: '家人上车' },
+    })])
+  })
+
   it('fallback fixtures are not composeAgentSpec targets', () => {
     // Documents why FALLBACK is excluded: composeAgentSpec, unaware of the
     // provider failure, produces a materially different (fuller) spec than the
@@ -121,7 +131,7 @@ describe('composeAgentSpec fixture conformance', () => {
     const files = readdirSync(FIXTURE_DIR)
       .filter((file) => file.endsWith('.json'))
       .map((file) => file.replace(/\.json$/, ''))
-    const categorized = new Set<string>([...AGREE, ...DIVERGENT, ...FALLBACK])
+    const categorized = new Set<string>([...AGREE, ...DIVERGENT, ...FALLBACK, 'waiting-for-passengers'])
     expect(files.filter((file) => !categorized.has(file))).toEqual([])
     expect(categorized.size).toBe(files.length)
     expect(files).toHaveLength(18)

@@ -901,21 +901,17 @@ a:focus-visible {
 
 .voice-status:empty { display: none; }
 
-/* Model provenance is a quiet, factual line: present only when the Agent reports
-   a validated model plan, and visually subordinate to the voice status above. */
-.model-provenance {
-  flex: 0 0 auto;
+.cockpit-idle-notice {
   margin: 0;
-  padding: 0 clamp(24px, 3vw, 52px);
-  color: var(--muted);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.5;
-}
-
-.model-provenance strong {
-  color: var(--ink);
+  padding: 10px 14px;
+  border: 1px solid rgba(125, 224, 180, .32);
+  border-radius: 12px;
+  background: rgba(10, 45, 34, .82);
+  color: #c9f6e1;
+  font-size: 15px;
   font-weight: 650;
+  letter-spacing: .02em;
+  backdrop-filter: blur(14px);
 }
 
 .voice-composer {

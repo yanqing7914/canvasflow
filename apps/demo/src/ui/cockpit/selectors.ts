@@ -18,6 +18,13 @@ const primaryWindowKinds = new Set<CockpitWindowSpec['kind']>([
   'return-confirmation',
 ])
 
+const phasePrimaryWindowKind: Partial<Record<UISpec['phase'], CockpitWindowSpec['kind']>> = {
+  'choosing-flight': 'flight-list',
+  'confirming-outbound': 'outbound-confirmation',
+  'passengers-onboard': 'passenger-onboard',
+  'confirming-return': 'return-confirmation',
+}
+
 function isTerminalPhase(phase: UISpec['phase']): boolean {
   return phase === 'completed' || phase === 'cancelled'
 }
@@ -35,8 +42,14 @@ export function deriveCockpitView(spec?: UISpec | null): CockpitView {
   if (!spec) return { mode: 'idle', auxiliaryWindows: [] }
 
   const windows = workspaceWindows(spec)
-  const primaryWindow = windows.find((window) => primaryWindowKinds.has(window.kind))
-  const auxiliaryWindows = windows.filter((window) => window !== primaryWindow)
+  const expectedPrimaryKind = phasePrimaryWindowKind[spec.phase]
+  const primaryWindow = expectedPrimaryKind
+    ? [...windows].reverse().find((window) => window.kind === expectedPrimaryKind)
+    : undefined
+  // Historical main-flow windows can remain declared for audit/replay, but the
+  // cockpit presents exactly one current primary step. They are not auxiliary
+  // tools and must not reappear as draggable weather-style windows.
+  const auxiliaryWindows = windows.filter((window) => !primaryWindowKinds.has(window.kind))
 
   let mode: CockpitViewMode = 'primary'
   if (isTerminalPhase(spec.phase)) mode = 'terminal'

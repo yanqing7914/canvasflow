@@ -195,9 +195,14 @@ async function cockpitWindow(page: Page, kind: string) {
   return window
 }
 
+async function primaryWindow(page: Page, kind: string) {
+  const window = page.locator(`[data-trip-brief][data-primary-kind="${kind}"]`).last()
+  await expect(window).toBeVisible()
+  return window
+}
+
 async function cockpitProgress(page: Page): Promise<number> {
-  const text = await page.locator('.persistent-route-map__source').getByText(/模拟行程进度 \d+%/).innerText()
-  return Number(text.match(/(\d+)%/u)?.[1] ?? 0)
+  return Number(await page.getByTestId('persistent-map-layer').getAttribute('data-progress') ?? 0) * 100
 }
 
 async function captureCockpitScreenshot(page: Page, testInfo: TestInfo, name: string) {
@@ -218,7 +223,7 @@ async function captureCockpitScreenshot(page: Page, testInfo: TestInfo, name: st
  *
  * The cards are measured alongside the containers because that is where clipping
  * actually lands: `.ui-card` hides its own overflow, so a card starved of height by
- * the stack's row allocation loses content while `.task-surface` and every other
+ * the stack's row allocation loses content while the cockpit shell and every other
  * container still report zero.
  *
  * Only asserted above the 680px breakpoint, where DESIGN.md deliberately allows a
@@ -260,7 +265,7 @@ async function expectNoScroll(page: Page) {
       // `overflow: hidden`, so a card squeezed by its neighbours loses its content
       // mid-sentence while every container above it still measures as clean — the
       // outer boxes alone cannot see that failure.
-      boxes: ['.demo-shell', '.cockpit-stage', '.task-surface', '.trip-brief__content', '.ui-slot', '.ui-component', '.ui-card']
+      boxes: ['.demo-shell', '.cockpit-workspace', '.cockpit-primary-panel', '.ui-slot', '.ui-component', '.ui-card']
         .flatMap(measure),
       // One level below the card, and on the width axis only. The metric label and
       // figure are `nowrap` with an ellipsis, so a card that fits its own column
@@ -305,6 +310,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await installMockAMap(page)
   await installControllableNavigationClock(page)
   await page.goto('/')
+  await page.getByTestId('persistent-map-layer').evaluate((node) => { node.setAttribute('data-e2e-map-node', 'persistent') })
 
   // The production entry is a quiet cabin, not a pre-created task or form.
   await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
@@ -329,7 +335,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
 
   await sendText(page, '虹桥')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'choosing-flight')
-  const flightList = await cockpitWindow(page, 'flight-list')
+  const flightList = await primaryWindow(page, 'flight-list')
   const rows = flightList.locator('.ui-flight-choices__row')
   await expect(rows).toHaveCount(5)
   for (let index = 0; index < 5; index += 1) {
@@ -338,15 +344,17 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   }
   const selectedFlight = (await rows.first().getAttribute('data-flight-number')) ?? ''
   expect(selectedFlight).not.toBe('')
+  await flightList.evaluate((node) => { node.setAttribute('data-e2e-primary-node', 'persistent') })
 
   await rows.first().click()
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-outbound')
-  await expect(flightList).toBeVisible()
-  const outboundConfirmation = await cockpitWindow(page, 'outbound-confirmation')
+  const outboundConfirmation = await primaryWindow(page, 'outbound-confirmation')
+  await expect(outboundConfirmation).toHaveAttribute('data-e2e-primary-node', 'persistent')
   await expect(outboundConfirmation).toContainText(selectedFlight)
   await expect(outboundConfirmation).toContainText('虹桥机场')
   await expect(outboundConfirmation).toContainText(/42%|电量/u)
   await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
+  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-e2e-map-node', 'persistent')
 
   const workspace = page.locator('.navigation-workspace[data-leg="outbound"]')
   await expect(workspace).toBeVisible()
@@ -355,9 +363,10 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
     return { left: bounds.left, top: bounds.top, right: bounds.right, bottom: bounds.bottom, width: innerWidth, height: innerHeight }
   })
   expect(workspaceBounds).toEqual({ left: 0, top: 0, right: workspaceBounds.width, bottom: workspaceBounds.height, width: workspaceBounds.width, height: workspaceBounds.height })
-  await expect(page.getByLabel('模拟导航地图')).toHaveAttribute('data-map-source', 'amap')
-  await expect(page.getByLabel('导航信息')).toContainText(selectedFlight)
-  await expect(page.getByLabel('导航信息')).toContainText('正常')
+  await expect(page.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'navigation')
+  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'route')
+  await expect(page.getByLabel('导航层')).toContainText(selectedFlight)
+  await expect(page.getByLabel('导航层')).toContainText('正常')
   await expect(page.locator('.cockpit-window[data-kind="flight-list"]')).toHaveCount(0)
   let observedProgress = 0
   for (const elapsed of [3_000, 3_000, 3_000]) {
@@ -371,10 +380,12 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   // map and keeps that instance across HUD, windows, and both route legs.
   expect(departedMap.mapCreates - idleMap.mapCreates).toBe(1)
   expect(departedMap.routeSearches).toHaveLength(1)
-  expect(new Set(departedMap.markerPositions.map((position) => position.join(','))).size).toBeGreaterThan(2)
-  expect(departedMap.centers.length).toBeGreaterThan(1)
-  expect(departedMap.markerAngles.length).toBeGreaterThan(0)
-  expect(departedMap.routeSearches[0]!.origin[0]).toBeGreaterThan(departedMap.routeSearches[0]!.destination[0])
+  await expect.poll(async () => (await mockAMapSnapshot(page)).markerPositions.length).toBeGreaterThan(2)
+  const settledDepartedMap = await mockAMapSnapshot(page)
+  expect(new Set(settledDepartedMap.markerPositions.map((position) => position.join(','))).size).toBeGreaterThan(2)
+  expect(settledDepartedMap.centers.length).toBeGreaterThan(1)
+  expect(settledDepartedMap.markerAngles.length).toBeGreaterThan(0)
+  expect(settledDepartedMap.routeSearches[0]!.origin[0]).toBeGreaterThan(settledDepartedMap.routeSearches[0]!.destination[0])
   await captureCockpitScreenshot(page, testInfo, 'desktop-map-hud.png')
 
   await emitMockAMapInteraction(page, 'dragstart')
@@ -394,7 +405,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
 
   const progressBeforeSpeedUp = await cockpitProgress(page)
   await sendText(page, '跑快点')
-  await expect(page.getByLabel('导航信息')).toContainText('快速')
+  await expect(page.getByLabel('导航层')).toContainText('快速')
   await advanceNavigationClock(page, 5_000)
   await expect.poll(() => cockpitProgress(page)).toBeGreaterThan(progressBeforeSpeedUp)
   await expect(weather).toBeVisible()
@@ -403,22 +414,22 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await captureCockpitScreenshot(page, testInfo, 'desktop-map-windows.png')
 
   await advanceNavigationClock(page, 40_000)
-  await expect(page.getByLabel('导航信息')).toContainText('已到达机场，等待接人')
+  await expect(page.getByLabel('导航层')).toContainText('已到达机场，等待接人')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'waiting-for-passengers')
   await captureCockpitScreenshot(page, testInfo, 'desktop-waiting-at-airport.png')
   await sendText(page, '接到人了')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'passengers-onboard')
-  const passenger = await cockpitWindow(page, 'passenger-onboard')
+  const passenger = await primaryWindow(page, 'passenger-onboard')
   await expect(passenger).toContainText('乘客已上车')
 
   await sendText(page, '开始回家')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-return')
-  const returnConfirmation = await cockpitWindow(page, 'return-confirmation')
+  const returnConfirmation = await primaryWindow(page, 'return-confirmation')
   await expect(returnConfirmation).toContainText('家')
   await expect(page.locator('.navigation-workspace')).toHaveAttribute('data-leg', 'outbound')
   await returnConfirmation.getByRole('button', { name: '开始返程', exact: true }).click()
   await expect(page.locator('.navigation-workspace')).toHaveAttribute('data-leg', 'return')
-  await expect(page.getByLabel('导航信息')).toContainText('返程导航')
+  await expect(page.getByLabel('导航层')).toContainText('返程导航')
   await expect.poll(async () => (await mockAMapSnapshot(page)).routeSearches.length).toBeGreaterThanOrEqual(2)
   const returningMap = await mockAMapSnapshot(page)
   expect(returningMap.mapCreates).toBe(departedMap.mapCreates)
@@ -445,20 +456,20 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(completedPayload.task).not.toHaveProperty('pickupAirport')
   expect(completedPayload.task).not.toHaveProperty('navigationSimulation')
   expect(completedPayload.task).not.toHaveProperty('cockpit')
-  const idleCockpit = page.getByRole('region', { name: '空闲座舱', exact: true })
-  await expect(idleCockpit).toBeVisible()
-  await expect(page.getByText('已到家')).toBeVisible()
+  await expect(page.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
+  await expect(page.getByRole('status')).toContainText('已到家')
   await expect(page.locator('.cockpit-window')).toHaveCount(0)
   await expect(page.locator('.navigation-workspace')).toHaveCount(0)
-  await expect(page.locator('.task-surface')).toHaveCount(0)
-  await expect(idleCockpit).not.toContainText(selectedFlight)
-  await expect(idleCockpit).not.toContainText('虹桥机场')
+  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
+  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-e2e-map-node', 'persistent')
+  await expect(page.getByTestId('cockpit-workspace')).not.toContainText(selectedFlight)
+  await expect(page.getByTestId('cockpit-workspace')).not.toContainText('虹桥机场')
   await expect(await composer(page)).toHaveValue('')
 
   const completedMap = await mockAMapSnapshot(page)
   expect(completedMap.mapCreates).toBe(departedMap.mapCreates + 1)
   expect(completedMap.routeSearches.length).toBeGreaterThanOrEqual(2)
-  expect(completedMap.mapDestroys).toBeGreaterThanOrEqual(2)
+  expect(completedMap.mapDestroys).toBe(0)
   expect(completedMap.markerPositions.length).toBeGreaterThan(departedMap.markerPositions.length)
 
   await captureCockpitScreenshot(page, testInfo, 'desktop-completed.png')
@@ -485,9 +496,9 @@ test('keeps multiple cockpit windows inside a narrow viewport @cockpit @layout',
   await installControllableNavigationClock(page)
   await page.goto('/')
   await sendText(page, '去虹桥机场接人')
-  const flightList = await cockpitWindow(page, 'flight-list')
+  const flightList = await primaryWindow(page, 'flight-list')
   await flightList.locator('.ui-flight-choices__row').first().click()
-  const outboundConfirmation = await cockpitWindow(page, 'outbound-confirmation')
+  const outboundConfirmation = await primaryWindow(page, 'outbound-confirmation')
   await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
   await expect(page.locator('.navigation-workspace')).toBeVisible()
 
@@ -673,7 +684,7 @@ test('keeps every journey stage readable at tablet width @layout', async ({ page
  * does not reflow".
  */
 async function briefWidth(page: Page) {
-  const box = await page.locator('.task-surface').boundingBox()
+  const box = await page.getByTestId('cockpit-workspace').boundingBox()
   expect(box).not.toBeNull()
   return Math.round(box?.width ?? 0)
 }
@@ -1251,7 +1262,7 @@ test('draws the offline route panel and steps its marker on authored progress @l
   for (const claim of ['实时位置', '正在此处', '当前位置', '实时路况']) {
     await expect(panel).not.toContainText(claim)
   }
-  await expect(page.locator('.task-surface')).not.toContainText('route-airport')
+  await expect(page.getByTestId('cockpit-workspace')).not.toContainText('route-airport')
 
   // Narrower than the split's breakpoint the map keeps a band of the fold rather
   // than disappearing, and the frame still holds with one column.
@@ -1671,8 +1682,8 @@ test('walks the pickup scenario from the arrivals board to the airport @layout',
   await expectNoScroll(page)
 
   // Nothing internal reached the driver anywhere along the way.
-  await expect(page.locator('.task-surface')).not.toContainText('route-airport')
-  await expect(page.locator('.task-surface')).not.toContainText('flight.list-arrivals')
+  await expect(page.getByTestId('cockpit-workspace')).not.toContainText('route-airport')
+  await expect(page.getByTestId('cockpit-workspace')).not.toContainText('flight.list-arrivals')
 })
 
 test('keeps the task usable around a voice attempt', async ({ page }) => {

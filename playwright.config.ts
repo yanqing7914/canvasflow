@@ -106,6 +106,10 @@ export default defineConfig({
       CANVASFLOW_E2E_NOW: '2026-08-11T09:30:00+08:00',
       AGENT_E2E_FAIL_AUTO_MESSAGE_SEND: '1',
       AGENT_PORT: String(port),
+      // The browser mock owns the API implementation. A public, non-secret
+      // sentinel only lets the production loader take its normal configured
+      // path instead of honestly choosing the no-key fallback.
+      VITE_AMAP_JS_KEY: 'canvasflow-e2e-mock-key',
     },
     reuseExistingServer: false,
     url: baseURL,

@@ -52,10 +52,6 @@ export function PersistentMapLayer({
     let cancelled = false
     const mount = container.current
     if (!mount) return
-    if (amapLoaderSnapshot().keyCount === 0) {
-      failureCallback.current?.()
-      return
-    }
     setSource('loading')
     void loadAMap().then((amap) => {
       if (cancelled || !amap) {
@@ -114,7 +110,7 @@ export function PersistentMapLayer({
   useEffect(() => { if (recenterNonce > 0) handle.current?.recenter() }, [recenterNonce])
 
   return (
-    <section className="persistent-map-layer" data-testid="persistent-map-layer" data-map-source={source} data-mode={mode} data-session-key={sessionKey} aria-label={mode === 'route' ? '模拟导航地图' : '座舱地图'}>
+    <section className="persistent-map-layer" data-testid="persistent-map-layer" data-map-source={source} data-mode={mode} data-session-key={sessionKey} data-progress={mode === 'route' && progress !== undefined ? String(progress) : undefined} aria-label={mode === 'route' ? '模拟导航地图' : '座舱地图'}>
       <div ref={container} className="persistent-map-layer__basemap" data-active={source === 'amap'} aria-hidden="true" />
       <div className="persistent-map-layer__fallback" aria-hidden={source === 'amap'}>
         {drawing ? (
@@ -128,6 +124,7 @@ export function PersistentMapLayer({
       </div>
       <span className="persistent-map-layer__source">
         {source === 'amap' ? '高德道路图层' : source === 'loading' ? '地图服务连接中' : '离线地图示意'}
+        {mode === 'route' && progress !== undefined ? ` · 模拟行程进度 ${Math.round(progress * 100)}%` : ''}
       </span>
     </section>
   )
