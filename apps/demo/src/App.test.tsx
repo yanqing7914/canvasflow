@@ -1767,6 +1767,44 @@ describe('demo integration', () => {
       expect(brief.textContent).not.toContain(phase)
     })
 
+    it('keeps the competition journey visible as the same task advances', () => {
+      const preparing = render(<App initialTask={{ ...createInitialTask(), phase: 'preparing' }} />)
+
+      const rail = screen.getByRole('list', { name: '接机行程阶段' })
+      expect(rail).toHaveTextContent('准备')
+      expect(rail).toHaveTextContent('接机')
+      expect(rail).toHaveTextContent('返程')
+      expect(rail).toHaveTextContent('到家')
+      expect(screen.getByText('准备', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'current')
+      expect(screen.getByText('接机', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'upcoming')
+
+      preparing.unmount()
+      const pickup = render(<App initialTask={{ ...createInitialTask(), phase: 'waiting-for-passengers' }} />)
+      expect(screen.getByText('准备', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'completed')
+      expect(screen.getByText('接机', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'current')
+
+      pickup.unmount()
+      const returning = render(<App initialTask={{ ...createInitialTask(), phase: 'returning-home' }} />)
+      expect(screen.getByText('返程', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'current')
+
+      returning.unmount()
+      render(<App initialTask={{ ...createInitialTask(), phase: 'completed' }} />)
+      const completedRail = screen.getByRole('list', { name: '接机行程阶段' })
+      expect(screen.getByText('到家', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'current')
+      expect(completedRail.querySelectorAll('[data-state="completed"]')).toHaveLength(3)
+    })
+
+    it('does not invent a journey stage before creation or after cancellation', () => {
+      const empty = render(<App />)
+      expect(screen.queryByRole('list', { name: '接机行程阶段' })).not.toBeInTheDocument()
+
+      empty.unmount()
+      render(<App initialTask={{ ...createInitialTask(), phase: 'cancelled' }} />)
+      const rail = screen.getByRole('list', { name: '接机行程阶段' })
+      expect(rail).toHaveAttribute('data-cancelled', 'true')
+      expect(rail.querySelector('[aria-current="step"]')).toBeNull()
+    })
+
     it('keeps engineering metadata out of the brief and inside the drawer', async () => {
       const user = userEvent.setup()
       render(<App initialTask={{ ...createInitialTask(), phase: 'preparing' }} />)
