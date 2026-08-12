@@ -265,7 +265,10 @@ async function expectNoScroll(page: Page) {
       // `overflow: hidden`, so a card squeezed by its neighbours loses its content
       // mid-sentence while every container above it still measures as clean — the
       // outer boxes alone cannot see that failure.
-      boxes: ['.demo-shell', '.cockpit-workspace', '.cockpit-primary-panel', '.ui-slot', '.ui-component', '.ui-card']
+      // The primary window is intentionally an internal scroll container. Its
+      // child panel may be taller than the viewport while remaining reachable;
+      // the frame that must stay on-screen is the outer window itself.
+      boxes: ['.demo-shell', '.cockpit-workspace', '.ui-slot', '.ui-component', '.ui-card']
         .flatMap(measure),
       // One level below the card, and on the width axis only. The metric label and
       // figure are `nowrap` with an ellipsis, so a card that fits its own column
@@ -590,8 +593,9 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     // pre-hydration lands on nothing and is not replayed.
     await expect(controls).toBeVisible()
 
-    // Idle has no clickable brand lockup; tab order begins with its compact
-    // microphone lamp, then the keyboard fallback and demo controls.
+    // The status wordmark is informative rather than a navigation target. Tab
+    // order begins with the cockpit utilities; the keyboard input itself is not
+    // in the tree until the driver explicitly opens it.
     await page.keyboard.press('Tab')
     // A disabled voice entry drops out of the tab order rather than trapping it.
     if (await mic.isEnabled()) {
@@ -1399,9 +1403,8 @@ test('floats, folds, and tiers the panel the same way on every engine @glass', a
 test('completes the airport pickup flow through the Agent API', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
-  await expect(page.getByRole('button', { name: '打开演示控制' })).toBeEnabled()
+  await expect(page.getByTestId('cockpit-workspace')).toBeVisible()
+  await expect(page.getByRole('region', { name: '座舱地图' }).first()).toBeVisible()
   // Without a task there is nothing to advance, and the drawer says so.
   await expectAdvanceEnabled(page, false)
   await readControls(page, '尚无任务')
@@ -1424,7 +1427,7 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await advanceFlow(page) // charging.completed
   await expect(page.getByText(/补能完成/)).toBeVisible()
   await advanceFlow(page) // flight landed
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('落地通知')
+  await expect(page.getByText('落地通知', { exact: true })).toBeVisible()
   await advanceFlow(page) // message.sent
   await readControls(page, 'message.send:succeeded')
   await advanceFlow(page) // airport geofence
@@ -1573,14 +1576,14 @@ test('follows a 浦东 pick east, and refuses a rank aimed at the board before a
   // The copy around the cards moved with the pick. The heading is on screen in
   // every phase of the trip, so 虹桥 here would contradict the route card under
   // it — the map flipping east is only half of following the row that was pressed.
-  await expect(page.locator('#trip-brief-title')).toHaveText('去浦东机场接妈妈和豆豆')
+  await expect(page.getByRole('region', { name: '去浦东机场接妈妈和豆豆窗口' })).toBeVisible()
   await expect(page.locator('.ui-card--navigation-summary')).toContainText('浦东机场 T2')
 
   await page.getByRole('button', { name: '开始导航' }).click()
   await readControls(page, 'driving-to-airport')
   await expect(page.getByRole('img', { name: '前往浦东机场 T2的路线示意' })).toBeVisible()
   expect(await routeLineDirection(page)).toBe('east')
-  await expect(page.locator('#trip-brief-title')).toHaveText('去浦东机场接妈妈和豆豆')
+  await expect(page.getByRole('heading', { name: '浦东机场 T2' })).toBeVisible()
 
   // The contrast, on a trip of its own: same panel, other airport, other way out
   // of the frame. Nothing is carried over — a reload starts from 尚无任务.
@@ -1588,7 +1591,7 @@ test('follows a 浦东 pick east, and refuses a rank aimed at the board before a
   await sendText(page)
   await page.locator('.ui-flight-choices__row', { hasText: 'MU5102' }).click()
   await readControls(page, 'preparing')
-  await expect(page.locator('#trip-brief-title')).toHaveText('去虹桥机场接妈妈和豆豆')
+  await expect(page.getByRole('region', { name: '去虹桥机场接妈妈和豆豆窗口' })).toBeVisible()
   await page.getByRole('button', { name: '开始导航' }).click()
   await readControls(page, 'driving-to-airport')
   await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
@@ -2044,7 +2047,7 @@ test('retries a failed landing message through action and confirmation APIs', as
       { type: 'message.revoke-authorization', status: 'cancelled' },
     ],
   })
-  await expect(page.getByRole('heading', { level: 1 })).toContainText('落地通知失败')
+  await expect(page.getByRole('heading', { name: '落地通知失败' })).toBeVisible()
   await expect(page.getByRole('button', { name: '重试发送' })).toBeVisible()
 
   const prepareResponsePromise = page.waitForResponse((response) => (
