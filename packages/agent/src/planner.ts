@@ -356,6 +356,8 @@ function informationPlan(intent: PlannerIntent, assistantText: string): Plan {
 }
 
 export function parsePickupAirport(text: string, state?: AirportPickupTaskState): { label: string; code?: 'SHA' | 'PVG' } | undefined {
+  if (state?.phase === 'collecting-airport' && /^虹桥[。！!？?]?$/.test(text)) return { label: '虹桥机场', code: 'SHA' }
+  if (state?.phase === 'collecting-airport' && /^浦东[。！!？?]?$/.test(text)) return { label: '浦东机场', code: 'PVG' }
   if (/虹桥(?:国际)?机场|上海虹桥/.test(text)) return { label: '虹桥机场', code: 'SHA' }
   if (/浦东(?:国际)?机场|上海浦东/.test(text)) return { label: '浦东机场', code: 'PVG' }
   if (state?.phase !== 'collecting-airport' && !/机场/.test(text)) return undefined

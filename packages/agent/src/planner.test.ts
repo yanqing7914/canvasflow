@@ -32,6 +32,34 @@ describe('airport pickup Planner', () => {
     })
   })
 
+  it.each([
+    ['虹桥', { label: '虹桥机场', code: 'SHA' }],
+    ['浦东', { label: '浦东机场', code: 'PVG' }],
+    ['虹桥。', { label: '虹桥机场', code: 'SHA' }],
+    ['浦东！', { label: '浦东机场', code: 'PVG' }],
+  ] as const)('accepts the contextual airport answer %s while collecting the airport', (text, airport) => {
+    const state = createInitialTask('cockpit-short-airport', timestamp)
+    state.phase = 'collecting-airport'
+
+    expect(planAirportPickup({ text, state, eventId: `short-airport-${text}` })).toMatchObject({
+      intent: 'provide-airport',
+      slotUpdates: { airport },
+      missingSlots: [],
+      assistantText: expect.stringContaining(airport.label),
+    })
+  })
+
+  it.each(['虹桥', '浦东'])('does not treat the bare place name %s as an airport outside airport collection', (text) => {
+    const state = createInitialTask('cockpit-strict-airport', timestamp)
+    state.phase = 'choosing-flight'
+
+    expect(planAirportPickup({ text, state, eventId: `strict-airport-${text}` })).toMatchObject({
+      intent: 'unknown',
+      slotUpdates: {},
+      proposedEvents: [],
+    })
+  })
+
   it('collects passengers and asks for a missing flight number', () => {
     const state = createInitialTask('pickup-001', timestamp)
     const before = structuredClone(state)
