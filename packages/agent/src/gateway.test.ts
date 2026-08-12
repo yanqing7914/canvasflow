@@ -475,6 +475,38 @@ describe('AgentGateway', () => {
     expect(selected.assistant?.text).toContain(`已选择 ${third.flightNumber}`)
   })
 
+  it.each([
+    ['虹桥', { label: '虹桥机场', code: 'SHA' as const }],
+    ['浦东', { label: '浦东机场', code: 'PVG' as const }],
+  ])('uses the contextual airport answer %s to open the matching arrivals board', (text, airport) => {
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => '2026-08-11T09:00:00+08:00',
+      createId: () => `short-airport-${airport.code}`,
+    })
+    const created = gateway.createTask(createCockpitRequest('我现在要去机场接人', `create-${airport.code}`))
+
+    const flights = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: `answer-${airport.code}`,
+      expectedTaskRevision: created.task.taskRevision,
+      event: {
+        eventId: `answer-${airport.code}`,
+        type: 'user.input',
+        text,
+        source: 'text',
+        timestamp: now,
+      },
+    })
+
+    expect(flights.task).toMatchObject({ phase: 'choosing-flight', pickupAirport: airport })
+    expect(flights.assistant?.text).toContain(airport.label)
+    expect(flights.ui.windows?.at(-1)?.kind).toBe('flight-list')
+    const board = flights.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
+    expect(board.props.choices).toHaveLength(5)
+    expect(board.props.choices.every((choice) => choice.airportName === airport.label)).toBe(true)
+  })
+
   it('rejects forged navigation snapshots and uses server-derived segment values', () => {
     const gateway = createGateway()
     const created = gateway.createTask({

@@ -327,7 +327,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(page.getByText('你要去哪个机场？')).toBeVisible()
   await expect(page.locator('.cockpit-window')).toHaveCount(0)
 
-  await sendText(page, '虹桥机场')
+  await sendText(page, '虹桥')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'choosing-flight')
   const flightList = await cockpitWindow(page, 'flight-list')
   const rows = flightList.locator('.ui-flight-choices__row')
