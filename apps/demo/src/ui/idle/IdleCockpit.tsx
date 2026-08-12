@@ -54,7 +54,11 @@ export function IdleCockpit({
             : '等待唤醒'
 
   return (
-    <section className="idle-cockpit" aria-label="空闲座舱">
+    <section
+      className="idle-cockpit"
+      aria-label="空闲座舱"
+      data-light-condition={vehicle.isNight ? 'night' : 'day'}
+    >
       <IdleMap retryNonce={mapRetryNonce} onRuntimeFailure={onMapRuntimeFailure} />
       <header className="idle-cockpit__brand"><strong>pilotflow</strong><span>小南座舱</span></header>
       <dl className="idle-cockpit__facts" aria-label="空闲座舱状态">

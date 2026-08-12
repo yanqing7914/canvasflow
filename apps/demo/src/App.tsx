@@ -1995,7 +1995,7 @@ export default function App({
       ) : !task && wakeWordEnabled && !seededPreview ? (
         <>
           <IdleCockpit
-            vehicle={startingVehicleContext}
+            vehicle={vehicleContext}
             voiceMode={!voiceEnabled || (!speech?.createRecognition && (!isRecognitionSupported() || !isSecureContextOk()))
               ? 'unavailable'
               : wakeSession.state}

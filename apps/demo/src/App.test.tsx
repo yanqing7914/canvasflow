@@ -34,6 +34,21 @@ describe('demo integration', () => {
     expect(screen.getByLabelText('任务输入')).toHaveValue('')
   })
 
+  it('updates the idle cockpit after shared controls change pre-task vehicle state', async () => {
+    const user = userEvent.setup()
+    render(<AppComponent voiceEnabled={false} initialVehicleContext={{
+      speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false,
+    }} />)
+
+    const cockpit = screen.getByLabelText('空闲座舱')
+    expect(cockpit).toHaveAttribute('data-light-condition', 'day')
+
+    await user.click(screen.getByRole('button', { name: '打开演示控制' }))
+    await user.click(screen.getByRole('button', { name: '夜间' }))
+
+    expect(cockpit).toHaveAttribute('data-light-condition', 'night')
+  })
+
   it('requires Xiaonan for speech but lets explicit text send create the task', async () => {
     const user = userEvent.setup()
     const speech = createFakeSpeech()
