@@ -289,6 +289,7 @@ a:focus-visible {
   --window-width: 440px;
   --window-height: 500px;
   position: absolute;
+  top: var(--window-y);
   left: var(--window-x);
   display: flex;
   width: min(var(--window-width), calc(100vw - 32px));
