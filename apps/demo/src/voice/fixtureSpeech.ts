@@ -8,6 +8,25 @@ import noisyCreateWav from '../../../../fixtures/airport-pickup/voice/noisy-crea
 import selectFirstFlightWav from '../../../../fixtures/airport-pickup/voice/select-first-flight.wav?url'
 import sendWeatherReminderWav from '../../../../fixtures/airport-pickup/voice/send-weather-reminder.wav?url'
 import startNavigationWav from '../../../../fixtures/airport-pickup/voice/start-navigation.wav?url'
+import chooseHongqiaoWav from '../../../../fixtures/airport-pickup/voice/choose-hongqiao.wav?url'
+import selectThirdFlightWav from '../../../../fixtures/airport-pickup/voice/select-third-flight.wav?url'
+import refreshFlightsWav from '../../../../fixtures/airport-pickup/voice/refresh-flights.wav?url'
+import checkCalendarWav from '../../../../fixtures/airport-pickup/voice/check-calendar.wav?url'
+import checkFlightDetailWav from '../../../../fixtures/airport-pickup/voice/check-flight-detail.wav?url'
+import checkVehicleStatusWav from '../../../../fixtures/airport-pickup/voice/check-vehicle-status.wav?url'
+import speedUpWav from '../../../../fixtures/airport-pickup/voice/speed-up.wav?url'
+import speedDownWav from '../../../../fixtures/airport-pickup/voice/speed-down.wav?url'
+import hideHudWav from '../../../../fixtures/airport-pickup/voice/hide-hud.wav?url'
+import showHudWav from '../../../../fixtures/airport-pickup/voice/show-hud.wav?url'
+import keepCalendarPlanWav from '../../../../fixtures/airport-pickup/voice/keep-calendar-plan.wav?url'
+import passengersOnboardWav from '../../../../fixtures/airport-pickup/voice/passengers-onboard.wav?url'
+import requestReturnWav from '../../../../fixtures/airport-pickup/voice/request-return.wav?url'
+import startReturnWav from '../../../../fixtures/airport-pickup/voice/start-return.wav?url'
+import resetTripWav from '../../../../fixtures/airport-pickup/voice/reset-trip.wav?url'
+import confirmResetWav from '../../../../fixtures/airport-pickup/voice/confirm-reset.wav?url'
+import cancelResetWav from '../../../../fixtures/airport-pickup/voice/cancel-reset.wav?url'
+import savePreferencesWav from '../../../../fixtures/airport-pickup/voice/save-preferences.wav?url'
+import rejectPreferencesWav from '../../../../fixtures/airport-pickup/voice/reject-preferences.wav?url'
 
 /**
  * The offline voice fallback: each fixture sample pairs a pre-recorded WAV with
@@ -49,28 +68,85 @@ const audioUrls: Record<string, string> = {
   'select-first-flight.wav': selectFirstFlightWav,
   'send-weather-reminder.wav': sendWeatherReminderWav,
   'start-navigation.wav': startNavigationWav,
+  'choose-hongqiao.wav': chooseHongqiaoWav,
+  'select-third-flight.wav': selectThirdFlightWav,
+  'refresh-flights.wav': refreshFlightsWav,
+  'check-calendar.wav': checkCalendarWav,
+  'check-flight-detail.wav': checkFlightDetailWav,
+  'check-vehicle-status.wav': checkVehicleStatusWav,
+  'speed-up.wav': speedUpWav,
+  'speed-down.wav': speedDownWav,
+  'hide-hud.wav': hideHudWav,
+  'show-hud.wav': showHudWav,
+  'keep-calendar-plan.wav': keepCalendarPlanWav,
+  'passengers-onboard.wav': passengersOnboardWav,
+  'request-return.wav': requestReturnWav,
+  'start-return.wav': startReturnWav,
+  'reset-trip.wav': resetTripWav,
+  'confirm-reset.wav': confirmResetWav,
+  'cancel-reset.wav': cancelResetWav,
+  'save-preferences.wav': savePreferencesWav,
+  'reject-preferences.wav': rejectPreferencesWav,
 }
 
 const sampleLabels: Record<string, string> = {
-  'create-airport-pickup': '接机指令',
+  'create-airport-pickup': '模糊接机目标',
   'select-first-flight': '选择第一个航班',
+  'select-third-flight': '选择第三个航班',
+  'refresh-flights': '刷新航班',
+  'choose-hongqiao': '选择虹桥机场',
   'flight-number': '补充航班号',
   'noisy-create': '嘈杂样本（需确认）',
-  'check-weather': '查询到达天气',
-  'start-navigation': '语音回放：开始导航',
-  'send-weather-reminder': '语音回放：提醒带伞',
-  'dismiss-weather-advisory': '语音回放：暂不处理',
+  'check-weather': '查询天气',
+  'check-calendar': '查看日程',
+  'check-flight-detail': '查看航班详情',
+  'check-vehicle-status': '查看车辆状态',
+  'start-navigation': '开始导航',
+  'speed-up': '调快速度',
+  'speed-down': '调慢速度',
+  'hide-hud': '隐藏导航信息',
+  'show-hud': '显示导航信息',
+  'send-weather-reminder': '提醒乘客带伞',
+  'dismiss-weather-advisory': '暂不处理天气提醒',
+  'keep-calendar-plan': '保持当前计划',
+  'passengers-onboard': '确认家人上车',
+  'request-return': '规划返程',
+  'start-return': '开始返程',
+  'reset-trip': '重新开始',
+  'confirm-reset': '确认重新开始',
+  'cancel-reset': '取消重新开始',
+  'save-preferences': '保存本次偏好',
+  'reject-preferences': '暂不保存',
 }
 
 const sampleUnavailableHints: Record<string, string> = {
   'create-airport-pickup': '仅在尚未创建任务时可用',
-  'select-first-flight': '需先显示到港航班选择板',
-  'flight-number': '需先创建一个缺少航班号的任务',
+  'choose-hongqiao': '需先创建接机任务并等待确认机场',
+  'select-first-flight': '需先显示到达航班选择窗口',
+  'select-third-flight': '需先显示至少三个到达航班',
+  'refresh-flights': '需先显示到达航班选择窗口',
+  'flight-number': '仅旧版缺少航班号的任务可用',
   'noisy-create': '仅在尚未创建任务时可用',
-  'check-weather': '需先完成航班选择并进入准备或途中阶段',
-  'start-navigation': '需先进入准备出发并生成可执行路线',
+  'check-weather': '需先创建任务；途中会按模拟位置查询',
+  'check-calendar': '需先创建任务',
+  'check-flight-detail': '需先选择航班',
+  'check-vehicle-status': '需先创建任务',
+  'start-navigation': '需先显示出发确认窗口',
+  'speed-up': '需先进入去程或返程导航',
+  'speed-down': '需先进入去程或返程导航',
+  'hide-hud': '需先进入导航且导航信息可见',
+  'show-hud': '需先进入导航且导航信息已隐藏',
   'send-weather-reminder': '需先触发途中小雨提醒',
-  'dismiss-weather-advisory': '需先触发途中小雨提醒',
+  'dismiss-weather-advisory': '需先触发天气提醒',
+  'keep-calendar-plan': '需先触发日历冲突提醒',
+  'passengers-onboard': '需先到达机场并等待家人',
+  'request-return': '需先确认家人已经上车',
+  'start-return': '需先显示返程确认窗口',
+  'reset-trip': '需先存在进行中的任务',
+  'confirm-reset': '需先说“重新开始”并等待确认',
+  'cancel-reset': '需先说“重新开始”并等待确认',
+  'save-preferences': '需先到家并出现偏好确认',
+  'reject-preferences': '需先到家并出现偏好确认',
 }
 
 export const voiceFixtureSamples: VoiceFixtureSample[] = transcripts.samples.map((sample) => ({
@@ -198,19 +274,34 @@ export function createFixtureRecognition(
 export function playFixtureSampleAudio(
   sample: VoiceFixtureSample,
   createAudio: FixtureAudioFactory = defaultAudioFactory,
+  onSettled?: () => void,
 ): FixtureAudioLike | null {
   let audio: FixtureAudioLike | null = null
   try {
     audio = createAudio(sample.audioUrl)
   } catch {
+    onSettled?.()
     return null
   }
-  if (!audio) return null
+  if (!audio) {
+    onSettled?.()
+    return null
+  }
+  let settled = false
+  const settle = () => {
+    if (settled) return
+    settled = true
+    onSettled?.()
+  }
+  // Attach lifecycle callbacks before starting playback so an immediate
+  // playback rejection or a very short fixture cannot race the dispatcher.
+  audio.onended = settle
+  audio.onerror = settle
   try {
     const played = audio.play()
-    if (played && typeof played.then === 'function') void played.then(undefined, () => {})
+    if (played && typeof played.then === 'function') void played.then(undefined, settle)
   } catch {
-    // Presentation only; the parked transcript carries the demo.
+    settle()
   }
   return audio
 }

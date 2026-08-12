@@ -87,13 +87,14 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
     effects.speak(text)
   }
 
-  function submit(command: string, recognitionSource?: VoiceRecognitionSource) {
+  function submit(command: string, recognitionSource?: VoiceRecognitionSource, confidence?: number) {
     const text = normalizeTranscript(command)
     if (!text) return
     clearSessionTimer()
     transition('waiting-wake')
     effects.submit?.(text, {
       source: 'voice',
+      ...(confidence === undefined ? {} : { confidence }),
       ...(recognitionSource ? { recognitionSource } : {}),
     })
   }
@@ -123,12 +124,12 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
     }, followUpMs)
   }
 
-  function receiveCommand(command: string, source?: VoiceRecognitionSource) {
+  function receiveCommand(command: string, source?: VoiceRecognitionSource, confidence?: number) {
     if (isResetCommand(command)) {
       askResetConfirmation()
       return
     }
-    submit(command, source)
+    submit(command, source, confidence)
   }
 
   return {
@@ -149,14 +150,22 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
     },
 
     recognitionFailed() {
-      if (state === 'authorizing') transition('needs-authorization')
+      // Continuous browser recognition can fail after authorization too — most
+      // commonly when Chrome ends a stream and refuses the replacement engine.
+      // Re-arm the explicit user gesture from every live state instead of
+      // leaving the session looking awake while no microphone exists.
+      if (state === 'needs-authorization') return
+      clearSessionTimer()
+      if (speaking) effects.stopSpeaking?.()
+      speaking = false
+      transition('needs-authorization')
     },
 
     setSpeaking(active: boolean) {
       speaking = active
     },
 
-    receive(input: string, options: { recognitionSource?: VoiceRecognitionSource } = {}) {
+    receive(input: string, options: { recognitionSource?: VoiceRecognitionSource; confidence?: number } = {}) {
       if (options.recognitionSource === 'system-tts') return 'ignored' as const
       if (state === 'needs-authorization' || state === 'authorizing') return 'ignored' as const
 
@@ -188,7 +197,7 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
         if (!command) return 'ignored' as const
         if (speaking) effects.stopSpeaking?.()
         speaking = false
-        receiveCommand(command, source)
+        receiveCommand(command, source, options.confidence)
         return 'accepted' as const
       }
 
@@ -197,7 +206,7 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
       if (speaking) effects.stopSpeaking?.()
       speaking = false
       if (!wake.command) beginFollowUp()
-      else receiveCommand(wake.command, source)
+      else receiveCommand(wake.command, source, options.confidence)
       return 'accepted' as const
     },
 

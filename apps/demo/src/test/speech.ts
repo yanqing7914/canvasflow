@@ -51,14 +51,18 @@ export type FakeSpeech = {
   /** The engine backing the current listening turn. */
   engine: () => FakeRecognition
   synthesis: FakeSynthesis
+  /** Make the next N recognition creations fail before a later retry succeeds. */
+  failNextRecognitionStarts: (count?: number) => void
 }
 
 export function createFakeSpeech(): FakeSpeech {
   const engines: FakeRecognition[] = []
   const synthesis = new FakeSynthesis()
+  let failedStarts = 0
   return {
     engines,
     synthesis,
+    failNextRecognitionStarts: (count = 1) => { failedStarts += count },
     engine: () => {
       const current = engines.at(-1)
       if (!current) throw new Error('no recognition turn has been started yet')
@@ -66,6 +70,10 @@ export function createFakeSpeech(): FakeSpeech {
     },
     deps: {
       createRecognition: () => {
+        if (failedStarts > 0) {
+          failedStarts -= 1
+          return null
+        }
         const engine = new FakeRecognition()
         engines.push(engine)
         return engine

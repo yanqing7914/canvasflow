@@ -53,6 +53,11 @@ async function readControls(page: Page, expected: string | RegExp) {
   await expect(drawer).toBeHidden()
 }
 
+function voiceReplayControls(page: Page) {
+  return page.getByRole('dialog', { name: '演示控制' })
+    .getByRole('group', { name: '语音兜底回放' })
+}
+
 /**
  * The keyboard is on demand, not a permanent input row: in a browser with working
  * speech recognition it is not on screen until the turn needs it or the driver
@@ -1647,7 +1652,7 @@ test('replays a fixture utterance deterministically from the demo drawer', async
     response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/v1/tasks'
   ))
-  await page.getByRole('button', { name: '接机指令' }).click()
+  await voiceReplayControls(page).getByRole('button', { name: '模糊接机目标', exact: true }).click()
   await expect(drawer).toBeHidden()
 
   // Production replay follows the hands-free voice path, so its canonical
@@ -1661,41 +1666,118 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   await readControls(page, 'collecting-information')
 })
 
-test('covers the main trip beats with state-bound WAV fallbacks', async ({ page }) => {
-  // Force the deterministic degraded path: the WAV is presentation, while its
-  // canonical transcript remains the input payload under test.
+test('replays cockpit fixtures through default wake mode without SpeechRecognition @cockpit', async ({ page }) => {
+  await installMockAMap(page)
   await page.addInitScript(() => {
     const scope = window as unknown as Record<string, unknown>
     delete scope.SpeechRecognition
     delete scope.webkitSpeechRecognition
   })
+
+  let taskCreateCount = 0
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/v1/tasks') taskCreateCount += 1
+  })
   await page.goto('/')
 
-  async function replay(label: string, expectedText: string) {
+  await expect(page.getByLabel('空闲座舱状态').getByText('语音不可用', { exact: true })).toBeVisible()
+
+  // A low-confidence fixture is still a confirmation turn in the shipped
+  // wake-word mode. With no browser speech service, its canonical transcript
+  // must be parked rather than silently submitted or dropped.
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await voiceReplayControls(page).getByRole('button', { name: '嘈杂样本（需确认）', exact: true }).click()
+  const parked = page.getByLabel('任务输入')
+  await expect(parked).toHaveValue(legacyTaskText, { timeout: 15_000 })
+  expect(taskCreateCount).toBe(0)
+
+  const createRequestPromise = page.waitForRequest((request) => (
+    request.method() === 'POST' && new URL(request.url()).pathname === '/v1/tasks'
+  ))
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  const createRequest = await createRequestPromise
+  expect(createRequest.postDataJSON()).toMatchObject({
+    input: { text: legacyTaskText, source: 'voice', confidence: 0.51 },
+    clientCapabilities: { cockpitVersion: '1' },
+  })
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'collecting-airport')
+
+  async function replayEvent(label: string, text: string) {
+    const requestPromise = page.waitForRequest((request) => (
+      request.method() === 'POST'
+      && /\/v1\/tasks\/[^/]+\/events$/u.test(new URL(request.url()).pathname)
+    ))
+    const responsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && /\/v1\/tasks\/[^/]+\/events$/u.test(new URL(response.url()).pathname)
+    ))
     await page.getByRole('button', { name: '打开演示控制' }).click()
-    await page.getByRole('dialog', { name: '演示控制' }).getByRole('button', { name: label }).click()
-    const input = page.getByLabel('任务输入')
-    await expect(input).toHaveValue(expectedText, { timeout: 15_000 })
-    await page.getByRole('button', { name: '发送' }).click()
+    const replay = voiceReplayControls(page).getByRole('button', { name: label, exact: true })
+    await expect(replay).toBeEnabled()
+    await replay.click()
+    const request = await requestPromise
+    expect(request.postDataJSON()).toMatchObject({ event: { text, source: 'voice' } })
+    expect((await responsePromise).ok()).toBe(true)
   }
 
-  await replay('接机指令', '我现在要去机场接妈妈和豆豆')
+  await replayEvent('选择虹桥机场', '去虹桥机场')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'choosing-flight')
+  const flightList = await cockpitWindow(page, 'flight-list')
+  const thirdFlight = await flightList.locator('.ui-flight-choices__row').nth(2).getAttribute('data-flight-number')
+  expect(thirdFlight).toBeTruthy()
+
+  await replayEvent('选择第三个航班', '选第三个')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-outbound')
+  await expect(await cockpitWindow(page, 'outbound-confirmation')).toContainText(thirdFlight!)
+
+  // Spoken cockpit confirmations resolve the generated action instead of being
+  // sent as planner text, so the fixture exercises the same policy path as the
+  // visible confirmation button.
+  const actionRequestPromise = page.waitForRequest((request) => (
+    request.method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/actions$/u.test(new URL(request.url()).pathname)
+  ))
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await voiceReplayControls(page).getByRole('button', { name: '开始导航', exact: true }).click()
+  expect((await actionRequestPromise).postDataJSON()).toMatchObject({
+    actionId: 'start-outbound',
+    componentId: 'outbound-confirmation',
+  })
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'outbound-driving')
+  await expect(page.locator('.navigation-workspace[data-leg="outbound"]')).toBeVisible()
+})
+
+test('covers the main trip beats with state-bound WAV fallbacks', async ({ page }) => {
+  await page.goto('/')
+
+  async function replay(label: string, expectedText: string, expectedPath: RegExp, requestBody: 'input' | 'event') {
+    const requestPromise = page.waitForRequest((candidate) => (
+      candidate.method() === 'POST' && expectedPath.test(new URL(candidate.url()).pathname)
+    ))
+    await page.getByRole('button', { name: '打开演示控制' }).click()
+    await voiceReplayControls(page).getByRole('button', { name: label, exact: true }).click()
+    expect((await requestPromise).postDataJSON()).toMatchObject(
+      requestBody === 'input' ? { input: { text: expectedText, source: 'voice' } } : { event: { text: expectedText, source: 'voice' } },
+    )
+  }
+
+  await replay('模糊接机目标', legacyTaskText, /\/v1\/tasks$/u, 'input')
   await expect(page.getByText('选择要接的航班')).toBeVisible()
 
-  await replay('选择第一个航班', '选第一个')
+  await replay('补充航班号', '航班 MU5102', /\/v1\/tasks\/[^/]+\/events$/u, 'event')
   await expect(page.getByText('准备出发')).toBeVisible()
 
-  await replay('查询到达天气', '到的时候天气怎么样')
+  await replay('查询天气', '到的时候天气怎么样', /\/v1\/tasks\/[^/]+\/events$/u, 'event')
   await expect(page.locator('.ui-card--weather-card')).toBeVisible()
 
-  await replay('语音回放：开始导航', '开始导航')
+  await page.getByRole('region', { name: '当前行程' }).getByRole('button', { name: '开始导航', exact: true }).click()
   await expect(page.getByText('途中')).toBeVisible()
 
   await advanceFlow(page) // charging.started
   await advanceFlow(page) // flight.updated in-air -> advisory
   await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
 
-  await replay('语音回放：提醒带伞', '提醒乘客带伞')
+  await replay('提醒乘客带伞', '提醒乘客带伞', /\/v1\/tasks\/[^/]+\/events$/u, 'event')
   await expect(page.getByRole('button', { name: '确认发送' })).toBeVisible()
   await page.getByRole('button', { name: '确认发送' }).click()
   await expect(page.locator('.ui-card--message-preview')).toHaveCount(0)
@@ -1706,31 +1788,32 @@ test('covers the main trip beats with state-bound WAV fallbacks', async ({ page 
 })
 
 test('replays the direct flight-number and advisory-dismiss WAV branches', async ({ page }) => {
-  await page.addInitScript(() => {
-    const scope = window as unknown as Record<string, unknown>
-    delete scope.SpeechRecognition
-    delete scope.webkitSpeechRecognition
-  })
   await page.goto('/')
 
-  async function replay(label: string, expectedText: string) {
+  async function replay(label: string, expectedText: string, requestBody: 'input' | 'event' = 'event') {
+    const requestPromise = page.waitForRequest((candidate) => (
+      candidate.method() === 'POST'
+      && (requestBody === 'input'
+        ? new URL(candidate.url()).pathname === '/v1/tasks'
+        : /\/v1\/tasks\/[^/]+\/events$/u.test(new URL(candidate.url()).pathname))
+    ))
     await page.getByRole('button', { name: '打开演示控制' }).click()
-    await page.getByRole('dialog', { name: '演示控制' }).getByRole('button', { name: label }).click()
-    const input = page.getByLabel('任务输入')
-    await expect(input).toHaveValue(expectedText, { timeout: 15_000 })
-    await page.getByRole('button', { name: '发送' }).click()
+    await voiceReplayControls(page).getByRole('button', { name: label, exact: true }).click()
+    expect((await requestPromise).postDataJSON()).toMatchObject(
+      requestBody === 'input' ? { input: { text: expectedText, source: 'voice' } } : { event: { text: expectedText, source: 'voice' } },
+    )
   }
 
-  await replay('接机指令', '我现在要去机场接妈妈和豆豆')
+  await replay('模糊接机目标', legacyTaskText, 'input')
   await replay('补充航班号', '航班 MU5102')
   await expect(page.getByText('准备出发')).toBeVisible()
-  await replay('语音回放：开始导航', '开始导航')
+  await page.getByRole('region', { name: '当前行程' }).getByRole('button', { name: '开始导航', exact: true }).click()
 
   await advanceFlow(page) // charging.started
   await advanceFlow(page) // flight.updated in-air -> advisory
   await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
 
-  await replay('语音回放：暂不处理', '暂不处理')
+  await replay('暂不处理天气提醒', '暂不处理')
   await expect(page.locator('[data-component-id="weather-advisory"]')).toHaveCount(0)
   await expect(page.locator('[data-component-type="navigation-summary"]')).toBeVisible()
 

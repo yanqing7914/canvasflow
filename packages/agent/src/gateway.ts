@@ -333,6 +333,36 @@ export class AgentGateway {
     const airport = plan.slotUpdates.airport
     let toolResults: ReadToolResults = {}
     let assistantText = plan.assistantText
+    // Resolve passengers at create time as well as on later cockpit turns. The
+    // cockpit reducer intentionally starts with an empty slot, so without this
+    // hand-off a first utterance such as "接妈妈和豆豆" would lose the trusted
+    // member ids before the eventual return-arrived memory proposal.
+    if (plan.slotUpdates.passengers) {
+      try {
+        const passengerReads = this.#orchestrator.resolveInitialPassengers(
+          taskId,
+          request.clientRequestId,
+          plan.slotUpdates.passengers.names,
+        )
+        task = {
+          ...task,
+          taskRevision: task.taskRevision + 1,
+          passengers: { ...passengerReads.passengers, confirmedOnboard: false },
+          message: { ...task.message, autoNotifyAuthorized: passengerReads.notificationAuthorized },
+          updatedAt: timestamp,
+        }
+        toolResults = passengerReads.toolResults
+      } catch (error) {
+        if (error instanceof ReadToolOrchestrationError) {
+          const stored = this.#store.create(
+            this.#publishFallback(task, toolResults, error, undefined, requestContext),
+            request.clientRequestId,
+          )
+          return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt)
+        }
+        this.#throwProviderError(error)
+      }
+    }
     if (plan.intent === 'check-weather') {
       try {
         const weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, {
@@ -369,7 +399,7 @@ export class AgentGateway {
       }, this.#preferences)
       const queried = this.#queryCockpitFlights(taskId, request.clientRequestId, task, timestamp)
       task = queried.task
-      toolResults = queried.toolResults
+      toolResults = { ...toolResults, ...queried.toolResults }
       assistantText = `已找到 ${queried.board.data.arrivals.length} 个${airport.label}到达航班。`
     }
     const stored = this.#store.create(this.#publish(task, toolResults, requestContext), request.clientRequestId)
@@ -1636,6 +1666,32 @@ export class AgentGateway {
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: '航班列表已重新查询。', shouldSpeak })
       }
+      if (plan.intent === 'pick-flight-choice' && current.task.phase === 'choosing-flight'
+        && plan.slotUpdates.flightChoiceOrdinal !== undefined) {
+        const board = current.toolResults?.['flight.list-arrivals']?.data
+        const picked = this.#renderedArrivalRows(current)?.[plan.slotUpdates.flightChoiceOrdinal - 1]
+        if (!board || !picked || board.candidateSetId !== current.task.flightDiscovery?.candidateSetId) {
+          return this.#cockpitNoop(current, request, startedAt, '当前航班列表中没有这条选择。')
+        }
+        const reads = this.#orchestrator.resolveCockpitRoute?.(taskId, request.clientRequestId, {
+          leg: 'outbound', pickupAirport: current.task.pickupAirport, vehicle: current.requestContext?.vehicle,
+        })
+        if (!reads) throw new AgentGatewayError('PROVIDER_FAILED', 'Route provider is unavailable', true, current)
+        const next = selectCockpitFlight({
+          task: current.task,
+          flight: picked,
+          route: reads.route.data,
+          vehicle: reads.vehicle.data,
+          at: timestamp,
+        })
+        const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
+          ...current.toolResults, 'navigation.plan-route': reads.route, 'vehicle.get-status': reads.vehicle,
+        }, current.requestContext, current.effectReceipts)))
+        this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+          text: `已选择 ${picked.flightNumber}，请确认现在出发。`, shouldSpeak,
+        })
+      }
       if (plan.intent === 'request-return') {
         if (current.task.phase !== 'passengers-onboard') return this.#cockpitNoop(current, request, startedAt, '请先确认乘客已经上车。')
         if (!commandSnapshot || request.event.navigationSnapshot?.leg !== 'outbound' || request.event.navigationSnapshot.progress !== 1) {
@@ -1704,6 +1760,12 @@ export class AgentGateway {
         throw new AgentGatewayError('POLICY_DENIED', 'Arrival does not match the completed active route', false, current)
       }
     }
+    // The cockpit reducer clears passenger context on return-arrived because
+    // the completed screen does not need trip slots. Keep a private copy for
+    // the memory proposal, which is still about the passengers just delivered.
+    const completedPassengerIds = request.event.type === 'navigation.return-arrived'
+      ? [...current.task.passengers.memberIds]
+      : undefined
     const normalizedEvent = { ...request.event, timestamp }
     let next = applyEvent(current.task, normalizedEvent, this.#preferences)
     if (next === current.task || next.taskRevision === current.task.taskRevision) {
@@ -1715,15 +1777,62 @@ export class AgentGateway {
       next = queried.task
       toolResults = queried.toolResults
     }
-    if (next.phase === 'completed') toolResults = {}
+    if (next.phase === 'completed') {
+      toolResults = {}
+      const memberId = (completedPassengerIds ?? next.passengers.memberIds)
+        .find((candidate) => this.#preferences[candidate]?.rearTemperatureC !== undefined)
+      if (!memberId) {
+        next.memoryProposal = { status: 'skipped', errorCode: 'PREFERENCE_UNAVAILABLE' }
+        next.pendingConfirmation = undefined
+      } else {
+        const proposal = this.#effectExecutor.proposeMemoryUpdate({
+          task: next,
+          memberId,
+          changes: { rearTemperatureC: this.#preferences[memberId]!.rearTemperatureC! },
+          requestId: request.event.eventId,
+          effectId: `${request.event.eventId}:0`,
+        })
+        if (proposal.succeeded && proposal.proposal) {
+          next.memoryProposal = {
+            proposalId: proposal.proposal.proposalId,
+            memberId: proposal.proposal.memberId,
+            confirmationId: proposal.proposal.confirmationId,
+            expiresAt: proposal.proposal.expiresAt,
+            changes: { rearTemperatureC: this.#preferences[memberId]!.rearTemperatureC! },
+            status: 'pending',
+          }
+          next.pendingConfirmation = {
+            confirmationId: proposal.proposal.confirmationId,
+            action: 'save-memory',
+            expiresAt: proposal.proposal.expiresAt,
+          }
+        } else {
+          next.memoryProposal = { status: 'failed', errorCode: proposal.effect.errorCode ?? 'PROVIDER_FAILED' }
+          next.pendingConfirmation = undefined
+        }
+      }
+    }
     const published = this.#publish(next, toolResults, current.requestContext, current.effectReceipts)
     const stored = this.#store.save(this.#mergeCockpitWindows(current, published))
-    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    const completionEffect: AgentResponse['effects'] = next.phase !== 'completed'
+      ? []
+      : next.memoryProposal?.status === 'pending'
+        ? [{ effectId: `${request.event.eventId}:0`, type: 'memory.propose-update', status: 'pending-confirmation', tool: 'memory.propose-update' }]
+        : next.memoryProposal?.status === 'skipped'
+          ? [{ effectId: `${request.event.eventId}:0`, type: 'memory.propose-update', status: 'cancelled', tool: 'memory.propose-update', errorCode: 'PREFERENCE_UNAVAILABLE' }]
+          : [{
+              effectId: `${request.event.eventId}:0`,
+              type: 'memory.propose-update',
+              status: 'failed',
+              tool: 'memory.propose-update',
+              errorCode: next.memoryProposal?.errorCode ?? 'PROVIDER_FAILED',
+            }]
+    this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: completionEffect })
     const text = normalizedEvent.type === 'passengers.onboard' ? '已记录乘客上车。'
       : normalizedEvent.type === 'navigation.outbound-arrived' ? '已到达机场，等待接人。'
         : normalizedEvent.type === 'navigation.return-arrived' ? '已到家，接机任务已完成。'
           : '机场已确认，正在查询航班。'
-    return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text, shouldSpeak })
+    return this.#response(request.clientRequestId, stored, completionEffect, performance.now() - startedAt, { text, shouldSpeak })
   }
 
   #submitCockpitAction(

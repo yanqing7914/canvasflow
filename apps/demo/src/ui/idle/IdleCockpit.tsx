@@ -5,10 +5,13 @@ import { ControlsIcon, KeyboardIcon, MicIcon } from '../icons'
 
 export type IdleVoiceMode = 'unavailable' | 'needs-authorization' | 'authorizing' | 'waiting-wake' | 'follow-up' | 'reset-confirmation'
 
+const cockpitTimeZone = 'Asia/Shanghai'
+
 export function IdleCockpit({
   vehicle,
   voiceMode,
   voiceStatus,
+  voiceRetryable = false,
   onMicrophone,
   onKeyboard,
   onControls,
@@ -18,6 +21,7 @@ export function IdleCockpit({
   vehicle: VehicleContext
   voiceMode: IdleVoiceMode
   voiceStatus: string
+  voiceRetryable?: boolean
   onMicrophone: () => void
   onKeyboard: () => void
   onControls: () => void
@@ -29,8 +33,18 @@ export function IdleCockpit({
     const timer = window.setInterval(() => setNow(new Date()), 1_000)
     return () => window.clearInterval(timer)
   }, [])
-  const formatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
-  const date = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(now)
+  const formatter = new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZone: cockpitTimeZone,
+  })
+  const date = new Intl.DateTimeFormat('zh-CN', {
+    month: 'long',
+    day: 'numeric',
+    weekday: 'short',
+    timeZone: cockpitTimeZone,
+  }).format(now)
   const lampLabel = voiceMode === 'waiting-wake' ? '等待唤醒'
     : voiceMode === 'follow-up' ? '正在聆听'
       : voiceMode === 'reset-confirmation' ? '等待确认'
@@ -51,8 +65,15 @@ export function IdleCockpit({
         <div className="idle-cockpit__voice"><dt>小南</dt><dd><span className={`wake-lamp wake-lamp--${voiceMode}`} aria-hidden="true" />{lampLabel}</dd></div>
       </dl>
       <div className="idle-cockpit__actions">
-        <button type="button" className="idle-mic" aria-label={voiceMode === 'needs-authorization' ? '启用小南语音唤醒' : '小南语音状态'} onClick={onMicrophone}>
-          <MicIcon size={24} /><span>{lampLabel}</span>
+        <button
+          type="button"
+          className="idle-mic"
+          aria-label={voiceRetryable
+            ? '重试语音唤醒'
+            : voiceMode === 'needs-authorization' ? '启用小南语音唤醒' : '小南语音状态'}
+          onClick={onMicrophone}
+        >
+          <MicIcon size={24} /><span>{voiceRetryable ? '重试语音' : lampLabel}</span>
         </button>
         <button type="button" aria-label="改用文字输入" onClick={onKeyboard}><KeyboardIcon size={22} /><span>文字</span></button>
         <button type="button" aria-label="打开演示控制" onClick={onControls}><ControlsIcon size={22} /><span>演示控制</span></button>

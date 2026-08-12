@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { readFileSync, readdirSync } from 'node:fs'
+import { extname, resolve } from 'node:path'
+import transcripts from '../../../../fixtures/airport-pickup/voice/transcripts.json'
 import {
   createFixtureRecognition,
   playFixtureSampleAudio,
@@ -56,28 +59,62 @@ function wire(engine: ReturnType<typeof createFixtureRecognition>): Callbacks {
 }
 
 const microtasks = () => new Promise<void>((resolve) => { setTimeout(resolve, 0) })
+const voiceFixtureDirectory = resolve(process.cwd(), 'fixtures/airport-pickup/voice')
+
+function readWavHeader(file: string) {
+  const data = readFileSync(resolve(voiceFixtureDirectory, file))
+  expect(data.subarray(0, 4).toString('ascii'), file).toBe('RIFF')
+  expect(data.subarray(8, 12).toString('ascii'), file).toBe('WAVE')
+  expect(data.subarray(12, 16).toString('ascii'), file).toBe('fmt ')
+  return {
+    audioFormat: data.readUInt16LE(20),
+    channels: data.readUInt16LE(22),
+    sampleRateHz: data.readUInt32LE(24),
+    bitsPerSample: data.readUInt16LE(34),
+  }
+}
 
 describe('voiceFixtureSamples', () => {
-  it('exposes every sample from transcripts.json with a label and an audio URL', () => {
-    expect(voiceFixtureSamples.map((entry) => entry.id))
-      .toEqual([
-        'create-airport-pickup',
-        'select-first-flight',
-        'flight-number',
-        'noisy-create',
-        'check-weather',
-        'start-navigation',
-        'send-weather-reminder',
-        'dismiss-weather-advisory',
-      ])
-    for (const entry of voiceFixtureSamples) {
+  it('exposes every catalog sample with presentation and availability copy', () => {
+    expect(voiceFixtureSamples).toHaveLength(transcripts.samples.length)
+    expect(voiceFixtureSamples.map((entry) => entry.id)).toEqual(transcripts.samples.map((entry) => entry.id))
+    expect(new Set(transcripts.samples.map((entry) => entry.id)).size).toBe(transcripts.samples.length)
+    expect(new Set(transcripts.samples.map((entry) => entry.file)).size).toBe(transcripts.samples.length)
+
+    for (const [index, entry] of voiceFixtureSamples.entries()) {
+      const catalogEntry = transcripts.samples[index]
+      expect(catalogEntry).toBeDefined()
+      expect(entry).toMatchObject({
+        id: catalogEntry?.id,
+        text: catalogEntry?.text,
+        confidence: catalogEntry?.confidence,
+        requiresConfirmation: catalogEntry?.requiresConfirmation,
+      })
       expect(entry.label).not.toBe('')
       expect(entry.audioUrl).not.toBe('')
       expect(entry.text).not.toBe('')
+      expect(entry.unavailableHint).not.toBe('')
     }
     // The noise-augmented sample is the one that exercises the confirmation
     // rule; losing the flag would let a refactor auto-submit it unnoticed.
     expect(voiceFixtureSamples.find((entry) => entry.id === 'noisy-create')?.requiresConfirmation).toBe(true)
+  })
+
+  it('ships exactly the catalog WAVs as 16 kHz mono PCM', () => {
+    const catalogFiles = transcripts.samples.map((entry) => entry.file).sort()
+    const shippedFiles = readdirSync(voiceFixtureDirectory)
+      .filter((file) => extname(file) === '.wav')
+      .sort()
+
+    expect(shippedFiles).toEqual(catalogFiles)
+    for (const file of catalogFiles) {
+      expect(readWavHeader(file)).toEqual({
+        audioFormat: 1,
+        channels: transcripts.channels,
+        sampleRateHz: transcripts.sampleRateHz,
+        bitsPerSample: 16,
+      })
+    }
   })
 })
 
@@ -139,16 +176,24 @@ describe('createFixtureRecognition', () => {
 })
 
 describe('playFixtureSampleAudio', () => {
-  it('plays the sample and swallows playback failures', () => {
+  it('plays the sample and settles once when playback fails', async () => {
     const audio = new FakeFixtureAudio()
     audio.playRejects = true
-    expect(playFixtureSampleAudio(sample, () => audio)).toBe(audio)
+    const settled = vi.fn()
+    expect(playFixtureSampleAudio(sample, () => audio, settled)).toBe(audio)
     expect(audio.played).toBe(1)
+    await microtasks()
+    expect(settled).toHaveBeenCalledOnce()
+    audio.onerror?.()
+    audio.onended?.()
+    expect(settled).toHaveBeenCalledOnce()
   })
 
-  it('does nothing when the factory yields no element', () => {
+  it('settles immediately when the factory yields no element', () => {
     const factory = vi.fn().mockReturnValue(null)
-    expect(playFixtureSampleAudio(sample, factory)).toBeNull()
+    const settled = vi.fn()
+    expect(playFixtureSampleAudio(sample, factory, settled)).toBeNull()
     expect(factory).toHaveBeenCalledWith(sample.audioUrl)
+    expect(settled).toHaveBeenCalledOnce()
   })
 })

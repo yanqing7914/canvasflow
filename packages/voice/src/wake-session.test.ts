@@ -35,6 +35,21 @@ describe('wake session', () => {
     expect(h.session.snapshot().state).toBe('waiting-wake')
   })
 
+  it('re-arms authorization when continuous recognition fails after it was live', () => {
+    const h = harness()
+    h.session.authorize()
+    h.session.recognitionStarted()
+    h.session.receive('小南')
+    expect(h.session.snapshot().state).toBe('follow-up')
+
+    h.session.recognitionFailed()
+
+    expect(h.session.snapshot()).toEqual({ state: 'needs-authorization', speaking: false })
+    expect(h.calls).toContainEqual({ name: 'stopSpeaking', args: [] })
+    h.session.authorize()
+    expect(h.calls.at(-1)).toEqual({ name: 'requestRecognition', args: [] })
+  })
+
   it('ignores ordinary speech and submits same-utterance commands', () => {
     const h = harness()
     h.session.authorize()
@@ -47,6 +62,19 @@ describe('wake session', () => {
     expect(h.session.snapshot().state).toBe('waiting-wake')
   })
 
+  it('preserves ASR confidence on submitted wake commands', () => {
+    const h = harness()
+    h.session.authorize()
+    h.session.recognitionStarted()
+
+    h.session.receive('小南，我要去机场接人', { recognitionSource: 'microphone', confidence: 0.51 })
+
+    expect(h.calls).toContainEqual({
+      name: 'submit',
+      args: ['我要去机场接人', { source: 'voice', recognitionSource: 'microphone', confidence: 0.51 }],
+    })
+  })
+
   it('opens one five-second follow-up after a wake-only utterance', () => {
     const h = harness()
     h.session.authorize()
@@ -54,10 +82,13 @@ describe('wake session', () => {
     h.session.receive('小南')
     expect(h.session.snapshot().state).toBe('follow-up')
     expect(h.calls).toContainEqual({ name: 'speak', args: ['我在'] })
-    h.session.receive('查天气')
+    h.session.receive('查天气', { recognitionSource: 'microphone', confidence: 0.62 })
     expect(h.scheduledMs).toEqual([5_000])
     expect(h.calls.at(-1)?.name).toBe('submit')
-    expect(h.calls.at(-1)?.args[0]).toBe('查天气')
+    expect(h.calls.at(-1)?.args).toEqual([
+      '查天气',
+      { source: 'voice', recognitionSource: 'microphone', confidence: 0.62 },
+    ])
     expect(h.session.snapshot().state).toBe('waiting-wake')
   })
 
