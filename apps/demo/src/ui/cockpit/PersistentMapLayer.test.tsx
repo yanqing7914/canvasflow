@@ -1,5 +1,5 @@
 import type { RouteSketch } from '@canvasflow/schema'
-import { act, cleanup, render } from '@testing-library/react'
+import { act, cleanup, fireEvent, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PersistentMapLayer } from './PersistentMapLayer'
 
@@ -95,5 +95,26 @@ describe('PersistentMapLayer', () => {
     expect(handle.setMode).toHaveBeenCalledTimes(1)
     expect(handle.setProgress).toHaveBeenLastCalledWith(0.7)
     expect(view.container.querySelector('.persistent-map-layer__vehicle')?.getAttribute('cx')).not.toBe(startX)
+  })
+
+  it('offers a recenter action after manual map interaction', async () => {
+    const handle = workspaceHandle()
+    let manualInteraction: (() => void) | undefined
+    stub.renderAMapWorkspace.mockImplementation((_amap, _mount, options) => {
+      manualInteraction = options.onManualInteraction
+      return handle
+    })
+    const onManualInteraction = vi.fn()
+    const onRecenter = vi.fn()
+    const view = render(<PersistentMapLayer mode="route" sketch={outbound} progress={0.2} routeKey="outbound" theme="dark" sessionKey="cockpit" follow onManualInteraction={onManualInteraction} onRecenter={onRecenter} />)
+    await act(async () => {})
+
+    act(() => manualInteraction?.())
+    expect(onManualInteraction).toHaveBeenCalledOnce()
+    view.rerender(<PersistentMapLayer mode="route" sketch={outbound} progress={0.2} routeKey="outbound" theme="dark" sessionKey="cockpit" follow={false} onManualInteraction={onManualInteraction} onRecenter={onRecenter} />)
+    fireEvent.click(view.getByRole('button', { name: '回到车辆位置' }))
+
+    expect(handle.recenter).toHaveBeenCalledOnce()
+    expect(onRecenter).toHaveBeenCalledOnce()
   })
 })

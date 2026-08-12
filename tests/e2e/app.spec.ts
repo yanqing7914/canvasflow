@@ -561,12 +561,12 @@ test('keeps maximized cockpit chrome and voice toolbar reachable on desktop @coc
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-navigation-toolbar', 'expanded')
   const expandedSpace = await page.locator('.demo-shell').evaluate((element) => getComputedStyle(element).getPropertyValue('--cockpit-toolbar-space').trim())
   expect(expandedSpace).toContain('190px')
-  const layout = await page.locator('.navigation-workspace').evaluate(() => {
-    const toolbar = document.querySelector<HTMLElement>('.navigation-command')!.getBoundingClientRect()
-    const windowChrome = document.querySelector<HTMLElement>('.cockpit-window[data-kind="vehicle-status"] .cockpit-window__chrome')!.getBoundingClientRect()
-    return { toolbarBottom: toolbar.bottom, chromeTop: windowChrome.top }
+  const layout = await page.getByTestId('cockpit-workspace').evaluate(() => {
+    const entry = document.querySelector<HTMLElement>('.cockpit-workspace__entry')!.getBoundingClientRect()
+    const window = document.querySelector<HTMLElement>('.cockpit-window[data-kind="vehicle-status"]')!.getBoundingClientRect()
+    return { entryTop: entry.top, windowBottom: window.bottom }
   })
-  expect(layout.chromeTop).toBeGreaterThanOrEqual(layout.toolbarBottom)
+  expect(layout.windowBottom).toBeLessThanOrEqual(layout.entryTop)
   await page.getByRole('button', { name: '打开演示控制' }).click()
   await expect(page.getByRole('dialog', { name: '演示控制' })).toBeVisible()
   await page.keyboard.press('Escape')

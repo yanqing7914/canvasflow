@@ -17,6 +17,7 @@ export type PersistentMapLayerProps = {
   follow?: boolean
   recenterNonce?: number
   onManualInteraction?: () => void
+  onRecenter?: () => void
   onRuntimeFailure?: () => void
   onRuntimeReady?: () => void
 }
@@ -24,7 +25,7 @@ export type PersistentMapLayerProps = {
 /** Stable cockpit map shell. AMap owns one basemap; only its overlays change. */
 export function PersistentMapLayer({
   mode, sketch, progress, theme, sessionKey, routeKey = mode, mapRetryNonce = 0,
-  follow = true, recenterNonce = 0, onManualInteraction, onRuntimeFailure, onRuntimeReady,
+  follow = true, recenterNonce = 0, onManualInteraction, onRecenter, onRuntimeFailure, onRuntimeReady,
 }: PersistentMapLayerProps) {
   const container = useRef<HTMLDivElement>(null)
   const handle = useRef<AMapWorkspaceHandle | undefined>(undefined)
@@ -126,6 +127,18 @@ export function PersistentMapLayer({
         {source === 'amap' ? '高德道路图层' : source === 'loading' ? '地图服务连接中' : '离线地图示意'}
         {mode === 'route' && progress !== undefined ? ` · 模拟行程进度 ${Math.round(progress * 100)}%` : ''}
       </span>
+      {!follow && mode === 'route' ? (
+        <button
+          className="persistent-map-layer__recenter"
+          type="button"
+          onClick={() => {
+            handle.current?.recenter()
+            onRecenter?.()
+          }}
+        >
+          回到车辆位置
+        </button>
+      ) : null}
     </section>
   )
 }
