@@ -1370,6 +1370,7 @@ export default function App({
       data-theme={spec?.presentation.theme}
       data-priority={spec?.presentation.priority}
       data-glass={glassTier}
+      data-navigation-toolbar={navigationActive ? (composerReason ? 'expanded' : 'compact') : undefined}
       style={GLASS_TIERS[glassTier]}
     >
       {navigationActive && runtimeTask && spec ? (

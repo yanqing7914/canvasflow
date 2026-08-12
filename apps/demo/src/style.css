@@ -130,10 +130,15 @@ a:focus-visible {
   min-height: 100dvh;
   overflow: hidden;
   isolation: isolate;
+  --cockpit-toolbar-space: max(88px, calc(env(safe-area-inset-top) + 72px));
   background:
     radial-gradient(circle at 50% 48%, rgba(36, 107, 253, 0.13), transparent 34%),
     #0c1015;
   color: #edf4ff;
+}
+
+.navigation-workspace[data-navigation-toolbar='expanded'] {
+  --cockpit-toolbar-space: max(190px, calc(env(safe-area-inset-top) + 174px));
 }
 
 .persistent-route-map,
@@ -276,7 +281,13 @@ a:focus-visible {
 .navigation-hud--minimum > div strong { font-family: Bahnschrift, "DIN Alternate", sans-serif; font-size: 26px; font-variant-numeric: tabular-nums; }
 .navigation-hud--minimum p { max-width: 18ch; margin: 0; color: #edf4ff; font-size: 13px; font-weight: 700; }
 
-.cockpit-windows { position: absolute; inset: 0; z-index: 90; pointer-events: none; }
+.cockpit-windows { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+
+.cockpit-window[data-mode='maximized'] {
+  inset: var(--cockpit-toolbar-space) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  width: auto;
+  max-height: none;
+}
 
 .cockpit-window {
   --window-x: 16px;
@@ -300,7 +311,6 @@ a:focus-visible {
   backdrop-filter: blur(26px) saturate(1.3);
 }
 
-.cockpit-window[data-mode='maximized'] { inset: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left)); width: auto; max-height: none; }
 .cockpit-window[data-mode='minimized'] { width: min(310px, calc(100vw - 32px)); max-height: 58px; }
 .cockpit-window:focus-visible { outline: 3px solid #8fb7ff; outline-offset: 2px; }
 .cockpit-window__chrome { display: flex; min-height: 56px; flex: 0 0 auto; align-items: center; gap: 10px; padding: 0 10px 0 16px; border-bottom: 1px solid rgba(164, 190, 224, 0.15); cursor: grab; user-select: none; }
@@ -371,7 +381,7 @@ a:focus-visible {
   .navigation-hud--minimum { width: calc(100vw - 24px); max-width: none; flex-wrap: wrap; }
   .navigation-hud--minimum p { flex: 1 1 12ch; }
   .cockpit-window { top: max(72px, env(safe-area-inset-top)); left: 12px; width: calc(100vw - 24px); max-height: calc(100dvh - max(88px, env(safe-area-inset-top)) - env(safe-area-inset-bottom)); }
-  .cockpit-window[data-mode='maximized'] { inset: max(10px, env(safe-area-inset-top)) 10px max(10px, env(safe-area-inset-bottom)); }
+  .cockpit-window[data-mode='maximized'] { inset: var(--cockpit-toolbar-space) 10px max(10px, env(safe-area-inset-bottom)); }
   .vehicle-status-grid { grid-template-columns: 1fr; }
   .persistent-route-map__source { max-width: 44vw; }
   .navigation-command { top: max(9px, env(safe-area-inset-top)); right: 10px; max-width: calc(100vw - 20px); }
