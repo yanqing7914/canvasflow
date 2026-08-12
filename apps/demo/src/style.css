@@ -107,9 +107,6 @@ a:focus-visible {
   mask-image: linear-gradient(to bottom, black, transparent 82%);
 }
 
-.demo-shell[data-navigation-toolbar='expanded'] {
-  --cockpit-toolbar-space: max(190px, calc(env(safe-area-inset-top) + 174px));
-
 /* Persistent cockpit shell: one map stage with quiet glass layers above it. */
 .cockpit-workspace {
   position: relative;
