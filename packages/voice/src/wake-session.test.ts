@@ -114,8 +114,11 @@ describe('wake session', () => {
     expect(h.session.snapshot().state).toBe('waiting-wake')
 
     h.session.receive('小南，重新开始')
+    const stopsBeforeCancel = h.calls.filter((call) => call.name === 'stopSpeaking').length
     h.session.receive('小南，取消')
     expect(h.calls.at(-1)).toMatchObject({ name: 'resetCancelled', args: ['cancelled'] })
+    expect(h.calls.filter((call) => call.name === 'stopSpeaking')).toHaveLength(stopsBeforeCancel + 1)
+    expect(h.session.snapshot()).toEqual({ state: 'waiting-wake', speaking: false })
 
     h.session.receive('小南，重新开始')
     h.fireTimer()

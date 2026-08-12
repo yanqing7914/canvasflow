@@ -1908,6 +1908,8 @@ export default function App({
 
   const isCompleted = task?.phase === 'completed'
   const isTerminal = task?.phase === 'completed' || task?.phase === 'cancelled'
+  const idleVoiceUnavailable = !voiceEnabled
+    || (!speech?.createRecognition && (!isRecognitionSupported() || !isSecureContextOk()))
   const playedEventCount = task
     ? task.processedEventIds.filter((eventId) => playableEventIds.has(eventId)).length
     : 0
@@ -2016,10 +2018,11 @@ export default function App({
         <>
           <IdleCockpit
             vehicle={vehicleContext}
-            voiceMode={!voiceEnabled || (!speech?.createRecognition && (!isRecognitionSupported() || !isSecureContextOk()))
-              ? 'unavailable'
-              : wakeSession.state}
-            voiceStatus={wakeError ?? queuedVoiceNotice ?? idleNotice ?? wakeStatus(wakeSession.state)}
+            voiceMode={idleVoiceUnavailable ? 'unavailable' : wakeSession.state}
+            voiceStatus={wakeError
+              ?? queuedVoiceNotice
+              ?? idleNotice
+              ?? (idleVoiceUnavailable ? '语音不可用，请用文字告诉我。' : wakeStatus(wakeSession.state))}
             voiceRetryable={Boolean(wakeError)}
             onMicrophone={pressMicrophone}
             onKeyboard={() => { focusComposerRef.current = true; setKeyboardRequested(true) }}

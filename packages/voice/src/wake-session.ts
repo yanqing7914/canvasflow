@@ -184,6 +184,8 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
         }
         if (decision === 'cancel') {
           clearSessionTimer()
+          if (speaking) effects.stopSpeaking?.()
+          speaking = false
           transition('waiting-wake')
           effects.resetCancelled?.('cancelled')
           return 'reset-cancelled' as const

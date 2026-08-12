@@ -29,6 +29,7 @@ describe('demo integration', () => {
     expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
     expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
     expect(screen.queryByText(/航班/)).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('语音不可用，请用文字告诉我。')
     expect(api.create).not.toHaveBeenCalled()
     await user.click(screen.getByRole('button', { name: '改用文字输入' }))
     expect(screen.getByLabelText('任务输入')).toHaveValue('')
