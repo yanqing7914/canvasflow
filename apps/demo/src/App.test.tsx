@@ -99,6 +99,37 @@ describe('demo integration', () => {
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
   })
 
+  it('keeps an invalid typed reset decision available for correction', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const active = apiResponse(createCockpitTask('reset-typed-invalid'))
+    const api = {
+      create: vi.fn().mockResolvedValue(active), event: vi.fn(), action: vi.fn(), confirmation: vi.fn(), cancel: vi.fn(),
+    }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.(); speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledOnce())
+    act(() => { speech.engine().emit('小南，重新开始', true, 0.9) })
+
+    await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+    const input = screen.getByLabelText('任务输入')
+    await user.type(input, '稍后再说')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    expect(input).toHaveValue('稍后再说')
+    expect(screen.getAllByText('等待确认').length).toBeGreaterThan(0)
+    expect(api.cancel).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('机场接人任务')).toBeInTheDocument()
+
+    await user.clear(input)
+    await user.type(input, '取消')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0)
+  })
+
   it('retries a reset revision conflict and releases a stuck wake drain for the next task', async () => {
     const user = userEvent.setup()
     const speech = createFakeSpeech()

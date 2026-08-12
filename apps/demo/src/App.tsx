@@ -1244,7 +1244,8 @@ export default function App({
     // must not race it. See `textPathLocked`.
     if (textPathLocked) return
     if (wakeWordEnabled && wakeSession.state === 'reset-confirmation') {
-      wakeSessionRef.current?.receive(text)
+      const result = wakeSessionRef.current?.receive(text)
+      if (result === 'ignored') return
       setText('')
       setDraftProtected(false)
       setKeyboardRequested(false)
