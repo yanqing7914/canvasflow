@@ -21,7 +21,8 @@ export type PersistentRouteMapProps = {
 export function PersistentRouteMap({ sessionKey, routeKey, destination, progress, sketch, theme, progressLabel, mapRetryNonce = 0, onRuntimeFailure, onRuntimeReady }: PersistentRouteMapProps) {
   const container = useRef<HTMLDivElement>(null)
   const handle = useRef<AMapRouteHandle | undefined>(undefined)
-  const initialTheme = useRef(theme)
+  const themeRef = useRef(theme)
+  themeRef.current = theme
   const sketchRef = useRef(sketch)
   const progressRef = useRef(progress)
   sketchRef.current = sketch
@@ -71,7 +72,7 @@ export function PersistentRouteMap({ sessionKey, routeKey, destination, progress
         return
       }
       const rendered = await renderAMapRoute(amap, mount, {
-        sketch: { ...sketchRef.current, progress: progressRef.current }, mode: 'follow', theme: initialTheme.current,
+        sketch: { ...sketchRef.current, progress: progressRef.current }, mode: 'follow', theme: themeRef.current,
         onManualInteraction: () => setFollowing(false),
         onRuntimeFailure: recoverRuntime,
       })
@@ -81,6 +82,7 @@ export function PersistentRouteMap({ sessionKey, routeKey, destination, progress
       }
       if (!rendered) return
       handle.current = rendered
+      rendered.setTheme(themeRef.current)
       runtimeAttempts.current = 0
       setRuntimeFailure(false)
       setSource('amap')
@@ -97,6 +99,8 @@ export function PersistentRouteMap({ sessionKey, routeKey, destination, progress
   }, [mapRetryNonce, recoverRuntime, runtimeReload, sessionKey])
 
   useEffect(() => { handle.current?.setProgress(progress) }, [progress])
+
+  useEffect(() => { handle.current?.setTheme(theme) }, [theme])
 
   useEffect(() => {
     const routeHandle = handle.current

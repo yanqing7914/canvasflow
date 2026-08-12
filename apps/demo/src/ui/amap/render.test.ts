@@ -27,12 +27,14 @@ function fakeAMap() {
   const destroy = vi.fn()
   const remove = vi.fn()
   const setCenter = vi.fn()
+  const setMapStyle = vi.fn()
   const map = {
     add: vi.fn(),
     remove,
     setFitView: vi.fn(),
     setZoomAndCenter: vi.fn(),
     setCenter,
+    setMapStyle,
     destroy,
   }
 
@@ -86,6 +88,7 @@ function fakeAMap() {
     polylineOptions,
     remove,
     tailPaths,
+    setMapStyle,
   }
 }
 
@@ -110,6 +113,25 @@ describe('renderAMapRoute themes', () => {
     handle?.destroy()
     expect(fake.remove).toHaveBeenCalled()
     expect(fake.destroy).toHaveBeenCalledOnce()
+  })
+
+  it('updates the live map and route palette when the theme changes', async () => {
+    const fake = fakeAMap()
+    const handle = await renderAMapRoute(fake.amap, document.createElement('div'), {
+      sketch,
+      mode: 'follow',
+      theme: 'light',
+    })
+    handle?.setTheme('dark')
+    expect(fake.setMapStyle).toHaveBeenCalledWith('amap://styles/dark')
+    expect(fake.polylineOptions.map((options) => options.strokeColor)).toEqual([
+      '#246bfd', '#9aa7b8', '#5b93ff', '#55637a',
+    ])
+    handle?.setTheme('light')
+    expect(fake.setMapStyle).toHaveBeenLastCalledWith('amap://styles/normal')
+    expect(fake.polylineOptions.slice(-2).map((options) => options.strokeColor)).toEqual([
+      '#246bfd', '#9aa7b8',
+    ])
   })
 })
 

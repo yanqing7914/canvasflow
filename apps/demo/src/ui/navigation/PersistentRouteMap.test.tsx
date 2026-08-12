@@ -42,6 +42,7 @@ const returning: RouteSketch = {
 function routeHandle(setRoute = vi.fn(async () => true)) {
   return {
     setProgress: vi.fn(),
+    setTheme: vi.fn(),
     setRoute,
     setFollow: vi.fn(),
     recenter: vi.fn(),
@@ -142,6 +143,35 @@ describe('PersistentRouteMap route replacement recovery', () => {
     expect(onRuntimeFailure).toHaveBeenCalledOnce()
     expect(onRuntimeReady).toHaveBeenCalledTimes(2)
     expect(mountedSession).toHaveAttribute('data-map-source', 'amap')
+  })
+
+  it('updates the basemap theme without remounting the session', async () => {
+    const handle = routeHandle()
+    stub.renderAMapRoute.mockResolvedValue(handle)
+    const view = render(
+      <PersistentRouteMap
+        sessionKey="cockpit-1"
+        routeKey="outbound:route-1"
+        destination="虹桥机场 T2"
+        progress={0.25}
+        sketch={outbound}
+        theme="dark"
+      />,
+    )
+    await act(async () => {})
+    view.rerender(
+      <PersistentRouteMap
+        sessionKey="cockpit-1"
+        routeKey="outbound:route-1"
+        destination="虹桥机场 T2"
+        progress={0.25}
+        sketch={outbound}
+        theme="light"
+      />,
+    )
+    await act(async () => {})
+    expect(stub.renderAMapRoute).toHaveBeenCalledOnce()
+    expect(handle.setTheme).toHaveBeenCalledWith('light')
   })
 
   it('stops on the sketch after the replacement and every remaining key fail', async () => {
