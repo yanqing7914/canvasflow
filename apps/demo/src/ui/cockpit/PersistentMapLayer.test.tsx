@@ -142,4 +142,26 @@ describe('PersistentMapLayer', () => {
     expect(stub.renderAMapWorkspace).toHaveBeenCalledTimes(2)
     expect(stub.invalidateAMap).toHaveBeenCalledOnce()
   })
+
+  it('learns the key budget after the loader publishes its configuration', async () => {
+    const failures: Array<() => void> = []
+    stub.loadAMap.mockImplementation(async () => {
+      // Initial render sees the loader's empty snapshot; loadAMap discovers
+      // the configured key ring when it starts.
+      stub.keyCount = 2
+      return {}
+    })
+    stub.renderAMapWorkspace.mockImplementation((_amap, _mount, options) => {
+      failures.push(options.onRuntimeFailure)
+      return workspaceHandle()
+    })
+
+    render(<PersistentMapLayer mode="idle" theme="dark" sessionKey="cockpit" />)
+    await act(async () => {})
+    act(() => failures[0]?.())
+    await act(async () => {})
+
+    expect(stub.renderAMapWorkspace).toHaveBeenCalledTimes(2)
+    expect(stub.invalidateAMap).toHaveBeenCalledOnce()
+  })
 })

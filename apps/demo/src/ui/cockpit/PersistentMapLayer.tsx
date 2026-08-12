@@ -39,7 +39,11 @@ export function PersistentMapLayer({
   manualInteractionCallback.current = onManualInteraction
   const initialTheme = useRef(theme)
   const [loadRevision, setLoadRevision] = useState(0)
-  const runtimeRetriesRemaining = useRef(Math.max(0, initialLoader.keyCount - 1))
+  // The loader learns its configured key count when the first request starts,
+  // which can be later than this component's initial render.
+  const runtimeRetriesRemaining = useRef<number | undefined>(
+    initialLoader.keyCount > 0 ? Math.max(0, initialLoader.keyCount - 1) : undefined,
+  )
   const recoveryInFlight = useRef(false)
   const modeRef = useRef(mode)
   const sketchRef = useRef(sketch)
@@ -52,7 +56,8 @@ export function PersistentMapLayer({
     : undefined, [mode, progress, sketch])
 
   useEffect(() => {
-    runtimeRetriesRemaining.current = Math.max(0, amapLoaderSnapshot().keyCount - 1)
+    const keyCount = amapLoaderSnapshot().keyCount
+    runtimeRetriesRemaining.current = keyCount > 0 ? Math.max(0, keyCount - 1) : undefined
     recoveryInFlight.current = false
   }, [mapRetryNonce, sessionKey])
 
@@ -61,6 +66,10 @@ export function PersistentMapLayer({
     recoveryInFlight.current = true
     setSource('fallback')
     failureCallback.current?.()
+    if (runtimeRetriesRemaining.current === undefined) {
+      const keyCount = amapLoaderSnapshot().keyCount
+      runtimeRetriesRemaining.current = Math.max(0, keyCount - 1)
+    }
     if (runtimeRetriesRemaining.current <= 0) return
     runtimeRetriesRemaining.current -= 1
     invalidateAMap({ rotate: true })
