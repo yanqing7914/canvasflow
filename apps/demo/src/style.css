@@ -276,7 +276,7 @@ a:focus-visible {
 .navigation-hud--minimum > div strong { font-family: Bahnschrift, "DIN Alternate", sans-serif; font-size: 26px; font-variant-numeric: tabular-nums; }
 .navigation-hud--minimum p { max-width: 18ch; margin: 0; color: #edf4ff; font-size: 13px; font-weight: 700; }
 
-.cockpit-windows { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
+.cockpit-windows { position: absolute; inset: 0; z-index: 90; pointer-events: none; }
 
 .cockpit-window {
   --window-x: 16px;
