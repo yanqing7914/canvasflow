@@ -35,6 +35,8 @@ export type AMapRouteHandle = {
    * caller does not have to know whether the spec authored a progress value.
    */
   setProgress: (progress: number) => void
+  /** Applies a new basemap and route palette without replacing the map session. */
+  setTheme: (theme: 'light' | 'dark') => void
   setRoute: (sketch: RouteSketch) => Promise<boolean>
   setFollow: (follow: boolean) => void
   recenter: () => void
@@ -243,9 +245,6 @@ export function renderAMapWorkspace(
     },
   }
 
-  if (options.mode === 'route' && options.sketch) {
-    void handle.setMode('route', options.sketch, options.progress)
-  }
   return handle
 }
 
@@ -376,7 +375,7 @@ function drawRoute(
   const path = extractPath(result)
   if (path.length < 2) throw new Error('empty route path')
 
-  const palette = THEMES[options.theme]
+  let palette = THEMES[options.theme]
   let overlays: AMapOverlay[] = []
   let following = options.mode === 'follow'
   let vehicle: LngLatPoint | undefined
@@ -437,7 +436,9 @@ function drawRoute(
       }
     }
   }
-  drawPath(path, normalizedProgress(options.sketch.progress))
+  let currentPath = path
+  let currentProgress = normalizedProgress(options.sketch.progress)
+  drawPath(currentPath, currentProgress)
 
   if (options.mode === 'follow' && vehicle) {
     map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
@@ -459,17 +460,33 @@ function drawRoute(
       if (clamped === undefined || !moveTo) return
       try {
         moveTo(clamped)
+        currentProgress = clamped
       } catch {
         // A repositioning that fails mid-crawl leaves the marker where it was,
         // which is a stale simulated point rather than a wrong one. Tearing the
         // map down over it would be the worse outcome.
       }
     },
+    setTheme: (next: 'light' | 'dark') => {
+      const nextPalette = THEMES[next]
+      if (nextPalette === palette) return
+      palette = nextPalette
+      try {
+        map.setMapStyle?.(palette.mapStyle ?? 'amap://styles/normal')
+        drawPath(currentPath, currentProgress)
+        if (following && vehicle) map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
+        else map.setFitView(overlays)
+      } catch {
+        // A rejected cosmetic theme update must not replace a working route.
+      }
+    },
     setRoute: async (sketch: RouteSketch) => {
       const nextPath = await searchRoute(amap, map, sketch, options.onRuntimeFailure)
       if (nextPath.length < 2) return false
       try {
-        drawPath(nextPath, normalizedProgress(sketch.progress))
+        currentPath = nextPath
+        currentProgress = normalizedProgress(sketch.progress)
+        drawPath(currentPath, currentProgress)
         if (following && vehicle) map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
         else map.setFitView(overlays)
         return true

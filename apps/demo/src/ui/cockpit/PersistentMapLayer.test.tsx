@@ -6,13 +6,15 @@ import { PersistentMapLayer } from './PersistentMapLayer'
 const stub = vi.hoisted(() => ({
   loadAMap: vi.fn(),
   renderAMapWorkspace: vi.fn(),
+  invalidateAMap: vi.fn(),
+  keyCount: 0,
 }))
 
 vi.mock('../amap/loader', () => ({
   // The loader snapshot starts uninitialized in production; loadAMap is the
   // authoritative place that reads build-time key configuration.
-  amapLoaderSnapshot: () => ({ state: 'idle', keyCount: 0 }),
-  invalidateAMap: vi.fn(),
+  amapLoaderSnapshot: () => ({ state: 'idle', keyCount: stub.keyCount }),
+  invalidateAMap: (...args: unknown[]) => { stub.invalidateAMap(...args) },
   loadAMap: () => stub.loadAMap(),
 }))
 
@@ -49,9 +51,11 @@ function workspaceHandle() {
 
 describe('PersistentMapLayer', () => {
   beforeEach(() => {
+    stub.keyCount = 0
     stub.loadAMap.mockReset()
     stub.loadAMap.mockResolvedValue({})
     stub.renderAMapWorkspace.mockReset()
+    stub.invalidateAMap.mockReset()
   })
   afterEach(() => cleanup())
 
@@ -116,5 +120,26 @@ describe('PersistentMapLayer', () => {
 
     expect(handle.recenter).toHaveBeenCalledOnce()
     expect(onRecenter).toHaveBeenCalledOnce()
+  })
+
+  it('stops after each configured key fails at runtime', async () => {
+    stub.keyCount = 2
+    const failures: Array<() => void> = []
+    stub.renderAMapWorkspace.mockImplementation((_amap, _mount, options) => {
+      failures.push(options.onRuntimeFailure)
+      return workspaceHandle()
+    })
+    render(<PersistentMapLayer mode="idle" theme="dark" sessionKey="cockpit" />)
+    await act(async () => {})
+    expect(stub.renderAMapWorkspace).toHaveBeenCalledTimes(1)
+
+    act(() => failures[0]?.())
+    await act(async () => {})
+    expect(stub.renderAMapWorkspace).toHaveBeenCalledTimes(2)
+
+    act(() => failures[1]?.())
+    await act(async () => {})
+    expect(stub.renderAMapWorkspace).toHaveBeenCalledTimes(2)
+    expect(stub.invalidateAMap).toHaveBeenCalledOnce()
   })
 })

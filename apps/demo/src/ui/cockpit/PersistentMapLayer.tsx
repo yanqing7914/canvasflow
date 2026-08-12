@@ -39,6 +39,7 @@ export function PersistentMapLayer({
   manualInteractionCallback.current = onManualInteraction
   const initialTheme = useRef(theme)
   const [loadRevision, setLoadRevision] = useState(0)
+  const runtimeAttempts = useRef(0)
   const modeRef = useRef(mode)
   const sketchRef = useRef(sketch)
   const progressRef = useRef(progress)
@@ -48,6 +49,10 @@ export function PersistentMapLayer({
   const drawing = useMemo(() => mode === 'route' && sketch
     ? buildRouteSketchDrawing({ ...sketch, ...(progress === undefined ? {} : { progress }) }, ROUTE_MAP_DRAWING_OPTIONS)
     : undefined, [mode, progress, sketch])
+
+  useEffect(() => {
+    runtimeAttempts.current = 0
+  }, [mapRetryNonce, sessionKey])
 
   useEffect(() => {
     let cancelled = false
@@ -74,7 +79,8 @@ export function PersistentMapLayer({
           setSource('fallback')
           failureCallback.current?.()
           const keyCount = amapLoaderSnapshot().keyCount
-          if (keyCount > 1) {
+          runtimeAttempts.current += 1
+          if (runtimeAttempts.current < keyCount) {
             invalidateAMap({ rotate: true })
             setLoadRevision((value) => value + 1)
           }
@@ -85,6 +91,9 @@ export function PersistentMapLayer({
       handle.current = rendered
       setSource('amap')
       readyCallback.current?.()
+      if (modeRef.current === 'route' && sketchRef.current) {
+        void rendered.setMode('route', sketchRef.current, progressRef.current)
+      }
     })
     return () => {
       cancelled = true
@@ -101,7 +110,7 @@ export function PersistentMapLayer({
       return
     }
     if (sketchRef.current) void current.setMode('route', sketchRef.current, progressRef.current)
-  }, [mode, routeKey, source])
+  }, [mode, routeKey])
 
   useEffect(() => {
     if (mode === 'route' && progress !== undefined) handle.current?.setProgress(progress)

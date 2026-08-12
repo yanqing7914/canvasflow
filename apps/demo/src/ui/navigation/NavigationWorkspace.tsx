@@ -32,9 +32,11 @@ export type NavigationWorkspaceProps = {
   onMapRuntimeFailure?: () => void
   onMapRuntimeReady?: () => void
   initialMapRuntimeFailure?: boolean
+  /** The persistent cockpit owns the one map instance; this workspace supplies only its simulator and HUD. */
+  renderMap?: boolean
 }
 
-const OUTBOUND_SKETCH: RouteSketch = {
+export const OUTBOUND_SKETCH: RouteSketch = {
   waypoints: [
     { name: '当前位置', latitude: 31.23, longitude: 121.47 },
     { name: '机场接人点', latitude: 31.198, longitude: 121.336 },
@@ -47,12 +49,23 @@ const OUTBOUND_SKETCH: RouteSketch = {
   ],
 }
 
-const RETURN_SKETCH: RouteSketch = {
+export const RETURN_SKETCH: RouteSketch = {
   waypoints: [
     { name: '机场接人点', latitude: 31.198, longitude: 121.336 },
     { name: '家', latitude: 31.23, longitude: 121.47 },
   ],
   polyline: [...OUTBOUND_SKETCH.polyline].reverse(),
+}
+
+/**
+ * Resolves the Agent-authored route when it exists and keeps the deterministic
+ * fallback in one place for the shared persistent map and navigation HUD.
+ */
+export function navigationSketchForTask(task: RuntimeNavigationTask, spec: UISpec): RouteSketch {
+  const routeComponent = spec.components.find((component) => component.type === 'route-map')
+  if (routeComponent?.type === 'route-map') return routeComponent.props.routeSketch
+  const leg = task.cockpit?.activeLeg ?? task.navigationSimulation?.leg ?? drivingLegForPhase(task.phase)
+  return leg === 'return' ? RETURN_SKETCH : OUTBOUND_SKETCH
 }
 
 export function NavigationWorkspace({
@@ -71,6 +84,7 @@ export function NavigationWorkspace({
   onMapRuntimeFailure,
   onMapRuntimeReady,
   initialMapRuntimeFailure = false,
+  renderMap = true,
 }: NavigationWorkspaceProps) {
   const activeClock = useMemo(() => clock ?? resolveNavigationClock(), [clock])
   const [state, dispatch] = useReducer(navigationSimulatorReducer, activeClock.now(), createNavigationSimulatorState)
@@ -88,10 +102,9 @@ export function NavigationWorkspace({
   const onSnapshotRef = useRef(onSnapshot)
   onSnapshotRef.current = onSnapshot
   const phaseLeg = drivingLegForPhase(task.phase)
-  const routeComponent = spec.components.find((component) => component.type === 'route-map')
-  const sourceSketch = routeComponent?.type === 'route-map' ? routeComponent.props.routeSketch : undefined
   const leg = state.simulation?.leg ?? phaseLeg ?? (task.phase === 'return-driving' ? 'return' : 'outbound')
-  const sketch = sourceSketch ?? (leg === 'return' ? RETURN_SKETCH : OUTBOUND_SKETCH)
+  const sourceSketch = navigationSketchForTask(task, spec)
+  const sketch = leg === 'return' && sourceSketch === OUTBOUND_SKETCH ? RETURN_SKETCH : sourceSketch
   const destination = leg === 'return' ? '家' : task.pickupAirport?.label ?? task.navigation?.destination ?? '机场接人点'
   const simulatorConfig = useMemo(() => {
     const seed = task.navigationSimulation
@@ -198,30 +211,32 @@ export function NavigationWorkspace({
 
   return (
     <section
-      className="navigation-workspace"
+      className={`navigation-workspace${renderMap ? '' : ' navigation-workspace--hud-only'}`}
       data-session-key={task.taskId}
       data-leg={leg}
       data-pending={pending}
       data-map-runtime={mapRuntimeFailure ? 'fallback' : 'ready'}
     >
-      <PersistentRouteMap
-        sessionKey={task.taskId}
-        routeKey={`${leg}:${task.navigation?.routeId ?? leg}`}
-        destination={destination}
-        progress={snapshot.progress}
-        sketch={sketch}
-        theme={spec.presentation.theme}
-        progressLabel={`模拟行程进度 ${Math.round(snapshot.progress * 100)}%`}
-        mapRetryNonce={mapRetryNonce}
-        onRuntimeFailure={() => {
-          setMapRuntimeFailure(true)
-          onMapRuntimeFailure?.()
-        }}
-        onRuntimeReady={() => {
-          setMapRuntimeFailure(false)
-          onMapRuntimeReady?.()
-        }}
-      />
+      {renderMap ? (
+        <PersistentRouteMap
+          sessionKey={task.taskId}
+          routeKey={`${leg}:${task.navigation?.routeId ?? leg}`}
+          destination={destination}
+          progress={snapshot.progress}
+          sketch={sketch}
+          theme={spec.presentation.theme}
+          progressLabel={`模拟行程进度 ${Math.round(snapshot.progress * 100)}%`}
+          mapRetryNonce={mapRetryNonce}
+          onRuntimeFailure={() => {
+            setMapRuntimeFailure(true)
+            onMapRuntimeFailure?.()
+          }}
+          onRuntimeReady={() => {
+            setMapRuntimeFailure(false)
+            onMapRuntimeReady?.()
+          }}
+        />
+      ) : null}
       <div className="navigation-workspace__brand" aria-label="pilotflow 模拟导航">
         <strong>pilotflow</strong><span>模拟导航</span>
       </div>
