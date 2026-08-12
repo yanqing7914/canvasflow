@@ -272,7 +272,7 @@ describe('demo integration', () => {
     expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
   })
 
-  it('renders cockpit-owned flight and confirmation windows before navigation', async () => {
+  it('keeps the flight chooser in the task surface instead of opening a floating window', async () => {
     const user = userEvent.setup()
     const task = {
       ...createInitialTask(), phase: 'choosing-flight', pickupAirport: { label: '虹桥机场', code: 'SHA' },
@@ -300,15 +300,16 @@ describe('demo integration', () => {
     const api = { create: vi.fn().mockResolvedValue(response), event: vi.fn(), action: vi.fn().mockResolvedValue(response), confirmation: vi.fn() }
     render(<AppComponent api={api} voiceEnabled={false} initialText="去机场接人" />)
     await user.click(screen.getByRole('button', { name: '发送' }))
-    expect(await screen.findByLabelText('虹桥机场到达航班窗口')).toBeInTheDocument()
-    const cockpitWindow = screen.getByLabelText('虹桥机场到达航班窗口')
-    const choice = cockpitWindow.querySelector<HTMLButtonElement>('[data-action-id="pick-cockpit-MU5102"]')
+    expect(screen.queryByLabelText('虹桥机场到达航班窗口')).not.toBeInTheDocument()
+    const surface = screen.getByRole('region', { name: '当前行程' })
+    expect(surface).toHaveTextContent('MU5102')
+    const choice = surface.querySelector<HTMLButtonElement>('[data-action-id="pick-cockpit-MU5102"]')
     expect(choice).not.toBeNull()
     await user.click(choice!)
     expect(api.action).toHaveBeenCalledWith(expect.anything(), 'pick-cockpit-MU5102', 'flight-choices-cockpit')
   })
 
-  it('renders the complete outbound confirmation summary inside its pre-navigation window', async () => {
+  it('renders the outbound confirmation summary in the task surface without a floating window', async () => {
     const user = userEvent.setup()
     const task = {
       ...createCockpitTask('confirm-outbound'), phase: 'confirming-outbound',
@@ -349,7 +350,8 @@ describe('demo integration', () => {
     render(<AppComponent api={api} voiceEnabled={false} initialText="选择航班" />)
     await user.click(screen.getByRole('button', { name: '发送' }))
 
-    const confirmation = await screen.findByLabelText('现在出发窗口')
+    expect(screen.queryByLabelText('现在出发窗口')).not.toBeInTheDocument()
+    const confirmation = screen.getByRole('region', { name: '当前行程' })
     expect(confirmation).toHaveTextContent('MU4490')
     expect(confirmation).toHaveTextContent('虹桥机场')
     expect(confirmation).toHaveTextContent('32.0 km')
