@@ -481,8 +481,54 @@ test('keeps multiple cockpit windows inside a narrow viewport @cockpit @layout',
   await vehicle.getByRole('button', { name: '放大车辆状态窗口' }).click()
   await expect(vehicle.getByRole('button', { name: '还原车辆状态窗口' })).toBeVisible()
   await expect(vehicle.getByRole('button', { name: '关闭车辆状态窗口' })).toBeVisible()
+
+  // Maximized chrome reserves the toolbar band instead of covering it. Prove both
+  // sides of that contract with real pointer clicks: the window's close controls
+  // and the global demo-control toolbar must remain reachable on a phone.
+  await vehicle.getByRole('button', { name: '关闭车辆状态窗口' }).click()
+  await expect(page.locator('.cockpit-window[data-kind="vehicle-status"]')).toHaveCount(0)
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeHidden()
   await expectNoHorizontalOverflow(page)
   await captureCockpitScreenshot(page, testInfo, 'mobile-windows.png')
+})
+
+test('keeps maximized cockpit chrome and voice toolbar reachable on desktop @cockpit @layout', async ({ page }) => {
+  await installMockAMap(page)
+  await installControllableNavigationClock(page)
+  await page.goto('/')
+  await sendText(page, '去虹桥机场接人')
+  const flightList = await cockpitWindow(page, 'flight-list')
+  await flightList.locator('.ui-flight-choices__row').first().click()
+  const outboundConfirmation = await cockpitWindow(page, 'outbound-confirmation')
+  await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
+  await expect(page.locator('.navigation-workspace')).toBeVisible()
+  await sendText(page, '查看车辆状态')
+
+  const vehicle = await cockpitWindow(page, 'vehicle-status')
+  const normalTop = await vehicle.evaluate((element) => element.getBoundingClientRect().top)
+  expect(normalTop).toBeGreaterThanOrEqual(84)
+  await vehicle.getByRole('button', { name: '放大车辆状态窗口' }).click()
+  await expect(vehicle.getByRole('button', { name: '还原车辆状态窗口' })).toBeVisible()
+  await expect(vehicle.getByRole('button', { name: '关闭车辆状态窗口' })).toBeVisible()
+  const keyboard = page.getByRole('button', { name: '改用文字输入' })
+  await keyboard.click()
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-navigation-toolbar', 'expanded')
+  const expandedSpace = await page.locator('.demo-shell').evaluate((element) => getComputedStyle(element).getPropertyValue('--cockpit-toolbar-space').trim())
+  expect(expandedSpace).toContain('190px')
+  const layout = await page.locator('.navigation-workspace').evaluate(() => {
+    const toolbar = document.querySelector<HTMLElement>('.navigation-command')!.getBoundingClientRect()
+    const windowChrome = document.querySelector<HTMLElement>('.cockpit-window[data-kind="vehicle-status"] .cockpit-window__chrome')!.getBoundingClientRect()
+    return { toolbarBottom: toolbar.bottom, chromeTop: windowChrome.top }
+  })
+  expect(layout.chromeTop).toBeGreaterThanOrEqual(layout.toolbarBottom)
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeVisible()
+  await page.keyboard.press('Escape')
+  await vehicle.getByRole('button', { name: '关闭车辆状态窗口' }).click()
+  await expect(page.locator('.cockpit-window[data-kind="vehicle-status"]')).toHaveCount(0)
 })
 
 test('renders the UISpec surface responsively and keeps primary controls keyboard accessible @layout', async ({ page }, testInfo) => {
