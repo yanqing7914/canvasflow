@@ -217,10 +217,11 @@ function cockpitActionForVoice(
       ? { actionId: 'start-return', componentId: 'return-confirmation' }
       : undefined
   if (!wanted) return undefined
-  const window = spec.windows?.find((candidate) => candidate.componentIds.includes(wanted.componentId))
+  const legacyWindow = spec.windows?.find((candidate) => candidate.componentIds.includes(wanted.componentId))
   const component = spec.components.find((candidate) => candidate.id === wanted.componentId)
   const action = registeredAction(spec, wanted.actionId)
-  if (!window?.actionIds?.includes(wanted.actionId)
+  const laidOut = Object.values(spec.layout.slots).flat().includes(wanted.componentId)
+  if (!(laidOut || legacyWindow?.actionIds?.includes(wanted.actionId))
     || !component?.actions?.includes(wanted.actionId)
     || action?.event.type !== 'tool-request'
     || action.event.actionToken !== wanted.actionId) return undefined
@@ -521,23 +522,45 @@ export default function App({
     })
   }, [composeContext, response, task])
   const spec = response?.ui ?? localSpec
+  // The pre-navigation flight board and outbound confirmation render inside
+  // the persistent task surface. Older responses may still declare those
+  // windows, so fold their components back into the surface at this seam.
+  const surfaceSpec = useMemo<UISpec | undefined>(() => {
+    if (!spec) return undefined
+    const declared = runtimeWindows(spec)
+    if (declared.length === 0) return spec
+    const foldedKinds = new Set(['flight-list', 'outbound-confirmation'])
+    const folded = declared.filter((window) => foldedKinds.has(window.kind))
+    if (folded.length === 0) return spec
+    const owned = new Set(folded.flatMap((window) => window.componentIds))
+    const keptWindows = declared.filter((window) => !foldedKinds.has(window.kind))
+    const laidOutIds = Object.values(spec.layout.slots).flat()
+    const foldedComponentIds = spec.components
+      .filter((component) => owned.has(component.id) && !laidOutIds.includes(component.id))
+      .map((component) => component.id)
+    return {
+      ...spec,
+      layout: { type: 'stack', gap: 'md', slots: { main: [...laidOutIds, ...foldedComponentIds] } },
+      windows: keptWindows,
+    }
+  }, [spec])
   const effects = useMemo(() => response?.effects ?? [], [response])
   const remoteTaskId = response?.task.taskId
   const runtimeTask = task as unknown as RuntimeNavigationTask | undefined
   const navigationStatus = runtimeTask?.navigation?.status
-  const cockpitWindows = spec ? runtimeWindows(spec) : []
+  const cockpitWindows = surfaceSpec ? runtimeWindows(surfaceSpec) : []
   const newCockpitContract = Boolean(runtimeTask && (
     runtimeTask.pickupAirport
     || runtimeTask.navigationSimulation
     || runtimeTask.cockpit
     || ['collecting-airport', 'choosing-flight', 'confirming-outbound', 'outbound-driving', 'passengers-onboard', 'confirming-return', 'return-driving'].includes(runtimeTask.phase)
   ))
-  const cockpitContract = Boolean(runtimeTask && spec && (
+  const cockpitContract = Boolean(runtimeTask && surfaceSpec && (
     (newCockpitContract && cockpitContractPhase(runtimeTask.phase))
     || runtimeTask.pickupAirport
     || cockpitWindows.length > 0
   ))
-  const navigationActive = Boolean(runtimeTask && spec
+  const navigationActive = Boolean(runtimeTask && surfaceSpec
     && runtimeTask.phase !== 'completed'
     && runtimeTask.phase !== 'cancelled'
     && newCockpitContract
@@ -1463,14 +1486,15 @@ export default function App({
   }, [remoteTaskId, task?.phase])
 
   const operationSpec = useMemo<UISpec | undefined>(() => {
-    if (!spec || !cockpitOperation || cockpitOperation.taskId !== runtimeTask?.taskId) return spec
+    if (!spec || !cockpitOperation || cockpitOperation.taskId !== runtimeTask?.taskId) return surfaceSpec
+    if (!surfaceSpec) return undefined
     const windowId = `${cockpitOperation.state}-${cockpitOperation.id}-${cockpitOperation.attempt}`
     const componentId = `${windowId}-status`
     const actionId = `${windowId}-retry`
     const error = cockpitOperation.state === 'error'
     return {
-      ...spec,
-      components: [...spec.components, {
+      ...surfaceSpec,
+      components: [...surfaceSpec.components, {
         id: componentId,
         type: 'status-banner',
         ...(error && cockpitOperation.retryable ? { actions: [actionId] } : {}),
@@ -1481,9 +1505,9 @@ export default function App({
         },
       }],
       actions: error && cockpitOperation.retryable
-        ? [...spec.actions, { id: actionId, label: '重试', style: 'primary' as const, event: { type: 'dismiss' as const, targetId: cockpitOperation.id } }]
-        : spec.actions,
-      windows: [...runtimeWindows(spec), {
+        ? [...surfaceSpec.actions, { id: actionId, label: '重试', style: 'primary' as const, event: { type: 'dismiss' as const, targetId: cockpitOperation.id } }]
+        : surfaceSpec.actions,
+      windows: [...runtimeWindows(surfaceSpec), {
         id: windowId,
         kind: cockpitOperation.state,
         title: error ? '操作未完成' : cockpitOperation.title,
@@ -1493,9 +1517,9 @@ export default function App({
         controls: { closable: error, minimizable: false, maximizable: false },
       }],
     }
-  }, [cockpitOperation, runtimeTask?.taskId, spec])
+  }, [cockpitOperation, runtimeTask?.taskId, spec, surfaceSpec])
 
-  const windowSpec = operationSpec ?? spec
+  const windowSpec = operationSpec ?? surfaceSpec
   const windowVehicle = latestNavigationSnapshot ?? (runtimeTask ? {
     leg: runtimeTask.navigationSimulation?.leg,
     routeId: runtimeTask.navigationSimulation?.routeId ?? runtimeTask.navigation?.routeId,
@@ -1560,7 +1584,7 @@ export default function App({
     const driving = isDrivingVehicle(vehicleContext)
     if (sample.id === 'choose-hongqiao') return response.task.phase === 'collecting-airport'
     if (sample.id === 'select-first-flight' || sample.id === 'select-third-flight' || sample.id === 'refresh-flights') {
-      return response.task.phase === 'choosing-flight' && Boolean(spec.windows?.some((window) => window.kind === 'flight-list'))
+      return response.task.phase === 'choosing-flight' && spec.components.some((component) => component.type === 'flight-choices')
     }
     if (sample.id === 'flight-number') {
       return response.task.phase === 'collecting-information' && response.task.flight === undefined
@@ -1569,7 +1593,7 @@ export default function App({
       return response.task.phase !== 'completed' && response.task.phase !== 'cancelled'
     }
     if (sample.id === 'start-navigation') {
-      return response.task.phase === 'confirming-outbound' && Boolean(spec.windows?.some((window) => window.kind === 'outbound-confirmation'))
+      return response.task.phase === 'confirming-outbound' && spec.components.some((component) => component.type === 'route-confirmation')
     }
     if (sample.id === 'speed-up' || sample.id === 'speed-down') {
       return response.task.phase === 'outbound-driving' || response.task.phase === 'return-driving'
@@ -1979,8 +2003,8 @@ export default function App({
   // Before the first task there is no phase to name, so the brief says what it is
   // waiting for rather than borrowing a phase label it does not have.
   const phaseIdentity = task ? phaseIdentityLabels[task.phase] : '等待创建任务'
-  const tripTitleIsContextual = spec ? hasContextualTripTitle(spec) : false
-  const tripTitle = spec?.title || '机场接人'
+  const tripTitleIsContextual = surfaceSpec ? hasContextualTripTitle(surfaceSpec) : false
+  const tripTitle = surfaceSpec?.title || '机场接人'
   // Model provenance comes straight from the Agent's response envelope: it is only
   // present when a validated model plan was actually applied, so showing it never
   // overstates what the model did. Rules-only turns render nothing.
@@ -1997,18 +2021,18 @@ export default function App({
       className="demo-shell"
       data-controls-open={controlsOpen}
       data-phase={task?.phase}
-      data-density={spec?.presentation.density}
-      data-theme={spec?.presentation.theme}
-      data-priority={spec?.presentation.priority}
+      data-density={surfaceSpec?.presentation.density}
+      data-theme={surfaceSpec?.presentation.theme}
+      data-priority={surfaceSpec?.presentation.priority}
       data-glass={glassTier}
       data-navigation-toolbar={navigationActive ? (composerReason ? 'expanded' : 'compact') : undefined}
       style={GLASS_TIERS[glassTier]}
     >
-      {navigationActive && runtimeTask && spec ? (
+      {navigationActive && runtimeTask && surfaceSpec ? (
         <>
           <NavigationWorkspace
             task={runtimeTask}
-            spec={spec}
+            spec={surfaceSpec}
             initialVehicle={startingVehicleContext}
             clock={navigationClock}
             pending={pending}
@@ -2205,19 +2229,19 @@ export default function App({
               that what they pressed did not go through. */}
           {error && !cockpitContract && <p className="brief-error" role="alert">{error}</p>}
 
-          <div className="trip-brief__content" key={spec?.phase} data-phase-transition={spec?.phase}>
+          <div className="trip-brief__content" key={surfaceSpec?.phase} data-phase-transition={surfaceSpec?.phase}>
             <header
-              className={`task-heading task-heading--${spec?.phase ?? 'idle'}${tripTitleIsContextual ? ' task-heading--contextual' : ''}`}
+              className={`task-heading task-heading--${surfaceSpec?.phase ?? 'idle'}${tripTitleIsContextual ? ' task-heading--contextual' : ''}`}
               data-title-role={tripTitleIsContextual ? 'context' : 'primary'}
             >
               <h1 id="trip-brief-title">{tripTitle}</h1>
             </header>
-            {spec && task
+            {surfaceSpec && task
               ? <UISpecRenderer
                 driving={isDrivingVehicle(vehicleContext)}
                 onAction={handleAction}
                 pending={pending}
-                spec={spec}
+                spec={surfaceSpec}
               />
               : <p className="brief-placeholder">告诉我接谁，我来安排这趟行程。</p>}
           </div>

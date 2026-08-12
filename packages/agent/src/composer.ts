@@ -661,23 +661,20 @@ export function composeAgentSpec(
       }
     }
   }
-  const cockpitFlightChoices = components.find((component) => component.type === 'flight-choices')
-  const cockpitWindow = task.phase === 'choosing-flight' && cockpitFlightChoices
-    ? [{ id: `flight-list-${task.uiRevision + 1}`, kind: 'flight-list' as const, title: `${task.pickupAirport?.label ?? '机场'}到达航班`, componentIds: [cockpitFlightChoices.id], actionIds: actions.map((action) => action.id), size: 'large' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
-    : task.phase === 'confirming-outbound'
-      ? [{ id: `outbound-confirmation-${task.uiRevision + 1}`, kind: 'outbound-confirmation' as const, title: '现在出发', componentIds: ['outbound-confirmation'], actionIds: ['start-outbound'], size: 'medium' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
-      : task.phase === 'passengers-onboard'
-        ? [{ id: `passenger-onboard-${task.uiRevision + 1}`, kind: 'passenger-onboard' as const, title: '乘客已上车', componentIds: ['passenger-onboard'], size: 'compact' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
-        : task.phase === 'confirming-return'
-          ? [{ id: `return-confirmation-${task.uiRevision + 1}`, kind: 'return-confirmation' as const, title: '确认返程', componentIds: ['return-confirmation'], actionIds: ['start-return'], size: 'medium' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
-          : undefined
-  const windowOwned = new Set((cockpitWindow ?? []).flatMap((window) => window.componentIds))
+  // The pre-navigation airport choice and outbound confirmation stay in the
+  // persistent task surface. Later navigation handoffs still use focused
+  // windows because the map workspace owns the main screen by then.
+  const cockpitWindow = task.phase === 'passengers-onboard'
+    ? [{ id: `passenger-onboard-${task.uiRevision + 1}`, kind: 'passenger-onboard' as const, title: '乘客已上车', componentIds: ['passenger-onboard'], size: 'compact' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
+    : task.phase === 'confirming-return'
+      ? [{ id: `return-confirmation-${task.uiRevision + 1}`, kind: 'return-confirmation' as const, title: '确认返程', componentIds: ['return-confirmation'], actionIds: ['start-return'], size: 'medium' as const, controls: { closable: true, minimizable: true, maximizable: true } }]
+      : undefined
   return uiSpecSchema.parse({
     version: '1.0', taskId: task.taskId, surfaceId: task.surfaceId,
     taskRevision: task.taskRevision, uiRevision: Math.max(task.uiRevision, task.taskRevision) + 1,
     phase: task.phase, title,
     presentation: { mode: 'replace', density, theme: 'dark', priority },
-    layout: layout ?? { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id).filter((id) => !windowOwned.has(id)) } },
+    layout: layout ?? { type: 'stack', gap: 'md', slots: { main: components.map((component) => component.id) } },
     components, actions, ...(cockpitWindow ? { windows: cockpitWindow } : {}),
     meta: {
       generatedBy: 'composer', sourceTaskRevision: task.taskRevision, requiresConfirm,

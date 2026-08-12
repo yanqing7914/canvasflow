@@ -329,8 +329,9 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
 
   await sendText(page, '虹桥')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'choosing-flight')
-  const flightList = await cockpitWindow(page, 'flight-list')
-  const rows = flightList.locator('.ui-flight-choices__row')
+  await expect(page.locator('.cockpit-window')).toHaveCount(0)
+  const tripSurface = page.getByRole('region', { name: '当前行程' })
+  const rows = tripSurface.locator('.ui-flight-choices__row')
   await expect(rows).toHaveCount(5)
   for (let index = 0; index < 5; index += 1) {
     await expect(rows.nth(index)).toContainText('虹桥机场')
@@ -341,8 +342,8 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
 
   await rows.first().click()
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-outbound')
-  await expect(flightList).toBeVisible()
-  const outboundConfirmation = await cockpitWindow(page, 'outbound-confirmation')
+  await expect(page.locator('.cockpit-window')).toHaveCount(0)
+  const outboundConfirmation = tripSurface.locator('.ui-component:has(.ui-card--route-confirmation)')
   await expect(outboundConfirmation).toContainText(selectedFlight)
   await expect(outboundConfirmation).toContainText('虹桥机场')
   await expect(outboundConfirmation).toContainText(/42%|电量/u)
@@ -485,9 +486,9 @@ test('keeps multiple cockpit windows inside a narrow viewport @cockpit @layout',
   await installControllableNavigationClock(page)
   await page.goto('/')
   await sendText(page, '去虹桥机场接人')
-  const flightList = await cockpitWindow(page, 'flight-list')
-  await flightList.locator('.ui-flight-choices__row').first().click()
-  const outboundConfirmation = await cockpitWindow(page, 'outbound-confirmation')
+  const tripSurface = page.getByRole('region', { name: '当前行程' })
+  await tripSurface.locator('.ui-flight-choices__row').first().click()
+  const outboundConfirmation = tripSurface.locator('.ui-component:has(.ui-card--route-confirmation)')
   await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
   await expect(page.locator('.navigation-workspace')).toBeVisible()
 
@@ -532,9 +533,9 @@ test('keeps maximized cockpit chrome and voice toolbar reachable on desktop @coc
   await installControllableNavigationClock(page)
   await page.goto('/')
   await sendText(page, '去虹桥机场接人')
-  const flightList = await cockpitWindow(page, 'flight-list')
-  await flightList.locator('.ui-flight-choices__row').first().click()
-  const outboundConfirmation = await cockpitWindow(page, 'outbound-confirmation')
+  const tripSurface = page.getByRole('region', { name: '当前行程' })
+  await tripSurface.locator('.ui-flight-choices__row').first().click()
+  const outboundConfirmation = tripSurface.locator('.ui-component:has(.ui-card--route-confirmation)')
   await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
   await expect(page.locator('.navigation-workspace')).toBeVisible()
   await sendText(page, '查看车辆状态')
@@ -1806,13 +1807,13 @@ test('replays cockpit fixtures through default wake mode without SpeechRecogniti
 
   await replayEvent('选择虹桥机场', '去虹桥机场')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'choosing-flight')
-  const flightList = await cockpitWindow(page, 'flight-list')
-  const thirdFlight = await flightList.locator('.ui-flight-choices__row').nth(2).getAttribute('data-flight-number')
+  const tripSurface = page.getByRole('region', { name: '当前行程' })
+  const thirdFlight = await tripSurface.locator('.ui-flight-choices__row').nth(2).getAttribute('data-flight-number')
   expect(thirdFlight).toBeTruthy()
 
   await replayEvent('选择第三个航班', '选第三个')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-outbound')
-  await expect(await cockpitWindow(page, 'outbound-confirmation')).toContainText(thirdFlight!)
+  await expect(tripSurface.locator('.ui-card--route-confirmation')).toContainText(thirdFlight!)
 
   // Spoken cockpit confirmations resolve the generated action instead of being
   // sent as planner text, so the fixture exercises the same policy path as the

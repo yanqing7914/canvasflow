@@ -283,10 +283,11 @@ describe('AgentGateway', () => {
     })
     expect(flights.task.phase).toBe('choosing-flight')
     expect(flights.assistant?.shouldSpeak).toBe(false)
-    expect(flights.ui.windows?.at(-1)?.kind).toBe('flight-list')
+    expect(flights.ui.windows ?? []).toHaveLength(0)
     const board = flights.ui.components.find((component) => component.type === 'flight-choices')
     if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
     expect(board.props.choices).toHaveLength(5)
+    expect(Object.values(flights.ui.layout.slots).flat()).toContain(board.id)
     const pickAction = board.props.choices[0]!.actionId
     if (!pickAction) throw new Error('expected pick action')
 
@@ -296,7 +297,8 @@ describe('AgentGateway', () => {
     })
     expect(selected.task.phase).toBe('confirming-outbound')
     expect(selected.task.flight?.flightNumber).toBe(board.props.choices[0]!.flightNumber)
-    expect(selected.ui.windows?.map((window) => window.kind)).toEqual(expect.arrayContaining(['flight-list', 'outbound-confirmation']))
+    expect(selected.ui.windows ?? []).toHaveLength(0)
+    expect(Object.values(selected.ui.layout.slots).flat()).toContain('outbound-confirmation')
 
     const started = gateway.submitAction(selected.task.taskId, {
       clientRequestId: 'start-outbound', expectedTaskRevision: selected.task.taskRevision, expectedUiRevision: selected.ui.uiRevision,
@@ -402,6 +404,7 @@ describe('AgentGateway', () => {
     })
     expect(confirmingReturn.task.phase).toBe('confirming-return')
     expect(confirmingReturn.task.navigationSimulation?.initialBatteryPercent).toBe(terminalBattery)
+    expect(confirmingReturn.ui.windows?.at(-1)?.kind).toBe('return-confirmation')
     const returnCard = confirmingReturn.ui.components.find((component) => component.type === 'route-confirmation')
     expect(returnCard).toMatchObject({ props: { currentBatteryPercent: terminalBattery } })
     const returning = gateway.submitAction(confirmingReturn.task.taskId, {
@@ -500,11 +503,12 @@ describe('AgentGateway', () => {
 
     expect(flights.task).toMatchObject({ phase: 'choosing-flight', pickupAirport: airport })
     expect(flights.assistant?.text).toContain(airport.label)
-    expect(flights.ui.windows?.at(-1)?.kind).toBe('flight-list')
+    expect(flights.ui.windows ?? []).toHaveLength(0)
     const board = flights.ui.components.find((component) => component.type === 'flight-choices')
     if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
     expect(board.props.choices).toHaveLength(5)
     expect(board.props.choices.every((choice) => choice.airportName === airport.label)).toBe(true)
+    expect(Object.values(flights.ui.layout.slots).flat()).toContain(board.id)
   })
 
   it('rejects forged navigation snapshots and uses server-derived segment values', () => {
