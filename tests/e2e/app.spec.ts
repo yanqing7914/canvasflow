@@ -608,6 +608,33 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
   }
 })
 
+test('keeps every journey stage readable at tablet width @layout', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 720 })
+  await page.goto('/')
+  await sendText(page)
+
+  const rail = page.locator('.journey-rail')
+  await expect(rail).toBeVisible()
+  const stageLayout = await rail.locator('.journey-rail__stage').evaluateAll((stages) => stages.map((stage) => {
+    const label = stage.querySelector<HTMLElement>('[data-journey-label]')
+    const marker = stage.querySelector<HTMLElement>('.journey-rail__marker')
+    const copy = stage.querySelector<HTMLElement>('.journey-rail__copy')
+    if (!label || !marker || !copy) throw new Error('journey stage structure is incomplete')
+    const markerBox = marker.getBoundingClientRect()
+    const copyBox = copy.getBoundingClientRect()
+    return {
+      label: label.textContent,
+      labelClippedBy: label.scrollWidth - label.clientWidth,
+      markerOverlapsCopyBy: Math.round(markerBox.right - copyBox.left),
+    }
+  }))
+
+  expect(stageLayout).toHaveLength(4)
+  expect(stageLayout.filter((stage) => stage.labelClippedBy > 1)).toEqual([])
+  expect(stageLayout.filter((stage) => stage.markerOverlapsCopyBy > 0)).toEqual([])
+  await expectNoHorizontalOverflow(page)
+})
+
 /**
  * The Fixed Frame Rule has a width half that `expectNoScroll` does not cover: it
  * measures each box against the viewport, so it would pass a drawer that squeezed
