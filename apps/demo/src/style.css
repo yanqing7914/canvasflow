@@ -283,19 +283,12 @@ a:focus-visible {
 
 .cockpit-windows { position: absolute; inset: 0; z-index: 20; pointer-events: none; }
 
-.cockpit-window[data-mode='maximized'] {
-  inset: var(--cockpit-toolbar-space) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
-  width: auto;
-  max-height: none;
-}
-
 .cockpit-window {
   --window-x: 16px;
   --window-y: 84px;
   --window-width: 440px;
   --window-height: 500px;
   position: absolute;
-  top: var(--window-y);
   left: var(--window-x);
   display: flex;
   width: min(var(--window-width), calc(100vw - 32px));
@@ -309,6 +302,12 @@ a:focus-visible {
   box-shadow: 0 28px 72px rgba(0, 0, 0, 0.46);
   pointer-events: auto;
   backdrop-filter: blur(26px) saturate(1.3);
+}
+
+.cockpit-window[data-mode='maximized'] {
+  inset: var(--cockpit-toolbar-space) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  width: auto;
+  max-height: none;
 }
 
 .cockpit-window[data-mode='minimized'] { width: min(310px, calc(100vw - 32px)); max-height: 58px; }
