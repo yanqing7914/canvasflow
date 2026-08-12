@@ -148,7 +148,7 @@ a:focus-visible {
 .persistent-map-layer__car span { width: 8px; height: 14px; border-radius: 5px 5px 3px 3px; background: #cbe0ff; }
 .persistent-map-layer__location { position: absolute; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); color: #b9cbe4; font-size: 13px; letter-spacing: .04em; }
 .persistent-map-layer__source { position: absolute; right: 18px; bottom: 18px; z-index: 3; color: rgba(217, 228, 244, .7); font-size: 11px; letter-spacing: .08em; }
-.persistent-map-layer__recenter { position: absolute; right: 18px; bottom: 48px; z-index: 4; min-height: 42px; border: 1px solid rgba(190, 213, 242, .28); border-radius: 12px; padding: 0 15px; background: rgba(9, 17, 28, .88); color: #edf4ff; font-weight: 750; backdrop-filter: blur(16px); }
+.persistent-map-layer__recenter { position: absolute; right: 18px; bottom: 96px; z-index: 61; min-height: 42px; border: 1px solid rgba(190, 213, 242, .28); border-radius: 12px; padding: 0 15px; background: rgba(9, 17, 28, .88); color: #edf4ff; font-weight: 750; backdrop-filter: blur(16px); }
 
 .cockpit-workspace__status { position: absolute; top: 18px; left: 22px; z-index: 40; }
 .cockpit-status-bar { display: flex; align-items: center; gap: 14px; padding: 9px 13px; border: 1px solid rgba(190, 213, 242, .2); border-radius: 14px; background: rgba(9, 17, 28, .78); box-shadow: 0 16px 40px rgba(0, 0, 0, .2); backdrop-filter: blur(18px); }
