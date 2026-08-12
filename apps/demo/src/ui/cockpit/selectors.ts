@@ -22,6 +22,10 @@ function isTerminalPhase(phase: UISpec['phase']): boolean {
   return phase === 'completed' || phase === 'cancelled'
 }
 
+function isNavigationWorkspacePhase(phase: UISpec['phase']): boolean {
+  return navigationPhase(phase) || phase === 'waiting-for-passengers'
+}
+
 /**
  * Derives cockpit presentation concerns from the legal UISpec. The task and
  * Agent remain the source of truth; this selector only decides where the
@@ -36,7 +40,7 @@ export function deriveCockpitView(spec?: UISpec | null): CockpitView {
 
   let mode: CockpitViewMode = 'primary'
   if (isTerminalPhase(spec.phase)) mode = 'terminal'
-  else if (navigationPhase(spec.phase)) mode = 'navigation'
+  else if (isNavigationWorkspacePhase(spec.phase)) mode = 'navigation'
 
   return { mode, phase: spec.phase, primaryWindow, auxiliaryWindows }
 }

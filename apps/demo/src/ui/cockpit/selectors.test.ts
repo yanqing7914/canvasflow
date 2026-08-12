@@ -32,6 +32,7 @@ describe('deriveCockpitView', () => {
   it('prioritizes navigation and terminal modes over window contents', () => {
     const weather = { id: 'weather', kind: 'weather' as const, title: '天气', componentIds: [], size: 'compact' as const, controls }
     expect(deriveCockpitView(spec('driving-to-airport', [weather])).mode).toBe('navigation')
+    expect(deriveCockpitView(spec('waiting-for-passengers', [weather])).mode).toBe('navigation')
     expect(deriveCockpitView(spec('completed', [weather])).mode).toBe('terminal')
   })
 
