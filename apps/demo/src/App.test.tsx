@@ -20,19 +20,23 @@ function App(props: ComponentProps<typeof AppComponent>) {
 }
 
 describe('demo integration', () => {
-  it('starts in a quiet idle cockpit without creating a task or showing a large composer', async () => {
-    const user = userEvent.setup()
+  it('starts in a quiet idle cockpit without creating a task or showing flight content', async () => {
     const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
     render(<AppComponent api={api} voiceEnabled={false} />)
+    const workspace = screen.getByTestId('cockpit-workspace')
+    const map = screen.getByTestId('persistent-map-layer')
+    expect(workspace).toHaveAttribute('data-cockpit-mode', 'idle')
+    expect(map).toHaveAttribute('data-mode', 'idle')
+    expect(map).toHaveAttribute('data-session-key', 'cockpit-session')
     expect(screen.getByLabelText('空闲座舱')).toBeInTheDocument()
     expect(screen.getByLabelText('人民广场模拟车辆位置')).toHaveTextContent('模拟位置，非真实 GPS')
-    expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    // Voice-unavailable mode keeps the explicit text path open inside the
+    // persistent entry slot; the idle shell must still contain no task content.
+    expect(screen.getByLabelText('任务输入')).toHaveValue('')
     expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
     expect(screen.queryByText(/航班/)).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('语音不可用，请用文字告诉我。')
     expect(api.create).not.toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: '改用文字输入' }))
-    expect(screen.getByLabelText('任务输入')).toHaveValue('')
   })
 
   it('updates the idle cockpit after shared controls change pre-task vehicle state', async () => {
@@ -41,13 +45,10 @@ describe('demo integration', () => {
       speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false,
     }} />)
 
-    const cockpit = screen.getByLabelText('空闲座舱')
-    expect(cockpit).toHaveAttribute('data-light-condition', 'day')
-
     await user.click(screen.getByRole('button', { name: '打开演示控制' }))
+    expect(screen.getByRole('button', { name: '白天' })).toHaveAttribute('aria-pressed', 'true')
     await user.click(screen.getByRole('button', { name: '夜间' }))
-
-    expect(cockpit).toHaveAttribute('data-light-condition', 'night')
+    expect(screen.getByRole('button', { name: '夜间' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('requires Xiaonan for speech but lets explicit text send create the task', async () => {
@@ -122,7 +123,9 @@ describe('demo integration', () => {
     expect(input).toHaveValue('稍后再说')
     expect(screen.getAllByText('等待确认').length).toBeGreaterThan(0)
     expect(api.cancel).not.toHaveBeenCalled()
-    expect(screen.getByLabelText('机场接人任务')).toBeInTheDocument()
+    expect(screen.getByTestId('cockpit-workspace').querySelector(
+      '[data-trip-brief][data-window-title="机场接人任务"]',
+    )).toBeInTheDocument()
 
     await user.clear(input)
     await user.type(input, '取消')
@@ -359,10 +362,12 @@ describe('demo integration', () => {
     expect(confirmation.querySelector('[data-action-id="start-outbound"]')).not.toBeNull()
   })
 
-  it('keeps legacy waiting screens outside the cockpit workspace', () => {
+  it('keeps the waiting-for-passengers HUD inside the persistent cockpit workspace', () => {
     render(<App initialTask={{ ...createInitialTask(), phase: 'waiting-for-passengers' }} />)
-    expect(screen.getByRole('region', { name: '当前行程' })).toBeInTheDocument()
-    expect(screen.queryByLabelText('模拟导航地图')).not.toBeInTheDocument()
+    expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'navigation')
+    expect(screen.getByTestId('persistent-map-layer')).toBeInTheDocument()
+    expect(document.querySelector('.task-surface')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('导航层')).toBeInTheDocument()
   })
 
   it('keeps the completed feedback until a new input creates a fresh task', async () => {
@@ -743,10 +748,13 @@ describe('demo integration', () => {
     const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
     render(<App api={api} />)
 
-    // With no task there is no phase to name, so the brief says what it waits for
-    // rather than borrowing a phase label it does not have.
-    expect(screen.getByText('等待创建任务')).toBeInTheDocument()
-    expect(screen.getByText('告诉我接谁，我来安排这趟行程。')).toBeInTheDocument()
+    // Before creation the persistent shell owns the empty state; no synthetic
+    // task phase or legacy task surface should be fabricated.
+    expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
+    expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
+    expect(screen.queryByText('告诉我接谁，我来安排这趟行程。')).not.toBeInTheDocument()
+    expect(document.querySelector('.task-surface')).not.toBeInTheDocument()
     expect(screen.queryByText('status-banner')).not.toBeInTheDocument()
 
     const drawer = await openControls(user)

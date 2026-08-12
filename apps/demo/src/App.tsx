@@ -27,14 +27,15 @@ import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, AgentApiError, demoVehicleContext, isNightAt, type AgentEventInput } from './agent-client'
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
-import { NavigationWorkspace } from './ui/navigation/NavigationWorkspace'
-import { cockpitContractPhase, runtimeWindows, type CockpitUISpec, type RuntimeNavigationTask } from './ui/navigation/contracts'
+import { NavigationWorkspace, navigationSketchForTask } from './ui/navigation/NavigationWorkspace'
+import { cockpitContractPhase, runtimeWindows, windowUISpec, type CockpitUISpec, type RuntimeNavigationTask } from './ui/navigation/contracts'
 import type { NavigationClock, NavigationLeg, NavigationSnapshot } from './ui/navigation/simulator'
 import { WindowManager } from './ui/navigation/WindowManager'
 import { GLASS_TIERS, useGlassTier } from './ui/glass-capability'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 import { matchWakeWord } from '@canvasflow/voice'
-import { IdleCockpit } from './ui/idle/IdleCockpit'
+import { CockpitStatusBar, CockpitWorkspace, deriveCockpitView } from './ui/cockpit'
+import { PersistentMapLayer } from './ui/cockpit/PersistentMapLayer'
 import { amapLoaderSnapshot, retryAMap, subscribeAMapLoader, switchAMapKey, type AMapLoaderSnapshot } from './ui/amap/loader'
 import {
   createFixtureRecognition,
@@ -136,17 +137,6 @@ function JourneyPhaseRail({ phase }: { phase: AirportPickupTaskState['phase'] })
   )
 }
 
-const conclusionComponentTypes = new Set<UISpec['components'][number]['type']>([
-  'flight-status',
-  'navigation-summary',
-  'charging-recommendation',
-  'passenger-status',
-  'message-preview',
-  'cabin-profile',
-  'status-banner',
-  'alert',
-])
-
 const focusableControlSelector = [
   'a[href]',
   'button:not([disabled])',
@@ -155,14 +145,6 @@ const focusableControlSelector = [
   'textarea:not([disabled])',
   '[tabindex]:not([tabindex="-1"])',
 ].join(', ')
-
-function hasContextualTripTitle(spec: UISpec): boolean {
-  // Keep the initial instruction and the completed result as the page title; elsewhere
-  // the current card conclusion leads and the title steps back into trip context.
-  if (spec.phase === 'collecting-information' && spec.meta.generatedBy !== 'fallback') return false
-  if (spec.phase === 'completed') return false
-  return spec.components.some((component) => conclusionComponentTypes.has(component.type))
-}
 
 function isDrivingVehicle(vehicle: VehicleContext): boolean {
   return vehicle.speedKph > 0 || vehicle.gear !== 'P'
@@ -375,14 +357,6 @@ const wakeButtonLabels: Record<WakeSessionSnapshot['state'], { aria: string; tex
   'reset-confirmation': { aria: '小南正在等待重置确认', text: '等待确认' },
 }
 
-function wakeStatus(state: WakeSessionSnapshot['state']): string {
-  if (state === 'needs-authorization') return '点击麦克风启用小南'
-  if (state === 'authorizing') return '正在等待浏览器麦克风授权'
-  if (state === 'waiting-wake') return '等待唤醒'
-  if (state === 'follow-up') return '正在聆听'
-  return '等待确认'
-}
-
 function isProductResetCommand(text: string): boolean {
   return /^(?:重新开始|重来|重置)$/u.test(text.trim().replace(/[，,。.!！?？：:；;]+$/u, ''))
 }
@@ -444,9 +418,6 @@ export default function App({
   // `initialText` is a test/preview seed, not part of the shipped idle shell.
   // Once a real task returns to idle, the production shell should own the empty
   // state instead of reviving the seed's preview layout.
-  const [seededPreviewActive, setSeededPreviewActive] = useState(
-    initialText.trim().length > 0 || localOnly,
-  )
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
   const [cockpitOperation, setCockpitOperation] = useState<CockpitOperation>()
@@ -460,6 +431,7 @@ export default function App({
   const [mapRuntimeFailed, setMapRuntimeFailed] = useState(false)
   const [vehicleContext, setVehicleContext] = useState(startingVehicleContext)
   const [latestNavigationSnapshot, setLatestNavigationSnapshot] = useState<NavigationSnapshot>()
+  const [mapFollowing, setMapFollowing] = useState(true)
   // Which light condition the car reports. `auto` is what a car does — read the
   // world and say what it sees; the two pinned values exist so a walkthrough or
   // a screenshot can show either cabin at any hour of the day.
@@ -716,7 +688,6 @@ export default function App({
     setResponse(undefined)
     setLocalTask(undefined)
     setStepIndex(0)
-    setSeededPreviewActive(localOnly)
     setError(undefined)
     setCockpitOperation(undefined)
     setWakeError(undefined)
@@ -876,10 +847,17 @@ export default function App({
         ...(meta?.confidence === undefined ? {} : { confidence: meta.confidence }),
       }))
       if (!created) return { sent: false }
+      const speak = spokenReply(created)
       setStepIndex(1)
       setText('')
       setDraftProtected(false)
-      return { sent: true, speak: spokenReply(created) }
+      // Some replay/provider responses are terminal on creation. Return to the
+      // persistent idle shell unless a follow-up confirmation still owns the turn.
+      if ((created.task.phase === 'completed' || created.task.phase === 'cancelled')
+        && !created.task.pendingConfirmation) {
+        returnToIdle(speak ?? (created.task.phase === 'completed' ? '已到家' : undefined))
+      }
+      return { sent: true, speak }
     }
     if (!currentResponse) {
       setLocalTask((current) => current ? applyEvent(current, {
@@ -1418,10 +1396,10 @@ export default function App({
       },
     )
     if (!next) return false
-    // Keep the completed surface alive while the Agent holds a memory proposal
-    // for the driver's save/reject decision. Only a terminal response without
-    // a pending confirmation can safely return to the empty idle cockpit.
-    if (leg === 'return' && !next.task.pendingConfirmation) returnToIdle('已到家')
+    // A verified return-arrived event ends the visible journey. Any optional
+    // preference proposal is a follow-up turn and must not keep navigation or
+    // stale operation windows mounted in the cockpit.
+    if (leg === 'return') returnToIdle('已到家')
     return true
   }
 
@@ -1935,7 +1913,7 @@ export default function App({
           ? '正在提交…'
           : voice.state === 'speaking'
             ? voice.speaking ?? '正在播报'
-            : '')
+            : (!voice.available ? '语音不可用，请用文字告诉我。' : ''))
 
   // The keyboard is not a permanent fixture of the cabin. It appears when the
   // turn genuinely needs it and steps back out when it does not, so the journey
@@ -1964,8 +1942,6 @@ export default function App({
 
   const isCompleted = task?.phase === 'completed'
   const isTerminal = task?.phase === 'completed' || task?.phase === 'cancelled'
-  const idleVoiceUnavailable = !voiceEnabled
-    || (!speech?.createRecognition && (!isRecognitionSupported() || !isSecureContextOk()))
   const playedEventCount = task
     ? task.processedEventIds.filter((eventId) => playableEventIds.has(eventId)).length
     : 0
@@ -1978,9 +1954,7 @@ export default function App({
 
   // Before the first task there is no phase to name, so the brief says what it is
   // waiting for rather than borrowing a phase label it does not have.
-  const phaseIdentity = task ? phaseIdentityLabels[task.phase] : '等待创建任务'
-  const tripTitleIsContextual = spec ? hasContextualTripTitle(spec) : false
-  const tripTitle = spec?.title || '机场接人'
+  const phaseIdentity = task ? phaseIdentityLabels[task.phase] : undefined
   // Model provenance comes straight from the Agent's response envelope: it is only
   // present when a validated model plan was actually applied, so showing it never
   // overstates what the model did. Rules-only turns render nothing.
@@ -1991,6 +1965,106 @@ export default function App({
   // engine is running, so a capable browser is never punished for being the
   // minority one — see `glass-capability.ts`.
   const glassTier = useGlassTier()
+
+  // Keep one cockpit shell and one map owner for every task revision. The
+  // Agent may replace slot contents, but it must not replace the outer DOM.
+  const cockpitSessionKeyRef = useRef(initialTask?.taskId ?? 'cockpit-session')
+  const cockpitSessionKey = cockpitSessionKeyRef.current
+  // Operation windows are transient feedback, not the task's primary step. Derive
+  // the primary window from the base Agent spec so a processing/error response
+  // cannot displace the airport question or confirmation. The synthetic window
+  // is then appended to the auxiliary set for the floating WindowManager.
+  const baseCockpitView = deriveCockpitView(spec)
+  const operationWindows = cockpitOperation && windowSpec && windowSpec !== spec
+    ? runtimeWindows(windowSpec).filter((window) => window.id.includes(cockpitOperation.id))
+    : []
+  const cockpitView = {
+    ...baseCockpitView,
+    auxiliaryWindows: [...baseCockpitView.auxiliaryWindows, ...operationWindows],
+  }
+  const primarySpec = cockpitView.primaryWindow
+    ? windowUISpec(spec ?? windowSpec!, cockpitView.primaryWindow)
+    : cockpitView.mode === 'primary' ? spec : undefined
+  const auxiliarySpec = windowSpec
+    ? { ...windowSpec, windows: cockpitView.auxiliaryWindows } as CockpitUISpec
+    : undefined
+  const routeSketch = navigationActive && runtimeTask && spec
+    ? navigationSketchForTask(runtimeTask, spec)
+    : undefined
+  const mapMode = routeSketch ? 'route' as const : 'idle' as const
+  const mapRouteKey = navigationActive
+    ? `${runtimeTask?.cockpit?.activeLeg ?? runtimeTask?.navigationSimulation?.leg ?? 'outbound'}:${runtimeTask?.navigation?.routeId ?? runtimeTask?.navigationSimulation?.routeId ?? 'route'}`
+    : 'idle'
+  // The navigation HUD owns the full-screen driving surface, but waiting at
+  // the airport and confirming the return still need their primary task card.
+  const hideNavigationPrimary = cockpitView.mode === 'navigation'
+    && task?.phase !== 'waiting-for-passengers'
+    && task?.phase !== 'confirming-return'
+  const entryContent = (
+    <>
+      <div className="header-actions">
+        <button
+          className={`mic-button mic-${micState}`}
+          type="button"
+          aria-label={microphoneCopy.aria}
+          aria-pressed={wakeWordEnabled ? wakeSession.state === 'follow-up' : micState === 'listening'}
+          disabled={microphoneDisabled}
+          onClick={pressMicrophone}
+        >
+          <MicIcon size={22} /><span>{microphoneCopy.text}</span>
+        </button>
+        <button
+          className={`keyboard-toggle${composerReason ? ' keyboard-toggle--open' : ''}`}
+          type="button"
+          aria-pressed={Boolean(composerReason)}
+          aria-label={composerReason ? '收起文字输入' : '改用文字输入'}
+          disabled={pending || textPathLocked || (Boolean(composerReason) && !composerDismissible)}
+          onClick={toggleKeyboard}
+        >
+          <KeyboardIcon size={22} /><span>文字</span>
+        </button>
+        <button
+          ref={controlsTriggerRef}
+          className="control-toggle"
+          type="button"
+          aria-expanded={controlsOpen}
+          aria-controls="event-console"
+          aria-haspopup="dialog"
+          aria-label={controlsOpen ? '收起演示控制' : '打开演示控制'}
+          onClick={toggleControls}
+        >
+          <ControlsIcon size={22} /><span>演示控制</span>
+        </button>
+      </div>
+      <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">
+        {voiceStatus || (!task ? idleNotice : '')}
+      </p>
+      {composerReason ? (
+        <form
+          className="voice-composer"
+          data-voice-state={micState}
+          data-composer-reason={composerReason}
+          aria-label="Agent input"
+          onSubmit={(event) => { event.preventDefault(); submitText() }}
+        >
+          {composerNotice && <p className="voice-composer__notice">{composerNotice}</p>}
+          <div className="voice-composer__row">
+            <input
+              ref={composerInputRef}
+              className="voice-composer__input"
+              type="text"
+              aria-label="任务输入"
+              value={text}
+              disabled={pending || textPathLocked}
+              placeholder="告诉我接谁、航班号或下一步"
+              onChange={(event) => changeText(event.target.value)}
+            />
+            <button className="voice-composer__send" type="submit" disabled={pending || textPathLocked}>发送</button>
+          </div>
+        </form>
+      ) : null}
+    </>
+  )
 
   return (
     <main
@@ -2004,11 +2078,70 @@ export default function App({
       data-navigation-toolbar={navigationActive ? (composerReason ? 'expanded' : 'compact') : undefined}
       style={GLASS_TIERS[glassTier]}
     >
-      {navigationActive && runtimeTask && spec ? (
-        <>
+      <CockpitWorkspace
+        mode={cockpitView.mode}
+        phase={cockpitView.phase}
+        map={(
+          <PersistentMapLayer
+            mode={mapMode}
+            sketch={routeSketch}
+            progress={latestNavigationSnapshot?.progress}
+            routeKey={mapRouteKey}
+            theme={spec?.presentation.theme ?? 'dark'}
+            sessionKey={cockpitSessionKey}
+            mapRetryNonce={mapRetryNonce}
+            follow={mapFollowing}
+            onManualInteraction={() => setMapFollowing(false)}
+            onRecenter={() => setMapFollowing(true)}
+            onRuntimeFailure={() => {
+              setMapRuntimeFailed(true)
+              setMapLoader(amapLoaderSnapshot())
+            }}
+            onRuntimeReady={() => setMapRuntimeFailed(false)}
+          />
+        )}
+        status={<CockpitStatusBar vehicle={vehicleContext} phaseLabel={task ? phaseIdentity : undefined} />}
+        feedback={(
+          <>
+            {!task && idleNotice ? <p className="cockpit-idle-notice" role="status">{idleNotice}</p> : null}
+            {error ? <p className="brief-error" role="alert">{error}</p> : null}
+          </>
+        )}
+        primary={hideNavigationPrimary || cockpitView.mode === 'terminal' || (cockpitContract && Boolean(windowSpec) && !cockpitView.primaryWindow)
+          ? null
+          : (
+            <section
+              className="cockpit-primary-panel"
+              aria-label="当前行程"
+              data-trip-brief
+              data-primary-kind={cockpitView.primaryWindow?.kind}
+              data-window-title={cockpitView.primaryWindow?.title ?? windowSpec?.title}
+              data-phase={task?.phase}
+              data-phase-label={phaseIdentity}
+            >
+              {task ? <JourneyPhaseRail phase={task.phase} /> : null}
+              {modelUsed ? <p className="model-provenance" data-model-used={modelUsed} aria-label="模型参与说明">模型 <strong>{modelUsed}</strong> 参与了本任务的输入规范化</p> : null}
+              {primarySpec && task ? (
+                <section className="cockpit-primary-panel__content" aria-label={`${cockpitView.primaryWindow?.title ?? windowSpec?.title ?? '当前行程'}窗口`}>
+                  <UISpecRenderer
+                    driving={isDrivingVehicle(vehicleContext)}
+                    onAction={handleAction}
+                    pending={pending}
+                    spec={primarySpec}
+                  />
+                </section>
+              ) : task ? <h1 className="sr-only">机场接人</h1> : (
+                <section className="idle-cockpit" aria-label="空闲座舱">
+                  <p className="idle-cockpit__location" aria-label="人民广场模拟车辆位置">模拟位置，非真实 GPS</p>
+                </section>
+              )}
+            </section>
+          )}
+        hud={navigationActive && runtimeTask && spec ? (
           <NavigationWorkspace
-            task={runtimeTask}
-            spec={spec}
+            renderMap={false}
+            task={runtimeTask!}
+            spec={spec!}
             initialVehicle={startingVehicleContext}
             clock={navigationClock}
             pending={pending}
@@ -2018,227 +2151,25 @@ export default function App({
             retryLeg={retryNavigationLeg}
             onReminder={enqueueNavigationReminder}
             onHudVisibilityChange={setHudVisibility}
-            mapRetryNonce={mapRetryNonce}
-            onMapRuntimeFailure={() => setMapRuntimeFailed(true)}
-            onMapRuntimeReady={() => setMapRuntimeFailed(false)}
           />
-          <section className="navigation-command" aria-label="导航语音与文字控制">
-            <div className="header-actions">
-              <button
-                className={`mic-button mic-${micState}`}
-                type="button"
-                aria-label={microphoneCopy.aria}
-                aria-pressed={wakeWordEnabled ? wakeSession.state === 'follow-up' : micState === 'listening'}
-                disabled={microphoneDisabled}
-                onClick={pressMicrophone}
-              >
-                <MicIcon size={22} /><span>{microphoneCopy.text}</span>
-              </button>
-              <button
-                className={`keyboard-toggle${composerReason ? ' keyboard-toggle--open' : ''}`}
-                type="button"
-                aria-pressed={Boolean(composerReason)}
-                aria-label={composerReason ? '收起文字输入' : '改用文字输入'}
-                disabled={pending || textPathLocked || (Boolean(composerReason) && !composerDismissible)}
-                onClick={toggleKeyboard}
-              >
-                <KeyboardIcon size={22} /><span>文字</span>
-              </button>
-              <button
-                ref={controlsTriggerRef}
-                className="control-toggle"
-                type="button"
-                aria-expanded={controlsOpen}
-                aria-controls="event-console"
-                aria-haspopup="dialog"
-                aria-label={controlsOpen ? '收起演示控制' : '打开演示控制'}
-                onClick={toggleControls}
-              >
-                <ControlsIcon size={22} /><span>演示控制</span>
-              </button>
-            </div>
-            <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
-            {composerReason ? (
-              <form className="voice-composer" data-voice-state={micState} data-composer-reason={composerReason} aria-label="Agent input" onSubmit={(event) => { event.preventDefault(); submitText() }}>
-                {composerNotice && <p className="voice-composer__notice">{composerNotice}</p>}
-                <div className="voice-composer__row">
-                  <input ref={composerInputRef} className="voice-composer__input" type="text" aria-label="任务输入" value={text} disabled={pending || textPathLocked} placeholder="查天气、查日历或调整速度" onChange={(event) => changeText(event.target.value)} />
-                  <button className="voice-composer__send" type="submit" disabled={pending || textPathLocked}>发送</button>
-                </div>
-              </form>
-            ) : null}
-            {error && !cockpitContract && <p className="brief-error" role="alert">{error}</p>}
-          </section>
-        </>
-      ) : !task && wakeWordEnabled && !seededPreviewActive ? (
-        <>
-          <IdleCockpit
-            vehicle={vehicleContext}
-            voiceMode={idleVoiceUnavailable ? 'unavailable' : wakeSession.state}
-            voiceStatus={wakeError
-              ?? queuedVoiceNotice
-              ?? idleNotice
-              ?? (idleVoiceUnavailable ? '语音不可用，请用文字告诉我。' : wakeStatus(wakeSession.state))}
-            voiceRetryable={Boolean(wakeError)}
-            onMicrophone={pressMicrophone}
-            onKeyboard={() => { focusComposerRef.current = true; setKeyboardRequested(true) }}
-            onControls={toggleControls}
-            mapRetryNonce={mapRetryNonce}
-            onMapRuntimeFailure={() => {
-              setMapRuntimeFailed(true)
-              setMapLoader(amapLoaderSnapshot())
+        ) : null}
+        auxiliary={cockpitContract && auxiliarySpec && runtimeTask && windowVehicle && cockpitView.auxiliaryWindows.length > 0 ? (
+          <WindowManager
+            key={runtimeTask.taskId}
+            spec={auxiliarySpec}
+            pending={pending}
+            driving={windowVehicle.runState === 'driving'}
+            vehicle={windowVehicle}
+            onAction={handleWindowAction}
+            clear={runtimeTask.phase === 'completed'}
+            preserveMissing={false}
+            onWindowClose={(windowId) => {
+              if (cockpitOperation && windowId.includes(cockpitOperation.id)) setCockpitOperation(undefined)
             }}
           />
-          {keyboardRequested || text.trim() ? (
-            <form className="idle-composer" aria-label="Agent input" onSubmit={(event) => { event.preventDefault(); submitText() }}>
-              <input ref={composerInputRef} type="text" aria-label="任务输入" value={text} placeholder="用文字告诉小南" onChange={(event) => changeText(event.target.value)} />
-              <button type="submit" disabled={pending}>发送</button>
-            </form>
-          ) : null}
-        </>
-      ) : <section className="cockpit-stage" aria-label="机场接人任务">
-        <section
-          id="task-surface"
-          className="task-surface"
-          aria-label="当前行程"
-          data-trip-brief
-          data-phase={task?.phase}
-          data-phase-label={phaseIdentity}
-        >
-          <header className="trip-brief__header">
-            <a className="brand-lockup" href="#trip-brief-title" aria-label={`pilotflow ${phaseIdentity}`}>
-              <span className="brand-wordmark">pilotflow</span>
-              <span className="brand-separator" aria-hidden="true">·</span>
-              <span className="trip-brief__phase" data-phase-identity>{phaseIdentity}</span>
-            </a>
-            <div className="header-actions">
-              <button
-                className={`mic-button mic-${micState}`}
-                type="button"
-                aria-label={microphoneCopy.aria}
-                aria-pressed={wakeWordEnabled ? wakeSession.state === 'follow-up' : micState === 'listening'}
-                disabled={microphoneDisabled}
-                onClick={pressMicrophone}
-              >
-                <MicIcon size={22} />
-                <span>{microphoneCopy.text}</span>
-              </button>
-              <button
-                className={`keyboard-toggle${composerReason ? ' keyboard-toggle--open' : ''}`}
-                type="button"
-                // Reports whether the field is on screen, not merely whether this
-                // button put it there: a transcript or a failure opens it too.
-                aria-pressed={Boolean(composerReason)}
-                // Voice is an assistive utility, never the only way in. Even when
-                // the microphone is working, the keyboard stays one press away.
-                // It can only be taken back when nothing else depends on it.
-                aria-label={composerReason ? '收起文字输入' : '改用文字输入'}
-                disabled={pending || textPathLocked || (Boolean(composerReason) && !composerDismissible)}
-                onClick={toggleKeyboard}
-              >
-                <KeyboardIcon size={22} />
-                <span>文字</span>
-              </button>
-              <button
-                ref={controlsTriggerRef}
-                className="control-toggle"
-                type="button"
-                aria-expanded={controlsOpen}
-                aria-controls="event-console"
-                aria-haspopup="dialog"
-                aria-label={controlsOpen ? '收起演示控制' : '打开演示控制'}
-                onClick={toggleControls}
-              >
-                <ControlsIcon size={22} />
-                <span>演示控制</span>
-              </button>
-            </div>
-          </header>
-
-          {task && <JourneyPhaseRail phase={task.phase} />}
-
-          {/* Rendered unconditionally so the region exists before the first announcement. */}
-          <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
-
-          {/* Provenance is a task-level fact: the Agent persists the model ID with
-              the task snapshot once a validated model plan is applied, so this line
-              states participation, not per-turn authorship. Rules-only tasks leave
-              meta.modelUsed unset and this line off screen. */}
-          {modelUsed && (
-            <p className="model-provenance" data-model-used={modelUsed} aria-label="模型参与说明">
-              模型 <strong>{modelUsed}</strong> 参与了本任务的输入规范化
-            </p>
-          )}
-
-          {composerReason ? (
-            <form
-              className="voice-composer"
-              data-voice-state={micState}
-              data-composer-reason={composerReason}
-              aria-label="Agent input"
-              onSubmit={(event) => { event.preventDefault(); submitText() }}
-            >
-              {composerNotice && <p className="voice-composer__notice">{composerNotice}</p>}
-              <div className="voice-composer__row">
-                <input
-                  ref={composerInputRef}
-                  className="voice-composer__input"
-                  type="text"
-                  aria-label="任务输入"
-                  value={text}
-                  disabled={pending || textPathLocked}
-                  placeholder="告诉我接谁、航班号或下一步"
-                  onChange={(event) => changeText(event.target.value)}
-                />
-                <button
-                  className="voice-composer__send"
-                  type="submit"
-                  disabled={pending || textPathLocked}
-                >
-                  发送
-                </button>
-              </div>
-            </form>
-          ) : null}
-
-          {/* A failed request is not a trip fact, but the driver still has to learn
-              that what they pressed did not go through. */}
-          {error && !cockpitContract && <p className="brief-error" role="alert">{error}</p>}
-
-          <div className="trip-brief__content" key={spec?.phase} data-phase-transition={spec?.phase}>
-            <header
-              className={`task-heading task-heading--${spec?.phase ?? 'idle'}${tripTitleIsContextual ? ' task-heading--contextual' : ''}`}
-              data-title-role={tripTitleIsContextual ? 'context' : 'primary'}
-            >
-              <h1 id="trip-brief-title">{tripTitle}</h1>
-            </header>
-            {spec && task
-              ? <UISpecRenderer
-                driving={isDrivingVehicle(vehicleContext)}
-                onAction={handleAction}
-                pending={pending}
-                spec={spec}
-              />
-              : <p className="brief-placeholder">告诉我接谁，我来安排这趟行程。</p>}
-          </div>
-        </section>
-      </section>}
-
-      {cockpitContract && windowSpec && runtimeTask && windowVehicle && runtimeWindows(windowSpec).length > 0 ? (
-        <WindowManager
-          key={runtimeTask.taskId}
-          spec={windowSpec}
-          pending={pending}
-          driving={windowVehicle.runState === 'driving'}
-          vehicle={windowVehicle}
-          onAction={handleWindowAction}
-          clear={runtimeTask.phase === 'completed'}
-          preserveMissing={(windowSpec as unknown as { windows?: unknown }).windows === undefined}
-          onWindowClose={(windowId) => {
-            if (cockpitOperation && windowId.includes(cockpitOperation.id)) setCockpitOperation(undefined)
-          }}
-        />
-      ) : null}
+        ) : null}
+        entry={entryContent}
+      />
 
       {controlsOpen ? (
         <>
