@@ -331,6 +331,17 @@ function isProductResetCommand(text: string): boolean {
   return /^(?:重新开始|重来|重置)$/u.test(text.trim().replace(/[，,。.!！?？：:；;]+$/u, ''))
 }
 
+function completedPreferenceResolved(
+  before: AirportPickupTaskState,
+  after: AirportPickupTaskState,
+): boolean {
+  return before.phase === 'completed'
+    && before.pendingConfirmation?.action === 'save-memory'
+    && after.taskId === before.taskId
+    && after.phase === 'completed'
+    && after.pendingConfirmation === undefined
+}
+
 export default function App({
   api = defaultClient,
   initialTask,
@@ -370,14 +381,16 @@ export default function App({
   wakeWordEnabled?: boolean
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
-  // `initialText` is a test/preview seed, not part of the shipped idle shell.
-  // Keeping seeded previews on the legacy surface preserves fixture coverage;
-  // a production mount starts with an empty string and gets the quiet cockpit.
-  const seededPreview = initialText.trim().length > 0 || localOnly
   const [startingVehicleContext] = useState<VehicleContext>(() => initialVehicleContext ?? demoVehicleContext())
   const [response, setResponse] = useState<AgentResponse>()
   const [text, setText] = useState(initialText)
   const [stepIndex, setStepIndex] = useState(0)
+  // `initialText` is a test/preview seed, not part of the shipped idle shell.
+  // Once a real task returns to idle, the production shell should own the empty
+  // state instead of reviving the seed's preview layout.
+  const [seededPreviewActive, setSeededPreviewActive] = useState(
+    initialText.trim().length > 0 || localOnly,
+  )
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
   const [cockpitOperation, setCockpitOperation] = useState<CockpitOperation>()
@@ -647,6 +660,7 @@ export default function App({
     setResponse(undefined)
     setLocalTask(undefined)
     setStepIndex(0)
+    setSeededPreviewActive(localOnly)
     setError(undefined)
     setCockpitOperation(undefined)
     setWakeError(undefined)
@@ -779,9 +793,11 @@ export default function App({
         spokenConfirmation.decision,
       ))
       if (!next) return { sent: false }
+      const speak = spokenReply(next)
       setText('')
       setDraftProtected(false)
-      return { sent: true, speak: spokenReply(next) }
+      if (completedPreferenceResolved(currentResponse.task, next.task)) returnToIdle('已到家')
+      return { sent: true, speak }
     }
     // A stale or malformed UISpec must not turn a one-shot confirmation phrase
     // into a brand-new task. Refuse the turn so voice keeps the exact words for
@@ -1674,7 +1690,9 @@ export default function App({
       const operation = () => api.confirmation(currentResponse.task, actionEvent.confirmationId, actionEvent.decision)
       void (cockpitContract
         ? runCockpitOperation({ kind: 'generic', title: '正在处理确认', message: '地图和已有窗口保持不变。' }, operation)
-        : run(operation))
+        : run(operation)).then((next) => {
+        if (next && completedPreferenceResolved(currentResponse.task, next.task)) returnToIdle('已到家')
+      })
     } else if (actionEvent?.type === 'agent-message') {
       // Pressing a row is the driver saying what it says. It travels as the same
       // user input the composer sends, so the planner sees one kind of answer and
@@ -1992,7 +2010,7 @@ export default function App({
             {error && !cockpitContract && <p className="brief-error" role="alert">{error}</p>}
           </section>
         </>
-      ) : !task && wakeWordEnabled && !seededPreview ? (
+      ) : !task && wakeWordEnabled && !seededPreviewActive ? (
         <>
           <IdleCockpit
             vehicle={vehicleContext}

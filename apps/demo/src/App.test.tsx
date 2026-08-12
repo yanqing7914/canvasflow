@@ -1383,8 +1383,52 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '发送' }))
 
     await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `cnf-${decision}`, decision))
+    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('已到家')
+    expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
     expect(api.create).toHaveBeenCalledTimes(1)
     expect(api.event).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['保存本次偏好', 'accept' as const],
+    ['暂不保存', 'reject' as const],
+  ])('returns to the idle cockpit after the completion button "%s" resolves', async (label, decision) => {
+    const user = userEvent.setup()
+    const completedTask: AirportPickupTaskState = {
+      ...createCockpitTask(`button-memory-${decision}`),
+      phase: 'completed',
+      taskRevision: 8,
+      pendingConfirmation: { confirmationId: `button-cnf-${decision}`, action: 'save-memory' },
+      memoryProposal: {
+        proposalId: `button-proposal-${decision}`,
+        memberId: 'mom',
+        confirmationId: `button-cnf-${decision}`,
+        changes: { rearTemperatureC: 25 },
+        status: 'pending',
+      },
+    }
+    const resolved = apiResponse({
+      ...completedTask,
+      taskRevision: 9,
+      pendingConfirmation: undefined,
+      memoryProposal: { ...completedTask.memoryProposal!, status: decision === 'accept' ? 'accepted' : 'rejected' },
+    })
+    const api = {
+      create: vi.fn().mockResolvedValue(apiResponse(completedTask)),
+      event: vi.fn(),
+      action: vi.fn(),
+      confirmation: vi.fn().mockResolvedValue(resolved),
+    }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="建立任务" />)
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    await user.click(screen.getByRole('button', { name: label }))
+
+    await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `button-cnf-${decision}`, decision))
+    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('已到家')
+    expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
   })
 
   it('gates preference replay on the renderer first-wins confirmation action', async () => {
