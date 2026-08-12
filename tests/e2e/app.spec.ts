@@ -508,9 +508,16 @@ test('keeps maximized cockpit chrome and voice toolbar reachable on desktop @coc
   await sendText(page, '查看车辆状态')
 
   const vehicle = await cockpitWindow(page, 'vehicle-status')
+  const normalTop = await vehicle.evaluate((element) => element.getBoundingClientRect().top)
+  expect(normalTop).toBeGreaterThanOrEqual(84)
   await vehicle.getByRole('button', { name: '放大车辆状态窗口' }).click()
   await expect(vehicle.getByRole('button', { name: '还原车辆状态窗口' })).toBeVisible()
   await expect(vehicle.getByRole('button', { name: '关闭车辆状态窗口' })).toBeVisible()
+  const keyboard = page.getByRole('button', { name: '改用文字输入' })
+  await keyboard.click()
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-navigation-toolbar', 'expanded')
+  const expandedSpace = await page.locator('.navigation-workspace').evaluate((element) => getComputedStyle(element).getPropertyValue('--cockpit-toolbar-space').trim())
+  expect(expandedSpace).toContain('190px')
   const layout = await page.locator('.navigation-workspace').evaluate(() => {
     const toolbar = document.querySelector<HTMLElement>('.navigation-command')!.getBoundingClientRect()
     const windowChrome = document.querySelector<HTMLElement>('.cockpit-window[data-kind="vehicle-status"] .cockpit-window__chrome')!.getBoundingClientRect()

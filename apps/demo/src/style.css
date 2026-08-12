@@ -137,7 +137,7 @@ a:focus-visible {
   color: #edf4ff;
 }
 
-.navigation-workspace[data-navigation-toolbar='expanded'] {
+.demo-shell[data-navigation-toolbar='expanded'] .navigation-workspace {
   --cockpit-toolbar-space: max(190px, calc(env(safe-area-inset-top) + 174px));
 }
 
