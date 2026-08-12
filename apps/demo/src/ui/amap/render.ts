@@ -139,7 +139,10 @@ export function renderAMapWorkspace(
     })
     map.add(route)
     routeOverlays.push(route)
-    const normalized = normalizedProgress(progress)
+    // A route always starts with a vehicle marker, even if the simulator has
+    // not emitted its first snapshot yet. Later progress ticks update it in
+    // place instead of requiring another route search.
+    const normalized = normalizedProgress(progress ?? 0)
     if (normalized === undefined) { map.setFitView(routeOverlays); return }
     const xy = path.map((point) => ({ x: point.lng, y: point.lat }))
     const lengths = segmentLengths(xy)
@@ -164,8 +167,8 @@ export function renderAMapWorkspace(
       currentProgress = valid
       const point = pointAtProgress(xy, lengths, valid)
       marker.setPosition([point.x, point.y])
-        marker.setAngle?.(headingAtProgress(xy, lengths, valid))
-        tail.setPath(traversedPath(xy, lengths, valid).map((covered) => [covered.x, covered.y]))
+      marker.setAngle?.(headingAtProgress(xy, lengths, valid))
+      tail.setPath(traversedPath(xy, lengths, valid).map((covered) => [covered.x, covered.y]))
       if (following) {
         if (map.setCenter) map.setCenter([point.x, point.y], false)
         else map.setZoomAndCenter(14, [point.x, point.y])

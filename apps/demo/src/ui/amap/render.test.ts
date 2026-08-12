@@ -119,6 +119,20 @@ describe('renderAMapWorkspace', () => {
     expect(fake.destroy).toHaveBeenCalledOnce()
   })
 
+  it('creates the route marker before the first simulator snapshot and then moves it', async () => {
+    const fake = fakeAMap()
+    const handle = renderAMapWorkspace(fake.amap, document.createElement('div'), {
+      mode: 'idle', theme: 'dark',
+    })!
+
+    await expect(handle.setMode('route', sketch)).resolves.toBe(true)
+    expect(fake.markerPositions).toHaveLength(2)
+
+    handle.setProgress(0.6)
+    expect(fake.markerPositions).toHaveLength(3)
+    expect(fake.markerPositions[2]).not.toEqual(fake.markerPositions[1])
+  })
+
   it('ignores an obsolete route response after returning to idle', async () => {
     const fake = fakeAMap()
     let complete: ((status: string, result: unknown) => void) | undefined
