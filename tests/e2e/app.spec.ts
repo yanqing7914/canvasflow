@@ -462,8 +462,8 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(page.locator('.navigation-workspace')).toHaveCount(0)
   await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
   await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-e2e-map-node', 'persistent')
-  await expect(page.getByTestId('cockpit-workspace')).not.toContainText(selectedFlight)
-  await expect(page.getByTestId('cockpit-workspace')).not.toContainText('虹桥机场')
+  await expect(page.locator('[data-cockpit-slot="primary"]')).not.toContainText(selectedFlight)
+  await expect(page.locator('[data-cockpit-slot="primary"]')).not.toContainText('虹桥机场')
   await expect(await composer(page)).toHaveValue('')
 
   const completedMap = await mockAMapSnapshot(page)
