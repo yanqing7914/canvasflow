@@ -516,7 +516,7 @@ test('keeps maximized cockpit chrome and voice toolbar reachable on desktop @coc
   const keyboard = page.getByRole('button', { name: '改用文字输入' })
   await keyboard.click()
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-navigation-toolbar', 'expanded')
-  const expandedSpace = await page.locator('.navigation-workspace').evaluate((element) => getComputedStyle(element).getPropertyValue('--cockpit-toolbar-space').trim())
+  const expandedSpace = await page.locator('.demo-shell').evaluate((element) => getComputedStyle(element).getPropertyValue('--cockpit-toolbar-space').trim())
   expect(expandedSpace).toContain('190px')
   const layout = await page.locator('.navigation-workspace').evaluate(() => {
     const toolbar = document.querySelector<HTMLElement>('.navigation-command')!.getBoundingClientRect()

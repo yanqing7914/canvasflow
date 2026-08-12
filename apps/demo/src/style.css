@@ -81,11 +81,15 @@ a:focus-visible {
      app overwrites both inline once it has read the device; see
      `glass-capability.ts` for why an unknown device is treated as a capable one. */
   --glass-blur: 28px;
-  --glass-saturate: 1.6;
+  --cockpit-toolbar-space: max(88px, calc(env(safe-area-inset-top) + 72px));
   min-height: 100dvh;
   overflow: hidden;
   background: var(--cabin);
   color: var(--ink);
+}
+
+.demo-shell[data-navigation-toolbar='expanded'] {
+  --cockpit-toolbar-space: max(190px, calc(env(safe-area-inset-top) + 174px));
 }
 
 /* The Agent's theme applies to the whole driver-facing cockpit, not just the
@@ -130,15 +134,10 @@ a:focus-visible {
   min-height: 100dvh;
   overflow: hidden;
   isolation: isolate;
-  --cockpit-toolbar-space: max(88px, calc(env(safe-area-inset-top) + 72px));
   background:
     radial-gradient(circle at 50% 48%, rgba(36, 107, 253, 0.13), transparent 34%),
     #0c1015;
   color: #edf4ff;
-}
-
-.demo-shell[data-navigation-toolbar='expanded'] .navigation-workspace {
-  --cockpit-toolbar-space: max(190px, calc(env(safe-area-inset-top) + 174px));
 }
 
 .persistent-route-map,
