@@ -375,6 +375,17 @@ a:focus-visible {
   color: #edf4ff;
 }
 
+/* In the persistent cockpit the workspace contributes HUD content only. The
+   wrapper must not become a full-screen pointer shield over the shared map. */
+.navigation-workspace--hud-only {
+  pointer-events: none;
+  background: transparent;
+}
+.navigation-workspace--hud-only .navigation-hud,
+.navigation-workspace--hud-only .navigation-workspace__brand {
+  pointer-events: auto;
+}
+
 .persistent-route-map,
 .persistent-route-map__basemap,
 .persistent-route-map__fallback {
