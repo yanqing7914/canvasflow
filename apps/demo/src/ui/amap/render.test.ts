@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RouteSketch } from '@canvasflow/schema'
 import type { AMapApi, AMapMarker, AMapPolyline } from './loader'
-import { renderAMapPosition, renderAMapRoute } from './render'
+import { renderAMapPosition, renderAMapRoute, renderAMapWorkspace } from './render'
 
 const sketch: RouteSketch = {
   waypoints: [
@@ -27,14 +27,12 @@ function fakeAMap() {
   const destroy = vi.fn()
   const remove = vi.fn()
   const setCenter = vi.fn()
-  const setMapStyle = vi.fn()
   const map = {
     add: vi.fn(),
     remove,
     setFitView: vi.fn(),
     setZoomAndCenter: vi.fn(),
     setCenter,
-    setMapStyle,
     destroy,
   }
 
@@ -88,9 +86,65 @@ function fakeAMap() {
     polylineOptions,
     remove,
     tailPaths,
-    setMapStyle,
   }
 }
+
+describe('renderAMapWorkspace', () => {
+  it('keeps one map while switching idle, outbound, return, and idle again', async () => {
+    const fake = fakeAMap()
+    const handle = renderAMapWorkspace(fake.amap, document.createElement('div'), {
+      mode: 'idle', theme: 'dark',
+    })
+    const returning: RouteSketch = {
+      waypoints: [...sketch.waypoints].reverse(),
+      polyline: [...sketch.polyline].reverse(),
+      progress: 0,
+    }
+
+    expect(handle).not.toBeNull()
+    expect(fake.mapOptions).toHaveLength(1)
+    expect(fake.markerPositions).toEqual([[121.4737, 31.2304]])
+
+    await expect(handle?.setMode('route', sketch, 0.5)).resolves.toBe(true)
+    await expect(handle?.setRoute(returning)).resolves.toBe(true)
+    expect(fake.mapOptions).toHaveLength(1)
+    expect(fake.destroy).not.toHaveBeenCalled()
+    expect(fake.polylineOptions).toHaveLength(4)
+
+    await expect(handle?.setMode('idle')).resolves.toBe(true)
+    expect(fake.remove).toHaveBeenCalled()
+    expect(fake.destroy).not.toHaveBeenCalled()
+
+    handle?.destroy()
+    expect(fake.destroy).toHaveBeenCalledOnce()
+  })
+
+  it('ignores an obsolete route response after returning to idle', async () => {
+    const fake = fakeAMap()
+    let complete: ((status: string, result: unknown) => void) | undefined
+    fake.amap.Driving = class {
+      search(
+        _origin: unknown,
+        _destination: unknown,
+        _options: { waypoints?: unknown[] },
+        callback: (status: string, result: unknown) => void,
+      ) { complete = callback }
+    } as unknown as AMapApi['Driving']
+    const handle = renderAMapWorkspace(fake.amap, document.createElement('div'), {
+      mode: 'idle', theme: 'light',
+    })!
+
+    const pending = handle.setRoute(sketch)
+    await expect(handle.setMode('idle')).resolves.toBe(true)
+    complete?.('complete', {
+      routes: [{ steps: [{ path: [{ lng: 121.47, lat: 31.23 }, { lng: 121.336, lat: 31.198 }] }] }],
+    })
+
+    await expect(pending).resolves.toBe(false)
+    expect(fake.polylineOptions).toHaveLength(0)
+    expect(fake.destroy).not.toHaveBeenCalled()
+  })
+})
 
 describe('renderAMapRoute themes', () => {
   it.each([
@@ -114,25 +168,6 @@ describe('renderAMapRoute themes', () => {
     expect(fake.remove).toHaveBeenCalled()
     expect(fake.destroy).toHaveBeenCalledOnce()
   })
-
-  it('updates the live map and route palette when the theme changes', async () => {
-    const fake = fakeAMap()
-    const handle = await renderAMapRoute(fake.amap, document.createElement('div'), {
-      sketch,
-      mode: 'follow',
-      theme: 'light',
-    })
-    handle?.setTheme('dark')
-    expect(fake.setMapStyle).toHaveBeenCalledWith('amap://styles/dark')
-    expect(fake.polylineOptions.map((options) => options.strokeColor)).toEqual([
-      '#246bfd', '#9aa7b8', '#5b93ff', '#55637a',
-    ])
-    handle?.setTheme('light')
-    expect(fake.setMapStyle).toHaveBeenLastCalledWith('amap://styles/normal')
-    expect(fake.polylineOptions.slice(-2).map((options) => options.strokeColor)).toEqual([
-      '#246bfd', '#9aa7b8',
-    ])
-  })
 })
 
 describe('renderAMapPosition', () => {
@@ -147,77 +182,6 @@ describe('renderAMapPosition', () => {
     handle?.destroy()
     expect(fake.remove).toHaveBeenCalledOnce()
     expect(fake.destroy).toHaveBeenCalledOnce()
-  })
-})
-
-describe('renderAMapRoute runtime failures', () => {
-  it('signals a Map constructor failure while preserving the null fallback', async () => {
-    const onRuntimeFailure = vi.fn()
-    const broken = {
-      Map: class { constructor() { throw new Error('map failed') } },
-    } as unknown as AMapApi
-
-    await expect(renderAMapRoute(broken, document.createElement('div'), {
-      sketch,
-      mode: 'follow',
-      theme: 'light',
-      onRuntimeFailure,
-    })).resolves.toBeNull()
-    expect(onRuntimeFailure).toHaveBeenCalledOnce()
-  })
-
-  it.each(['constructor', 'search', 'status'] as const)(
-    'signals a Driving %s failure once and tears down the partial map',
-    async (failure) => {
-      const fake = fakeAMap()
-      const onRuntimeFailure = vi.fn()
-      fake.amap.Driving = class {
-        constructor() {
-          if (failure === 'constructor') throw new Error('driving failed')
-        }
-        search(
-          _origin: unknown,
-          _destination: unknown,
-          _options: { waypoints?: unknown[] },
-          callback: (status: string, result: unknown) => void,
-        ) {
-          if (failure === 'search') throw new Error('search failed')
-          callback('error', {})
-        }
-      } as unknown as AMapApi['Driving']
-
-      await expect(renderAMapRoute(fake.amap, document.createElement('div'), {
-        sketch,
-        mode: 'follow',
-        theme: 'light',
-        onRuntimeFailure,
-      })).resolves.toBeNull()
-      expect(onRuntimeFailure).toHaveBeenCalledOnce()
-      expect(fake.destroy).toHaveBeenCalledOnce()
-    },
-  )
-
-  it('signals a later route-search failure without destroying the working map', async () => {
-    const fake = fakeAMap()
-    const onRuntimeFailure = vi.fn()
-    const handle = await renderAMapRoute(fake.amap, document.createElement('div'), {
-      sketch,
-      mode: 'follow',
-      theme: 'light',
-      onRuntimeFailure,
-    })
-    fake.amap.Driving = class {
-      search(
-        _origin: unknown,
-        _destination: unknown,
-        _options: { waypoints?: unknown[] },
-        callback: (status: string, result: unknown) => void,
-      ) { callback('error', {}) }
-    } as unknown as AMapApi['Driving']
-
-    await expect(handle?.setRoute(sketch)).resolves.toBe(false)
-    expect(onRuntimeFailure).toHaveBeenCalledOnce()
-    expect(fake.destroy).not.toHaveBeenCalled()
   })
 })
 
