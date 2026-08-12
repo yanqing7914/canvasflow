@@ -113,20 +113,32 @@ describe('NavigationWorkspace', () => {
     expect(onComplete).toHaveBeenCalledTimes(2)
   })
 
-  it('pauses simulator progress while real map recovery is required', () => {
+  it('continues the simulator on the offline sketch while real map recovery is required', () => {
     const clock = manualClock()
-    const rendered = render(
-      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} initialMapRuntimeFailure />,
+    const onComplete = vi.fn()
+    const onSnapshot = vi.fn()
+    render(
+      <NavigationWorkspace
+        task={task()}
+        spec={spec()}
+        initialVehicle={vehicle}
+        clock={clock}
+        pending={false}
+        initialMapRuntimeFailure
+        onLegComplete={onComplete}
+        onSnapshot={onSnapshot}
+      />,
     )
-    const before = screen.getByText(/模拟行程进度/).textContent
-    act(() => clock.advance(45_000))
-    expect(screen.getByText(/模拟行程进度/)).toHaveTextContent(before ?? '')
+    expect(screen.getByLabelText('模拟导航地图').closest('.navigation-workspace')).toHaveAttribute('data-map-runtime', 'fallback')
 
-    rendered.rerender(
-      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} initialMapRuntimeFailure mapRetryNonce={1} />,
-    )
-    act(() => clock.advance(1_000))
-    expect(screen.getByText(/模拟行程进度/).textContent).not.toBe(before)
+    act(() => clock.advance(45_000))
+    expect(screen.getByText('模拟行程进度 50%')).toBeInTheDocument()
+    expect(onSnapshot.mock.calls.at(-1)?.[0]).toMatchObject({ progress: 0.5 })
+    expect(onSnapshot.mock.calls.at(-1)?.[0].batteryPercent).toBeLessThan(vehicle.batteryPercent)
+
+    act(() => clock.advance(45_000))
+    expect(screen.getByText('已到达机场，等待接人')).toBeInTheDocument()
+    expect(onComplete).toHaveBeenCalledOnce()
   })
 
   it('keeps the map mounted while HUD and windows change', () => {

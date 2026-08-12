@@ -141,7 +141,7 @@ export function PersistentRouteMap({ sessionKey, routeKey, destination, progress
       )}
       <div className="persistent-route-map__source">
         {progressLabel && <span>{progressLabel}</span>}
-        <span>{source === 'amap' ? '道路导航 · 高德地图' : runtimeFailure ? '地图服务暂时不可用 · 模拟已暂停' : '离线路线示意 · 降级展示'}</span>
+        <span>{source === 'amap' ? '道路导航 · 高德地图' : runtimeFailure ? '地图服务暂时不可用 · 离线模拟继续' : '离线路线示意 · 降级展示'}</span>
         <strong>模拟位置，非真实 GPS</strong>
       </div>
       {!following && (

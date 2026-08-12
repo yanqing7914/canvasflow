@@ -60,6 +60,28 @@ describe('PersistentRouteMap route replacement recovery', () => {
 
   afterEach(() => cleanup())
 
+  it('keeps the offline simulation available when AMap cannot load', async () => {
+    stub.loadAMap.mockResolvedValue(undefined)
+    const onRuntimeFailure = vi.fn()
+
+    const view = render(
+      <PersistentRouteMap
+        sessionKey="cockpit-1"
+        routeKey="outbound:route-1"
+        destination="虹桥机场 T2"
+        progress={0.25}
+        sketch={outbound}
+        theme="dark"
+        onRuntimeFailure={onRuntimeFailure}
+      />,
+    )
+    await act(async () => {})
+
+    expect(onRuntimeFailure).toHaveBeenCalledOnce()
+    expect(view.getByLabelText('模拟导航地图')).toHaveAttribute('data-map-source', 'sketch')
+    expect(view.getByText('地图服务暂时不可用 · 离线模拟继续')).toBeInTheDocument()
+  })
+
   it('recovers a failed return-route replacement with the next key without remounting the session', async () => {
     let reportRuntimeFailure: (() => void) | undefined
     const failedSetRoute = vi.fn(async () => {

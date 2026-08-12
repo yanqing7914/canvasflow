@@ -116,11 +116,10 @@ export function NavigationWorkspace({
   }), [destination, nowMs, simulatorConfig, state])
 
   useEffect(() => activeClock.schedule(() => {
-    if (mapRuntimeFailure) return
     const tick = activeClock.now()
     setNowMs(tick)
     dispatch({ type: 'tick', nowMs: tick })
-  }), [activeClock, mapRuntimeFailure])
+  }), [activeClock])
 
   useEffect(() => {
     if (mountedMapRetryNonce.current === mapRetryNonce) return
@@ -198,7 +197,13 @@ export function NavigationWorkspace({
   }, [onReminder, snapshot, state])
 
   return (
-    <section className="navigation-workspace" data-session-key={task.taskId} data-leg={leg} data-pending={pending}>
+    <section
+      className="navigation-workspace"
+      data-session-key={task.taskId}
+      data-leg={leg}
+      data-pending={pending}
+      data-map-runtime={mapRuntimeFailure ? 'fallback' : 'ready'}
+    >
       <PersistentRouteMap
         sessionKey={task.taskId}
         routeKey={`${leg}:${task.navigation?.routeId ?? leg}`}
