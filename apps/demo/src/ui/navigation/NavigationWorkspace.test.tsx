@@ -113,6 +113,19 @@ describe('NavigationWorkspace', () => {
     expect(onComplete).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps an arrival alert ahead of the maneuver in the minimum HUD', () => {
+    const clock = manualClock()
+    render(
+      <NavigationWorkspace task={{ ...task(), cockpit: { speedMode: 'normal', hudVisible: false } }} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} />,
+    )
+    act(() => clock.advance(90_000))
+    // The alert is produced by the simulator at arrival and remains the primary
+    // compact message when the driver folds the HUD.
+    const minimumHud = screen.getByLabelText('最小导航信息')
+    expect(minimumHud).toHaveTextContent('已到达机场，等待接人')
+    expect(minimumHud).not.toHaveTextContent('沿道路向西行驶')
+  })
+
   it('keeps the map mounted while HUD and windows change', () => {
     const clock = manualClock()
     const first = spec()
@@ -124,8 +137,13 @@ describe('NavigationWorkspace', () => {
       <NavigationWorkspace task={{ ...task(), cockpit: { speedMode: 'normal', hudVisible: false } }} spec={first} initialVehicle={vehicle} clock={clock} pending={false} />,
     )
     expect(screen.getByRole('button', { name: '显示导航信息' })).toBeInTheDocument()
-    expect(screen.getByLabelText('最小导航信息')).toHaveTextContent('55')
-    expect(screen.getByLabelText('最小导航信息')).toHaveTextContent('72')
+    const minimumHud = screen.getByLabelText('最小导航信息')
+    expect(minimumHud).toHaveTextContent('虹桥机场 T2')
+    expect(minimumHud).toHaveTextContent('当前位置附近道路')
+    expect(minimumHud).toHaveTextContent('沿道路向西行驶')
+    expect(minimumHud).toHaveTextContent('55')
+    expect(minimumHud).toHaveTextContent('72')
+    expect(minimumHud).not.toHaveTextContent('当前目的地')
     const weatherWindow = {
       id: 'weather-1', kind: 'weather' as const, title: '当前位置天气', componentIds: [], size: 'compact' as const,
       controls: { closable: true, minimizable: true, maximizable: true },

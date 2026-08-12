@@ -25,9 +25,22 @@ export function NavigationHUD({
   if (!expanded) {
     return (
       <section className="navigation-hud navigation-hud--minimum" aria-label="最小导航信息">
-        <div><span>车速</span><strong>{Math.round(snapshot.speedKph)}</strong><small>km/h</small></div>
-        <div><span>电量</span><strong>{Math.round(snapshot.batteryPercent)}</strong><small>%</small></div>
-        {destinationAlert && <p role="status">{destinationAlert}</p>}
+        <div className="navigation-hud--minimum__destination">
+          <span>前往</span>
+          <strong>{snapshot.destination}</strong>
+        </div>
+        <div className="navigation-hud--minimum__metrics">
+          <div><span>车速</span><strong>{Math.round(snapshot.speedKph)}</strong><small>km/h</small></div>
+          <div><span>电量</span><strong>{Math.round(snapshot.batteryPercent)}</strong><small>%</small></div>
+        </div>
+        {destinationAlert
+          ? <p className="navigation-hud--minimum__alert" role="status">{destinationAlert}</p>
+          : (
+            <div className="navigation-hud--minimum__maneuver">
+              <span>{snapshot.road}</span>
+              <strong>{snapshot.maneuver}</strong>
+            </div>
+          )}
         <button type="button" onClick={onToggle}>显示导航信息</button>
       </section>
     )

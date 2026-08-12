@@ -14,7 +14,10 @@ import { describe, expect, it } from 'vitest'
  * step needs a real `refs/pull/N/merge` checkout to execute at all.
  */
 
-const workflow = readFileSync('.github/workflows/codex-review.yml', 'utf8')
+// Git may materialize the tracked workflow with CRLF on Windows. The assertions
+// inspect YAML structure, not checkout line-ending policy, so normalize once at
+// the boundary and keep the section matcher deterministic on every platform.
+const workflow = readFileSync('.github/workflows/codex-review.yml', 'utf8').replace(/\r\n/g, '\n')
 const prompt = readFileSync('.github/codex/prompts/review.md', 'utf8')
 
 /** Slice from `heading` to the next sibling at the same indent, or '' if absent. */

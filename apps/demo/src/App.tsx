@@ -75,6 +75,62 @@ const phaseIdentityLabels: Record<AirportPickupTaskState['phase'], string> = {
   cancelled: '行程已取消',
 }
 
+const journeyStages = [
+  { id: 'prepare', label: '准备', detail: '确认航班与出发方案' },
+  { id: 'pickup', label: '接机', detail: '前往机场并接到家人' },
+  { id: 'return', label: '返程', detail: '送家人安全回家' },
+  { id: 'home', label: '到家', detail: '总结行程与偏好' },
+] as const
+
+const journeyStageByPhase: Record<AirportPickupTaskState['phase'], number | undefined> = {
+  'collecting-airport': 0,
+  'choosing-flight': 0,
+  'confirming-outbound': 0,
+  'collecting-information': 0,
+  preparing: 0,
+  'outbound-driving': 1,
+  'driving-to-airport': 1,
+  'approaching-airport': 1,
+  'waiting-for-passengers': 1,
+  'passengers-onboard': 2,
+  'confirming-return': 2,
+  'return-driving': 2,
+  'returning-home': 2,
+  completed: 3,
+  cancelled: undefined,
+}
+
+function JourneyPhaseRail({ phase }: { phase: AirportPickupTaskState['phase'] }) {
+  const currentStage = journeyStageByPhase[phase]
+  const cancelled = phase === 'cancelled'
+
+  return (
+    <ol className="journey-rail" aria-label="接机行程阶段" data-cancelled={cancelled || undefined}>
+      {journeyStages.map((stage, index) => {
+        const state = currentStage === undefined
+          ? 'upcoming'
+          : index < currentStage ? 'completed' : index === currentStage ? 'current' : 'upcoming'
+        return (
+          <li
+            className="journey-rail__stage"
+            data-state={state}
+            aria-current={state === 'current' ? 'step' : undefined}
+            key={stage.id}
+          >
+            <span className="journey-rail__marker" aria-hidden="true">
+              <span>{index + 1}</span>
+            </span>
+            <span className="journey-rail__copy">
+              <strong data-journey-label>{stage.label}</strong>
+              <small>{cancelled ? '行程已停止' : stage.detail}</small>
+            </span>
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
 const conclusionComponentTypes = new Set<UISpec['components'][number]['type']>([
   'flight-status',
   'navigation-summary',
@@ -1493,6 +1549,8 @@ export default function App({
               </button>
             </div>
           </header>
+
+          {task && <JourneyPhaseRail phase={task.phase} />}
 
           {/* Rendered unconditionally so the region exists before the first announcement. */}
           <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">{voiceStatus}</p>
