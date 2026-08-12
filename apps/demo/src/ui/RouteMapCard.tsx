@@ -7,7 +7,7 @@ import {
   buildRouteSketchDrawing,
   type RouteSketchDrawing,
 } from './route-sketch'
-import { loadAMap } from './amap/loader'
+import { amapLoaderSnapshot, invalidateAMap, loadAMap } from './amap/loader'
 import { startCrawl } from './amap/crawl'
 import { renderAMapRoute, type AMapRouteHandle } from './amap/render'
 
@@ -59,6 +59,8 @@ export function RouteMapCard({
   const mapContainer = useRef<HTMLDivElement>(null)
   const mapHandle = useRef<AMapRouteHandle | null>(null)
   const [source, setSource] = useState<'sketch' | 'amap'>('sketch')
+  const [runtimeReload, setRuntimeReload] = useState(0)
+  const runtimeAttempts = useRef(0)
   /** Where the crawl has reached, or `undefined` while the marker holds. */
   const [crawled, setCrawled] = useState<number | undefined>(undefined)
   /**
@@ -72,6 +74,12 @@ export function RouteMapCard({
    */
   const crawledRef = useRef<number | undefined>(undefined)
 
+  // A route replacement starts a fresh key ring. Runtime retries themselves
+  // keep the attempt count so a failed key cannot trigger an endless loop.
+  useEffect(() => {
+    runtimeAttempts.current = 0
+  }, [props.routeSketch, props.mode, theme])
+
   useEffect(() => {
     let cancelled = false
     const container = mapContainer.current
@@ -83,6 +91,19 @@ export function RouteMapCard({
         sketch: props.routeSketch,
         mode: props.mode,
         theme,
+        onRuntimeFailure: () => {
+          if (cancelled) return
+          // A runtime failure can leave a rejected key's global AMap object in
+          // place. Invalidate before retrying so the next attempt gets a clean
+          // script, map instance, and security config, with the next key first.
+          invalidateAMap({ rotate: true })
+          setSource('sketch')
+          const keyCount = amapLoaderSnapshot().keyCount
+          if (runtimeAttempts.current < Math.max(0, keyCount - 1)) {
+            runtimeAttempts.current += 1
+            setRuntimeReload((current) => current + 1)
+          }
+        },
       }).then((rendered) => {
         if (cancelled) {
           rendered?.destroy()
@@ -109,7 +130,7 @@ export function RouteMapCard({
     }
     // Re-run when the drawn route, the camera intent, or the theme changes, so a
     // new spec redraws on the basemap instead of leaving a stale route behind.
-  }, [props.routeSketch, props.mode, theme])
+  }, [props.routeSketch, props.mode, theme, runtimeReload])
 
   useEffect(() => {
     // A new sketch is a new authored position: drop whatever the last one had

@@ -35,10 +35,42 @@ export type AMapRouteHandle = {
    * caller does not have to know whether the spec authored a progress value.
    */
   setProgress: (progress: number) => void
+  /** Applies a new basemap and route palette without replacing the map session. */
+  setTheme: (theme: 'light' | 'dark') => void
   setRoute: (sketch: RouteSketch) => Promise<boolean>
   setFollow: (follow: boolean) => void
   recenter: () => void
   destroy: () => void
+}
+
+export type AMapPositionHandle = { destroy: () => void }
+
+export function renderAMapPosition(
+  amap: AMapApi,
+  container: HTMLElement,
+  options: { position: { latitude: number; longitude: number }; theme: 'light' | 'dark' },
+): AMapPositionHandle | null {
+  if (!plottable(options.position)) return null
+  let map: AMapMap
+  let marker: AMapOverlay
+  try {
+    const palette = THEMES[options.theme]
+    map = new amap.Map(container, { zoom: 14, center: tuple(options.position), ...(palette.mapStyle ? { mapStyle: palette.mapStyle } : {}) })
+    marker = new amap.Marker({
+      position: tuple(options.position),
+      zIndex: 70,
+      anchor: 'center',
+      content: '<span class="amap-cockpit-car" aria-hidden="true"><span></span></span>',
+    })
+    map.add(marker)
+    map.setZoomAndCenter(14, tuple(options.position))
+  } catch {
+    try { map!.destroy() } catch { /* failed construction has nothing else to release */ }
+    return null
+  }
+  return { destroy: () => {
+    try { map.remove(marker); map.destroy() } catch { /* unmount cleanup is best-effort */ }
+  } }
 }
 
 export type AMapRouteOptions = {
@@ -46,6 +78,7 @@ export type AMapRouteOptions = {
   mode: 'overview' | 'follow'
   theme: 'light' | 'dark'
   onManualInteraction?: () => void
+  onRuntimeFailure?: () => void
 }
 
 /**
@@ -114,6 +147,7 @@ export function renderAMapRoute(
       ...(palette.mapStyle ? { mapStyle: palette.mapStyle } : {}),
     })
   } catch {
+    options.onRuntimeFailure?.()
     return Promise.resolve(null)
   }
   const activeMap = map
@@ -123,8 +157,12 @@ export function renderAMapRoute(
   const waypoints = stops.slice(1, -1).map(tuple)
 
   return new Promise<AMapRouteHandle | null>((resolve) => {
+    let failed = false
     const giveUp = () => {
+      if (failed) return
+      failed = true
       try { activeMap.destroy() } catch { /* nothing to clean up */ }
+      options.onRuntimeFailure?.()
       resolve(null)
     }
     let driving: AMapDriving
@@ -162,7 +200,8 @@ function drawRoute(
   const path = extractPath(result)
   if (path.length < 2) throw new Error('empty route path')
 
-  const palette = THEMES[options.theme]
+  let currentTheme = options.theme
+  let palette = THEMES[currentTheme]
   let overlays: AMapOverlay[] = []
   let following = options.mode === 'follow'
   let vehicle: LngLatPoint | undefined
@@ -223,7 +262,9 @@ function drawRoute(
       }
     }
   }
-  drawPath(path, normalizedProgress(options.sketch.progress))
+  let currentPath = path
+  let currentProgress = normalizedProgress(options.sketch.progress)
+  drawPath(currentPath, currentProgress)
 
   if (options.mode === 'follow' && vehicle) {
     map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
@@ -245,19 +286,41 @@ function drawRoute(
       if (clamped === undefined || !moveTo) return
       try {
         moveTo(clamped)
+        currentProgress = clamped
       } catch {
         // A repositioning that fails mid-crawl leaves the marker where it was,
         // which is a stale simulated point rather than a wrong one. Tearing the
         // map down over it would be the worse outcome.
       }
     },
-    setRoute: (sketch: RouteSketch) => searchRoute(amap, map, sketch).then((nextPath) => {
+    setTheme: (next: 'light' | 'dark') => {
+      if (next === currentTheme) return
+      currentTheme = next
+      palette = THEMES[next]
+      try {
+        map.setMapStyle?.(palette.mapStyle ?? 'amap://styles/normal')
+        drawPath(currentPath, currentProgress)
+        if (following && vehicle) map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
+        else map.setFitView(overlays)
+      } catch {
+        // Theme changes are cosmetic; keep the existing route if the map rejects one.
+      }
+    },
+    setRoute: async (sketch: RouteSketch) => {
+      const nextPath = await searchRoute(amap, map, sketch, options.onRuntimeFailure)
       if (nextPath.length < 2) return false
-      drawPath(nextPath, normalizedProgress(sketch.progress))
-      if (following && vehicle) map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
-      else map.setFitView(overlays)
-      return true
-    }),
+      try {
+        currentPath = nextPath
+        currentProgress = normalizedProgress(sketch.progress)
+        drawPath(currentPath, currentProgress)
+        if (following && vehicle) map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
+        else map.setFitView(overlays)
+        return true
+      } catch {
+        options.onRuntimeFailure?.()
+        return false
+      }
+    },
     setFollow: (next: boolean) => { following = next },
     recenter: () => {
       following = true
@@ -279,7 +342,12 @@ function drawRoute(
   }
 }
 
-function searchRoute(amap: AMapApi, map: AMapMap, sketch: RouteSketch): Promise<LngLatPoint[]> {
+function searchRoute(
+  amap: AMapApi,
+  map: AMapMap,
+  sketch: RouteSketch,
+  onRuntimeFailure?: () => void,
+): Promise<LngLatPoint[]> {
   const stops = sketch.waypoints.filter(plottable)
   if (stops.length < 2) return Promise.resolve([])
   return new Promise((resolve) => {
@@ -287,14 +355,20 @@ function searchRoute(amap: AMapApi, map: AMapMap, sketch: RouteSketch): Promise<
     try {
       driving = new amap.Driving({ map })
     } catch {
+      onRuntimeFailure?.()
       resolve([])
       return
     }
     try {
       driving.search(tuple(stops[0]!), tuple(stops[stops.length - 1]!), {
         waypoints: stops.slice(1, -1).map(tuple),
-      }, (status, result) => resolve(status === 'complete' ? extractPath(result) : []))
+      }, (status, result) => {
+        const path = status === 'complete' ? extractPath(result) : []
+        if (path.length < 2) onRuntimeFailure?.()
+        resolve(path)
+      })
     } catch {
+      onRuntimeFailure?.()
       resolve([])
     }
   })

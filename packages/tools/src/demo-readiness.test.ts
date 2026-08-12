@@ -202,16 +202,9 @@ describe('voice fallback fixtures', () => {
 
   it('ships the canonical main-flow and low-confidence samples', () => {
     expect(manifest).toMatchObject({ version: '1.0', language: 'zh-CN', sampleRateHz: 16000, channels: 1 })
-    expect(manifest.samples.map((sample) => sample.id)).toEqual([
-      'create-airport-pickup',
-      'select-first-flight',
-      'flight-number',
-      'noisy-create',
-      'check-weather',
-      'start-navigation',
-      'send-weather-reminder',
-      'dismiss-weather-advisory',
-    ])
+    expect(manifest.samples).toHaveLength(27)
+    expect(new Set(manifest.samples.map((sample) => sample.id)).size).toBe(manifest.samples.length)
+    expect(new Set(manifest.samples.map((sample) => sample.file)).size).toBe(manifest.samples.length)
     expect(manifest.samples.find((sample) => sample.id === 'noisy-create')).toMatchObject({
       requiresConfirmation: true,
     })
@@ -219,6 +212,10 @@ describe('voice fallback fixtures', () => {
   })
 
   it('keeps every referenced WAV in the documented browser-ASR format', () => {
+    const catalogFiles = manifest.samples.map((sample) => sample.file).sort()
+    const shippedFiles = readdirSync(VOICE_DIR).filter((file) => extname(file) === '.wav').sort()
+    expect(shippedFiles).toEqual(catalogFiles)
+
     for (const sample of manifest.samples) {
       expect(extname(sample.file)).toBe('.wav')
       expect(sample.file).toBe(basename(sample.file))

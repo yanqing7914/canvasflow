@@ -53,6 +53,11 @@ async function readControls(page: Page, expected: string | RegExp) {
   await expect(drawer).toBeHidden()
 }
 
+function voiceReplayControls(page: Page) {
+  return page.getByRole('dialog', { name: '演示控制' })
+    .getByRole('group', { name: '语音兜底回放' })
+}
+
 /**
  * The keyboard is on demand, not a permanent input row: in a browser with working
  * speech recognition it is not on screen until the turn needs it or the driver
@@ -62,15 +67,19 @@ async function readControls(page: Page, expected: string | RegExp) {
  * filling that one detaches mid-action.
  */
 async function composer(page: Page) {
-  if (await page.getByLabel('任务输入').count() === 0) {
-    const toggle = page.getByRole('button', { name: '改用文字输入' })
+  const visibleInput = page.locator('input[aria-label="任务输入"]:visible').last()
+  if (await visibleInput.count() === 0) {
+    const toggle = page.getByRole('button', { name: '改用文字输入', exact: true })
+    await expect(toggle).toBeVisible()
     await expect(toggle).toBeEnabled()
     await toggle.click()
   }
   // Resolve and settle the field itself rather than the toggle: when voice is
   // unavailable the toggle is deliberately disabled forever, and a field left from
   // the previous turn may still be disabled by a request in flight.
-  const input = page.getByLabel('任务输入')
+  const input = page.locator('input[aria-label="任务输入"]:visible').last()
+  await expect(input).toBeAttached()
+  await expect(input).toBeVisible()
   await expect(input).toBeEnabled()
   return input
 }
@@ -83,12 +92,24 @@ async function composer(page: Page) {
 async function sendText(page: Page, value = legacyTaskText) {
   const input = await composer(page)
   await input.fill(value)
-  await page.getByRole('button', { name: '发送' }).click()
+  const composerForm = input.locator('xpath=ancestor::form[1]')
+  const submit = composerForm.getByRole('button', { name: '发送', exact: true })
+  await expect(submit).toBeVisible()
+  await expect(submit).toBeEnabled()
+  const responsePromise = page.waitForResponse((response) => {
+    if (response.request().method() !== 'POST') return false
+    const path = new URL(response.url()).pathname
+    return path === '/v1/tasks' || /\/v1\/tasks\/[^/]+\/(events|actions)$/u.test(path)
+  })
+  await submit.click()
+  await responsePromise
   // Either the composer left (the send was accepted and text was the only reason
   // it was open) or it is back to editable — never mid-flight.
   await expect(async () => {
-    const field = page.getByLabel('任务输入')
+    const field = page.locator('input[aria-label="任务输入"]:visible').last()
     if (await field.count() === 0) return
+    await expect(field).toBeAttached()
+    await expect(field).toBeVisible()
     await expect(field).toBeEnabled()
   }).toPass({ timeout: 10_000 })
 }
@@ -285,8 +306,15 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await installControllableNavigationClock(page)
   await page.goto('/')
 
-  // The production entry is genuinely empty: no passenger, airport, or sample
-  // sentence is allowed to leak into a fresh cockpit task.
+  // The production entry is a quiet cabin, not a pre-created task or form.
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByLabel('人民广场模拟车辆位置')).toContainText('模拟位置，非真实 GPS')
+  await expect(page.getByLabel('任务输入')).toHaveCount(0)
+  const idleMap = await mockAMapSnapshot(page)
+  expect(idleMap.mapCreates).toBeGreaterThanOrEqual(1)
+
+  // No passenger, airport, or sample sentence is allowed to leak into the first
+  // explicit keyboard turn.
   const input = await composer(page)
   await expect(input).toHaveValue('')
   const createRequestPromise = page.waitForRequest((request) => (
@@ -339,7 +367,9 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   }
 
   const departedMap = await mockAMapSnapshot(page)
-  expect(departedMap.mapCreates).toBe(1)
+  // The idle basemap is a separate session. Navigation creates exactly one new
+  // map and keeps that instance across HUD, windows, and both route legs.
+  expect(departedMap.mapCreates - idleMap.mapCreates).toBe(1)
   expect(departedMap.routeSearches).toHaveLength(1)
   expect(new Set(departedMap.markerPositions.map((position) => position.join(','))).size).toBeGreaterThan(2)
   expect(departedMap.centers.length).toBeGreaterThan(1)
@@ -369,7 +399,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect.poll(() => cockpitProgress(page)).toBeGreaterThan(progressBeforeSpeedUp)
   await expect(weather).toBeVisible()
   await expect(calendar).toBeVisible()
-  expect((await mockAMapSnapshot(page)).mapCreates).toBe(1)
+  expect((await mockAMapSnapshot(page)).mapCreates).toBe(departedMap.mapCreates)
   await captureCockpitScreenshot(page, testInfo, 'desktop-map-windows.png')
 
   await advanceNavigationClock(page, 40_000)
@@ -391,7 +421,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(page.getByLabel('导航信息')).toContainText('返程导航')
   await expect.poll(async () => (await mockAMapSnapshot(page)).routeSearches.length).toBeGreaterThanOrEqual(2)
   const returningMap = await mockAMapSnapshot(page)
-  expect(returningMap.mapCreates).toBe(1)
+  expect(returningMap.mapCreates).toBe(departedMap.mapCreates)
   const returnSearch = returningMap.routeSearches[returningMap.routeSearches.length - 1]!
   expect(returnSearch.origin[0]).toBeLessThan(returnSearch.destination[0])
   await advanceNavigationClock(page, 5_000)
@@ -415,18 +445,20 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(completedPayload.task).not.toHaveProperty('pickupAirport')
   expect(completedPayload.task).not.toHaveProperty('navigationSimulation')
   expect(completedPayload.task).not.toHaveProperty('cockpit')
-  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'completed')
+  const idleCockpit = page.getByRole('region', { name: '空闲座舱', exact: true })
+  await expect(idleCockpit).toBeVisible()
+  await expect(page.getByText('已到家')).toBeVisible()
   await expect(page.locator('.cockpit-window')).toHaveCount(0)
   await expect(page.locator('.navigation-workspace')).toHaveCount(0)
-  await expect(page.getByRole('heading', { name: '接机任务已完成' })).toBeVisible()
-  await expect(page.locator('.task-surface')).not.toContainText(selectedFlight)
-  await expect(page.locator('.task-surface')).not.toContainText('虹桥机场')
+  await expect(page.locator('.task-surface')).toHaveCount(0)
+  await expect(idleCockpit).not.toContainText(selectedFlight)
+  await expect(idleCockpit).not.toContainText('虹桥机场')
   await expect(await composer(page)).toHaveValue('')
 
   const completedMap = await mockAMapSnapshot(page)
-  expect(completedMap.mapCreates).toBe(1)
+  expect(completedMap.mapCreates).toBe(departedMap.mapCreates + 1)
   expect(completedMap.routeSearches.length).toBeGreaterThanOrEqual(2)
-  expect(completedMap.mapDestroys).toBe(1)
+  expect(completedMap.mapDestroys).toBeGreaterThanOrEqual(2)
   expect(completedMap.markerPositions.length).toBeGreaterThan(departedMap.markerPositions.length)
 
   await captureCockpitScreenshot(page, testInfo, 'desktop-completed.png')
@@ -540,17 +572,15 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
   for (const viewport of viewports) {
     if (viewport) await page.setViewportSize(viewport)
     await page.goto('/')
-    const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
+    const mic = page.getByRole('button', { name: /启用小南语音唤醒|语音入口暂不可用/ })
     const keyboard = page.getByRole('button', { name: '改用文字输入' })
     const controls = page.getByRole('button', { name: '打开演示控制' })
     // Wait for the mounted surface before pressing a key: a Tab that arrives
     // pre-hydration lands on nothing and is not replayed.
     await expect(controls).toBeVisible()
 
-    // Tab order follows the brief's reading order: brand, then the header
-    // utilities. The keyboard is not in it yet because it is not on screen.
-    await page.keyboard.press('Tab')
-    await expect(page.getByRole('link', { name: /pilotflow/ })).toBeFocused()
+    // Idle has no clickable brand lockup; tab order begins with its compact
+    // microphone lamp, then the keyboard fallback and demo controls.
     await page.keyboard.press('Tab')
     // A disabled voice entry drops out of the tab order rather than trapping it.
     if (await mic.isEnabled()) {
@@ -1358,7 +1388,9 @@ test('floats, folds, and tiers the panel the same way on every engine @glass', a
 test('completes the airport pickup flow through the Agent API', async ({ page }) => {
   await page.goto('/')
 
-  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: '打开演示控制' })).toBeEnabled()
   // Without a task there is nothing to advance, and the drawer says so.
   await expectAdvanceEnabled(page, false)
   await readControls(page, '尚无任务')
@@ -1398,8 +1430,19 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await readControls(page, 'completed')
   await readControls(page, 'memory.propose-update:pending-confirmation')
 
+  const confirmed = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/confirmations\//.test(new URL(response.url()).pathname)
+  ))
   await page.getByRole('button', { name: '保存本次偏好' }).click()
-  await readControls(page, 'memory.confirm-update:succeeded')
+  const confirmation = await confirmed
+  expect(confirmation.ok()).toBe(true)
+  expect(await confirmation.json()).toMatchObject({
+    task: { phase: 'completed' },
+    effects: [expect.objectContaining({ type: 'memory.confirm-update', status: 'succeeded' })],
+  })
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByText('已到家')).toBeVisible()
   await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
 })
 
@@ -1634,7 +1677,8 @@ test('walks the pickup scenario from the arrivals board to the airport @layout',
 
 test('keeps the task usable around a voice attempt', async ({ page }) => {
   await page.goto('/')
-  const mic = page.getByRole('button', { name: /开始语音输入|语音入口暂不可用/ })
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  const mic = page.getByRole('button', { name: /启用小南语音唤醒|小南语音状态|语音入口暂不可用/ })
   await expect(mic).toBeVisible()
 
   // Headless Chromium exposes the Web Speech API but has no speech service
@@ -1643,21 +1687,10 @@ test('keeps the task usable around a voice attempt', async ({ page }) => {
   // returns to a usable state and the text path still completes the turn.
   if (await mic.isEnabled()) {
     await mic.click()
-    // The keyboard is closed on purpose while the microphone is capturing, so
-    // end the turn before typing. A second press either hands back a transcript
-    // or reports that nothing was heard; either way the keyboard reopens.
-    const capturing = page.getByRole('button', { name: '停止语音输入' })
-    if (await capturing.isVisible()) await capturing.click()
-    await expect(
-      page.getByRole('button', { name: /开始语音输入|重试语音输入|放弃这次语音输入/ }),
-    ).toBeEnabled()
-    // Whatever that turn did, a keyboard is reachable: either the failure has
-    // already opened one — in which case the toggle is deliberately unable to
-    // take it away — or the 文字 entry can still bring one up.
-    const fieldAlreadyOpen = await page.getByLabel('任务输入').count() > 0
-    if (!fieldAlreadyOpen) {
-      await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
-    }
+    // Authorization/service outcome is browser-dependent, but the quiet idle
+    // shell and its explicit text fallback must remain usable either way.
+    await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
   }
 
   await sendText(page)
@@ -1672,12 +1705,15 @@ test('falls back to text when the browser has no speech recognition', async ({ p
   })
   await page.goto('/')
 
-  const mic = page.getByRole('button', { name: '语音入口暂不可用' })
-  await expect(mic).toBeVisible()
-  await expect(mic).toBeDisabled()
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+  await expect(page.getByLabel('空闲座舱状态').getByText('语音不可用', { exact: true })).toBeVisible()
 
   await sendText(page, '我现在要去机场接妈妈和豆豆')
   await readControls(page, 'collecting-information')
+  await expect(page.getByLabel('语音状态')).toContainText('当前浏览器不支持语音识别，请改用文字输入。')
+  await expect(page.getByRole('button', { name: '收起文字输入' })).toBeDisabled()
+  await expect(page.getByLabel('任务输入')).toBeEnabled()
 })
 
 test('replays a fixture utterance deterministically from the demo drawer', async ({ page }) => {
@@ -1700,7 +1736,7 @@ test('replays a fixture utterance deterministically from the demo drawer', async
     response.request().method() === 'POST'
     && new URL(response.url()).pathname === '/v1/tasks'
   ))
-  await page.getByRole('button', { name: '接机指令' }).click()
+  await voiceReplayControls(page).getByRole('button', { name: '模糊接机目标', exact: true }).click()
   await expect(drawer).toBeHidden()
 
   // Production replay follows the hands-free voice path, so its canonical
@@ -1714,41 +1750,118 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   await readControls(page, 'collecting-information')
 })
 
-test('covers the main trip beats with state-bound WAV fallbacks', async ({ page }) => {
-  // Force the deterministic degraded path: the WAV is presentation, while its
-  // canonical transcript remains the input payload under test.
+test('replays cockpit fixtures through default wake mode without SpeechRecognition @cockpit', async ({ page }) => {
+  await installMockAMap(page)
   await page.addInitScript(() => {
     const scope = window as unknown as Record<string, unknown>
     delete scope.SpeechRecognition
     delete scope.webkitSpeechRecognition
   })
+
+  let taskCreateCount = 0
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && new URL(request.url()).pathname === '/v1/tasks') taskCreateCount += 1
+  })
   await page.goto('/')
 
-  async function replay(label: string, expectedText: string) {
+  await expect(page.getByLabel('空闲座舱状态').getByText('语音不可用', { exact: true })).toBeVisible()
+
+  // A low-confidence fixture is still a confirmation turn in the shipped
+  // wake-word mode. With no browser speech service, its canonical transcript
+  // must be parked rather than silently submitted or dropped.
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await voiceReplayControls(page).getByRole('button', { name: '嘈杂样本（需确认）', exact: true }).click()
+  const parked = page.getByLabel('任务输入')
+  await expect(parked).toHaveValue(legacyTaskText, { timeout: 15_000 })
+  expect(taskCreateCount).toBe(0)
+
+  const createRequestPromise = page.waitForRequest((request) => (
+    request.method() === 'POST' && new URL(request.url()).pathname === '/v1/tasks'
+  ))
+  await page.getByRole('button', { name: '发送', exact: true }).click()
+  const createRequest = await createRequestPromise
+  expect(createRequest.postDataJSON()).toMatchObject({
+    input: { text: legacyTaskText, source: 'voice', confidence: 0.51 },
+    clientCapabilities: { cockpitVersion: '1' },
+  })
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'collecting-airport')
+
+  async function replayEvent(label: string, text: string) {
+    const requestPromise = page.waitForRequest((request) => (
+      request.method() === 'POST'
+      && /\/v1\/tasks\/[^/]+\/events$/u.test(new URL(request.url()).pathname)
+    ))
+    const responsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && /\/v1\/tasks\/[^/]+\/events$/u.test(new URL(response.url()).pathname)
+    ))
     await page.getByRole('button', { name: '打开演示控制' }).click()
-    await page.getByRole('dialog', { name: '演示控制' }).getByRole('button', { name: label }).click()
-    const input = page.getByLabel('任务输入')
-    await expect(input).toHaveValue(expectedText, { timeout: 15_000 })
-    await page.getByRole('button', { name: '发送' }).click()
+    const replay = voiceReplayControls(page).getByRole('button', { name: label, exact: true })
+    await expect(replay).toBeEnabled()
+    await replay.click()
+    const request = await requestPromise
+    expect(request.postDataJSON()).toMatchObject({ event: { text, source: 'voice' } })
+    expect((await responsePromise).ok()).toBe(true)
   }
 
-  await replay('接机指令', '我现在要去机场接妈妈和豆豆')
+  await replayEvent('选择虹桥机场', '去虹桥机场')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'choosing-flight')
+  const flightList = await cockpitWindow(page, 'flight-list')
+  const thirdFlight = await flightList.locator('.ui-flight-choices__row').nth(2).getAttribute('data-flight-number')
+  expect(thirdFlight).toBeTruthy()
+
+  await replayEvent('选择第三个航班', '选第三个')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-outbound')
+  await expect(await cockpitWindow(page, 'outbound-confirmation')).toContainText(thirdFlight!)
+
+  // Spoken cockpit confirmations resolve the generated action instead of being
+  // sent as planner text, so the fixture exercises the same policy path as the
+  // visible confirmation button.
+  const actionRequestPromise = page.waitForRequest((request) => (
+    request.method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/actions$/u.test(new URL(request.url()).pathname)
+  ))
+  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await voiceReplayControls(page).getByRole('button', { name: '开始导航', exact: true }).click()
+  expect((await actionRequestPromise).postDataJSON()).toMatchObject({
+    actionId: 'start-outbound',
+    componentId: 'outbound-confirmation',
+  })
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'outbound-driving')
+  await expect(page.locator('.navigation-workspace[data-leg="outbound"]')).toBeVisible()
+})
+
+test('covers the main trip beats with state-bound WAV fallbacks', async ({ page }) => {
+  await page.goto('/')
+
+  async function replay(label: string, expectedText: string, expectedPath: RegExp, requestBody: 'input' | 'event') {
+    const requestPromise = page.waitForRequest((candidate) => (
+      candidate.method() === 'POST' && expectedPath.test(new URL(candidate.url()).pathname)
+    ))
+    await page.getByRole('button', { name: '打开演示控制' }).click()
+    await voiceReplayControls(page).getByRole('button', { name: label, exact: true }).click()
+    expect((await requestPromise).postDataJSON()).toMatchObject(
+      requestBody === 'input' ? { input: { text: expectedText, source: 'voice' } } : { event: { text: expectedText, source: 'voice' } },
+    )
+  }
+
+  await replay('模糊接机目标', legacyTaskText, /\/v1\/tasks$/u, 'input')
   await expect(page.getByText('选择要接的航班')).toBeVisible()
 
-  await replay('选择第一个航班', '选第一个')
+  await replay('补充航班号', '航班 MU5102', /\/v1\/tasks\/[^/]+\/events$/u, 'event')
   await expect(page.getByText('准备出发')).toBeVisible()
 
-  await replay('查询到达天气', '到的时候天气怎么样')
+  await replay('查询天气', '到的时候天气怎么样', /\/v1\/tasks\/[^/]+\/events$/u, 'event')
   await expect(page.locator('.ui-card--weather-card')).toBeVisible()
 
-  await replay('语音回放：开始导航', '开始导航')
+  await page.getByRole('region', { name: '当前行程' }).getByRole('button', { name: '开始导航', exact: true }).click()
   await expect(page.getByText('途中')).toBeVisible()
 
   await advanceFlow(page) // charging.started
   await advanceFlow(page) // flight.updated in-air -> advisory
   await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
 
-  await replay('语音回放：提醒带伞', '提醒乘客带伞')
+  await replay('提醒乘客带伞', '提醒乘客带伞', /\/v1\/tasks\/[^/]+\/events$/u, 'event')
   await expect(page.getByRole('button', { name: '确认发送' })).toBeVisible()
   await page.getByRole('button', { name: '确认发送' }).click()
   await expect(page.locator('.ui-card--message-preview')).toHaveCount(0)
@@ -1759,31 +1872,32 @@ test('covers the main trip beats with state-bound WAV fallbacks', async ({ page 
 })
 
 test('replays the direct flight-number and advisory-dismiss WAV branches', async ({ page }) => {
-  await page.addInitScript(() => {
-    const scope = window as unknown as Record<string, unknown>
-    delete scope.SpeechRecognition
-    delete scope.webkitSpeechRecognition
-  })
   await page.goto('/')
 
-  async function replay(label: string, expectedText: string) {
+  async function replay(label: string, expectedText: string, requestBody: 'input' | 'event' = 'event') {
+    const requestPromise = page.waitForRequest((candidate) => (
+      candidate.method() === 'POST'
+      && (requestBody === 'input'
+        ? new URL(candidate.url()).pathname === '/v1/tasks'
+        : /\/v1\/tasks\/[^/]+\/events$/u.test(new URL(candidate.url()).pathname))
+    ))
     await page.getByRole('button', { name: '打开演示控制' }).click()
-    await page.getByRole('dialog', { name: '演示控制' }).getByRole('button', { name: label }).click()
-    const input = page.getByLabel('任务输入')
-    await expect(input).toHaveValue(expectedText, { timeout: 15_000 })
-    await page.getByRole('button', { name: '发送' }).click()
+    await voiceReplayControls(page).getByRole('button', { name: label, exact: true }).click()
+    expect((await requestPromise).postDataJSON()).toMatchObject(
+      requestBody === 'input' ? { input: { text: expectedText, source: 'voice' } } : { event: { text: expectedText, source: 'voice' } },
+    )
   }
 
-  await replay('接机指令', '我现在要去机场接妈妈和豆豆')
+  await replay('模糊接机目标', legacyTaskText, 'input')
   await replay('补充航班号', '航班 MU5102')
   await expect(page.getByText('准备出发')).toBeVisible()
-  await replay('语音回放：开始导航', '开始导航')
+  await page.getByRole('region', { name: '当前行程' }).getByRole('button', { name: '开始导航', exact: true }).click()
 
   await advanceFlow(page) // charging.started
   await advanceFlow(page) // flight.updated in-air -> advisory
   await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
 
-  await replay('语音回放：暂不处理', '暂不处理')
+  await replay('暂不处理天气提醒', '暂不处理')
   await expect(page.locator('[data-component-id="weather-advisory"]')).toHaveCount(0)
   await expect(page.locator('[data-component-type="navigation-summary"]')).toBeVisible()
 
@@ -1834,9 +1948,20 @@ test('rejects the arrival memory proposal through the confirmation API', async (
 
   for (let step = 0; step < 10; step += 1) await advanceFlow(page)
   await readControls(page, 'completed')
+  const rejected = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/confirmations\//.test(new URL(response.url()).pathname)
+  ))
   await page.getByRole('button', { name: '暂不保存' }).click()
 
-  await readControls(page, 'memory.reject-update:cancelled')
+  const rejection = await rejected
+  expect(rejection.ok()).toBe(true)
+  expect(await rejection.json()).toMatchObject({
+    task: { phase: 'completed' },
+    effects: [expect.objectContaining({ type: 'memory.reject-update', status: 'cancelled' })],
+  })
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByText('已到家')).toBeVisible()
   await expect(page.getByRole('button', { name: '暂不保存' })).toHaveCount(0)
 })
 

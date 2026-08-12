@@ -1,17 +1,4 @@
-/**
- * Loads the AMap JS API once, or resolves null when it should stay offline.
- *
- * The route panel calls this and falls back to its offline sketch on null, so
- * every failure mode — no key configured, script blocked, slow network — has to
- * end in a plain `null` rather than a throw. Nothing here logs the key, and with
- * no key the loader injects no script and touches the network not at all: the
- * demo's default, keyless state makes zero requests.
- *
- * The security code never appears here. It is server-only; the loader just
- * points AMap's service host at our `/_AMapService` proxy, which appends it.
- */
-
-/** The slice of the AMap global the panel actually uses. */
+/** Generation-safe loader for the AMap Web JS API and its ordered key ring. */
 export type AMapApi = {
   Map: new (container: HTMLElement, options?: Record<string, unknown>) => AMapMap
   Driving: new (options?: Record<string, unknown>) => AMapDriving
@@ -25,6 +12,7 @@ export type AMapMap = {
   remove: (overlay: AMapOverlay | AMapOverlay[]) => void
   setFitView: (overlays?: AMapOverlay[] | null) => void
   setZoomAndCenter: (zoom: number, center: [number, number]) => void
+  setMapStyle?: (style: string) => void
   setCenter?: (center: [number, number], immediately?: boolean) => void
   on?: (event: 'dragstart' | 'zoomstart', listener: () => void) => void
   off?: (event: 'dragstart' | 'zoomstart', listener: () => void) => void
@@ -32,98 +20,141 @@ export type AMapMap = {
 }
 
 export type AMapDriving = {
-  search: (
-    origin: unknown,
-    destination: unknown,
-    options: { waypoints?: unknown[] },
-    callback: (status: string, result: unknown) => void,
-  ) => void
+  search: (origin: unknown, destination: unknown, options: { waypoints?: unknown[] }, callback: (status: string, result: unknown) => void) => void
 }
-
-/**
- * An overlay the panel has added to the map.
- *
- * Structurally empty because nothing generic is read off one — they are handed
- * back to `map.remove` and no further. The two the crawl repositions are narrower
- * types below, so a plain overlay still cannot be moved by accident.
- */
 export type AMapOverlay = Record<string, never>
+export type AMapMarker = AMapOverlay & { setPosition: (position: [number, number]) => void; setAngle?: (angle: number) => void }
+export type AMapPolyline = AMapOverlay & { setPath: (path: Array<[number, number]>) => void }
 
-/** A marker the crawl moves, rather than removes and rebuilds each frame. */
-export type AMapMarker = AMapOverlay & {
-  setPosition: (position: [number, number]) => void
-  setAngle?: (angle: number) => void
-}
-
-/** A polyline whose points the crawl rewrites, for the traversed tail. */
-export type AMapPolyline = AMapOverlay & {
-  setPath: (path: Array<[number, number]>) => void
-}
-
-type AMapWindow = typeof globalThis & {
-  AMap?: AMapApi
-  _AMapSecurityConfig?: { serviceHost: string }
-}
+type AMapWindow = typeof globalThis & { AMap?: AMapApi; _AMapSecurityConfig?: { serviceHost: string } }
+export type AMapLoaderSnapshot = { state: 'idle' | 'loading' | 'ready' | 'failed'; keyIndex?: number; keyCount: number }
+type LoaderListener = (snapshot: AMapLoaderSnapshot) => void
 
 const SCRIPT_ID = 'amap-js-api'
-const LOAD_TIMEOUT_MS = 3000
-
+const LOAD_TIMEOUT_MS = 3_000
+const listeners = new Set<LoaderListener>()
 let pending: Promise<AMapApi | null> | null = null
+let generation = 0
+let keyIndex = 0
+let currentScript: HTMLScriptElement | null = null
+let currentScriptGeneration = -1
+let testKeys: string[] | undefined
+let snapshot: AMapLoaderSnapshot = { state: 'idle', keyCount: 0 }
 
-/**
- * Resolve the AMap API, or null if it cannot be loaded. Single-flight: repeated
- * mounts share one load (and one script tag). Never rejects.
- */
+function configuredKeys(): string[] {
+  if (testKeys) return [...testKeys]
+  const env = import.meta.env as ImportMetaEnv & { VITE_AMAP_JS_KEYS?: string; VITE_AMAP_JS_KEY?: string }
+  const raw = env.VITE_AMAP_JS_KEYS || env.VITE_AMAP_JS_KEY || ''
+  return raw.split(',').map((key) => key.trim()).filter(Boolean)
+}
+
+function publish(next: AMapLoaderSnapshot) {
+  snapshot = next
+  for (const listener of listeners) listener(next)
+}
+
+export function amapLoaderSnapshot(): AMapLoaderSnapshot { return snapshot }
+export function subscribeAMapLoader(listener: LoaderListener): () => void {
+  listeners.add(listener)
+  listener(snapshot)
+  return () => listeners.delete(listener)
+}
+
 export function loadAMap(): Promise<AMapApi | null> {
   if (pending) return pending
-  pending = inject()
+  const keys = configuredKeys()
+  const loadGeneration = generation
+  publish({ state: 'loading', keyCount: keys.length, ...(keys.length ? { keyIndex: keyIndex % keys.length } : {}) })
+  if (typeof window !== 'undefined' && (window as AMapWindow).AMap) {
+    const api = (window as AMapWindow).AMap!
+    publish({ state: 'ready', keyCount: keys.length, ...(keys.length ? { keyIndex: keyIndex % keys.length } : {}) })
+    pending = Promise.resolve(api)
+    return pending
+  }
+  pending = loadAll(keys, loadGeneration).then((api) => {
+    if (loadGeneration !== generation) return null
+    publish(api
+      ? { state: 'ready', keyCount: keys.length, keyIndex: keyIndex % keys.length }
+      : { state: 'failed', keyCount: keys.length, ...(keys.length ? { keyIndex: keyIndex % keys.length } : {}) })
+    return api
+  })
   return pending
 }
 
-function inject(): Promise<AMapApi | null> {
-  if (typeof window === 'undefined' || typeof document === 'undefined') return Promise.resolve(null)
+async function loadAll(keys: string[], loadGeneration: number): Promise<AMapApi | null> {
+  if (typeof window === 'undefined' || typeof document === 'undefined' || keys.length === 0) return null
+  const start = keyIndex % keys.length
+  for (let offset = 0; offset < keys.length; offset += 1) {
+    const index = (start + offset) % keys.length
+    const api = await loadAttempt(keys[index]!, index, loadGeneration)
+    if (loadGeneration !== generation) return null
+    if (api) {
+      keyIndex = index
+      return api
+    }
+  }
+  delete (window as AMapWindow)._AMapSecurityConfig
+  return null
+}
+
+function loadAttempt(key: string, attemptIndex: number, loadGeneration: number): Promise<AMapApi | null> {
   const amapWindow = window as AMapWindow
-  if (amapWindow.AMap) return Promise.resolve(amapWindow.AMap)
-
-  const key = import.meta.env.VITE_AMAP_JS_KEY
-  // No key: stay entirely offline. No script, no request, no security config.
-  if (!key) return Promise.resolve(null)
-
-  return new Promise<AMapApi | null>((resolve) => {
-    // Route AMap's own service calls through our proxy so the jscode stays server-side.
-    amapWindow._AMapSecurityConfig = { serviceHost: `${window.location.origin}/_AMapService` }
-
-    const existing = document.getElementById(SCRIPT_ID)
+  return new Promise((resolve) => {
     let settled = false
+    const timer = window.setTimeout(() => finish(null), LOAD_TIMEOUT_MS)
+    let script: HTMLScriptElement | null = null
     const finish = (value: AMapApi | null) => {
       if (settled) return
       settled = true
       window.clearTimeout(timer)
-      resolve(value)
+      const current = loadGeneration === generation && currentScript === script && currentScriptGeneration === loadGeneration
+      if (!current) { resolve(null); return }
+      if (value) { resolve(value); return }
+      delete amapWindow.AMap
+      if (script?.parentNode && document.getElementById(SCRIPT_ID) === script) script.remove()
+      currentScript = null
+      resolve(null)
     }
 
-    // No retry: one attempt, and a slow or blocked script degrades to the sketch.
-    const timer = window.setTimeout(() => finish(null), LOAD_TIMEOUT_MS)
-
-    if (existing) {
-      existing.addEventListener('load', () => finish(amapWindow.AMap ?? null))
-      existing.addEventListener('error', () => finish(null))
-      if (amapWindow.AMap) finish(amapWindow.AMap)
-      return
-    }
-
-    const script = document.createElement('script')
+    amapWindow._AMapSecurityConfig = { serviceHost: `${window.location.origin}/_AMapService` }
+    const existing = document.getElementById(SCRIPT_ID)
+    if (existing && existing !== currentScript) existing.remove()
+    script = document.createElement('script')
     script.id = SCRIPT_ID
+    script.dataset.keyIndex = String(attemptIndex)
     script.async = true
     script.src = `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}&plugin=AMap.Driving`
+    currentScript = script
+    currentScriptGeneration = loadGeneration
     script.addEventListener('load', () => finish(amapWindow.AMap ?? null))
-    // The failure is intentionally opaque: the key is never read back into any message.
     script.addEventListener('error', () => finish(null))
     document.head.appendChild(script)
   })
 }
 
-/** Test-only: drop the single-flight cache so a fresh load can be observed. */
-export function __resetAMapLoaderForTest(): void {
+export function invalidateAMap(options: { rotate?: boolean } = {}): void {
+  generation += 1
+  const count = configuredKeys().length
+  if (options.rotate !== false && count > 0) keyIndex = (keyIndex + 1) % count
+  const amapWindow = typeof window === 'undefined' ? null : (window as AMapWindow)
+  if (currentScript?.parentNode && document.getElementById(SCRIPT_ID) === currentScript) currentScript.remove()
+  currentScript = null
+  currentScriptGeneration = -1
+  if (amapWindow) {
+    delete amapWindow.AMap
+    delete amapWindow._AMapSecurityConfig
+  }
   pending = null
+  publish({ state: 'idle', keyCount: count, ...(count ? { keyIndex: keyIndex % count } : {}) })
+}
+
+export function retryAMap(): Promise<AMapApi | null> { invalidateAMap({ rotate: false }); return loadAMap() }
+export function switchAMapKey(): Promise<AMapApi | null> { invalidateAMap(); return loadAMap() }
+export function __setAMapKeysForTest(keys?: string[]): void { testKeys = keys }
+export function __resetAMapLoaderForTest(): void {
+  invalidateAMap({ rotate: false })
+  keyIndex = 0
+  generation = 0
+  testKeys = undefined
+  snapshot = { state: 'idle', keyCount: 0 }
 }

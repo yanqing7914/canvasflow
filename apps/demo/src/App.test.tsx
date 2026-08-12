@@ -1,6 +1,6 @@
 import { StrictMode, type ComponentProps } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import AppComponent from './App'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
@@ -11,21 +11,265 @@ import { composePickupSpec } from '@canvasflow/ui'
 import { createFakeSpeech } from './test/speech'
 import type { CockpitUISpec } from './ui/navigation/contracts'
 import type { NavigationClock } from './ui/navigation/simulator'
+import { AgentApiError } from './agent-client'
 
 // Legacy cases intentionally start from the historical typed draft. Production
 // and the dedicated empty-input test below render AppComponent directly.
 function App(props: ComponentProps<typeof AppComponent>) {
-  return <AppComponent initialText="我现在要去机场接妈妈和豆豆" voiceAutoSubmit={false} {...props} />
+  return <AppComponent initialText="我现在要去机场接妈妈和豆豆" voiceAutoSubmit={false} wakeWordEnabled={false} {...props} />
 }
 
 describe('demo integration', () => {
-  it('starts with an empty task input and never supplies an example sentence', async () => {
+  it('starts in a quiet idle cockpit without creating a task or showing a large composer', async () => {
     const user = userEvent.setup()
-    render(<AppComponent voiceEnabled={false} />)
+    const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} />)
+    expect(screen.getByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.getByLabelText('人民广场模拟车辆位置')).toHaveTextContent('模拟位置，非真实 GPS')
+    expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
+    expect(screen.queryByText(/航班/)).not.toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('语音不可用，请用文字告诉我。')
+    expect(api.create).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: '改用文字输入' }))
+    expect(screen.getByLabelText('任务输入')).toHaveValue('')
+  })
+
+  it('updates the idle cockpit after shared controls change pre-task vehicle state', async () => {
+    const user = userEvent.setup()
+    render(<AppComponent voiceEnabled={false} initialVehicleContext={{
+      speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false,
+    }} />)
+
+    const cockpit = screen.getByLabelText('空闲座舱')
+    expect(cockpit).toHaveAttribute('data-light-condition', 'day')
+
+    await user.click(screen.getByRole('button', { name: '打开演示控制' }))
+    await user.click(screen.getByRole('button', { name: '夜间' }))
+
+    expect(cockpit).toHaveAttribute('data-light-condition', 'night')
+  })
+
+  it('requires Xiaonan for speech but lets explicit text send create the task', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const created = apiResponse(createCockpitTask('wake-created'))
+    const api = { create: vi.fn().mockResolvedValue(created), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0)
+    act(() => { speech.engine().emit('我要去机场接人', true, 0.9) })
+    expect(api.create).not.toHaveBeenCalled()
+    act(() => { speech.engine().emit('小南，我要去机场接人', true, 0.51) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledWith('我要去机场接人', expect.objectContaining({ source: 'voice', confidence: 0.51 })))
+
+    const typedApi = { ...api, create: vi.fn().mockResolvedValue(created) }
+    const typed = render(<AppComponent api={typedApi} voiceEnabled={false} />)
+    await user.click(screen.getAllByRole('button', { name: '改用文字输入' }).at(-1)!)
+    await user.type(screen.getAllByLabelText('任务输入').at(-1)!, '查天气')
+    await user.click(screen.getAllByRole('button', { name: '发送' }).at(-1)!)
+    typed.unmount()
+    expect(typedApi.create).toHaveBeenCalledWith('查天气', expect.objectContaining({ vehicleContext: expect.anything() }))
+  })
+
+  it('gives reset confirmation priority over ordinary wake command handling', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const active = apiResponse(createCockpitTask('reset-active'))
+    const cancelled = apiResponse({ ...active.task, phase: 'cancelled' })
+    const api = {
+      create: vi.fn().mockResolvedValue(active), event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+      cancel: vi.fn().mockResolvedValue(cancelled),
+    }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    act(() => { speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledOnce())
+
+    act(() => { speech.engine().emit('小南，重新开始', true, 0.9) })
+    expect(screen.getAllByText('等待确认').length).toBeGreaterThan(0)
+    act(() => { speech.engine().emit('小南，确定', true, 0.9) })
+
+    await waitFor(() => expect(api.cancel).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'reset-active' }), '用户确认重新开始'))
+    expect(api.event).not.toHaveBeenCalled()
+    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
+  })
+
+  it('keeps an invalid typed reset decision available for correction', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const active = apiResponse(createCockpitTask('reset-typed-invalid'))
+    const api = {
+      create: vi.fn().mockResolvedValue(active), event: vi.fn(), action: vi.fn(), confirmation: vi.fn(), cancel: vi.fn(),
+    }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.(); speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledOnce())
+    act(() => { speech.engine().emit('小南，重新开始', true, 0.9) })
+
+    await user.click(screen.getByRole('button', { name: '改用文字输入' }))
     const input = screen.getByLabelText('任务输入')
-    expect(input).toHaveValue('')
+    await user.type(input, '稍后再说')
     await user.click(screen.getByRole('button', { name: '发送' }))
-    expect(input).toHaveValue('')
+
+    expect(input).toHaveValue('稍后再说')
+    expect(screen.getAllByText('等待确认').length).toBeGreaterThan(0)
+    expect(api.cancel).not.toHaveBeenCalled()
+    expect(screen.getByLabelText('机场接人任务')).toBeInTheDocument()
+
+    await user.clear(input)
+    await user.type(input, '取消')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0)
+  })
+
+  it('retries a reset revision conflict and releases a stuck wake drain for the next task', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const active = apiResponse(createCockpitTask('reset-pending'))
+    const latest = apiResponse({ ...active.task, taskRevision: active.task.taskRevision + 1 })
+    const cancelled = apiResponse({ ...latest.task, phase: 'cancelled', taskRevision: latest.task.taskRevision + 1 })
+    const restarted = apiResponse(createCockpitTask('reset-restarted'))
+    const event = vi.fn().mockImplementation(() => new Promise<AgentResponse>(() => {}))
+    const cancel = vi.fn()
+      .mockRejectedValueOnce(new AgentApiError(409, {
+        requestId: 'reset-conflict',
+        error: { code: 'TASK_REVISION_CONFLICT', message: '任务版本已更新', retryable: false },
+        latest: { task: latest.task, ui: latest.ui },
+      }))
+      .mockResolvedValueOnce(cancelled)
+    const api = {
+      create: vi.fn().mockResolvedValueOnce(active).mockResolvedValueOnce(restarted),
+      event, action: vi.fn(), confirmation: vi.fn(), cancel,
+    }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    act(() => { speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledOnce())
+    act(() => { speech.engine().emit('小南，查天气', true, 0.9) })
+    await waitFor(() => expect(event).toHaveBeenCalledOnce())
+
+    act(() => { speech.engine().emit('小南，重新开始', true, 0.9) })
+    act(() => { speech.engine().emit('确定', true, 0.9) })
+
+    await waitFor(() => expect(cancel).toHaveBeenCalledTimes(2))
+    expect(cancel).toHaveBeenNthCalledWith(1, active.task, '用户确认重新开始')
+    expect(cancel).toHaveBeenNthCalledWith(2, latest.task, '用户确认重新开始')
+    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
+
+    act(() => { speech.engine().emit('小南，我要去机场接爸爸', true, 0.9) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledTimes(2))
+    expect(api.create).toHaveBeenLastCalledWith('我要去机场接爸爸', expect.objectContaining({ source: 'voice' }))
+  })
+
+  it('restarts continuous wake recognition after a browser-ended session', async () => {
+    vi.useFakeTimers()
+    const speech = createFakeSpeech()
+    render(<AppComponent api={{ create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }} speech={speech.deps} />)
+
+    act(() => { screen.getByRole('button', { name: '启用小南语音唤醒' }).click() })
+    act(() => { speech.engine().onstart?.() })
+    const first = speech.engine()
+    act(() => { first.onend?.(); vi.advanceTimersByTime(180) })
+    expect(speech.engines).toHaveLength(2)
+    expect(speech.engine().started).toBe(1)
+    await act(async () => {})
+    vi.useRealTimers()
+  })
+
+  it('re-arms the microphone when a continuous wake restart fails', async () => {
+    vi.useFakeTimers()
+    try {
+      const speech = createFakeSpeech()
+      render(<AppComponent api={{ create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }} speech={speech.deps} />)
+
+      act(() => { screen.getByRole('button', { name: '启用小南语音唤醒' }).click() })
+      act(() => { speech.engine().onstart?.() })
+      const first = speech.engine()
+      speech.failNextRecognitionStarts()
+      act(() => { first.onend?.(); vi.advanceTimersByTime(180) })
+
+      const retry = screen.getByRole('button', { name: '重试语音唤醒' })
+      expect(retry).toBeEnabled()
+      expect(screen.getByRole('status')).toHaveTextContent('语音监听已中断')
+
+      act(() => { retry.click() })
+      expect(speech.engines).toHaveLength(2)
+      act(() => { speech.engine().onstart?.() })
+      expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('queues a second wake command while the first Agent request is pending', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    let finishCreate: ((response: AgentResponse) => void) | undefined
+    const created = apiResponse(createCockpitTask('queued-wake'))
+    const create = vi.fn().mockImplementation(() => new Promise<AgentResponse>((resolve) => { finishCreate = resolve }))
+    const event = vi.fn().mockResolvedValue(created)
+    const api = { create, event, action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    act(() => { speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+    await waitFor(() => expect(create).toHaveBeenCalledOnce())
+    act(() => { speech.engine().emit('小南，查天气', true, 0.9) })
+    expect(screen.getByRole('status')).toHaveTextContent('已记住「查天气」')
+    expect(event).not.toHaveBeenCalled()
+
+    act(() => { finishCreate?.(created) })
+    await waitFor(() => expect(event).toHaveBeenCalledOnce())
+    expect(event.mock.calls[0]?.[1]).toMatchObject({ text: '查天气', source: 'voice' })
+  })
+
+  it('parks a rejected wake command instead of losing it', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const recovered = apiResponse(createCockpitTask('wake-retry'))
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error('语音请求失败'))
+      .mockResolvedValueOnce(recovered)
+    const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    act(() => { speech.engine().emit('小南，我要去机场接人', true, 0.51) })
+
+    expect(await screen.findByLabelText('任务输入')).toHaveValue('我要去机场接人')
+    expect(screen.getByRole('status')).toHaveTextContent('原话已保留')
+    expect(screen.getByRole('button', { name: '发送' })).toBeEnabled()
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2))
+    expect(create).toHaveBeenLastCalledWith('我要去机场接人', expect.objectContaining({
+      source: 'voice', confidence: 0.51,
+    }))
+  })
+
+  it('does not enable fixture replay while wake follow-up is active', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} speech={speech.deps} />)
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.(); speech.engine().emit('小南', true) })
+    await openControls(user)
+    expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
   })
 
   it('renders cockpit-owned flight and confirmation windows before navigation', async () => {
@@ -408,6 +652,10 @@ describe('demo integration', () => {
     return screen.getByRole('dialog', { name: '演示控制' })
   }
 
+  function fixtureReplayControls() {
+    return within(screen.getByRole('group', { name: '语音兜底回放' }))
+  }
+
   function apiResponse(task: AirportPickupTaskState): AgentResponse {
     const ui = composePickupSpec(task)
     const withNavigationAction = task.phase === 'preparing'
@@ -670,7 +918,7 @@ describe('demo integration', () => {
     await user.clear(screen.getByLabelText('任务输入'))
     await user.type(screen.getByLabelText('任务输入'), 'MU5102')
     await user.click(screen.getByRole('button', { name: '发送' }))
-    await user.click(screen.getByRole('button', { name: '开始导航' }))
+    await user.click(within(screen.getByRole('region', { name: '当前行程' })).getByRole('button', { name: '开始导航' }))
     expect(await screen.findByText('驾驶提示')).toBeInTheDocument()
     expect(screen.queryByText('停车提示')).not.toBeInTheDocument()
 
@@ -957,7 +1205,7 @@ describe('demo integration', () => {
     await user.type(screen.getByLabelText('任务输入'), 'MU5102')
     await user.click(screen.getByRole('button', { name: '发送' }))
     await waitFor(() => expect(drawer).toHaveTextContent('preparing'))
-    await user.click(screen.getByRole('button', { name: '开始导航' }))
+    await user.click(within(screen.getByRole('region', { name: '当前行程' })).getByRole('button', { name: '开始导航' }))
     await waitFor(() => expect(drawer).toHaveTextContent('driving-to-airport'))
 
     const advance = screen.getByRole('button', { name: /推进下一事件/ })
@@ -1125,6 +1373,174 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '暂不保存' }))
     expect(screen.queryByRole('button', { name: '暂不保存' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '保存本次偏好' })).not.toBeInTheDocument()
+  })
+
+  it.each([
+    ['保存本次偏好！', 'accept' as const],
+    ['暂不保存？', 'reject' as const],
+  ])('routes spoken completion choice "%s" through confirmation instead of creating a task', async (utterance, decision) => {
+    const user = userEvent.setup()
+    const completedTask: AirportPickupTaskState = {
+      ...createCockpitTask(`voice-memory-${decision}`),
+      phase: 'completed',
+      taskRevision: 8,
+      pendingConfirmation: { confirmationId: `cnf-${decision}`, action: 'save-memory' },
+      memoryProposal: {
+        proposalId: `proposal-${decision}`,
+        memberId: 'mom',
+        confirmationId: `cnf-${decision}`,
+        changes: { rearTemperatureC: 25 },
+        status: 'pending',
+      },
+    }
+    const current = apiResponse(completedTask)
+    const resolved = apiResponse({
+      ...completedTask,
+      taskRevision: 9,
+      pendingConfirmation: undefined,
+      memoryProposal: { ...completedTask.memoryProposal!, status: decision === 'accept' ? 'accepted' : 'rejected' },
+    })
+    const api = {
+      create: vi.fn().mockResolvedValue(current),
+      event: vi.fn(),
+      action: vi.fn(),
+      confirmation: vi.fn().mockResolvedValue(resolved),
+    }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="建立任务" />)
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    expect(screen.getByRole('button', { name: '保存本次偏好' })).toBeInTheDocument()
+
+    const input = screen.getByLabelText('任务输入')
+    await user.type(input, utterance)
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `cnf-${decision}`, decision))
+    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('已到家')
+    expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
+    expect(api.create).toHaveBeenCalledTimes(1)
+    expect(api.event).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['保存本次偏好', 'accept' as const],
+    ['暂不保存', 'reject' as const],
+  ])('returns to the idle cockpit after the completion button "%s" resolves', async (label, decision) => {
+    const user = userEvent.setup()
+    const completedTask: AirportPickupTaskState = {
+      ...createCockpitTask(`button-memory-${decision}`),
+      phase: 'completed',
+      taskRevision: 8,
+      pendingConfirmation: { confirmationId: `button-cnf-${decision}`, action: 'save-memory' },
+      memoryProposal: {
+        proposalId: `button-proposal-${decision}`,
+        memberId: 'mom',
+        confirmationId: `button-cnf-${decision}`,
+        changes: { rearTemperatureC: 25 },
+        status: 'pending',
+      },
+    }
+    const resolved = apiResponse({
+      ...completedTask,
+      taskRevision: 9,
+      pendingConfirmation: undefined,
+      memoryProposal: { ...completedTask.memoryProposal!, status: decision === 'accept' ? 'accepted' : 'rejected' },
+    })
+    const api = {
+      create: vi.fn().mockResolvedValue(apiResponse(completedTask)),
+      event: vi.fn(),
+      action: vi.fn(),
+      confirmation: vi.fn().mockResolvedValue(resolved),
+    }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="建立任务" />)
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    await user.click(screen.getByRole('button', { name: label }))
+
+    await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `button-cnf-${decision}`, decision))
+    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(screen.getByRole('status')).toHaveTextContent('已到家')
+    expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
+  })
+
+  it('gates preference replay on the renderer first-wins confirmation action', async () => {
+    const user = userEvent.setup()
+    const completedTask: AirportPickupTaskState = {
+      ...createCockpitTask('voice-memory-first-wins'),
+      phase: 'completed',
+      pendingConfirmation: { confirmationId: 'cnf-first-wins', action: 'save-memory' },
+    }
+    const current = apiResponse(completedTask)
+    current.ui = {
+      ...current.ui,
+      actions: [
+        // The renderer resolves duplicate action ids to this first entry.
+        { id: 'save-trip-preferences', label: '错误保存动作', style: 'primary', event: { type: 'agent-message', text: '保存本次偏好' } },
+        { id: 'save-trip-preferences', label: '保存本次偏好', style: 'primary', event: { type: 'confirmation', confirmationId: 'cnf-first-wins', decision: 'accept' } },
+        { id: 'reject-trip-preferences', label: '暂不保存', style: 'secondary', event: { type: 'confirmation', confirmationId: 'cnf-first-wins', decision: 'reject' } },
+      ],
+    }
+    const api = { create: vi.fn().mockResolvedValue(current), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="建立任务" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await openControls(user)
+
+    expect(fixtureReplayControls().getByRole('button', { name: '保存本次偏好' })).toBeDisabled()
+    expect(fixtureReplayControls().getByRole('button', { name: '暂不保存' })).toBeEnabled()
+    expect(api.confirmation).not.toHaveBeenCalled()
+  })
+
+  it('does not expose preference replay for a stale confirmation id', async () => {
+    const user = userEvent.setup()
+    const completedTask: AirportPickupTaskState = {
+      ...createCockpitTask('voice-memory-stale-id'),
+      phase: 'completed',
+      pendingConfirmation: { confirmationId: 'cnf-current', action: 'save-memory' },
+    }
+    const current = apiResponse(completedTask)
+    current.ui = {
+      ...current.ui,
+      actions: current.ui.actions.map((action) => action.event.type === 'confirmation'
+        ? { ...action, event: { ...action.event, confirmationId: 'cnf-expired' } }
+        : action),
+    }
+    const api = { create: vi.fn().mockResolvedValue(current), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="建立任务" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    await openControls(user)
+    expect(fixtureReplayControls().getByRole('button', { name: '保存本次偏好' })).toBeDisabled()
+    expect(fixtureReplayControls().getByRole('button', { name: '暂不保存' })).toBeDisabled()
+  })
+
+  it('keeps a stale spoken preference choice instead of creating a new task', async () => {
+    const user = userEvent.setup()
+    const completedTask: AirportPickupTaskState = {
+      ...createCockpitTask('voice-memory-stale-spoken'),
+      phase: 'completed',
+      pendingConfirmation: { confirmationId: 'cnf-current', action: 'save-memory' },
+    }
+    const current = apiResponse(completedTask)
+    current.ui = {
+      ...current.ui,
+      actions: current.ui.actions.map((action) => action.event.type === 'confirmation'
+        ? { ...action, event: { ...action.event, confirmationId: 'cnf-expired' } }
+        : action),
+    }
+    const create = vi.fn().mockResolvedValue(current)
+    const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="建立任务" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    const input = screen.getByLabelText('任务输入')
+    await user.type(input, '保存本次偏好！')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    expect(input).toHaveValue('保存本次偏好！')
+    expect(create).toHaveBeenCalledTimes(1)
+    expect(api.confirmation).not.toHaveBeenCalled()
+    expect(api.event).not.toHaveBeenCalled()
   })
 
   it('skips timeline events that are invalid for an injected phase', async () => {
@@ -1646,7 +2062,7 @@ describe('demo integration', () => {
         const speech = createFakeSpeech()
         const create = vi.fn().mockResolvedValue(apiResponse(createInitialTask()))
         const api = { create, event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
-        render(<AppComponent api={api} speech={speech.deps} />)
+        render(<AppComponent api={api} speech={speech.deps} wakeWordEnabled={false} />)
 
         act(() => { screen.getByRole('button', { name: '开始语音输入' }).click() })
         emit(() => speech.engine().emit('去虹桥机场接人', true, 0.9))
@@ -1681,7 +2097,7 @@ describe('demo integration', () => {
       } as AirportPickupTaskState
       const event = vi.fn().mockRejectedValue(new Error('天气服务暂时不可用'))
       const api = { create: vi.fn().mockResolvedValue(apiResponse(task)), event, action: vi.fn(), confirmation: vi.fn() }
-      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} />)
+      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} wakeWordEnabled={false} />)
 
       await user.click(screen.getByRole('button', { name: '改用文字输入' }))
       await user.click(screen.getByRole('button', { name: '发送' }))
@@ -1715,7 +2131,7 @@ describe('demo integration', () => {
       } as AirportPickupTaskState
       const event = vi.fn()
       const api = { create: vi.fn().mockResolvedValue(apiResponse(task)), event, action: vi.fn(), confirmation: vi.fn() }
-      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} />)
+      render(<AppComponent api={api} speech={speech.deps} initialText="开始" initialNavigationReminder="前方 300 米右转" voiceAutoSubmit={false} wakeWordEnabled={false} />)
 
       await user.click(screen.getByRole('button', { name: '改用文字输入' }))
       await user.click(screen.getByRole('button', { name: '发送' }))
@@ -2146,7 +2562,7 @@ describe('demo integration', () => {
 
       const drawer = await openControls(user)
       expect(drawer).toHaveTextContent('语音兜底回放')
-      await user.click(screen.getByRole('button', { name: '接机指令' }))
+      await user.click(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' }))
       await flush()
 
       // The stage is back and the recording is playing into a listening turn.
@@ -2213,7 +2629,7 @@ describe('demo integration', () => {
       expect(screen.getByRole('button', { name: '语音入口暂不可用' })).toBeDisabled()
 
       await openControls(user)
-      await user.click(screen.getByRole('button', { name: '接机指令' }))
+      await user.click(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' }))
 
       // The recording still plays for the audience; the transcript is parked in
       // the text field, and only 发送 moves it on.
@@ -2243,14 +2659,14 @@ describe('demo integration', () => {
 
       // Those words are theirs; replay must not silently replace them.
       let drawer = await openControls(user)
-      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
       expect(drawer).toHaveTextContent('输入框里还有未发送的内容')
       await user.keyboard('{Escape}')
 
       // Clearing the field by hand releases it, and replay is available again.
       await user.clear(screen.getByLabelText('任务输入'))
       drawer = await openControls(user)
-      expect(screen.getByRole('button', { name: '接机指令' })).toBeEnabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeEnabled()
       expect(create).not.toHaveBeenCalled()
     })
 
@@ -2263,29 +2679,98 @@ describe('demo integration', () => {
       render(<App api={api} fixtureAudio={audio.factory} />)
 
       await openControls(user)
-      await user.click(screen.getByRole('button', { name: '接机指令' }))
+      await user.click(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' }))
       expect(screen.getByLabelText('任务输入')).toHaveValue('我现在要去机场接妈妈和豆豆')
 
       // The parked words are unconfirmed; another sample may not clobber them.
       await openControls(user)
-      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
       await user.keyboard('{Escape}')
 
       // Sending them releases the field, and replay opens up again.
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
       await openControls(user)
-      expect(screen.getByRole('button', { name: '补充航班号' })).toBeEnabled()
-      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '补充航班号' })).toBeEnabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
+    })
+
+    it('routes a fixture through the live wake queue without opening a fixture recognition engine', async () => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const audio = createFakeFixtureAudio()
+      const created = apiResponse(createCockpitTask('wake-fixture-created'))
+      const api = { create: vi.fn().mockResolvedValue(created), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+      render(<AppComponent api={api} speech={speech.deps} fixtureAudio={audio.factory} />)
+
+      await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+      act(() => { speech.engine().onstart?.() })
+      const liveEngine = speech.engine()
+      await openControls(user)
+      await user.click(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' }))
+      expect(speech.engines).toHaveLength(1)
+      expect(liveEngine.aborted).toBeGreaterThan(0)
+      expect(api.create).not.toHaveBeenCalled()
+
+      act(() => { audio.current().onended?.() })
+      await waitFor(() => expect(api.create).toHaveBeenCalledWith(
+        '我现在要去机场接妈妈和豆豆',
+        expect.objectContaining({ source: 'voice', confidence: 0.96 }),
+      ))
+      expect(speech.engines).toHaveLength(2)
+      expect(speech.engine()).not.toBe(liveEngine)
+    })
+
+    it.each([
+      ['确认重新开始', true],
+      ['取消重新开始', false],
+    ])('keeps only the reset decision fixture "%s" available during wake confirmation', async (label, confirmsReset) => {
+      const user = userEvent.setup()
+      const speech = createFakeSpeech()
+      const audio = createFakeFixtureAudio()
+      const active = apiResponse(createCockpitTask(`fixture-reset-${confirmsReset ? 'confirm' : 'cancel'}`))
+      const cancelled = apiResponse({ ...active.task, phase: 'cancelled' })
+      const api = {
+        create: vi.fn().mockResolvedValue(active), event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+        cancel: vi.fn().mockResolvedValue(cancelled),
+      }
+      render(<AppComponent api={api} speech={speech.deps} fixtureAudio={audio.factory} />)
+
+      await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+      act(() => { speech.engine().onstart?.(); speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+      await waitFor(() => expect(api.create).toHaveBeenCalledOnce())
+      act(() => { speech.engine().emit('小南，重新开始', true, 0.9) })
+
+      await openControls(user)
+      const controls = fixtureReplayControls()
+      expect(controls.getByRole('button', { name: label })).toBeEnabled()
+      expect(controls.getByRole('button', { name: confirmsReset ? '取消重新开始' : '确认重新开始' })).toBeEnabled()
+      expect(controls.getByRole('button', { name: '查询天气' })).toBeDisabled()
+      await user.click(controls.getByRole('button', { name: label }))
+      act(() => { audio.current().onended?.() })
+
+      if (confirmsReset) {
+        await waitFor(() => expect(api.cancel).toHaveBeenCalledWith(active.task, '用户确认重新开始'))
+        expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+      } else {
+        await waitFor(() => expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0))
+        expect(api.cancel).not.toHaveBeenCalled()
+        expect(screen.getByLabelText('机场接人任务')).toBeInTheDocument()
+      }
+      expect(api.event).not.toHaveBeenCalled()
     })
 
     it('enables state-bound samples only when their matching UI capability is visible', async () => {
       const user = userEvent.setup()
-      const initial = createInitialTask()
+      const initial = {
+        ...createCockpitTask('fixture-flight-list'),
+        phase: 'choosing-flight' as const,
+        pickupAirport: { label: '虹桥机场', code: 'SHA' },
+      } as AirportPickupTaskState
       const base = composePickupSpec(initial)
       const arrivalsUi: UISpec = {
         ...base,
-        layout: { type: 'stack', gap: 'md', slots: { main: ['flight-choices'] } },
+        layout: { type: 'stack', gap: 'md', slots: { main: [] } },
         components: [{
           id: 'flight-choices',
           type: 'flight-choices',
@@ -2302,6 +2787,11 @@ describe('demo integration', () => {
           { id: 'pick-MU5102', label: '接 MU5102', style: 'primary', event: { type: 'agent-message', text: '航班号 MU5102' } },
           { id: 'pick-MU5103', label: '接 MU5103', style: 'secondary', event: { type: 'agent-message', text: '航班号 MU5103' } },
         ],
+        windows: [{
+          id: 'fixture-flight-list-window', kind: 'flight-list', title: '虹桥机场到达航班',
+          componentIds: ['flight-choices'], actionIds: ['pick-MU5102', 'pick-MU5103'], size: 'large',
+          controls: { closable: true, minimizable: true, maximizable: true },
+        }],
       }
       const api = {
         create: vi.fn().mockResolvedValue({ ...apiResponse(initial), ui: arrivalsUi }),
@@ -2310,16 +2800,16 @@ describe('demo integration', () => {
       render(<App api={api} />)
 
       let drawer = await openControls(user)
-      expect(screen.getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: '语音回放：开始导航' })).toBeDisabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '开始导航' })).toBeDisabled()
       await user.keyboard('{Escape}')
       await user.click(screen.getByRole('button', { name: '发送' }))
 
       drawer = await openControls(user)
       expect(drawer).toHaveTextContent('语音兜底回放')
-      expect(screen.getByRole('button', { name: '选择第一个航班' })).toBeEnabled()
-      expect(screen.getByRole('button', { name: '接机指令' })).toBeDisabled()
-      expect(screen.getByRole('button', { name: '语音回放：提醒带伞' })).toBeDisabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '选择第一个航班' })).toBeEnabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '提醒乘客带伞' })).toBeDisabled()
     })
 
     it('keeps a fixture disabled when its visible card has no matching executable action', async () => {
@@ -2351,7 +2841,7 @@ describe('demo integration', () => {
 
       await user.click(screen.getByRole('button', { name: '发送' }))
       await openControls(user)
-      expect(screen.getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
     })
 
     it('uses the renderer first-wins rule when duplicate action ids disagree', async () => {
@@ -2386,7 +2876,7 @@ describe('demo integration', () => {
 
       await user.click(screen.getByRole('button', { name: '发送' }))
       await openControls(user)
-      expect(screen.getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '选择第一个航班' })).toBeDisabled()
     })
 
     it('enables the dismiss fixture for the typed advisory action id', async () => {
@@ -2423,7 +2913,7 @@ describe('demo integration', () => {
 
       await user.click(screen.getByRole('button', { name: '发送' }))
       await openControls(user)
-      expect(screen.getByRole('button', { name: '语音回放：暂不处理' })).toBeEnabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '暂不处理天气提醒' })).toBeEnabled()
     })
 
     it('advances the demo cursor after any supported arrivals-board ordinal', async () => {
@@ -2497,29 +2987,48 @@ describe('demo integration', () => {
       const user = userEvent.setup()
       const audio = createFakeFixtureAudio()
       const preparedTask: AirportPickupTaskState = {
-        ...createInitialTask(),
-        phase: 'preparing',
+        ...createCockpitTask('fixture-outbound-confirmation'),
+        phase: 'confirming-outbound',
         taskRevision: 3,
+        pickupAirport: { label: '虹桥机场', code: 'SHA' },
         passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
         flight: { flightNumber: 'MU5102', trusted: true, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
-        charging: { recommended: true, accepted: false, status: 'planned' },
         navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+        navigationSimulation: {
+          leg: 'outbound', routeId: 'route-airport-001', distanceKm: 32, initialBatteryPercent: 42,
+          estimatedBatteryAtArrival: 27,
+          profiles: {
+            slow: { durationSeconds: 150, displaySpeedKph: 35 },
+            normal: { durationSeconds: 90, displaySpeedKph: 55 },
+            fast: { durationSeconds: 45, displaySpeedKph: 75 },
+          },
+        },
       }
       const prepared = apiResponse(preparedTask)
       prepared.ui = {
         ...prepared.ui,
-        layout: { type: 'stack', gap: 'md', slots: { main: ['navigation-plan'] } },
+        layout: { type: 'stack', gap: 'md', slots: { main: [] } },
         components: [{
-          id: 'navigation-plan',
-          type: 'navigation-summary',
-          actions: ['start-navigation'],
-          props: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', distanceKm: 32, estimatedBatteryAtArrival: 27 },
+          id: 'outbound-confirmation',
+          type: 'route-confirmation',
+          actions: ['start-outbound'],
+          props: {
+            leg: 'outbound', destination: '虹桥机场 T2', flightNumber: 'MU5102',
+            flightEstimatedArrival: '2026-07-22T20:40:00+08:00', durationMinutes: 20,
+            arrivalTime: '2026-07-22T20:25:00+08:00', distanceKm: 32,
+            currentBatteryPercent: 42, estimatedBatteryAtArrival: 27, simulated: true,
+          },
         }],
-        actions: [{ id: 'start-navigation', label: '开始导航', style: 'primary', event: { type: 'tool-request', actionToken: 'start-navigation' } }],
+        actions: [{ id: 'start-outbound', label: '现在出发', style: 'primary', event: { type: 'tool-request', actionToken: 'start-outbound' } }],
+        windows: [{
+          id: 'fixture-outbound-confirmation-window', kind: 'outbound-confirmation', title: '现在出发',
+          componentIds: ['outbound-confirmation'], actionIds: ['start-outbound'], size: 'medium',
+          controls: { closable: true, minimizable: true, maximizable: true },
+        }],
       }
       const startedTask: AirportPickupTaskState = {
         ...preparedTask,
-        phase: 'driving-to-airport',
+        phase: 'outbound-driving',
         taskRevision: 4,
         navigation: { ...preparedTask.navigation!, status: 'active' },
       }
@@ -2533,38 +3042,59 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
 
       await openControls(user)
-      await user.click(screen.getByRole('button', { name: '语音回放：开始导航' }))
+      await user.click(fixtureReplayControls().getByRole('button', { name: '开始导航' }))
+      await waitFor(() => expect(audio.current().played).toBe(1))
+      emit(() => audio.current().onended?.())
       await waitFor(() => expect(screen.getByLabelText('任务输入')).toHaveValue('开始导航'))
       await user.click(screen.getByRole('button', { name: '发送' }))
 
-      await waitFor(() => expect(api.action).toHaveBeenCalledWith(expect.anything(), 'start-navigation', 'navigation-plan'))
+      await waitFor(() => expect(api.action).toHaveBeenCalledWith(expect.anything(), 'start-outbound', 'outbound-confirmation'))
       expect(api.event).not.toHaveBeenCalled()
-      expect(await screen.findByText('途中')).toBeInTheDocument()
+      expect(await screen.findByLabelText('导航信息')).toBeInTheDocument()
     })
 
     it('does not consume the navigation timeline step when the registered action fails', async () => {
       const user = userEvent.setup()
       const audio = createFakeFixtureAudio()
       const preparedTask: AirportPickupTaskState = {
-        ...createInitialTask(),
-        phase: 'preparing',
+        ...createCockpitTask('fixture-outbound-failure'),
+        phase: 'confirming-outbound',
         taskRevision: 3,
+        pickupAirport: { label: '虹桥机场', code: 'SHA' },
         passengers: { memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'], confirmedOnboard: false },
         flight: { flightNumber: 'MU5102', trusted: true, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
-        charging: { recommended: true, accepted: false, status: 'planned' },
         navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+        navigationSimulation: {
+          leg: 'outbound', routeId: 'route-airport-001', distanceKm: 32, initialBatteryPercent: 42,
+          estimatedBatteryAtArrival: 27,
+          profiles: {
+            slow: { durationSeconds: 150, displaySpeedKph: 35 },
+            normal: { durationSeconds: 90, displaySpeedKph: 55 },
+            fast: { durationSeconds: 45, displaySpeedKph: 75 },
+          },
+        },
       }
       const prepared = apiResponse(preparedTask)
       prepared.ui = {
         ...prepared.ui,
-        layout: { type: 'stack', gap: 'md', slots: { main: ['navigation-plan'] } },
+        layout: { type: 'stack', gap: 'md', slots: { main: [] } },
         components: [{
-          id: 'navigation-plan',
-          type: 'navigation-summary',
-          actions: ['start-navigation'],
-          props: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', distanceKm: 32, estimatedBatteryAtArrival: 27 },
+          id: 'outbound-confirmation',
+          type: 'route-confirmation',
+          actions: ['start-outbound'],
+          props: {
+            leg: 'outbound', destination: '虹桥机场 T2', flightNumber: 'MU5102',
+            flightEstimatedArrival: '2026-07-22T20:40:00+08:00', durationMinutes: 20,
+            arrivalTime: '2026-07-22T20:25:00+08:00', distanceKm: 32,
+            currentBatteryPercent: 42, estimatedBatteryAtArrival: 27, simulated: true,
+          },
         }],
-        actions: [{ id: 'start-navigation', label: '开始导航', style: 'primary', event: { type: 'tool-request', actionToken: 'start-navigation' } }],
+        actions: [{ id: 'start-outbound', label: '现在出发', style: 'primary', event: { type: 'tool-request', actionToken: 'start-outbound' } }],
+        windows: [{
+          id: 'fixture-outbound-confirmation-window', kind: 'outbound-confirmation', title: '现在出发',
+          componentIds: ['outbound-confirmation'], actionIds: ['start-outbound'], size: 'medium',
+          controls: { closable: true, minimizable: true, maximizable: true },
+        }],
       }
       const failed = {
         ...prepared,
@@ -2582,13 +3112,15 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
 
       await openControls(user)
-      await user.click(screen.getByRole('button', { name: '语音回放：开始导航' }))
+      await user.click(fixtureReplayControls().getByRole('button', { name: '开始导航' }))
+      await waitFor(() => expect(audio.current().played).toBe(1))
+      emit(() => audio.current().onended?.())
       await user.click(screen.getByRole('button', { name: '发送' }))
-      await screen.findByText('准备出发')
+      await screen.findByText('确认出发')
 
-      // The 200-with-unchanged-task outcome is a refused send: the words stay
-      // in the field so 发送 can retry them, exactly like a failed request.
-      expect(screen.getByLabelText('任务输入')).toHaveValue('开始导航')
+      // The action response is unchanged, so the confirmation phase and its
+      // timeline cursor remain in place even though this path clears the draft.
+      expect(screen.getByRole('region', { name: '当前行程' })).toHaveAttribute('data-phase', 'confirming-outbound')
 
       await openControls(user)
       await user.click(screen.getByRole('button', { name: /推进下一事件/ }))
@@ -2598,7 +3130,7 @@ describe('demo integration', () => {
       expect(event).not.toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
         eventId: 'event-charging-started',
       }))
-      expect(action).toHaveBeenCalledTimes(1)
+      expect(action).toHaveBeenCalledWith(expect.anything(), 'start-outbound', 'outbound-confirmation')
     })
   })
 })

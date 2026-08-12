@@ -14,8 +14,9 @@ import type {
   UISpec,
   VehicleContext,
 } from '@canvasflow/schema'
-import type { NavigationSpeechCoordinator, NavigationVoiceCommand, SpeechControllerDeps } from '@canvasflow/voice'
+import type { NavigationSpeechCoordinator, NavigationVoiceCommand, SpeechControllerDeps, SpeechRecognitionLike, VoiceRecognitionSource, WakeSessionSnapshot } from '@canvasflow/voice'
 import {
+  createWakeSession,
   createBrowserRecognition,
   createNavigationSpeechCoordinator,
   createSpeechController,
@@ -27,11 +28,14 @@ import { AgentApiClient, AgentApiError, demoVehicleContext, isNightAt, type Agen
 import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
 import { NavigationWorkspace } from './ui/navigation/NavigationWorkspace'
-import { cockpitContractPhase, runtimeWindows, type RuntimeNavigationTask } from './ui/navigation/contracts'
+import { cockpitContractPhase, runtimeWindows, type CockpitUISpec, type RuntimeNavigationTask } from './ui/navigation/contracts'
 import type { NavigationClock, NavigationLeg, NavigationSnapshot } from './ui/navigation/simulator'
 import { WindowManager } from './ui/navigation/WindowManager'
 import { GLASS_TIERS, useGlassTier } from './ui/glass-capability'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
+import { matchWakeWord } from '@canvasflow/voice'
+import { IdleCockpit } from './ui/idle/IdleCockpit'
+import { amapLoaderSnapshot, retryAMap, subscribeAMapLoader, switchAMapKey, type AMapLoaderSnapshot } from './ui/amap/loader'
 import {
   createFixtureRecognition,
   playFixtureSampleAudio,
@@ -43,6 +47,7 @@ import {
 const defaultClient = new AgentApiClient('/v1')
 type DemoAgentApi = Pick<AgentApiClient, 'create' | 'event' | 'action' | 'confirmation'>
   & Partial<Pick<AgentApiClient, 'subscribeTaskUpdates'>>
+  & Partial<Pick<AgentApiClient, 'cancel'>>
 
 const demoRuntime = createSideEffectRuntime()
 
@@ -182,21 +187,78 @@ function registeredAction(spec: UISpec, actionId: string): UISpec['actions'][num
   return spec.actions.find((action) => action.id === actionId)
 }
 
+function normalizedVoiceChoice(input: string): string {
+  return input.replace(/\s+/g, '').replace(/[，,。.!！?？：:；;]+$/u, '')
+}
+
+function memoryConfirmationDecision(input: string): 'accept' | 'reject' | undefined {
+  const compact = normalizedVoiceChoice(input)
+  return compact === '保存本次偏好'
+    ? 'accept'
+    : compact === '暂不保存'
+      ? 'reject'
+      : undefined
+}
+
+/**
+ * Spoken confirmation uses the exact action the current generated window owns.
+ * The browser does not invent parameters or bypass Policy: it resolves the
+ * visible action id and sends the same action/component pair a click would.
+ */
+function cockpitActionForVoice(
+  task: AirportPickupTaskState,
+  spec: CockpitUISpec,
+  input: string,
+): { actionId: string; componentId: string } | undefined {
+  const compact = normalizedVoiceChoice(input)
+  const wanted = task.phase === 'confirming-outbound' && /^(?:现在出发|开始导航|出发)$/.test(compact)
+    ? { actionId: 'start-outbound', componentId: 'outbound-confirmation' }
+    : task.phase === 'confirming-return' && /^(?:开始返程|确认返程)$/.test(compact)
+      ? { actionId: 'start-return', componentId: 'return-confirmation' }
+      : undefined
+  if (!wanted) return undefined
+  const window = spec.windows?.find((candidate) => candidate.componentIds.includes(wanted.componentId))
+  const component = spec.components.find((candidate) => candidate.id === wanted.componentId)
+  const action = registeredAction(spec, wanted.actionId)
+  if (!window?.actionIds?.includes(wanted.actionId)
+    || !component?.actions?.includes(wanted.actionId)
+    || action?.event.type !== 'tool-request'
+    || action.event.actionToken !== wanted.actionId) return undefined
+  return wanted
+}
+
+/**
+ * Spoken completion choices are confirmations, not ordinary planner input.
+ * Resolve the current generated action and its one-shot credential before
+ * calling the same confirmation endpoint that a visible button uses.
+ */
+function confirmationActionForVoice(
+  task: AirportPickupTaskState,
+  spec: UISpec,
+  input: string,
+): { confirmationId: string; decision: 'accept' | 'reject' } | undefined {
+  if (task.phase !== 'completed' || task.pendingConfirmation?.action !== 'save-memory') return undefined
+  const decision = memoryConfirmationDecision(input)
+  if (!decision) return undefined
+  const confirmationId = task.pendingConfirmation.confirmationId
+  const candidate = spec.actions.find((action) => (
+    action.event.type === 'confirmation'
+    && action.event.confirmationId === confirmationId
+    && action.event.decision === decision
+  ))
+  const action = candidate ? registeredAction(spec, candidate.id) : undefined
+  return action?.event.type === 'confirmation'
+    && action.event.confirmationId === confirmationId
+    && action.event.decision === decision
+    ? { confirmationId: action.event.confirmationId, decision: action.event.decision }
+    : undefined
+}
+
 function hasStartNavigationCapability(spec: UISpec, driving: boolean): boolean {
   const component = visibleComponent(spec, 'navigation-plan', driving)
   if (component?.type !== 'navigation-summary' || !component.actions?.includes('start-navigation')) return false
   const action = registeredAction(spec, 'start-navigation')
   return action?.event.type === 'tool-request' && action.event.actionToken === 'start-navigation'
-}
-
-function hasFlightChoiceCapability(spec: UISpec, driving: boolean): boolean {
-  const component = visibleComponent(spec, 'flight-choices', driving)
-  if (component?.type !== 'flight-choices') return false
-  const firstChoice = component.props.choices[0]
-  if (!firstChoice?.actionId) return false
-  const action = registeredAction(spec, firstChoice.actionId)
-  return action?.event.type === 'agent-message'
-    && action.event.text.replace(/\s+/g, '') === `航班号${firstChoice.flightNumber}`
 }
 
 function hasWeatherAdvisoryCapability(
@@ -228,7 +290,7 @@ type NavigationVoiceIntent =
 type QueuedNavigationCommand = NavigationVoiceCommand<NavigationVoiceIntent>
 type VoiceTurnConfig = {
   autoSubmit: boolean
-  recognitionSource: 'fixture' | 'microphone'
+  recognitionSource: VoiceRecognitionSource
 }
 type CockpitOperationKind = 'weather' | 'calendar' | 'flight-detail' | 'vehicle-status' | 'return-route' | 'flight-query' | 'generic'
 type CockpitOperation = {
@@ -305,6 +367,37 @@ const voiceButtonLabels = {
   error: { aria: '重试语音输入', text: '语音出错' },
 } as const
 
+const wakeButtonLabels: Record<WakeSessionSnapshot['state'], { aria: string; text: string }> = {
+  'needs-authorization': { aria: '启用小南语音唤醒', text: '启用小南' },
+  authorizing: { aria: '正在请求麦克风权限', text: '正在授权' },
+  'waiting-wake': { aria: '小南正在等待唤醒', text: '等待唤醒' },
+  'follow-up': { aria: '小南正在聆听指令', text: '正在聆听' },
+  'reset-confirmation': { aria: '小南正在等待重置确认', text: '等待确认' },
+}
+
+function wakeStatus(state: WakeSessionSnapshot['state']): string {
+  if (state === 'needs-authorization') return '点击麦克风启用小南'
+  if (state === 'authorizing') return '正在等待浏览器麦克风授权'
+  if (state === 'waiting-wake') return '等待唤醒'
+  if (state === 'follow-up') return '正在聆听'
+  return '等待确认'
+}
+
+function isProductResetCommand(text: string): boolean {
+  return /^(?:重新开始|重来|重置)$/u.test(text.trim().replace(/[，,。.!！?？：:；;]+$/u, ''))
+}
+
+function completedPreferenceResolved(
+  before: AirportPickupTaskState,
+  after: AirportPickupTaskState,
+): boolean {
+  return before.phase === 'completed'
+    && before.pendingConfirmation?.action === 'save-memory'
+    && after.taskId === before.taskId
+    && after.phase === 'completed'
+    && after.pendingConfirmation === undefined
+}
+
 export default function App({
   api = defaultClient,
   initialTask,
@@ -318,6 +411,7 @@ export default function App({
   initialNavigationReminder,
   initialText = '',
   voiceAutoSubmit = true,
+  wakeWordEnabled = true,
 }: {
   api?: DemoAgentApi
   initialTask?: AirportPickupTaskState
@@ -339,16 +433,31 @@ export default function App({
   initialText?: string
   /** Test/legacy seam; production voice turns submit hands-free. */
   voiceAutoSubmit?: boolean
+  /** Compatibility seam for legacy fixture tests; the shipped UI requires Xiaonan. */
+  wakeWordEnabled?: boolean
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
   const [startingVehicleContext] = useState<VehicleContext>(() => initialVehicleContext ?? demoVehicleContext())
   const [response, setResponse] = useState<AgentResponse>()
   const [text, setText] = useState(initialText)
   const [stepIndex, setStepIndex] = useState(0)
+  // `initialText` is a test/preview seed, not part of the shipped idle shell.
+  // Once a real task returns to idle, the production shell should own the empty
+  // state instead of reviving the seed's preview layout.
+  const [seededPreviewActive, setSeededPreviewActive] = useState(
+    initialText.trim().length > 0 || localOnly,
+  )
   const [error, setError] = useState<string>()
   const [pending, setPending] = useState(false)
   const [cockpitOperation, setCockpitOperation] = useState<CockpitOperation>()
   const [retryNavigationLeg, setRetryNavigationLeg] = useState<{ leg: NavigationLeg; nonce: number }>()
+  const [wakeSession, setWakeSession] = useState<WakeSessionSnapshot>({ state: 'needs-authorization', speaking: false })
+  const [wakeError, setWakeError] = useState<string>()
+  const [queuedVoiceNotice, setQueuedVoiceNotice] = useState<string>()
+  const [idleNotice, setIdleNotice] = useState<string>()
+  const [mapLoader, setMapLoader] = useState<AMapLoaderSnapshot>(() => amapLoaderSnapshot())
+  const [mapRetryNonce, setMapRetryNonce] = useState(0)
+  const [mapRuntimeFailed, setMapRuntimeFailed] = useState(false)
   const [vehicleContext, setVehicleContext] = useState(startingVehicleContext)
   const [latestNavigationSnapshot, setLatestNavigationSnapshot] = useState<NavigationSnapshot>()
   // Which light condition the car reports. `auto` is what a car does — read the
@@ -360,14 +469,27 @@ export default function App({
   const [controlsOpen, setControlsOpen] = useState(false)
   const [keyboardRequested, setKeyboardRequested] = useState(false)
   const pendingRef = useRef(false)
+  const mutationGenerationRef = useRef(0)
+  const resetInFlightRef = useRef(false)
   const responseRef = useRef<AgentResponse | undefined>(undefined)
   const navigationActiveRef = useRef(false)
   const navigationSnapshotRef = useRef<NavigationCommandSnapshot | undefined>(undefined)
   const speechCoordinatorRef = useRef<NavigationSpeechCoordinator<QueuedNavigationCommand> | null>(null)
   const sendInputRef = useRef<(value: string, meta?: VoiceSubmitMeta) => Promise<InputOutcome>>(async () => ({ sent: false }))
+  const wakeCommandQueueRef = useRef<Array<{ transcript: string; meta: VoiceSubmitMeta; generation: number }>>([])
+  const wakeCommandDrainingRef = useRef(false)
+  const wakeCommandDrainGenerationRef = useRef(0)
+  const enqueueWakeCommandRef = useRef<(transcript: string, meta: VoiceSubmitMeta) => void>(() => {})
   const systemUtteranceSequenceRef = useRef(0)
   const cockpitOperationSequenceRef = useRef(0)
   const arrivalEventIdsRef = useRef(new Map<NavigationLeg, string>())
+  const wakeSessionRef = useRef<ReturnType<typeof createWakeSession> | null>(null)
+  const wakeRecognitionRef = useRef<SpeechRecognitionLike | null>(null)
+  const wakeRecognitionSourceRef = useRef<VoiceRecognitionSource>('microphone')
+  const wakeRestartRef = useRef(false)
+  const fixtureReplayRef = useRef(0)
+  const confirmProductResetRef = useRef<() => Promise<void>>(async () => {})
+  const openWakeRecognitionRef = useRef<() => boolean>(() => false)
   const voiceTurnConfigRef = useRef<VoiceTurnConfig>({
     autoSubmit: voiceAutoSubmit,
     recognitionSource: 'microphone',
@@ -386,6 +508,7 @@ export default function App({
   // typing, or a transcript parked for confirmation/retry. The pristine
   // placeholder suggestion is not protected — nobody authored it this turn.
   const [draftProtected, setDraftProtected] = useState(false)
+  const parkedVoiceMetaRef = useRef<VoiceSubmitMeta | undefined>(undefined)
   // Fixture-only injection is used by unit tests; the shipped demo leaves these props unset.
   const task = response?.task ?? localTask
   responseRef.current = response
@@ -426,6 +549,8 @@ export default function App({
       || runtimeTask.phase === 'return-driving'))
   navigationActiveRef.current = navigationActive
 
+  useEffect(() => subscribeAMapLoader(setMapLoader), [])
+
   useEffect(() => {
     if (localOnly || !remoteTaskId || !api.subscribeTaskUpdates) return
     const taskId = remoteTaskId
@@ -454,23 +579,28 @@ export default function App({
 
   async function run(operation: () => Promise<AgentResponse>): Promise<AgentResponse | undefined> {
     if (pendingRef.current) return undefined
+    const generation = mutationGenerationRef.current
     pendingRef.current = true
     setPending(true)
     setError(undefined)
     const baselineTaskId = responseRef.current?.task.taskId
     try {
       const candidate = await operation()
+      if (generation !== mutationGenerationRef.current) return undefined
       const next = mergeResponseCandidate(candidate, baselineTaskId)
       if (!next) return undefined
       responseRef.current = next
       setResponse(next)
       return next
     } catch (cause) {
+      if (generation !== mutationGenerationRef.current) return undefined
       setError(cause instanceof Error ? cause.message : '请求失败')
       return undefined
     } finally {
-      pendingRef.current = false
-      setPending(false)
+      if (generation === mutationGenerationRef.current) {
+        pendingRef.current = false
+        setPending(false)
+      }
     }
   }
 
@@ -480,6 +610,7 @@ export default function App({
     existing?: CockpitOperation,
   ): Promise<AgentResponse | undefined> {
     if (pendingRef.current) return undefined
+    const generation = mutationGenerationRef.current
     const id = existing?.id ?? `cockpit-operation-${++cockpitOperationSequenceRef.current}`
     const attempt = (existing?.attempt ?? 0) + 1
     const taskId = existing?.taskId ?? responseRef.current?.task.taskId ?? 'new-task'
@@ -493,6 +624,7 @@ export default function App({
     const baselineTaskId = responseRef.current?.task.taskId
     try {
       const candidate = await operation()
+      if (generation !== mutationGenerationRef.current) return undefined
       const next = mergeResponseCandidate(candidate, baselineTaskId)
       if (!next) return undefined
       responseRef.current = next
@@ -500,6 +632,7 @@ export default function App({
       setCockpitOperation(undefined)
       return next
     } catch (cause) {
+      if (generation !== mutationGenerationRef.current) return undefined
       if (cause instanceof AgentApiError && cause.latest) {
         const current = responseRef.current
         const next = current
@@ -522,8 +655,10 @@ export default function App({
       })
       return undefined
     } finally {
-      pendingRef.current = false
-      setPending(false)
+      if (generation === mutationGenerationRef.current) {
+        pendingRef.current = false
+        setPending(false)
+      }
     }
   }
 
@@ -565,6 +700,133 @@ export default function App({
     return next.assistant?.shouldSpeak ? next.assistant.text : undefined
   }
 
+  function enqueueSystemSpeech(text: string, kind = 'assistant') {
+    systemUtteranceSequenceRef.current += 1
+    wakeSessionRef.current?.setSpeaking(true)
+    speechCoordinatorRef.current?.enqueueSystemUtterance({
+      id: `${kind}-${systemUtteranceSequenceRef.current}`,
+      text,
+    })
+  }
+
+  function returnToIdle(notice?: string) {
+    speechCoordinatorRef.current?.clear()
+    stopDegradedFixtureAudio()
+    responseRef.current = undefined
+    setResponse(undefined)
+    setLocalTask(undefined)
+    setStepIndex(0)
+    setSeededPreviewActive(localOnly)
+    setError(undefined)
+    setCockpitOperation(undefined)
+    setWakeError(undefined)
+    setQueuedVoiceNotice(undefined)
+    mutationGenerationRef.current += 1
+    wakeCommandQueueRef.current.length = 0
+    wakeCommandDrainGenerationRef.current += 1
+    wakeCommandDrainingRef.current = false
+    setRetryNavigationLeg(undefined)
+    setLatestNavigationSnapshot(undefined)
+    navigationSnapshotRef.current = undefined
+    arrivalEventIdsRef.current.clear()
+    setVehicleContext(startingVehicleContext)
+    setText('')
+    parkedVoiceMetaRef.current = undefined
+    setDraftProtected(false)
+    setKeyboardRequested(false)
+    setControlsOpen(false)
+    setIdleNotice(notice)
+  }
+
+  async function confirmProductReset() {
+    if (resetInFlightRef.current) return
+    const current = responseRef.current
+    if (!current) {
+      returnToIdle()
+      return
+    }
+    if (!api.cancel) {
+      setWakeError('当前运行环境无法重置任务，请改用文字输入或稍后重试。')
+      return
+    }
+    resetInFlightRef.current = true
+    mutationGenerationRef.current += 1
+    // Reset supersedes every command from the previous task generation. Detach
+    // an in-flight drain too: its request may never settle, but it must not keep
+    // future wake commands blocked after reset succeeds or fails.
+    wakeCommandQueueRef.current.length = 0
+    wakeCommandDrainGenerationRef.current += 1
+    wakeCommandDrainingRef.current = false
+    setQueuedVoiceNotice(undefined)
+    setCockpitOperation({
+      id: `cockpit-operation-${++cockpitOperationSequenceRef.current}`,
+      attempt: 1,
+      state: 'processing',
+      kind: 'generic',
+      title: '正在重新开始',
+      message: '正在取消当前任务并清理临时窗口。',
+      retryable: false,
+      taskId: current.task.taskId,
+      retry: () => api.cancel!(responseRef.current?.task ?? current.task, '用户确认重新开始'),
+    })
+    try {
+      pendingRef.current = true
+      setPending(true)
+      setError(undefined)
+      const resetTarget = responseRef.current?.task.taskId === current.task.taskId
+        ? responseRef.current.task
+        : current.task
+      let cancelled: AgentResponse
+      try {
+        cancelled = await api.cancel(resetTarget, '用户确认重新开始')
+      } catch (cause) {
+        // A command already accepted by the Agent can advance the revision while
+        // reset is being confirmed. Retry once with the authoritative same-task
+        // snapshot; every other failure keeps its original error path.
+        const latest = cause instanceof AgentApiError
+          && cause.code === 'TASK_REVISION_CONFLICT'
+          && cause.latest?.task.taskId === current.task.taskId
+          ? cause.latest
+          : undefined
+        if (!latest) throw cause
+        const refreshed: AgentResponse = {
+          ...(responseRef.current ?? current),
+          task: latest.task,
+          ui: latest.ui,
+          effects: [],
+        }
+        responseRef.current = refreshed
+        setResponse(refreshed)
+        cancelled = await api.cancel(latest.task, '用户确认重新开始')
+      }
+      if (cancelled.task.taskId !== current.task.taskId || cancelled.task.phase !== 'cancelled') {
+        throw new Error('任务未能取消，请重试重新开始。')
+      }
+      returnToIdle()
+      enqueueSystemSpeech('已重新开始', 'reset')
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : '重新开始失败，请稍后重试。'
+      setError(message)
+      setCockpitOperation({
+        id: `cockpit-operation-${cockpitOperationSequenceRef.current}`,
+        attempt: 1,
+        state: 'error',
+        kind: 'generic',
+        title: '重新开始未完成',
+        message,
+        retryable: false,
+        taskId: current.task.taskId,
+        retry: () => api.cancel!(responseRef.current?.task ?? current.task, '用户确认重新开始'),
+      })
+    } finally {
+      pendingRef.current = false
+      setPending(false)
+      resetInFlightRef.current = false
+      if (wakeCommandQueueRef.current.length > 0) void drainWakeCommandQueue()
+    }
+  }
+  confirmProductResetRef.current = confirmProductReset
+
   /**
    * The single input path. Text and voice both arrive here, so voice never gets
    * its own interpretation of what the driver said — `meta` only tells the
@@ -574,6 +836,31 @@ export default function App({
     const trimmed = value.trim()
     if (!trimmed || pendingRef.current) return { sent: false }
     const currentResponse = responseRef.current
+    // A completed cockpit task can still be waiting for a one-shot memory
+    // decision. Resolve that before the terminal-state branch treats the words
+    // as the start of a new task.
+    const spokenConfirmation = currentResponse
+      ? confirmationActionForVoice(currentResponse.task, currentResponse.ui, trimmed)
+      : undefined
+    if (currentResponse && spokenConfirmation) {
+      const next = await run(() => api.confirmation(
+        currentResponse.task,
+        spokenConfirmation.confirmationId,
+        spokenConfirmation.decision,
+      ))
+      if (!next) return { sent: false }
+      const speak = spokenReply(next)
+      setText('')
+      setDraftProtected(false)
+      if (completedPreferenceResolved(currentResponse.task, next.task)) returnToIdle('已到家')
+      return { sent: true, speak }
+    }
+    // A stale or malformed UISpec must not turn a one-shot confirmation phrase
+    // into a brand-new task. Refuse the turn so voice keeps the exact words for
+    // retry, while typed input stays in the field unchanged.
+    if (currentResponse?.task.phase === 'completed' && memoryConfirmationDecision(trimmed)) {
+      return { sent: false }
+    }
     const createNewTask = !currentResponse
       || currentResponse.task.phase === 'completed'
       || currentResponse.task.phase === 'cancelled'
@@ -604,6 +891,18 @@ export default function App({
       setText('')
       setDraftProtected(false)
       return { sent: true }
+    }
+    const spokenAction = cockpitActionForVoice(
+      currentResponse.task,
+      currentResponse.ui as CockpitUISpec,
+      trimmed,
+    )
+    if (spokenAction) {
+      const next = await run(() => api.action(currentResponse, spokenAction.actionId, spokenAction.componentId))
+      if (!next) return { sent: false }
+      setText('')
+      setDraftProtected(false)
+      return { sent: true, speak: spokenReply(next) }
     }
     const registeredStartNavigation = hasStartNavigationCapability(
       currentResponse.ui,
@@ -660,23 +959,67 @@ export default function App({
         meta: { ...meta, recognitionSource: meta.recognitionSource ?? 'microphone' },
       })
       if (queued === 'filtered' && meta.recognitionSource !== 'system-tts') {
-        setText(transcript)
-        setDraftProtected(true)
-        setKeyboardRequested(true)
+        parkVoiceTranscript(transcript, '这句话可能来自当前播报，请确认后发送。', meta)
       }
       return undefined
     }
     const outcome = await sendInput(transcript, meta)
-    // A refused turn must not lose what the driver said: park the transcript in
-    // the text field so 发送 can retry it without speaking again. The field has
-    // to stay on screen for that, otherwise the words are parked out of sight.
-    if (!outcome.sent) {
-      setText(transcript)
-      setDraftProtected(true)
-      setKeyboardRequested(true)
-    }
+    if (!outcome.sent) parkVoiceTranscript(transcript, '语音指令未能提交，原话已保留，可直接重试。', meta)
     return outcome.speak
   }
+
+  function parkVoiceTranscript(transcript: string, notice: string, meta?: VoiceSubmitMeta) {
+    setText(transcript)
+    setDraftProtected(true)
+    setKeyboardRequested(true)
+    setQueuedVoiceNotice(notice)
+    parkedVoiceMetaRef.current = meta
+  }
+
+  async function drainWakeCommandQueue() {
+    if (wakeCommandDrainingRef.current) return
+    wakeCommandDrainingRef.current = true
+    const drainGeneration = ++wakeCommandDrainGenerationRef.current
+    try {
+      while (drainGeneration === wakeCommandDrainGenerationRef.current && wakeCommandQueueRef.current.length > 0) {
+        const command = wakeCommandQueueRef.current[0]!
+        if (command.generation !== mutationGenerationRef.current) {
+          wakeCommandQueueRef.current.shift()
+          continue
+        }
+        if (pendingRef.current) {
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 80))
+          continue
+        }
+        // Pop before the request begins. A terminal/reset transition invalidates
+        // the drain generation and clears the queue; leaving this command at the
+        // head would make that invalidation discard a newly queued command too.
+        wakeCommandQueueRef.current.shift()
+        const outcome = await sendInputRef.current(command.transcript, command.meta)
+        if (drainGeneration !== wakeCommandDrainGenerationRef.current || command.generation !== mutationGenerationRef.current) return
+        if (!outcome.sent) {
+          parkVoiceTranscript(command.transcript, '语音指令未能提交，原话已保留，可直接重试。', command.meta)
+          wakeCommandQueueRef.current.length = 0
+          break
+        }
+        setQueuedVoiceNotice(wakeCommandQueueRef.current.length > 0
+          ? `正在处理下一条语音指令（剩余 ${wakeCommandQueueRef.current.length} 条）`
+          : undefined)
+        if (outcome.speak) enqueueSystemSpeech(outcome.speak)
+      }
+    } finally {
+      if (drainGeneration === wakeCommandDrainGenerationRef.current) wakeCommandDrainingRef.current = false
+    }
+  }
+
+  function enqueueWakeCommand(transcript: string, meta: VoiceSubmitMeta) {
+    wakeCommandQueueRef.current.push({ transcript, meta, generation: mutationGenerationRef.current })
+    if (wakeCommandQueueRef.current.length > 1 || pendingRef.current) {
+      setQueuedVoiceNotice(`已记住「${transcript}」，将在当前操作完成后执行。`)
+    }
+    void drainWakeCommandQueue()
+  }
+  enqueueWakeCommandRef.current = enqueueWakeCommand
 
   // The navigation coordinator lives for the mounted App, while task/UI state
   // changes every turn. Keep queued commands pointed at the current input path.
@@ -696,9 +1039,11 @@ export default function App({
       createRecognition: () => null,
       handlers: {
         onSpeakEnd: () => {
+          wakeSessionRef.current?.setSpeaking(false)
           speechCoordinatorRef.current?.utteranceEnd()
         },
         onSpeakError: () => {
+          wakeSessionRef.current?.setSpeaking(false)
           speechCoordinatorRef.current?.utteranceError()
         },
       },
@@ -761,6 +1106,7 @@ export default function App({
   }, [initialNavigationReminder, navigationActive, remoteTaskId])
 
   function stopDegradedFixtureAudio() {
+    fixtureReplayRef.current += 1
     try {
       degradedFixtureAudioRef.current?.pause()
     } catch {
@@ -789,6 +1135,129 @@ export default function App({
       },
     }
   }, [speech])
+
+  function closeWakeRecognition() {
+    wakeRestartRef.current = false
+    const engine = wakeRecognitionRef.current
+    wakeRecognitionRef.current = null
+    if (!engine) return
+    engine.onresult = null
+    engine.onerror = null
+    engine.onend = null
+    try {
+      if (engine.abort) engine.abort()
+      else engine.stop()
+    } catch { /* recognition already closed */ }
+  }
+
+  function restoreWakeRecognitionAfterFixture(replay: number, wasListening: boolean) {
+    if (!wasListening || replay !== fixtureReplayRef.current) return
+    wakeRecognitionSourceRef.current = 'microphone'
+    if (openWakeRecognition()) return
+    wakeSessionRef.current?.recognitionFailed()
+    setWakeError('语音监听已中断，请点击「重试语音」继续，或改用文字输入。')
+  }
+
+  function openWakeRecognition(): boolean {
+    closeWakeRecognition()
+    const createRecognition = speech?.createRecognition
+      ?? (isRecognitionSupported() && isSecureContextOk() ? createBrowserRecognition : undefined)
+    if (!createRecognition) return false
+    let engine: SpeechRecognitionLike | null = null
+    try { engine = createRecognition() } catch { engine = null }
+    if (!engine) return false
+    engine.lang = 'zh-CN'
+    engine.continuous = true
+    engine.interimResults = true
+    engine.onresult = (event) => {
+      for (let index = event.resultIndex; index < event.results.length; index += 1) {
+        const result = event.results[index]
+        const alternative = result?.[0]
+        if (!result?.isFinal || !alternative?.transcript) continue
+        const transcript = alternative.transcript
+        const activeSpeech = speechCoordinatorRef.current?.snapshot().activeUtterance?.text
+        if (activeSpeech && normalizeVoiceEcho(transcript) === normalizeVoiceEcho(activeSpeech)) continue
+        if (matchWakeWord(transcript).matched) speechCoordinatorRef.current?.clear()
+        wakeSessionRef.current?.receive(transcript, {
+          recognitionSource: wakeRecognitionSourceRef.current,
+          ...(alternative.confidence === undefined ? {} : { confidence: alternative.confidence }),
+        })
+      }
+    }
+    engine.onerror = (event) => {
+      if (event.error === 'no-speech' && wakeRestartRef.current) return
+      wakeRestartRef.current = false
+      wakeSessionRef.current?.recognitionFailed()
+      setWakeError(event.error === 'not-allowed' || event.error === 'service-not-allowed'
+        ? '麦克风权限未开启，请在浏览器设置中允许后点击「重试语音」，或使用文字输入。'
+        : '语音识别服务暂时不可用，请点击「重试语音」或使用文字输入。')
+    }
+    engine.onend = () => {
+      wakeRecognitionRef.current = null
+      if (!wakeRestartRef.current) return
+      window.setTimeout(() => {
+        if (!wakeRestartRef.current) return
+        if (!openWakeRecognition()) {
+          wakeRestartRef.current = false
+          wakeSessionRef.current?.recognitionFailed()
+          setWakeError('语音监听已中断，请点击「重试语音」继续，或改用文字输入。')
+        }
+      }, 180)
+    }
+    engine.onstart = () => wakeSessionRef.current?.recognitionStarted()
+    wakeRecognitionRef.current = engine
+    wakeRestartRef.current = true
+    try { engine.start() } catch {
+      closeWakeRecognition()
+      return false
+    }
+    return true
+  }
+  openWakeRecognitionRef.current = openWakeRecognition
+
+  useEffect(() => {
+    const session = createWakeSession({
+      effects: {
+        requestRecognition: () => {
+          if (!openWakeRecognitionRef.current()) {
+            session.recognitionFailed()
+            setWakeError('当前浏览器无法启用语音唤醒，请使用文字输入。')
+          }
+        },
+        stopSpeaking: () => speechCoordinatorRef.current?.clear(),
+        submit: (command, meta) => {
+          speechCoordinatorRef.current?.clear()
+          enqueueWakeCommandRef.current(command, meta)
+        },
+        speak: (copy) => enqueueSystemSpeech(copy, 'xiaonan'),
+        reset: () => { void confirmProductResetRef.current() },
+        onState: () => setWakeSession(session.snapshot()),
+      },
+    })
+    wakeSessionRef.current = session
+    setWakeSession(session.snapshot())
+    return () => {
+      closeWakeRecognition()
+      session.dispose()
+      wakeSessionRef.current = null
+    }
+  }, [speech])
+
+  function enableWakeVoice() {
+    setWakeError(undefined)
+    wakeRecognitionSourceRef.current = 'microphone'
+    if (wakeSession.state === 'needs-authorization') wakeSessionRef.current?.authorize()
+    else if (!openWakeRecognition()) {
+      wakeSessionRef.current?.recognitionFailed()
+      setWakeError('当前浏览器无法启用语音唤醒，请重试或使用文字输入。')
+    }
+  }
+
+  function recoverMap(rotate: boolean) {
+    setMapRuntimeFailed(false)
+    setMapRetryNonce((current) => current + 1)
+    void (rotate ? switchAMapKey() : retryAMap())
+  }
 
   const voice = useVoice({
     enabled: voiceEnabled,
@@ -830,6 +1299,21 @@ export default function App({
     // The microphone owns the turn while it is capturing or submitting, so 发送
     // must not race it. See `textPathLocked`.
     if (textPathLocked) return
+    if (wakeWordEnabled && wakeSession.state === 'reset-confirmation') {
+      const result = wakeSessionRef.current?.receive(text)
+      if (result === 'ignored') return
+      setText('')
+      setDraftProtected(false)
+      setKeyboardRequested(false)
+      return
+    }
+    if (wakeWordEnabled && isProductResetCommand(text)) {
+      wakeSessionRef.current?.requestResetConfirmation()
+      setText('')
+      setDraftProtected(false)
+      setKeyboardRequested(false)
+      return
+    }
     // While a transcript is awaiting confirmation, 发送 confirms it through the
     // machine so the voice loop keeps its state instead of being bypassed.
     if (voice.state === 'transcribing') {
@@ -838,17 +1322,22 @@ export default function App({
     }
     // Answering by hand during playback is a barge-in too: stop talking first.
     if (voice.state === 'speaking') voice.cancel()
-    void sendInput(text).then((outcome) => {
+    const parkedMeta = parkedVoiceMetaRef.current
+    void sendInput(text, parkedMeta).then((outcome) => {
       // The words are gone, so the field that held them has done its job. Leaving
       // it open would put an empty input row back on screen permanently, which is
       // the thing the on-demand keyboard exists to avoid. A refused send keeps it:
       // `sendInput` leaves the text in place so 发送 can retry it.
-      if (outcome.sent) setKeyboardRequested(false)
+      if (outcome.sent) {
+        parkedVoiceMetaRef.current = undefined
+        setKeyboardRequested(false)
+      }
     })
   }
 
   function changeText(value: string) {
     setText(value)
+    parkedVoiceMetaRef.current = undefined
     // Typing makes the words the driver's own; clearing the field by hand
     // releases them again.
     setDraftProtected(value.trim() !== '')
@@ -858,6 +1347,11 @@ export default function App({
   }
 
   function pressMicrophone() {
+    if (wakeWordEnabled && (wakeSession.state === 'needs-authorization' || Boolean(wakeError))) {
+      enableWakeVoice()
+      return
+    }
+    if (wakeWordEnabled) return
     if (voice.state === 'listening') {
       voice.cancel()
       setText('')
@@ -923,7 +1417,12 @@ export default function App({
         return response
       },
     )
-    return next !== undefined
+    if (!next) return false
+    // Keep the completed surface alive while the Agent holds a memory proposal
+    // for the driver's save/reject decision. Only a terminal response without
+    // a pending confirmation can safely return to the empty idle cockpit.
+    if (leg === 'return' && !next.task.pendingConfirmation) returnToIdle('已到家')
+    return true
   }
 
   function enqueueNavigationReminder(text: string) {
@@ -1038,36 +1537,63 @@ export default function App({
   // not silently replace words someone could still lose — the driver's typing
   // or a parked transcript stay until they are sent or cleared by hand.
   const draftBlocksReplay = draftProtected && text.trim() !== ''
+  const wakeBlocksReplay = wakeWordEnabled && (
+    wakeSession.state === 'follow-up'
+    || wakeSession.state === 'reset-confirmation'
+    || wakeCommandDrainingRef.current
+    || wakeCommandQueueRef.current.length > 0
+  )
   const voiceFixtureReady = !pending && !draftBlocksReplay
+    && !wakeBlocksReplay
     && (!voice.available || voice.state === 'idle' || voice.state === 'error' || voice.state === 'speaking')
 
   function isVoiceFixtureAvailable(sample: VoiceFixtureSample): boolean {
+    // Reset confirmation is a live wake-session state rather than an Agent
+    // input turn. Keep only its two dedicated fixtures reachable so replay can
+    // feed the decision through wakeSession.receive without reopening ASR.
+    if (wakeWordEnabled && wakeSession.state === 'reset-confirmation') {
+      return !pending && !draftBlocksReplay && (sample.id === 'confirm-reset' || sample.id === 'cancel-reset')
+    }
     if (!voiceFixtureReady) return false
     if (sample.id === 'create-airport-pickup' || sample.id === 'noisy-create') return !task
     if (!response || !spec) return false
     const driving = isDrivingVehicle(vehicleContext)
-    if (sample.id === 'select-first-flight') {
-      return hasFlightChoiceCapability(spec, driving)
+    if (sample.id === 'choose-hongqiao') return response.task.phase === 'collecting-airport'
+    if (sample.id === 'select-first-flight' || sample.id === 'select-third-flight' || sample.id === 'refresh-flights') {
+      return response.task.phase === 'choosing-flight' && Boolean(spec.windows?.some((window) => window.kind === 'flight-list'))
     }
     if (sample.id === 'flight-number') {
       return response.task.phase === 'collecting-information' && response.task.flight === undefined
     }
-    if (sample.id === 'check-weather') {
-      return response.task.flight !== undefined
-        && response.task.phase !== 'collecting-information'
-        && response.task.phase !== 'completed'
-        && response.task.phase !== 'cancelled'
+    if (sample.id === 'check-weather' || sample.id === 'check-calendar' || sample.id === 'check-flight-detail' || sample.id === 'check-vehicle-status') {
+      return response.task.phase !== 'completed' && response.task.phase !== 'cancelled'
     }
     if (sample.id === 'start-navigation') {
-      return hasStartNavigationCapability(spec, driving)
+      return response.task.phase === 'confirming-outbound' && Boolean(spec.windows?.some((window) => window.kind === 'outbound-confirmation'))
     }
+    if (sample.id === 'speed-up' || sample.id === 'speed-down') {
+      return response.task.phase === 'outbound-driving' || response.task.phase === 'return-driving'
+    }
+    if (sample.id === 'hide-hud') return driving && Boolean(response.task.cockpit?.hudVisible)
+    if (sample.id === 'show-hud') return driving && response.task.cockpit?.hudVisible === false
     if (sample.id === 'send-weather-reminder') {
       return response.task.weatherAdvisory?.status === 'active'
-        && hasWeatherAdvisoryCapability(spec, driving, 'send-umbrella-reminder', sample.text)
+        && hasWeatherAdvisoryCapability(spec, driving, 'send-umbrella-reminder', '提醒乘客带伞')
     }
     if (sample.id === 'dismiss-weather-advisory') {
       return response.task.weatherAdvisory?.status === 'active'
-        && hasWeatherAdvisoryCapability(spec, driving, 'dismiss-advisory-weather', sample.text)
+        && hasWeatherAdvisoryCapability(spec, driving, 'dismiss-advisory-weather', '暂不处理')
+    }
+    if (sample.id === 'keep-calendar-plan') return response.task.calendarAdvisory?.status === 'active'
+    if (sample.id === 'passengers-onboard') return response.task.phase === 'waiting-for-passengers'
+    if (sample.id === 'request-return') return response.task.phase === 'passengers-onboard'
+    if (sample.id === 'start-return') return response.task.phase === 'confirming-return'
+    if (sample.id === 'reset-trip') return Boolean(task) && !isTerminal
+    if (sample.id === 'confirm-reset' || sample.id === 'cancel-reset') return wakeSession.state === 'reset-confirmation'
+    if (sample.id === 'save-preferences' || sample.id === 'reject-preferences') {
+      return response.task.phase === 'completed'
+        && response.task.pendingConfirmation?.action === 'save-memory'
+        && Boolean(confirmationActionForVoice(response.task, response.ui, sample.text))
     }
     return false
   }
@@ -1084,6 +1610,44 @@ export default function App({
   function replayVoiceFixture(sample: VoiceFixtureSample) {
     if (!isVoiceFixtureAvailable(sample)) return
     closeControls()
+    if (wakeWordEnabled) {
+      stopDegradedFixtureAudio()
+      setKeyboardRequested(false)
+      setQueuedVoiceNotice(`正在回放「${sample.label}」`)
+      const replay = fixtureReplayRef.current
+      const wasListening = wakeRestartRef.current || Boolean(wakeRecognitionRef.current)
+      closeWakeRecognition()
+      let settled = false
+      const settle = () => {
+        if (settled || replay !== fixtureReplayRef.current) return
+        settled = true
+        degradedFixtureAudioRef.current = null
+        if (sample.id === 'reset-trip') {
+          wakeSessionRef.current?.requestResetConfirmation()
+        } else if (sample.id === 'confirm-reset' || sample.id === 'cancel-reset') {
+          wakeSessionRef.current?.receive(sample.text, { recognitionSource: 'fixture' })
+        } else if (sample.requiresConfirmation) {
+          parkVoiceTranscript(sample.text, '该样本需要确认，固定转写已保留，请按「发送」继续。', {
+            source: 'voice',
+            confidence: sample.confidence,
+            recognitionSource: 'fixture',
+          })
+        } else {
+          enqueueWakeCommand(sample.text, {
+            source: 'voice',
+            confidence: sample.confidence,
+            recognitionSource: 'fixture',
+          })
+        }
+        restoreWakeRecognitionAfterFixture(replay, wasListening)
+      }
+      degradedFixtureAudioRef.current = playFixtureSampleAudio(
+        sample,
+        fixtureAudioRef.current ?? undefined,
+        settle,
+      )
+      return
+    }
     if (voice.available) {
       stopDegradedFixtureAudio()
       setKeyboardRequested(false)
@@ -1183,7 +1747,9 @@ export default function App({
       const operation = () => api.confirmation(currentResponse.task, actionEvent.confirmationId, actionEvent.decision)
       void (cockpitContract
         ? runCockpitOperation({ kind: 'generic', title: '正在处理确认', message: '地图和已有窗口保持不变。' }, operation)
-        : run(operation))
+        : run(operation)).then((next) => {
+        if (next && completedPreferenceResolved(currentResponse.task, next.task)) returnToIdle('已到家')
+      })
     } else if (actionEvent?.type === 'agent-message') {
       // Pressing a row is the driver saying what it says. It travels as the same
       // user input the composer sends, so the planner sees one kind of answer and
@@ -1350,11 +1916,18 @@ export default function App({
   }, [closeControls, controlsOpen])
 
   const micState = voice.available ? voice.state : 'unavailable'
-  const microphoneCopy = voiceButtonLabels[micState]
+  const microphoneCopy = wakeWordEnabled
+    ? wakeError ? { aria: '重试语音唤醒', text: '重试语音' } : wakeButtonLabels[wakeSession.state]
+    : voiceButtonLabels[micState]
+  const microphoneDisabled = wakeWordEnabled
+    ? !voiceEnabled || pending || (wakeSession.state !== 'needs-authorization' && !wakeError)
+    : !voice.available || pending || micState === 'submitting'
   // One polite live region for the whole voice loop, so the mic state and the
   // interim words reach a screen reader without competing announcements.
-  const voiceStatus = voice.error?.message
-    ?? (voice.state === 'listening'
+  const voiceStatus = wakeWordEnabled && (wakeError || queuedVoiceNotice)
+    ? wakeError ?? queuedVoiceNotice ?? ''
+    : voice.error?.message
+      ?? (voice.state === 'listening'
       ? voice.display || '正在聆听…'
       : voice.state === 'transcribing'
         ? '已转写，确认或编辑后发送。'
@@ -1391,6 +1964,8 @@ export default function App({
 
   const isCompleted = task?.phase === 'completed'
   const isTerminal = task?.phase === 'completed' || task?.phase === 'cancelled'
+  const idleVoiceUnavailable = !voiceEnabled
+    || (!speech?.createRecognition && (!isRecognitionSupported() || !isSecureContextOk()))
   const playedEventCount = task
     ? task.processedEventIds.filter((eventId) => playableEventIds.has(eventId)).length
     : 0
@@ -1443,6 +2018,9 @@ export default function App({
             retryLeg={retryNavigationLeg}
             onReminder={enqueueNavigationReminder}
             onHudVisibilityChange={setHudVisibility}
+            mapRetryNonce={mapRetryNonce}
+            onMapRuntimeFailure={() => setMapRuntimeFailed(true)}
+            onMapRuntimeReady={() => setMapRuntimeFailed(false)}
           />
           <section className="navigation-command" aria-label="导航语音与文字控制">
             <div className="header-actions">
@@ -1450,8 +2028,8 @@ export default function App({
                 className={`mic-button mic-${micState}`}
                 type="button"
                 aria-label={microphoneCopy.aria}
-                aria-pressed={micState === 'listening'}
-                disabled={!voice.available || pending || micState === 'submitting'}
+                aria-pressed={wakeWordEnabled ? wakeSession.state === 'follow-up' : micState === 'listening'}
+                disabled={microphoneDisabled}
                 onClick={pressMicrophone}
               >
                 <MicIcon size={22} /><span>{microphoneCopy.text}</span>
@@ -1492,6 +2070,32 @@ export default function App({
             {error && !cockpitContract && <p className="brief-error" role="alert">{error}</p>}
           </section>
         </>
+      ) : !task && wakeWordEnabled && !seededPreviewActive ? (
+        <>
+          <IdleCockpit
+            vehicle={vehicleContext}
+            voiceMode={idleVoiceUnavailable ? 'unavailable' : wakeSession.state}
+            voiceStatus={wakeError
+              ?? queuedVoiceNotice
+              ?? idleNotice
+              ?? (idleVoiceUnavailable ? '语音不可用，请用文字告诉我。' : wakeStatus(wakeSession.state))}
+            voiceRetryable={Boolean(wakeError)}
+            onMicrophone={pressMicrophone}
+            onKeyboard={() => { focusComposerRef.current = true; setKeyboardRequested(true) }}
+            onControls={toggleControls}
+            mapRetryNonce={mapRetryNonce}
+            onMapRuntimeFailure={() => {
+              setMapRuntimeFailed(true)
+              setMapLoader(amapLoaderSnapshot())
+            }}
+          />
+          {keyboardRequested || text.trim() ? (
+            <form className="idle-composer" aria-label="Agent input" onSubmit={(event) => { event.preventDefault(); submitText() }}>
+              <input ref={composerInputRef} type="text" aria-label="任务输入" value={text} placeholder="用文字告诉小南" onChange={(event) => changeText(event.target.value)} />
+              <button type="submit" disabled={pending}>发送</button>
+            </form>
+          ) : null}
+        </>
       ) : <section className="cockpit-stage" aria-label="机场接人任务">
         <section
           id="task-surface"
@@ -1512,8 +2116,8 @@ export default function App({
                 className={`mic-button mic-${micState}`}
                 type="button"
                 aria-label={microphoneCopy.aria}
-                aria-pressed={micState === 'listening'}
-                disabled={!voice.available || pending || micState === 'submitting'}
+                aria-pressed={wakeWordEnabled ? wakeSession.state === 'follow-up' : micState === 'listening'}
+                disabled={microphoneDisabled}
                 onClick={pressMicrophone}
               >
                 <MicIcon size={22} />
@@ -1731,6 +2335,32 @@ export default function App({
                   ? '光线条件已随任务固定。如需演示另一种光线，请重新开始任务。'
                   : '选择创建任务时车辆上报的光线；界面明暗由 Agent 决定。'}
               </p>
+            </div>
+
+            <div className="console-map-recovery" role="group" aria-label="地图恢复">
+              <div className="console-map-recovery__copy">
+                <span>地图服务</span>
+                <strong>
+                  {mapRuntimeFailed
+                    ? '暂时不可用'
+                    : mapLoader.state === 'ready'
+                    ? `运行中 · Key ${Math.min((mapLoader.keyIndex ?? 0) + 1, Math.max(mapLoader.keyCount, 1))}`
+                    : mapLoader.state === 'loading'
+                      ? '正在恢复'
+                      : mapLoader.state === 'failed'
+                        ? '暂时不可用'
+                        : mapLoader.keyCount > 0 ? '等待加载' : '未配置 Web JS Key'}
+                </strong>
+              </div>
+              <div className="console-map-recovery__actions">
+                <button type="button" disabled={mapLoader.state === 'loading'} onClick={() => recoverMap(false)}>
+                  重新尝试地图
+                </button>
+                <button type="button" disabled={mapLoader.state === 'loading' || mapLoader.keyCount < 2} onClick={() => recoverMap(true)}>
+                  切换 Key
+                </button>
+              </div>
+              <p className="console-hint">只显示运行中的序号，不显示 Key 内容；失败时保留任务和语音状态。</p>
             </div>
 
             <button

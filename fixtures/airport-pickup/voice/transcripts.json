@@ -59,6 +59,139 @@
       "text": "暂不处理",
       "confidence": 0.98,
       "requiresConfirmation": false
+    },
+    {
+      "id": "choose-hongqiao",
+      "file": "choose-hongqiao.wav",
+      "text": "去虹桥机场",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "select-third-flight",
+      "file": "select-third-flight.wav",
+      "text": "选第三个",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "refresh-flights",
+      "file": "refresh-flights.wav",
+      "text": "再查一下",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "check-calendar",
+      "file": "check-calendar.wav",
+      "text": "看看日程",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "check-flight-detail",
+      "file": "check-flight-detail.wav",
+      "text": "查看航班详情",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "check-vehicle-status",
+      "file": "check-vehicle-status.wav",
+      "text": "查看车辆状态",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "speed-up",
+      "file": "speed-up.wav",
+      "text": "跑快点",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "speed-down",
+      "file": "speed-down.wav",
+      "text": "跑慢点",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "hide-hud",
+      "file": "hide-hud.wav",
+      "text": "隐藏导航信息",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "show-hud",
+      "file": "show-hud.wav",
+      "text": "显示导航信息",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "keep-calendar-plan",
+      "file": "keep-calendar-plan.wav",
+      "text": "保持当前计划",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "passengers-onboard",
+      "file": "passengers-onboard.wav",
+      "text": "家人已经上车",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "request-return",
+      "file": "request-return.wav",
+      "text": "送我们回家",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "start-return",
+      "file": "start-return.wav",
+      "text": "开始返程",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "reset-trip",
+      "file": "reset-trip.wav",
+      "text": "重新开始",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "confirm-reset",
+      "file": "confirm-reset.wav",
+      "text": "确定",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "cancel-reset",
+      "file": "cancel-reset.wav",
+      "text": "取消",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "save-preferences",
+      "file": "save-preferences.wav",
+      "text": "保存本次偏好",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
+      "id": "reject-preferences",
+      "file": "reject-preferences.wav",
+      "text": "暂不保存",
+      "confidence": 0.98,
+      "requiresConfirmation": false
     }
   ]
 }

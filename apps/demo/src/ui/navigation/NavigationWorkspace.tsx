@@ -28,6 +28,10 @@ export type NavigationWorkspaceProps = {
   retryLeg?: { leg: NavigationLeg; nonce: number }
   onReminder?: (text: string) => void
   onHudVisibilityChange?: (visible: boolean) => void
+  mapRetryNonce?: number
+  onMapRuntimeFailure?: () => void
+  onMapRuntimeReady?: () => void
+  initialMapRuntimeFailure?: boolean
 }
 
 const OUTBOUND_SKETCH: RouteSketch = {
@@ -63,6 +67,10 @@ export function NavigationWorkspace({
   retryLeg,
   onReminder,
   onHudVisibilityChange,
+  mapRetryNonce = 0,
+  onMapRuntimeFailure,
+  onMapRuntimeReady,
+  initialMapRuntimeFailure = false,
 }: NavigationWorkspaceProps) {
   const activeClock = useMemo(() => clock ?? resolveNavigationClock(), [clock])
   const [state, dispatch] = useReducer(navigationSimulatorReducer, activeClock.now(), createNavigationSimulatorState)
@@ -70,9 +78,11 @@ export function NavigationWorkspace({
   const [localHudExpanded, setLocalHudExpanded] = useState(true)
   const [reminderText, setReminderText] = useState<string | undefined>()
   const [retryGeneration, setRetryGeneration] = useState(0)
+  const [mapRuntimeFailure, setMapRuntimeFailure] = useState(initialMapRuntimeFailure)
   const completedLeg = useRef<NavigationLeg | undefined>(undefined)
   const completingLeg = useRef<NavigationLeg | undefined>(undefined)
   const failedLeg = useRef<NavigationLeg | undefined>(undefined)
+  const mountedMapRetryNonce = useRef(mapRetryNonce)
   const onVehicleSnapshotRef = useRef(onVehicleSnapshot)
   onVehicleSnapshotRef.current = onVehicleSnapshot
   const onSnapshotRef = useRef(onSnapshot)
@@ -110,6 +120,12 @@ export function NavigationWorkspace({
     setNowMs(tick)
     dispatch({ type: 'tick', nowMs: tick })
   }), [activeClock])
+
+  useEffect(() => {
+    if (mountedMapRetryNonce.current === mapRetryNonce) return
+    mountedMapRetryNonce.current = mapRetryNonce
+    setMapRuntimeFailure(false)
+  }, [mapRetryNonce])
 
   useEffect(() => {
     if (!phaseLeg || state.simulation?.leg === phaseLeg) return
@@ -181,7 +197,13 @@ export function NavigationWorkspace({
   }, [onReminder, snapshot, state])
 
   return (
-    <section className="navigation-workspace" data-session-key={task.taskId} data-leg={leg} data-pending={pending}>
+    <section
+      className="navigation-workspace"
+      data-session-key={task.taskId}
+      data-leg={leg}
+      data-pending={pending}
+      data-map-runtime={mapRuntimeFailure ? 'fallback' : 'ready'}
+    >
       <PersistentRouteMap
         sessionKey={task.taskId}
         routeKey={`${leg}:${task.navigation?.routeId ?? leg}`}
@@ -190,6 +212,15 @@ export function NavigationWorkspace({
         sketch={sketch}
         theme={spec.presentation.theme}
         progressLabel={`模拟行程进度 ${Math.round(snapshot.progress * 100)}%`}
+        mapRetryNonce={mapRetryNonce}
+        onRuntimeFailure={() => {
+          setMapRuntimeFailure(true)
+          onMapRuntimeFailure?.()
+        }}
+        onRuntimeReady={() => {
+          setMapRuntimeFailure(false)
+          onMapRuntimeReady?.()
+        }}
       />
       <div className="navigation-workspace__brand" aria-label="pilotflow 模拟导航">
         <strong>pilotflow</strong><span>模拟导航</span>

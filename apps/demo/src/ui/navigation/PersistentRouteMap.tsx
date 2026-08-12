@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { RouteSketch } from '@canvasflow/schema'
-import { loadAMap } from '../amap/loader'
+import { amapLoaderSnapshot, invalidateAMap, loadAMap } from '../amap/loader'
 import { renderAMapRoute, type AMapRouteHandle } from '../amap/render'
 import { ROUTE_MAP_DRAWING_OPTIONS, ROUTE_MAP_VIEWBOX, buildRouteSketchDrawing } from '../route-sketch'
 import { pointAtProgress, segmentLengths } from '../route-sketch'
@@ -13,40 +13,80 @@ export type PersistentRouteMapProps = {
   sketch: RouteSketch
   theme: 'light' | 'dark'
   progressLabel?: string
+  mapRetryNonce?: number
+  onRuntimeFailure?: () => void
+  onRuntimeReady?: () => void
 }
 
-export function PersistentRouteMap({ sessionKey, routeKey, destination, progress, sketch, theme, progressLabel }: PersistentRouteMapProps) {
+export function PersistentRouteMap({ sessionKey, routeKey, destination, progress, sketch, theme, progressLabel, mapRetryNonce = 0, onRuntimeFailure, onRuntimeReady }: PersistentRouteMapProps) {
   const container = useRef<HTMLDivElement>(null)
   const handle = useRef<AMapRouteHandle | undefined>(undefined)
-  const initialTheme = useRef(theme)
+  const themeRef = useRef(theme)
+  themeRef.current = theme
   const sketchRef = useRef(sketch)
   const progressRef = useRef(progress)
   sketchRef.current = sketch
   progressRef.current = progress
   const [source, setSource] = useState<'sketch' | 'amap'>('sketch')
+  const [runtimeFailure, setRuntimeFailure] = useState(false)
+  const [runtimeReload, setRuntimeReload] = useState(0)
+  const runtimeAttempts = useRef(0)
+  const runtimeFailureSerial = useRef(0)
+  const onRuntimeFailureRef = useRef(onRuntimeFailure)
+  onRuntimeFailureRef.current = onRuntimeFailure
+  const onRuntimeReadyRef = useRef(onRuntimeReady)
+  onRuntimeReadyRef.current = onRuntimeReady
   const [following, setFollowing] = useState(true)
   const drawing = useMemo(() => buildRouteSketchDrawing(
     { ...sketch, progress }, ROUTE_MAP_DRAWING_OPTIONS,
   ), [progress, sketch])
   const heading = useMemo(() => headingAtProgress(sketch, progress), [progress, sketch])
 
+  const recoverRuntime = useCallback(() => {
+    runtimeFailureSerial.current += 1
+    const failedHandle = handle.current
+    handle.current = undefined
+    failedHandle?.destroy()
+    const keyCount = amapLoaderSnapshot().keyCount
+    invalidateAMap({ rotate: true })
+    setRuntimeFailure(true)
+    setSource('sketch')
+    onRuntimeFailureRef.current?.()
+    if (runtimeAttempts.current < Math.max(0, keyCount - 1)) {
+      runtimeAttempts.current += 1
+      setRuntimeReload((current) => current + 1)
+    }
+  }, [])
+
   useEffect(() => {
     let cancelled = false
+    const loadFailureSerial = runtimeFailureSerial.current
     const mount = container.current
     if (!mount) return
     void loadAMap().then(async (amap) => {
-      if (!amap || cancelled) return
+      if (!amap || cancelled) {
+        if (!cancelled) {
+          setRuntimeFailure(true)
+          onRuntimeFailureRef.current?.()
+        }
+        return
+      }
       const rendered = await renderAMapRoute(amap, mount, {
-        sketch: { ...sketchRef.current, progress: progressRef.current }, mode: 'follow', theme: initialTheme.current,
+        sketch: { ...sketchRef.current, progress: progressRef.current }, mode: 'follow', theme: themeRef.current,
         onManualInteraction: () => setFollowing(false),
+        onRuntimeFailure: recoverRuntime,
       })
-      if (cancelled) {
+      if (cancelled || loadFailureSerial !== runtimeFailureSerial.current) {
         rendered?.destroy()
         return
       }
       if (!rendered) return
       handle.current = rendered
+      rendered.setTheme(themeRef.current)
+      runtimeAttempts.current = 0
+      setRuntimeFailure(false)
       setSource('amap')
+      onRuntimeReadyRef.current?.()
     })
     return () => {
       cancelled = true
@@ -56,16 +96,26 @@ export function PersistentRouteMap({ sessionKey, routeKey, destination, progress
     }
     // The task session owns the map. Only a leg/route replacement can replace
     // its route overlays; HUD, UISpec revisions and window changes never remount it.
-  }, [sessionKey])
+  }, [mapRetryNonce, recoverRuntime, runtimeReload, sessionKey])
 
   useEffect(() => { handle.current?.setProgress(progress) }, [progress])
 
+  useEffect(() => { handle.current?.setTheme(theme) }, [theme])
+
   useEffect(() => {
-    if (!handle.current) return
-    void handle.current.setRoute({ ...sketchRef.current, progress: progressRef.current }).then((replaced) => {
-      if (!replaced) setSource('sketch')
+    const routeHandle = handle.current
+    if (!routeHandle) return
+    let cancelled = false
+    const failureSerial = runtimeFailureSerial.current
+    void routeHandle.setRoute({ ...sketchRef.current, progress: progressRef.current }).then((replaced) => {
+      if (cancelled || replaced) return
+      // renderAMapRoute normally reports the failure before resolving false.
+      // Only recover here when an implementation returns false silently, so one
+      // failed replacement consumes exactly one key and one retry slot.
+      if (runtimeFailureSerial.current === failureSerial) recoverRuntime()
     })
-  }, [routeKey])
+    return () => { cancelled = true }
+  }, [recoverRuntime, routeKey])
 
   function recenter() {
     setFollowing(true)
@@ -95,7 +145,7 @@ export function PersistentRouteMap({ sessionKey, routeKey, destination, progress
       )}
       <div className="persistent-route-map__source">
         {progressLabel && <span>{progressLabel}</span>}
-        <span>{source === 'amap' ? '道路导航 · 高德地图' : '离线路线示意 · 降级展示'}</span>
+        <span>{source === 'amap' ? '道路导航 · 高德地图' : runtimeFailure ? '地图服务暂时不可用 · 离线模拟继续' : '离线路线示意 · 降级展示'}</span>
         <strong>模拟位置，非真实 GPS</strong>
       </div>
       {!following && (

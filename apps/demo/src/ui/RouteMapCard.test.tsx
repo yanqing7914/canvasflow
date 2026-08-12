@@ -20,17 +20,32 @@ import { ROUTE_MAP_DRAWING_OPTIONS, buildRouteSketchDrawing } from './route-sket
 const stub = vi.hoisted(() => ({
   /** Resolves to the AMap API; a test releases it when it wants the map to exist. */
   load: Promise.resolve<unknown>(null),
+  loadAMap: vi.fn<() => Promise<unknown | null>>(),
+  invalidateAMap: vi.fn<(options?: { rotate?: boolean }) => void>(),
+  keyCount: 1,
+  renderAMapRoute: vi.fn(),
   /** Where the map's own marker has been told to go. */
   setProgress: vi.fn<(progress: number) => void>(),
 }))
 
-vi.mock('./amap/loader', () => ({ loadAMap: () => stub.load }))
-vi.mock('./amap/render', () => ({
-  renderAMapRoute: () => Promise.resolve({
-    setProgress: (progress: number) => stub.setProgress(progress),
-    destroy: () => {},
-  }),
+vi.mock('./amap/loader', () => ({
+  amapLoaderSnapshot: () => ({ state: 'ready', keyCount: stub.keyCount, keyIndex: 0 }),
+  invalidateAMap: (options?: { rotate?: boolean }) => stub.invalidateAMap(options),
+  loadAMap: () => stub.loadAMap(),
 }))
+vi.mock('./amap/render', () => ({
+  renderAMapRoute: (...args: unknown[]) => stub.renderAMapRoute(...args),
+}))
+
+function renderedMap() {
+  return {
+    setProgress: (progress: number) => stub.setProgress(progress),
+    setRoute: vi.fn(async () => true),
+    setFollow: vi.fn(),
+    recenter: vi.fn(),
+    destroy: vi.fn(),
+  }
+}
 
 const sketch: RouteSketch = {
   summary: '经虹桥枢纽超充站前往机场',
@@ -68,7 +83,13 @@ describe('a basemap that finishes loading after the crawl has moved', () => {
     frames = []
     now = 0
     stub.setProgress.mockClear()
+    stub.invalidateAMap.mockClear()
+    stub.keyCount = 1
     stub.load = new Promise((resolve) => { releaseLoad = () => resolve({}) })
+    stub.loadAMap.mockReset()
+    stub.loadAMap.mockImplementation(() => stub.load)
+    stub.renderAMapRoute.mockReset()
+    stub.renderAMapRoute.mockResolvedValue(renderedMap())
     vi.stubGlobal('requestAnimationFrame', (callback: (timestampMs: number) => void) => {
       frames.push(callback)
       return frames.length
@@ -141,5 +162,60 @@ describe('a basemap that finishes loading after the crawl has moved', () => {
     // The route already carries the authored marker, so moving it would be a
     // second source of truth for the same value.
     expect(stub.setProgress).not.toHaveBeenCalled()
+  })
+})
+
+describe('AMap runtime recovery', () => {
+  beforeEach(() => {
+    stub.load = Promise.resolve({})
+    stub.loadAMap.mockReset()
+    stub.loadAMap.mockImplementation(() => stub.load)
+    stub.invalidateAMap.mockClear()
+    stub.setProgress.mockClear()
+    stub.renderAMapRoute.mockReset()
+  })
+
+  afterEach(() => cleanup())
+
+  it('rotates a failed runtime and retries the same mounted route with the next key', async () => {
+    stub.keyCount = 2
+    stub.renderAMapRoute
+      .mockImplementationOnce(async (...args: unknown[]) => {
+        const options = args[2] as { onRuntimeFailure?: () => void }
+        options.onRuntimeFailure?.()
+        return null
+      })
+      .mockResolvedValueOnce(renderedMap())
+
+    const view = render(card(sketch))
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(stub.invalidateAMap).toHaveBeenCalledOnce()
+    expect(stub.invalidateAMap).toHaveBeenCalledWith({ rotate: true })
+    expect(stub.loadAMap).toHaveBeenCalledTimes(2)
+    expect(stub.renderAMapRoute).toHaveBeenCalledTimes(2)
+    expect(view.container.querySelector('[data-route-map-source="amap"]')).not.toBeNull()
+  })
+
+  it('keeps the sketch honest after every configured runtime fails', async () => {
+    stub.keyCount = 2
+    stub.renderAMapRoute.mockImplementation(async (...args: unknown[]) => {
+      const options = args[2] as { onRuntimeFailure?: () => void }
+      options.onRuntimeFailure?.()
+      return null
+    })
+
+    const view = render(card(sketch))
+    await act(async () => {})
+    await act(async () => {})
+
+    expect(stub.invalidateAMap).toHaveBeenCalledTimes(2)
+    expect(stub.invalidateAMap).toHaveBeenNthCalledWith(1, { rotate: true })
+    expect(stub.invalidateAMap).toHaveBeenNthCalledWith(2, { rotate: true })
+    expect(stub.loadAMap).toHaveBeenCalledTimes(2)
+    expect(stub.renderAMapRoute).toHaveBeenCalledTimes(2)
+    expect(view.container.querySelector('[data-route-map-source="sketch"]')).not.toBeNull()
+    expect(view.container.querySelector('.ui-route-map__basemap')).toHaveAttribute('data-active', 'false')
   })
 })

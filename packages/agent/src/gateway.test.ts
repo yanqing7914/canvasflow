@@ -55,6 +55,34 @@ function startCockpitOutbound(gateway: AgentGateway, prefix: string) {
   })
 }
 
+describe('cockpit task cancellation', () => {
+  it.each(['choosing-flight', 'outbound-driving'] as const)('cancels a %s cockpit task through the terminal cleanup path', (phase) => {
+    const gateway = createGateway()
+    const current = phase === 'outbound-driving'
+      ? startCockpitOutbound(gateway, `cancel-${phase}`)
+      : gateway.createTask(createCockpitRequest('去虹桥机场接人', `cancel-${phase}`))
+
+    const cancelled = gateway.cancelTask(current.task.taskId, {
+      clientRequestId: `cancel-${phase}-request`,
+      expectedTaskRevision: current.task.taskRevision,
+      eventId: `cancel-${phase}-event`,
+      reason: '用户确认重新开始',
+    })
+    const replay = gateway.cancelTask(current.task.taskId, {
+      clientRequestId: `cancel-${phase}-retry`,
+      expectedTaskRevision: current.task.taskRevision,
+      eventId: `cancel-${phase}-event`,
+      reason: '用户确认重新开始',
+    })
+
+    expect(cancelled.task.phase).toBe('cancelled')
+    expect(cancelled.task.pendingConfirmation).toBeUndefined()
+    expect(cancelled.ui.phase).toBe('cancelled')
+    expect(replay.task).toEqual(cancelled.task)
+    expect(replay.ui).toEqual(cancelled.ui)
+  })
+})
+
 function failedLandingMessageTask(gateway: AgentGateway) {
   const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
   const started = gateway.submitAction(created.task.taskId, {
@@ -240,12 +268,13 @@ describe('AgentGateway', () => {
       createId: () => 'cockpit',
     })
     const cockpitRequest = {
-      ...createRequest('我现在要去机场接人'),
+      ...createRequest('我现在要去机场接妈妈和豆豆'),
       clientRequestId: 'cockpit-create',
       clientCapabilities: { uiSchemaVersion: '1.0' as const, supportsSse: true, supportsTts: true, cockpitVersion: '1' as const },
     }
     const created = gateway.createTask(cockpitRequest)
     expect(created.task.phase).toBe('collecting-airport')
+    expect(created.task.passengers).toMatchObject({ memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'] })
     expect(created.assistant?.text).toContain('哪个机场')
 
     const flights = gateway.submitEvent(created.task.taskId, {
@@ -393,9 +422,57 @@ describe('AgentGateway', () => {
       },
     })
     expect(completed.task).toMatchObject({ phase: 'completed', passengers: { names: [], confirmedOnboard: false } })
+    expect(completed.task.memoryProposal).toMatchObject({ status: 'pending', memberId: 'mom' })
+    expect(completed.task.pendingConfirmation).toMatchObject({
+      action: 'save-memory', confirmationId: completed.task.memoryProposal?.confirmationId,
+    })
+    expect(completed.effects).toEqual([expect.objectContaining({
+      type: 'memory.propose-update', status: 'pending-confirmation',
+    })])
+    expect(completed.ui.actions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ event: expect.objectContaining({ type: 'confirmation', decision: 'accept' }) }),
+      expect.objectContaining({ event: expect.objectContaining({ type: 'confirmation', decision: 'reject' }) }),
+    ]))
     expect(completed.task.flight).toBeUndefined()
     expect(completed.task.cockpit).toBeUndefined()
     expect(completed.ui.windows ?? []).toHaveLength(0)
+  })
+
+  it('resolves a spoken ordinal on the cockpit flight board through the event path', () => {
+    const gateway = new AgentGateway({
+      store: new MemoryTaskStore(),
+      now: () => '2026-08-11T09:00:00+08:00',
+      createId: () => 'cockpit-ordinal',
+    })
+    const requestContext = {
+      uiSchemaVersion: '1.0' as const,
+      supportsSse: true,
+      supportsTts: true,
+      cockpitVersion: '1' as const,
+    }
+    const created = gateway.createTask({
+      ...createRequest('我现在要去机场接妈妈和豆豆'),
+      clientRequestId: 'cockpit-ordinal-create',
+      clientCapabilities: requestContext,
+    })
+    const flights = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'cockpit-ordinal-airport',
+      expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'cockpit-ordinal-airport', type: 'user.input', text: '虹桥机场', source: 'voice', timestamp: now },
+    })
+    const board = flights.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
+    const third = board.props.choices[2]!
+
+    const selected = gateway.submitEvent(flights.task.taskId, {
+      clientRequestId: 'cockpit-ordinal-select',
+      expectedTaskRevision: flights.task.taskRevision,
+      event: { eventId: 'cockpit-ordinal-select', type: 'user.input', text: '选第三个', source: 'voice', timestamp: now },
+    })
+
+    expect(selected.task.phase).toBe('confirming-outbound')
+    expect(selected.task.flight?.flightNumber).toBe(third.flightNumber)
+    expect(selected.assistant?.text).toContain(`已选择 ${third.flightNumber}`)
   })
 
   it('rejects forged navigation snapshots and uses server-derived segment values', () => {
