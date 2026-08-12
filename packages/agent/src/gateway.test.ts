@@ -276,10 +276,17 @@ describe('AgentGateway', () => {
     expect(created.task.phase).toBe('collecting-airport')
     expect(created.task.passengers).toMatchObject({ memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'] })
     expect(created.assistant?.text).toContain('哪个机场')
+    const airportActions = created.ui.actions.filter((action) => action.event.type === 'agent-message')
+    expect(airportActions).toEqual([
+      expect.objectContaining({ label: '浦东机场', event: { type: 'agent-message', text: '浦东机场' } }),
+      expect.objectContaining({ label: '虹桥机场', event: { type: 'agent-message', text: '虹桥机场' } }),
+    ])
 
+    const hongqiaoAction = airportActions.find((action) => action.label === '虹桥机场')
+    if (hongqiaoAction?.event.type !== 'agent-message') throw new Error('expected Hongqiao agent-message action')
     const flights = gateway.submitEvent(created.task.taskId, {
       clientRequestId: 'airport-answer', expectedTaskRevision: created.task.taskRevision,
-      event: { eventId: 'airport-answer', type: 'user.input', text: '虹桥机场', source: 'text', timestamp: now },
+      event: { eventId: 'airport-answer', type: 'user.input', text: hongqiaoAction.event.text, source: 'text', timestamp: now },
     })
     expect(flights.task.phase).toBe('choosing-flight')
     expect(flights.assistant?.shouldSpeak).toBe(false)
@@ -374,9 +381,18 @@ describe('AgentGateway', () => {
         },
       },
     })
+    const onboardAction = arrived.ui.actions.find((action) => action.id === 'confirm-passengers-onboard')
+    expect(arrived.ui.components).toContainEqual(expect.objectContaining({
+      id: 'passenger-status', actions: ['confirm-passengers-onboard'],
+    }))
+    expect(onboardAction).toEqual({
+      id: 'confirm-passengers-onboard', label: '乘客已上车', style: 'primary',
+      event: { type: 'agent-message', text: '家人上车' },
+    })
+    if (onboardAction?.event.type !== 'agent-message') throw new Error('expected onboard agent-message action')
     const onboard = gateway.submitEvent(arrived.task.taskId, {
       clientRequestId: 'onboard', expectedTaskRevision: arrived.task.taskRevision,
-      event: { eventId: 'onboard', type: 'user.input', text: '接到人了', source: 'text', timestamp: now },
+      event: { eventId: 'onboard', type: 'user.input', text: onboardAction.event.text, source: 'text', timestamp: now },
     })
     expect(onboard.task.phase).toBe('passengers-onboard')
     const airportWeather = gateway.submitEvent(onboard.task.taskId, {

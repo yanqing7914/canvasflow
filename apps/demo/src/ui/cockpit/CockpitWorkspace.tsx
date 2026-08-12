@@ -56,7 +56,7 @@ export function CockpitWorkspace({
       <section className="cockpit-workspace__primary" data-cockpit-slot="primary" aria-label="主任务窗口">
         {primary}
       </section>
-      <section className="cockpit-workspace__hud" data-cockpit-slot="hud" aria-label="导航信息">
+      <section className="cockpit-workspace__hud" data-cockpit-slot="hud" aria-label="导航 HUD 层">
         {hud}
       </section>
       <section className="cockpit-workspace__auxiliary" data-cockpit-slot="auxiliary" aria-label="辅助信息窗口">

@@ -28,7 +28,8 @@ export function PersistentMapLayer({
 }: PersistentMapLayerProps) {
   const container = useRef<HTMLDivElement>(null)
   const handle = useRef<AMapWorkspaceHandle | undefined>(undefined)
-  const [source, setSource] = useState<'loading' | 'amap' | 'fallback'>('loading')
+  const initialLoader = amapLoaderSnapshot()
+  const [source, setSource] = useState<'loading' | 'amap' | 'fallback'>(initialLoader.keyCount === 0 ? 'fallback' : 'loading')
   const failureCallback = useRef(onRuntimeFailure)
   failureCallback.current = onRuntimeFailure
   const readyCallback = useRef(onRuntimeReady)
@@ -51,6 +52,10 @@ export function PersistentMapLayer({
     let cancelled = false
     const mount = container.current
     if (!mount) return
+    if (amapLoaderSnapshot().keyCount === 0) {
+      failureCallback.current?.()
+      return
+    }
     setSource('loading')
     void loadAMap().then((amap) => {
       if (cancelled || !amap) {
@@ -109,7 +114,7 @@ export function PersistentMapLayer({
   useEffect(() => { if (recenterNonce > 0) handle.current?.recenter() }, [recenterNonce])
 
   return (
-    <section className="persistent-map-layer" data-testid="persistent-map-layer" data-map-source={source} data-mode={mode} data-session-key={sessionKey} aria-label="座舱地图">
+    <section className="persistent-map-layer" data-testid="persistent-map-layer" data-map-source={source} data-mode={mode} data-session-key={sessionKey} aria-label={mode === 'route' ? '模拟导航地图' : '座舱地图'}>
       <div ref={container} className="persistent-map-layer__basemap" data-active={source === 'amap'} aria-hidden="true" />
       <div className="persistent-map-layer__fallback" aria-hidden={source === 'amap'}>
         {drawing ? (

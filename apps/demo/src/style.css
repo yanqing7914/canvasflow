@@ -108,6 +108,77 @@ a:focus-visible {
 
 .demo-shell[data-navigation-toolbar='expanded'] {
   --cockpit-toolbar-space: max(190px, calc(env(safe-area-inset-top) + 174px));
+
+/* Persistent cockpit shell: one map stage with quiet glass layers above it. */
+.cockpit-workspace {
+  position: relative;
+  min-height: 100dvh;
+  overflow: hidden;
+  isolation: isolate;
+  background: #0c1015;
+  color: #edf4ff;
+}
+
+.cockpit-workspace__map,
+.persistent-map-layer,
+.persistent-map-layer__basemap,
+.persistent-map-layer__fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.cockpit-workspace__map { z-index: 1; }
+.persistent-map-layer__basemap { z-index: 1; visibility: hidden; }
+.persistent-map-layer__basemap[data-active='true'] { visibility: visible; }
+.persistent-map-layer__fallback {
+  z-index: 0;
+  display: grid;
+  place-items: center;
+  gap: 14px;
+  background:
+    radial-gradient(circle at 40% 38%, rgba(36, 107, 253, 0.18), transparent 34%),
+    repeating-linear-gradient(30deg, transparent 0 34px, rgba(128, 156, 194, 0.08) 35px 36px),
+    #0c1015;
+}
+.persistent-map-layer__fallback svg { width: 100%; height: 100%; }
+.persistent-map-layer__car { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid rgba(145, 188, 255, 0.6); border-radius: 50%; background: rgba(35, 98, 180, 0.45); box-shadow: 0 0 28px rgba(88, 150, 255, 0.45); }
+.persistent-map-layer__car span { width: 8px; height: 14px; border-radius: 5px 5px 3px 3px; background: #cbe0ff; }
+.persistent-map-layer__location { position: absolute; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); color: #b9cbe4; font-size: 13px; letter-spacing: .04em; }
+.persistent-map-layer__source { position: absolute; right: 18px; bottom: 18px; z-index: 3; color: rgba(217, 228, 244, .7); font-size: 11px; letter-spacing: .08em; }
+
+.cockpit-workspace__status { position: absolute; top: 18px; left: 22px; z-index: 40; }
+.cockpit-status-bar { display: flex; align-items: center; gap: 14px; padding: 9px 13px; border: 1px solid rgba(190, 213, 242, .2); border-radius: 14px; background: rgba(9, 17, 28, .78); box-shadow: 0 16px 40px rgba(0, 0, 0, .2); backdrop-filter: blur(18px); }
+.cockpit-status-bar__brand { color: #9fc2ff; font-size: 17px; font-weight: 800; letter-spacing: -.04em; }
+.cockpit-status-bar__phase { color: #dfeaff; font-size: 13px; font-weight: 700; }
+.cockpit-status-bar__facts { display: flex; gap: 12px; margin: 0; }
+.cockpit-status-bar__facts div { display: grid; gap: 2px; }
+.cockpit-status-bar__facts dt { color: #91a5be; font-size: 10px; }
+.cockpit-status-bar__facts dd { margin: 0; color: #f1f6ff; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cockpit-workspace__feedback { position: absolute; left: 22px; bottom: 22px; z-index: 45; max-width: min(480px, calc(100vw - 44px)); }
+.cockpit-feedback { margin: 0; padding: 10px 13px; border: 1px solid rgba(190, 213, 242, .2); border-radius: 11px; background: rgba(9, 17, 28, .8); color: #dfeaff; }
+.cockpit-workspace__primary { position: absolute; top: 92px; left: 22px; z-index: 30; width: min(520px, calc(100vw - 44px)); max-height: calc(100dvh - 170px); overflow: auto; }
+.cockpit-primary-panel { padding: 16px; border: 1px solid rgba(190, 213, 242, .22); border-radius: 18px; background: rgba(9, 17, 28, .82); box-shadow: 0 20px 50px rgba(0, 0, 0, .24); backdrop-filter: blur(20px); }
+.cockpit-workspace__hud { position: absolute; inset: 0; z-index: 25; pointer-events: none; }
+.cockpit-workspace__hud > * { pointer-events: auto; }
+.cockpit-workspace__auxiliary { position: absolute; inset: 0; z-index: 50; pointer-events: none; }
+.cockpit-workspace__auxiliary > * { pointer-events: auto; }
+.cockpit-workspace__entry { position: absolute; right: 22px; bottom: 22px; z-index: 60; display: grid; justify-items: end; gap: 8px; }
+.cockpit-workspace__entry .header-actions { border: 1px solid rgba(190, 213, 242, .2); border-radius: 14px; padding: 5px; background: rgba(9, 17, 28, .8); box-shadow: 0 16px 40px rgba(0, 0, 0, .2); backdrop-filter: blur(18px); }
+.cockpit-workspace__entry .voice-status { margin: 0; max-width: 480px; padding: 5px 10px; border-radius: 8px; background: rgba(9, 17, 28, .78); color: #cddcf0; }
+.cockpit-workspace__entry .voice-composer { width: min(560px, calc(100vw - 44px)); margin: 0; border-color: rgba(190, 213, 242, .25); background: rgba(9, 17, 28, .94); }
+.cockpit-workspace__entry .voice-composer__input { background: #172438; color: #f0f5fb; }
+
+@media (max-width: 720px) {
+  .cockpit-workspace__status { top: 10px; left: 10px; right: 10px; }
+  .cockpit-status-bar { gap: 9px; padding: 8px 10px; overflow: auto; }
+  .cockpit-status-bar__facts { gap: 9px; }
+  .cockpit-workspace__primary { top: 78px; left: 10px; width: min(470px, calc(100vw - 20px)); max-height: calc(100dvh - 170px); }
+  .cockpit-workspace__feedback { left: 10px; bottom: 84px; max-width: calc(100vw - 20px); }
+  .cockpit-workspace__entry { right: 10px; bottom: 10px; left: 10px; justify-items: stretch; }
+  .cockpit-workspace__entry .header-actions { justify-content: center; }
+  .cockpit-workspace__entry .voice-composer { width: 100%; }
 }
 
 /* The Agent's theme applies to the whole driver-facing cockpit, not just the
