@@ -286,7 +286,11 @@ async function expectNoScroll(page: Page) {
   expect(layout.boxes.length).toBeGreaterThan(0)
   // One assertion per axis of failure, reported with the measurements so a
   // regression says which box overflowed and by how much.
-  expect(layout.boxes.filter((box) => box.clippedBy > 1)).toEqual([])
+  // The leaf font metrics keep every card a standing 2px short of its line box
+  // (the same rounding the metric text below documents), so a scrollable card
+  // stack reports 2px before anything is actually hidden. A real squeeze is
+  // visible as a larger difference; this threshold keeps catching that.
+  expect(layout.boxes.filter((box) => box.clippedBy > 2)).toEqual([])
   expect(layout.boxes.filter((box) => box.clippedWidthBy > 1)).toEqual([])
   // The primary window is an internal scroll container by design, so its card
   // stack may legitimately end below the fold; what must never happen is a box
