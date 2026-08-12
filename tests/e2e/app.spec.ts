@@ -1403,8 +1403,19 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await readControls(page, 'completed')
   await readControls(page, 'memory.propose-update:pending-confirmation')
 
+  const confirmed = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/confirmations\//.test(new URL(response.url()).pathname)
+  ))
   await page.getByRole('button', { name: '保存本次偏好' }).click()
-  await readControls(page, 'memory.confirm-update:succeeded')
+  const confirmation = await confirmed
+  expect(confirmation.ok()).toBe(true)
+  expect(await confirmation.json()).toMatchObject({
+    task: { phase: 'completed' },
+    effects: [expect.objectContaining({ type: 'memory.confirm-update', status: 'succeeded' })],
+  })
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByText('已到家')).toBeVisible()
   await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
 })
 
@@ -1910,9 +1921,20 @@ test('rejects the arrival memory proposal through the confirmation API', async (
 
   for (let step = 0; step < 10; step += 1) await advanceFlow(page)
   await readControls(page, 'completed')
+  const rejected = page.waitForResponse((response) => (
+    response.request().method() === 'POST'
+    && /\/v1\/tasks\/[^/]+\/confirmations\//.test(new URL(response.url()).pathname)
+  ))
   await page.getByRole('button', { name: '暂不保存' }).click()
 
-  await readControls(page, 'memory.reject-update:cancelled')
+  const rejection = await rejected
+  expect(rejection.ok()).toBe(true)
+  expect(await rejection.json()).toMatchObject({
+    task: { phase: 'completed' },
+    effects: [expect.objectContaining({ type: 'memory.reject-update', status: 'cancelled' })],
+  })
+  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
+  await expect(page.getByText('已到家')).toBeVisible()
   await expect(page.getByRole('button', { name: '暂不保存' })).toHaveCount(0)
 })
 
