@@ -1982,22 +1982,30 @@ export default function App({
     ...baseCockpitView,
     auxiliaryWindows: [...baseCockpitView.auxiliaryWindows, ...operationWindows],
   }
+  const terminalConfirmationVisible = task?.phase === 'completed' && Boolean(task.pendingConfirmation)
   const primarySpec = cockpitView.primaryWindow
     ? windowUISpec(spec ?? windowSpec!, cockpitView.primaryWindow)
-    : cockpitView.mode === 'primary' ? spec : undefined
+    : (cockpitView.mode === 'primary' || terminalConfirmationVisible) ? spec : undefined
   const auxiliarySpec = windowSpec
     ? { ...windowSpec, windows: cockpitView.auxiliaryWindows } as CockpitUISpec
     : undefined
-  const routeSketch = navigationActive && runtimeTask && spec
+  // Legacy task fixtures can still carry a real route/navigation phase without
+  // the newer cockpit simulation seed. Keep the persistent map faithful to that
+  // fact; only NavigationWorkspace requires the richer cockpit contract.
+  const mapRouteActive = Boolean(runtimeTask && spec && (
+    navigationActive
+    || ['driving-to-airport', 'approaching-airport', 'returning-home'].includes(runtimeTask.phase)
+  ))
+  const routeSketch = mapRouteActive && runtimeTask && spec
     ? navigationSketchForTask(runtimeTask, spec)
     : undefined
   const mapMode = routeSketch ? 'route' as const : 'idle' as const
-  const mapRouteKey = navigationActive
+  const mapRouteKey = mapRouteActive
     ? `${runtimeTask?.cockpit?.activeLeg ?? runtimeTask?.navigationSimulation?.leg ?? 'outbound'}:${runtimeTask?.navigation?.routeId ?? runtimeTask?.navigationSimulation?.routeId ?? 'route'}`
     : 'idle'
   // The navigation HUD owns the full-screen driving surface, but waiting at
   // the airport and confirming the return still need their primary task card.
-  const hideNavigationPrimary = cockpitView.mode === 'navigation'
+  const hideNavigationPrimary = navigationActive && cockpitView.mode === 'navigation'
     && task?.phase !== 'waiting-for-passengers'
     && task?.phase !== 'confirming-return'
   const entryContent = (
@@ -2107,7 +2115,7 @@ export default function App({
             {error ? <p className="brief-error" role="alert">{error}</p> : null}
           </>
         )}
-        primary={hideNavigationPrimary || cockpitView.mode === 'terminal' || (cockpitContract && Boolean(windowSpec) && !cockpitView.primaryWindow)
+        primary={hideNavigationPrimary || (cockpitView.mode === 'terminal' && !terminalConfirmationVisible) || (cockpitContract && Boolean(windowSpec) && !cockpitView.primaryWindow && !terminalConfirmationVisible)
           ? null
           : (
             <section
@@ -2120,7 +2128,6 @@ export default function App({
               data-phase-label={phaseIdentity}
             >
               {task ? <JourneyPhaseRail phase={task.phase} /> : null}
-              {modelUsed ? <p className="model-provenance" data-model-used={modelUsed} aria-label="模型参与说明">模型 <strong>{modelUsed}</strong> 参与了本任务的输入规范化</p> : null}
               {primarySpec && task ? (
                 <section className="cockpit-primary-panel__content" aria-label={`${cockpitView.primaryWindow?.title ?? windowSpec?.title ?? '当前行程'}窗口`}>
                   <UISpecRenderer

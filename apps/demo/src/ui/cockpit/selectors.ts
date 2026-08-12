@@ -48,7 +48,8 @@ export function deriveCockpitView(spec?: UISpec | null): CockpitView {
     // Older Composer specs do not declare `windows` yet. Treat their first
     // authored content window as the primary task surface so an airport
     // question or legacy replay never disappears into the auxiliary layer.
-    : windows.find((window) => window.kind === 'processing' || window.kind === 'error')
+    : [...windows].reverse().find((window) => primaryWindowKinds.has(window.kind))
+      ?? windows.find((window) => window.kind === 'processing' || window.kind === 'error')
   // Historical main-flow windows can remain declared for audit/replay, but the
   // cockpit presents exactly one current primary step. They are not auxiliary
   // tools and must not reappear as draggable weather-style windows.

@@ -39,7 +39,8 @@ export function PersistentMapLayer({
   manualInteractionCallback.current = onManualInteraction
   const initialTheme = useRef(theme)
   const [loadRevision, setLoadRevision] = useState(0)
-  const runtimeAttempts = useRef(0)
+  const runtimeRetriesRemaining = useRef(Math.max(0, initialLoader.keyCount - 1))
+  const recoveryInFlight = useRef(false)
   const modeRef = useRef(mode)
   const sketchRef = useRef(sketch)
   const progressRef = useRef(progress)
@@ -51,19 +52,31 @@ export function PersistentMapLayer({
     : undefined, [mode, progress, sketch])
 
   useEffect(() => {
-    runtimeAttempts.current = 0
+    runtimeRetriesRemaining.current = Math.max(0, amapLoaderSnapshot().keyCount - 1)
+    recoveryInFlight.current = false
   }, [mapRetryNonce, sessionKey])
+
+  const recoverRuntime = () => {
+    if (recoveryInFlight.current) return
+    recoveryInFlight.current = true
+    setSource('fallback')
+    failureCallback.current?.()
+    if (runtimeRetriesRemaining.current <= 0) return
+    runtimeRetriesRemaining.current -= 1
+    invalidateAMap({ rotate: true })
+    setLoadRevision((value) => value + 1)
+  }
 
   useEffect(() => {
     let cancelled = false
+    recoveryInFlight.current = false
     const mount = container.current
     if (!mount) return
     setSource('loading')
     void loadAMap().then((amap) => {
       if (cancelled || !amap) {
         if (!cancelled) {
-          setSource('fallback')
-          failureCallback.current?.()
+          recoverRuntime()
         }
         return
       }
@@ -76,18 +89,11 @@ export function PersistentMapLayer({
           const current = handle.current
           handle.current = undefined
           current?.destroy()
-          setSource('fallback')
-          failureCallback.current?.()
-          const keyCount = amapLoaderSnapshot().keyCount
-          runtimeAttempts.current += 1
-          if (runtimeAttempts.current < keyCount) {
-            invalidateAMap({ rotate: true })
-            setLoadRevision((value) => value + 1)
-          }
+          recoverRuntime()
         },
       })
       if (cancelled) { rendered?.destroy(); return }
-      if (!rendered) { setSource('fallback'); return }
+      if (!rendered) { recoverRuntime(); return }
       handle.current = rendered
       setSource('amap')
       readyCallback.current?.()
