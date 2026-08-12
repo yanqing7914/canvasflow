@@ -81,6 +81,7 @@ a:focus-visible {
      app overwrites both inline once it has read the device; see
      `glass-capability.ts` for why an unknown device is treated as a capable one. */
   --glass-blur: 28px;
+  --glass-saturate: 1.6;
   --cockpit-toolbar-space: max(88px, calc(env(safe-area-inset-top) + 72px));
   min-height: 100dvh;
   overflow: hidden;
