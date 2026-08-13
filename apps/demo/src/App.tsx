@@ -2001,8 +2001,19 @@ export default function App({
     ? navigationSketchForTask(runtimeTask, spec)
     : undefined
   const mapMode = routeSketch ? 'route' as const : 'idle' as const
+  const mapRouteId = runtimeTask?.navigation?.routeId ?? runtimeTask?.navigationSimulation?.routeId
+  const mapLeg = runtimeTask?.cockpit?.activeLeg ?? runtimeTask?.navigationSimulation?.leg
+  const mapSnapshotMatchesRoute = Boolean(
+    mapRouteId
+    && mapLeg
+    && latestNavigationSnapshot?.routeId === mapRouteId
+    && latestNavigationSnapshot.leg === mapLeg,
+  )
+  const mapProgress = mapSnapshotMatchesRoute
+    ? latestNavigationSnapshot?.progress
+    : runtimeTask?.navigation?.status === 'planned' ? 0 : undefined
   const mapRouteKey = mapRouteActive
-    ? `${runtimeTask?.cockpit?.activeLeg ?? runtimeTask?.navigationSimulation?.leg ?? 'outbound'}:${runtimeTask?.navigation?.routeId ?? runtimeTask?.navigationSimulation?.routeId ?? 'route'}`
+    ? `${mapLeg ?? 'outbound'}:${mapRouteId ?? 'route'}`
     : 'idle'
   // The navigation HUD owns the full-screen driving surface, but waiting at
   // the airport and confirming the return still need their primary task card.
@@ -2095,7 +2106,7 @@ export default function App({
           <PersistentMapLayer
             mode={mapMode}
             sketch={routeSketch}
-            progress={latestNavigationSnapshot?.progress}
+            progress={mapProgress}
             routeKey={mapRouteKey}
             theme={spec?.presentation.theme ?? 'dark'}
             sessionKey={cockpitSessionKey}

@@ -449,6 +449,12 @@ describe('demo integration', () => {
       ...task,
       phase: 'confirming-return',
       navigation: { routeId: 'route-return-2', destination: '家', eta: '2026-08-11T16:20:00+08:00', status: 'planned' },
+      navigationSimulation: {
+        ...task.navigationSimulation!,
+        leg: 'return',
+        routeId: 'route-return-2',
+      },
+      cockpit: { ...task.cockpit!, activeLeg: 'return' },
     } as AirportPickupTaskState
     const response = apiResponse(task)
     const returnResponse = apiResponse(returnTask)
@@ -472,6 +478,7 @@ describe('demo integration', () => {
       text: '到达天气怎么样',
       navigationSnapshot: expect.objectContaining({ routeId: 'route-snapshot-1' }),
     }))
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0')
 
     event.mockClear()
     await user.clear(input)
