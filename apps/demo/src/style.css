@@ -3690,6 +3690,20 @@ a:focus-visible {
 
 .ui-spec-renderer[data-single-component="false"] .ui-metric__label { font-size: 15px; }
 
+/* The persistent primary window is narrower than the legacy full-page surface.
+   Keep its metric values inside their grid tracks after the legacy desktop rules
+   above (which intentionally use a larger display size). */
+@media (min-width: 1180px) {
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-metric__value,
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-navigation-eta,
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--flight-status .ui-metric--hero .ui-metric__value {
+    box-sizing: border-box;
+    max-width: 100%;
+    font-size: clamp(17px, 1vw, 21px);
+    letter-spacing: -0.09em;
+  }
+}
+
 /* The one number each band is built around stays clearly ahead of its facts. */
 .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__time,
 .ui-spec-renderer[data-single-component="false"][data-density="compact"] .ui-flight-brief__time {
