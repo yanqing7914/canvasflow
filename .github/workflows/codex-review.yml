@@ -428,10 +428,10 @@ jobs:
     # Auto-merge only ordinary same-repo PRs into dev. The dev -> main release
     # PR stays owner-managed and is never merged automatically.
     if: >-
-      needs.review-verdict.outputs.verdict == 'PASS' &&
-      needs.review-verdict.outputs.eligible-for-auto-merge == 'true' &&
-      needs.resolve-pr.outputs.base-ref == 'dev' &&
-      needs.resolve-pr.outputs.draft == 'false'
+      needs['review-verdict'].outputs.verdict == 'PASS' &&
+      needs['review-verdict'].outputs['eligible-for-auto-merge'] == 'true' &&
+      needs['resolve-pr'].outputs['base-ref'] == 'dev' &&
+      needs['resolve-pr'].outputs.draft == 'false'
     runs-on: ubuntu-latest
     permissions:
       checks: read

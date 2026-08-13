@@ -29,6 +29,7 @@ function section(text, heading, nextPattern) {
 }
 
 const reviewJob = section(workflow, '\n  review:\n', /\n {2}auto-merge:\n/)
+const autoMergeJob = section(workflow, '\n  auto-merge:\n', /\n {2}[a-zA-Z0-9_-]+:\n/)
 const scopeStep = section(
   reviewJob,
   '- name: Copy trusted review prompt and pin the diff scope',
@@ -113,5 +114,16 @@ describe('codex review diff scope', () => {
     expect(prompt).toMatch(/`dev` is the integration branch/)
     expect(prompt).toMatch(/trails `dev`/)
     expect(prompt).toMatch(/Diff scope/)
+  })
+})
+
+describe('codex review auto-merge gate', () => {
+  it('uses bracket notation for job and output ids that contain hyphens', () => {
+    expect(autoMergeJob).not.toBe('')
+    expect(autoMergeJob).toContain("needs['review-verdict'].outputs.verdict == 'PASS'")
+    expect(autoMergeJob).toContain("needs['review-verdict'].outputs['eligible-for-auto-merge'] == 'true'")
+    expect(autoMergeJob).toContain("needs['resolve-pr'].outputs['base-ref'] == 'dev'")
+    expect(autoMergeJob).not.toContain('needs.review-verdict')
+    expect(autoMergeJob).not.toContain('outputs.eligible-for-auto-merge')
   })
 })
