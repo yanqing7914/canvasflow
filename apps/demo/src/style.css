@@ -219,11 +219,14 @@ a:focus-visible {
 .cockpit-primary-panel .ui-layout,
 .cockpit-primary-panel .ui-slot,
 .cockpit-primary-panel .ui-component {
+  width: 100%;
+  min-width: 0;
   height: auto;
   min-height: 0;
   flex: none;
   align-content: start;
 }
+.cockpit-primary-panel .ui-card { width: 100%; max-width: 100%; }
 .cockpit-primary-panel .ui-layout--stack .ui-component,
 .cockpit-primary-panel .ui-layout--focus .ui-component,
 .cockpit-primary-panel .ui-spec-renderer[data-single-component="true"] .ui-component {
