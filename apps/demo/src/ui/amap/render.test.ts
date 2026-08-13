@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { RouteSketch } from '@canvasflow/schema'
 import type { AMapApi, AMapMarker, AMapPolyline } from './loader'
-import { renderAMapPosition, renderAMapRoute } from './render'
+import { renderAMapPosition, renderAMapRoute, renderAMapWorkspace } from './render'
 
 const sketch: RouteSketch = {
   waypoints: [
@@ -87,10 +87,98 @@ function fakeAMap() {
     markerPositions,
     polylineOptions,
     remove,
-    tailPaths,
     setMapStyle,
+    tailPaths,
   }
 }
+
+describe('renderAMapWorkspace', () => {
+  it('keeps one map while switching idle, outbound, return, and idle again', async () => {
+    const fake = fakeAMap()
+    const handle = renderAMapWorkspace(fake.amap, document.createElement('div'), {
+      mode: 'idle', theme: 'dark',
+    })
+    const returning: RouteSketch = {
+      waypoints: [...sketch.waypoints].reverse(),
+      polyline: [...sketch.polyline].reverse(),
+      progress: 0,
+    }
+
+    expect(handle).not.toBeNull()
+    expect(fake.mapOptions).toHaveLength(1)
+    expect(fake.markerPositions).toEqual([[121.4737, 31.2304]])
+
+    await expect(handle?.setMode('route', sketch, 0.5)).resolves.toBe(true)
+    await expect(handle?.setRoute(returning)).resolves.toBe(true)
+    expect(fake.mapOptions).toHaveLength(1)
+    expect(fake.destroy).not.toHaveBeenCalled()
+    expect(fake.polylineOptions).toHaveLength(4)
+
+    await expect(handle?.setMode('idle')).resolves.toBe(true)
+    expect(fake.remove).toHaveBeenCalled()
+    expect(fake.destroy).not.toHaveBeenCalled()
+
+    handle?.destroy()
+    expect(fake.destroy).toHaveBeenCalledOnce()
+  })
+
+  it('creates the route marker before the first simulator snapshot and then moves it', async () => {
+    const fake = fakeAMap()
+    const handle = renderAMapWorkspace(fake.amap, document.createElement('div'), {
+      mode: 'idle', theme: 'dark',
+    })!
+
+    await expect(handle.setMode('route', sketch)).resolves.toBe(true)
+    expect(fake.markerPositions).toHaveLength(2)
+
+    handle.setProgress(0.6)
+    expect(fake.markerPositions).toHaveLength(3)
+    expect(fake.markerPositions[2]).not.toEqual(fake.markerPositions[1])
+  })
+
+  it('updates basemap and route palette in place when the cockpit theme changes', async () => {
+    const fake = fakeAMap()
+    const handle = renderAMapWorkspace(fake.amap, document.createElement('div'), {
+      mode: 'idle', theme: 'dark',
+    })!
+    await expect(handle.setMode('route', sketch, 0.5)).resolves.toBe(true)
+    const routeCount = fake.polylineOptions.length
+
+    handle.setTheme('light')
+
+    expect(fake.mapOptions).toHaveLength(1)
+    expect(fake.setMapStyle).toHaveBeenCalledWith('amap://styles/normal')
+    expect(fake.polylineOptions).toHaveLength(routeCount + 2)
+    expect(fake.polylineOptions.slice(-2).map((options) => options.strokeColor)).toEqual(['#246bfd', '#9aa7b8'])
+    expect(fake.destroy).not.toHaveBeenCalled()
+  })
+
+  it('ignores an obsolete route response after returning to idle', async () => {
+    const fake = fakeAMap()
+    let complete: ((status: string, result: unknown) => void) | undefined
+    fake.amap.Driving = class {
+      search(
+        _origin: unknown,
+        _destination: unknown,
+        _options: { waypoints?: unknown[] },
+        callback: (status: string, result: unknown) => void,
+      ) { complete = callback }
+    } as unknown as AMapApi['Driving']
+    const handle = renderAMapWorkspace(fake.amap, document.createElement('div'), {
+      mode: 'idle', theme: 'light',
+    })!
+
+    const pending = handle.setRoute(sketch)
+    await expect(handle.setMode('idle')).resolves.toBe(true)
+    complete?.('complete', {
+      routes: [{ steps: [{ path: [{ lng: 121.47, lat: 31.23 }, { lng: 121.336, lat: 31.198 }] }] }],
+    })
+
+    await expect(pending).resolves.toBe(false)
+    expect(fake.polylineOptions).toHaveLength(0)
+    expect(fake.destroy).not.toHaveBeenCalled()
+  })
+})
 
 describe('renderAMapRoute themes', () => {
   it.each([
@@ -113,25 +201,6 @@ describe('renderAMapRoute themes', () => {
     handle?.destroy()
     expect(fake.remove).toHaveBeenCalled()
     expect(fake.destroy).toHaveBeenCalledOnce()
-  })
-
-  it('updates the live map and route palette when the theme changes', async () => {
-    const fake = fakeAMap()
-    const handle = await renderAMapRoute(fake.amap, document.createElement('div'), {
-      sketch,
-      mode: 'follow',
-      theme: 'light',
-    })
-    handle?.setTheme('dark')
-    expect(fake.setMapStyle).toHaveBeenCalledWith('amap://styles/dark')
-    expect(fake.polylineOptions.map((options) => options.strokeColor)).toEqual([
-      '#246bfd', '#9aa7b8', '#5b93ff', '#55637a',
-    ])
-    handle?.setTheme('light')
-    expect(fake.setMapStyle).toHaveBeenLastCalledWith('amap://styles/normal')
-    expect(fake.polylineOptions.slice(-2).map((options) => options.strokeColor)).toEqual([
-      '#246bfd', '#9aa7b8',
-    ])
   })
 })
 

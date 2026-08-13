@@ -276,10 +276,17 @@ describe('AgentGateway', () => {
     expect(created.task.phase).toBe('collecting-airport')
     expect(created.task.passengers).toMatchObject({ memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'] })
     expect(created.assistant?.text).toContain('哪个机场')
+    const airportActions = created.ui.actions.filter((action) => action.event.type === 'agent-message')
+    expect(airportActions).toEqual([
+      expect.objectContaining({ label: '浦东机场', event: { type: 'agent-message', text: '浦东机场' } }),
+      expect.objectContaining({ label: '虹桥机场', event: { type: 'agent-message', text: '虹桥机场' } }),
+    ])
 
+    const hongqiaoAction = airportActions.find((action) => action.label === '虹桥机场')
+    if (hongqiaoAction?.event.type !== 'agent-message') throw new Error('expected Hongqiao agent-message action')
     const flights = gateway.submitEvent(created.task.taskId, {
       clientRequestId: 'airport-answer', expectedTaskRevision: created.task.taskRevision,
-      event: { eventId: 'airport-answer', type: 'user.input', text: '虹桥机场', source: 'text', timestamp: now },
+      event: { eventId: 'airport-answer', type: 'user.input', text: hongqiaoAction.event.text, source: 'text', timestamp: now },
     })
     expect(flights.task.phase).toBe('choosing-flight')
     expect(flights.assistant?.shouldSpeak).toBe(false)
@@ -376,33 +383,35 @@ describe('AgentGateway', () => {
         },
       },
     })
-    const onboard = gateway.submitEvent(arrived.task.taskId, {
-      clientRequestId: 'onboard', expectedTaskRevision: arrived.task.taskRevision,
-      event: { eventId: 'onboard', type: 'user.input', text: '接到人了', source: 'text', timestamp: now },
+    const onboardAction = arrived.ui.actions.find((action) => action.id === 'confirm-passengers-onboard')
+    expect(arrived.ui.components).toContainEqual(expect.objectContaining({
+      id: 'passenger-status', actions: ['confirm-passengers-onboard'],
+    }))
+    expect(onboardAction).toEqual({
+      id: 'confirm-passengers-onboard', label: '乘客已上车', style: 'primary',
+      event: { type: 'agent-message', text: '家人上车' },
     })
-    expect(onboard.task.phase).toBe('passengers-onboard')
-    const airportWeather = gateway.submitEvent(onboard.task.taskId, {
-      clientRequestId: 'airport-weather', expectedTaskRevision: onboard.task.taskRevision,
-      event: { eventId: 'airport-weather', type: 'user.input', text: '查天气', source: 'text', timestamp: now },
-    })
-    const terminalBattery = onboard.task.navigationSimulation!.estimatedBatteryAtArrival
+    if (onboardAction?.event.type !== 'agent-message') throw new Error('expected onboard agent-message action')
+    const onboardText = onboardAction.event.text
+    const terminalBattery = arrived.task.navigationSimulation!.estimatedBatteryAtArrival
     const terminalRange = terminalBattery / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm
-    expect(() => gateway.submitEvent(onboard.task.taskId, {
-      clientRequestId: 'return-without-vehicle', expectedTaskRevision: airportWeather.task.taskRevision,
-      event: { eventId: 'return-without-vehicle', type: 'user.input', text: '开始回家', source: 'text', timestamp: now },
+    expect(() => gateway.submitEvent(arrived.task.taskId, {
+      clientRequestId: 'onboard-without-vehicle', expectedTaskRevision: arrived.task.taskRevision,
+      event: { eventId: 'onboard-without-vehicle', type: 'user.input', text: onboardText, source: 'text', timestamp: now },
     })).toThrowError(expect.objectContaining({ code: 'POLICY_DENIED' }))
-    const confirmingReturn = gateway.submitEvent(onboard.task.taskId, {
-      clientRequestId: 'return-request', expectedTaskRevision: airportWeather.task.taskRevision,
+    const confirmingReturn = gateway.submitEvent(arrived.task.taskId, {
+      clientRequestId: 'onboard', expectedTaskRevision: arrived.task.taskRevision,
       event: {
-        eventId: 'return-request', type: 'user.input', text: '开始回家', source: 'text', timestamp: now,
+        eventId: 'onboard', type: 'user.input', text: onboardText, source: 'text', timestamp: now,
         navigationSnapshot: {
-          routeId: onboard.task.navigationSimulation!.routeId, leg: 'outbound', progress: 1,
-          speedKph: 0, batteryPercent: terminalBattery, remainingRangeKm: terminalRange, remainingDistanceKm: 0,
-          currentRoad: '伪造机场道路',
+          routeId: arrived.task.navigationSimulation!.routeId, leg: 'outbound', progress: 1,
+          speedKph: 0, batteryPercent: terminalBattery, remainingRangeKm: terminalRange,
+          remainingDistanceKm: 0, currentRoad: '机场接人点',
         },
       },
     })
     expect(confirmingReturn.task.phase).toBe('confirming-return')
+    expect(confirmingReturn.task.passengers.confirmedOnboard).toBe(true)
     expect(confirmingReturn.task.navigationSimulation?.initialBatteryPercent).toBe(terminalBattery)
     expect(confirmingReturn.ui.windows?.at(-1)?.kind).toBe('return-confirmation')
     const returnCard = confirmingReturn.ui.components.find((component) => component.type === 'route-confirmation')

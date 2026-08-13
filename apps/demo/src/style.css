@@ -83,6 +83,7 @@ a:focus-visible {
   --glass-blur: 28px;
   --glass-saturate: 1.6;
   --cockpit-toolbar-space: max(88px, calc(env(safe-area-inset-top) + 72px));
+  --cockpit-entry-space: max(88px, calc(env(safe-area-inset-bottom) + 72px));
   min-height: 100dvh;
   overflow: hidden;
   background:
@@ -106,8 +107,197 @@ a:focus-visible {
   mask-image: linear-gradient(to bottom, black, transparent 82%);
 }
 
+/* Persistent cockpit shell: one map stage with quiet glass layers above it. */
+.cockpit-workspace {
+  position: relative;
+  min-height: 100dvh;
+  overflow: hidden;
+  isolation: isolate;
+  background: #0c1015;
+  color: #edf4ff;
+}
+
+.cockpit-workspace__map,
+.persistent-map-layer,
+.persistent-map-layer__basemap,
+.persistent-map-layer__fallback {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.cockpit-workspace__map { z-index: 1; }
+.persistent-map-layer__basemap { z-index: 1; visibility: hidden; }
+.persistent-map-layer__basemap[data-active='true'] { visibility: visible; }
+.persistent-map-layer__fallback {
+  z-index: 0;
+  display: grid;
+  place-items: center;
+  gap: 14px;
+  background:
+    radial-gradient(circle at 40% 38%, rgba(36, 107, 253, 0.18), transparent 34%),
+    repeating-linear-gradient(30deg, transparent 0 34px, rgba(128, 156, 194, 0.08) 35px 36px),
+    #0c1015;
+}
+.persistent-map-layer__fallback svg { width: 100%; height: 100%; }
+.persistent-map-layer__route { fill: none; stroke: #5b93ff; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+.persistent-map-layer__stop { fill: #dce9ff; stroke: #17335f; stroke-width: 3; }
+.persistent-map-layer__vehicle { fill: #78a8ff; stroke: #f4f8ff; stroke-width: 3; filter: drop-shadow(0 0 10px rgba(91, 147, 255, .72)); }
+.persistent-map-layer__stops { position: absolute; left: 50%; bottom: 32px; display: flex; z-index: 2; gap: 8px; max-width: min(70vw, 720px); margin: 0; padding: 7px 11px; overflow: hidden; border: 1px solid rgba(190, 213, 242, .18); border-radius: 999px; background: rgba(9, 17, 28, .72); color: #dce8f8; list-style: none; font-size: 12px; transform: translateX(-50%); backdrop-filter: blur(12px); }
+.persistent-map-layer__stops li { display: flex; align-items: center; min-width: 0; white-space: nowrap; }
+.persistent-map-layer__stops li + li::before { margin-right: 8px; color: #78a8ff; content: '→'; }
+.persistent-map-layer__car { display: grid; width: 30px; height: 30px; place-items: center; border: 1px solid rgba(145, 188, 255, 0.6); border-radius: 50%; background: rgba(35, 98, 180, 0.45); box-shadow: 0 0 28px rgba(88, 150, 255, 0.45); }
+.persistent-map-layer__car span { width: 8px; height: 14px; border-radius: 5px 5px 3px 3px; background: #cbe0ff; }
+.persistent-map-layer__location { position: absolute; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); color: #b9cbe4; font-size: 13px; letter-spacing: .04em; }
+.persistent-map-layer__source { position: absolute; right: 18px; bottom: 18px; z-index: 3; color: rgba(217, 228, 244, .7); font-size: 11px; letter-spacing: .08em; }
+.persistent-map-layer__recenter { position: absolute; right: 18px; bottom: 96px; z-index: 61; min-height: 42px; border: 1px solid rgba(190, 213, 242, .28); border-radius: 12px; padding: 0 15px; background: rgba(9, 17, 28, .88); color: #edf4ff; font-weight: 750; backdrop-filter: blur(16px); }
+
+.cockpit-workspace__status { position: absolute; top: 18px; left: 22px; z-index: 40; }
+.cockpit-status-bar { display: flex; align-items: center; gap: 14px; padding: 9px 13px; border: 1px solid rgba(190, 213, 242, .2); border-radius: 14px; background: rgba(9, 17, 28, .78); box-shadow: 0 16px 40px rgba(0, 0, 0, .2); backdrop-filter: blur(18px); }
+.cockpit-status-bar__brand { color: #9fc2ff; font-size: 17px; font-weight: 800; letter-spacing: -.04em; }
+.cockpit-status-bar__phase { color: #dfeaff; font-size: 13px; font-weight: 700; }
+.cockpit-status-bar__facts { display: flex; gap: 12px; margin: 0; }
+.cockpit-status-bar__facts div { display: grid; gap: 2px; }
+.cockpit-status-bar__facts dt { color: #91a5be; font-size: 10px; }
+.cockpit-status-bar__facts dd { margin: 0; color: #f1f6ff; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cockpit-workspace__feedback { position: absolute; left: 22px; bottom: 22px; z-index: 45; max-width: min(480px, calc(100vw - 44px)); }
+.cockpit-feedback { margin: 0; padding: 10px 13px; border: 1px solid rgba(190, 213, 242, .2); border-radius: 11px; background: rgba(9, 17, 28, .8); color: #dfeaff; }
+.cockpit-workspace__primary {
+  position: absolute;
+  top: 92px;
+  left: 22px;
+  z-index: 30;
+  /* The generated trip surface keeps the full content width it was authored
+     for; only the shell itself is a window. Narrowing the whole UISpec to a
+     side panel forces the desktop 3-column cards to clip horizontally. */
+  /* Keep the map visibly dominant on laptop and car-display widths. Authored
+     content scrolls inside this window instead of claiming nearly the whole
+     cockpit at 1024-1280px. */
+  width: min(860px, 68vw);
+  max-height: calc(100dvh - 170px);
+  overflow: auto;
+}
+.cockpit-primary-panel { padding: 16px; border: 1px solid rgba(190, 213, 242, .22); border-radius: 18px; background: rgba(9, 17, 28, .82); box-shadow: 0 20px 50px rgba(0, 0, 0, .24); backdrop-filter: blur(20px); }
+.cockpit-primary-panel > .journey-rail {
+  /* The cockpit primary window is a normal-flow layer, not the legacy
+     full-screen surface the absolute placement was written for. */
+  position: relative;
+  inset: auto;
+  right: auto;
+  left: auto;
+  margin: 0 0 14px;
+}
+.cockpit-primary-panel .ui-card {
+  /* Inside the scrollable primary window a card must size to its own content.
+     The authored full-width surface stretches cards to fill a fixed frame;
+     a stretch height plus hidden overflow clips the last line here. */
+  height: auto;
+  min-height: 0;
+}
+.cockpit-primary-panel .ui-metric {
+  /* Metric spacing was authored for the old full-page surface. Inside the
+     persistent window that 30px-per-side budget truncates supporting labels
+     and figures even though the card itself fits. Compress only the horizontal
+     inset here so the map keeps its stage and every supplied fact stays legible. */
+  padding-right: clamp(8px, 1vw, 14px);
+  padding-left: clamp(8px, 1vw, 14px);
+}
+.cockpit-primary-panel .ui-metric:first-child { padding-left: 0; }
+@media (min-width: 1180px) {
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--flight-status {
+    /* The legacy desktop card reserves 260 + 340 + 250px before gaps, which is
+       wider than the 860px persistent window on Linux font metrics. Preserve
+       the three-band hierarchy but let every track shrink within the window.
+       Include the renderer state in this selector so the later legacy
+       full-page rule cannot restore its fixed minimum tracks. */
+    grid-template-columns: minmax(0, .9fr) minmax(0, 1.15fr) minmax(0, .75fr);
+    column-gap: clamp(14px, 1.6vw, 26px);
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__arrival {
+    padding-inline: clamp(12px, 1.4vw, 22px);
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary {
+    grid-template-columns: minmax(0, .85fr) auto minmax(0, 1.15fr);
+    column-gap: clamp(14px, 1.5vw, 24px);
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__eta {
+    padding-inline: clamp(12px, 1.2vw, 20px);
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary .ui-route-facts {
+    column-gap: clamp(8px, 1vw, 16px);
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary .ui-metric {
+    padding-inline: clamp(6px, .8vw, 12px);
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary .ui-metric__value {
+    font-size: clamp(20px, 1.3vw, 26px);
+    letter-spacing: -0.07em;
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-metric__value {
+    /* CI falls back from the DIN-family display faces to a wider generic
+       monospace face. Keep every primary-window metric within its track on
+       that fallback while preserving the tabular dashboard hierarchy. */
+    font-size: clamp(18px, 1.1vw, 21px);
+    letter-spacing: -0.08em;
+  }
+  /* Some primary specs render a single authored component and therefore do not
+     carry the multi-component renderer marker above. Keep that equivalent DOM
+     shape on the same Linux-safe metric budget. */
+  .cockpit-primary-panel .ui-metric__value {
+    font-size: clamp(18px, 1.1vw, 21px);
+    letter-spacing: -0.08em;
+  }
+  /* The legacy fixture/layout path uses the same cabin metric grid outside the
+     persistent shell. Linux's generic monospace fallback is wider there too. */
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-grid .ui-metric__value {
+    font-size: clamp(18px, 1.1vw, 21px);
+    letter-spacing: -0.08em;
+  }
+}
+.cockpit-primary-panel .ui-layout,
+.cockpit-primary-panel .ui-slot,
+.cockpit-primary-panel .ui-component {
+  width: 100%;
+  min-width: 0;
+  height: auto;
+  min-height: 0;
+  flex: none;
+  align-content: start;
+}
+.cockpit-primary-panel .ui-card { width: 100%; max-width: 100%; }
+.cockpit-primary-panel .ui-layout--stack .ui-component,
+.cockpit-primary-panel .ui-layout--focus .ui-component,
+.cockpit-primary-panel .ui-spec-renderer[data-single-component="true"] .ui-component {
+  height: auto;
+  grid-template-rows: auto auto;
+}
+.cockpit-workspace__hud { position: absolute; inset: 0; z-index: 25; pointer-events: none; }
+.cockpit-workspace__hud > * { pointer-events: auto; }
+.cockpit-workspace__auxiliary { position: absolute; inset: 0; z-index: 50; pointer-events: none; }
+.cockpit-workspace__auxiliary > * { pointer-events: auto; }
+.cockpit-workspace__entry { position: absolute; right: 22px; bottom: 22px; z-index: 60; display: grid; justify-items: end; gap: 8px; }
+.cockpit-workspace__entry .header-actions { border: 1px solid rgba(190, 213, 242, .2); border-radius: 14px; padding: 5px; background: rgba(9, 17, 28, .8); box-shadow: 0 16px 40px rgba(0, 0, 0, .2); backdrop-filter: blur(18px); }
+.cockpit-workspace__entry .voice-status { margin: 0; max-width: 480px; padding: 5px 10px; border-radius: 8px; background: rgba(9, 17, 28, .78); color: #cddcf0; }
+.cockpit-workspace__entry .voice-composer { width: min(560px, calc(100vw - 44px)); margin: 0; border-color: rgba(190, 213, 242, .25); background: rgba(9, 17, 28, .94); }
+.cockpit-workspace__entry .voice-composer__input { background: #172438; color: #f0f5fb; }
+
+@media (max-width: 720px) {
+  .cockpit-workspace__status { top: 10px; left: 10px; right: 10px; }
+  .cockpit-status-bar { gap: 9px; padding: 8px 10px; overflow: auto; }
+  .cockpit-status-bar__facts { gap: 9px; }
+  .cockpit-workspace__primary { top: 78px; left: 10px; width: min(470px, calc(100vw - 20px)); max-height: calc(100dvh - 170px); }
+  .cockpit-workspace__feedback { left: 10px; bottom: 84px; max-width: calc(100vw - 20px); }
+  .cockpit-workspace__entry { right: 10px; bottom: 10px; left: 10px; justify-items: stretch; }
+  .cockpit-workspace__entry .header-actions { justify-content: center; }
+  .cockpit-workspace__entry .voice-composer { width: 100%; }
+}
+
 .demo-shell[data-navigation-toolbar='expanded'] {
   --cockpit-toolbar-space: max(190px, calc(env(safe-area-inset-top) + 174px));
+  /* Firefox has no SpeechRecognition, so its fallback composer also includes
+     the capability notice. Reserve that full stack below maximized windows. */
+  --cockpit-entry-space: max(250px, calc(env(safe-area-inset-bottom) + 234px));
 }
 
 /* The Agent's theme applies to the whole driver-facing cockpit, not just the
@@ -295,6 +485,17 @@ a:focus-visible {
     radial-gradient(circle at 50% 48%, rgba(36, 107, 253, 0.13), transparent 34%),
     #0c1015;
   color: #edf4ff;
+}
+
+/* In the persistent cockpit the workspace contributes HUD content only. The
+   wrapper must not become a full-screen pointer shield over the shared map. */
+.navigation-workspace--hud-only {
+  pointer-events: none;
+  background: transparent;
+}
+.navigation-workspace--hud-only .navigation-hud,
+.navigation-workspace--hud-only .navigation-workspace__brand {
+  pointer-events: auto;
 }
 
 .persistent-route-map,
@@ -500,7 +701,7 @@ a:focus-visible {
 }
 
 .cockpit-window[data-mode='maximized'] {
-  inset: var(--cockpit-toolbar-space) max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) max(20px, env(safe-area-inset-left));
+  inset: max(20px, env(safe-area-inset-top)) max(20px, env(safe-area-inset-right)) var(--cockpit-entry-space) max(20px, env(safe-area-inset-left));
   width: auto;
   max-height: none;
 }
@@ -584,7 +785,7 @@ a:focus-visible {
   .navigation-hud--minimum__alert { grid-column: 1 / -1; }
   .navigation-hud--minimum button { grid-column: 2; grid-row: 2; }
   .cockpit-window { top: max(72px, env(safe-area-inset-top)); left: 12px; width: calc(100vw - 24px); max-height: calc(100dvh - max(88px, env(safe-area-inset-top)) - env(safe-area-inset-bottom)); }
-  .cockpit-window[data-mode='maximized'] { inset: var(--cockpit-toolbar-space) 10px max(10px, env(safe-area-inset-bottom)); }
+  .cockpit-window[data-mode='maximized'] { inset: max(10px, env(safe-area-inset-top)) 10px var(--cockpit-entry-space); }
   .vehicle-status-grid { grid-template-columns: 1fr; }
   .persistent-route-map__source { max-width: 44vw; }
   .navigation-command { top: max(9px, env(safe-area-inset-top)); right: 10px; max-width: calc(100vw - 20px); }
@@ -830,21 +1031,17 @@ a:focus-visible {
 
 .voice-status:empty { display: none; }
 
-/* Model provenance is a quiet, factual line: present only when the Agent reports
-   a validated model plan, and visually subordinate to the voice status above. */
-.model-provenance {
-  flex: 0 0 auto;
+.cockpit-idle-notice {
   margin: 0;
-  padding: 0 clamp(24px, 3vw, 52px);
-  color: var(--muted);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.5;
-}
-
-.model-provenance strong {
-  color: var(--ink);
+  padding: 10px 14px;
+  border: 1px solid rgba(125, 224, 180, .32);
+  border-radius: 12px;
+  background: rgba(10, 45, 34, .82);
+  color: #c9f6e1;
+  font-size: 15px;
   font-weight: 650;
+  letter-spacing: .02em;
+  backdrop-filter: blur(14px);
 }
 
 .voice-composer {
@@ -3492,6 +3689,20 @@ a:focus-visible {
 }
 
 .ui-spec-renderer[data-single-component="false"] .ui-metric__label { font-size: 15px; }
+
+/* The persistent primary window is narrower than the legacy full-page surface.
+   Keep its metric values inside their grid tracks after the legacy desktop rules
+   above (which intentionally use a larger display size). */
+@media (min-width: 1180px) {
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-metric__value,
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-navigation-eta,
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--flight-status .ui-metric--hero .ui-metric__value {
+    box-sizing: border-box;
+    max-width: 100%;
+    font-size: clamp(17px, 1vw, 21px);
+    letter-spacing: -0.09em;
+  }
+}
 
 /* The one number each band is built around stays clearly ahead of its facts. */
 .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__time,

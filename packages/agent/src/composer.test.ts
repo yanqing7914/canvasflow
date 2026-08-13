@@ -9,13 +9,41 @@ import {
   vehicleSnapshots,
 } from '@canvasflow/tools'
 import { ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent, weatherCardComponent } from './composer'
-import { applyEvent, createInitialTask } from './index'
+import { applyEvent, createCockpitTask, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
 import type { StoredTask } from './store'
 
 const timestamp = '2026-07-22T20:00:00+08:00'
 
 describe('Agent UISpec composer', () => {
+  it('offers both supported airports as real agent-message actions', () => {
+    const spec = composeAgentSpec(createCockpitTask('cockpit-airport', timestamp))
+
+    expect(spec.actions).toEqual([
+      expect.objectContaining({ label: '浦东机场', event: { type: 'agent-message', text: '浦东机场' } }),
+      expect.objectContaining({ label: '虹桥机场', event: { type: 'agent-message', text: '虹桥机场' } }),
+    ])
+  })
+
+  it('offers the real onboard business event while waiting for passengers', () => {
+    const spec = composeAgentSpec({
+      ...createCockpitTask('cockpit-onboard', timestamp),
+      phase: 'waiting-for-passengers',
+      pickupAirport: { label: '虹桥机场', code: 'SHA' },
+    })
+
+    expect(spec.components).toContainEqual(expect.objectContaining({
+      id: 'passenger-status',
+      actions: ['confirm-passengers-onboard'],
+    }))
+    expect(spec.actions).toContainEqual({
+      id: 'confirm-passengers-onboard',
+      label: '乘客已上车',
+      style: 'primary',
+      event: { type: 'agent-message', text: '家人上车' },
+    })
+  })
+
   it('combines provider-backed flight, route, and charging cards while preparing', () => {
     const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
     const task = {

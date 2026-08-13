@@ -45,6 +45,26 @@ export type AMapRouteHandle = {
 
 export type AMapPositionHandle = { destroy: () => void }
 
+/** A map handle whose basemap survives idle/route transitions. */
+export type AMapWorkspaceHandle = {
+  setMode: (mode: 'idle' | 'route', sketch?: RouteSketch, progress?: number) => Promise<boolean>
+  setTheme: (theme: 'light' | 'dark') => void
+  setRoute: (sketch: RouteSketch) => Promise<boolean>
+  setProgress: (progress: number) => void
+  setFollow: (follow: boolean) => void
+  recenter: () => void
+  destroy: () => void
+}
+
+export type AMapWorkspaceOptions = {
+  mode: 'idle' | 'route'
+  sketch?: RouteSketch
+  progress?: number
+  theme: 'light' | 'dark'
+  onManualInteraction?: () => void
+  onRuntimeFailure?: () => void
+}
+
 export function renderAMapPosition(
   amap: AMapApi,
   container: HTMLElement,
@@ -71,6 +91,185 @@ export function renderAMapPosition(
   return { destroy: () => {
     try { map.remove(marker); map.destroy() } catch { /* unmount cleanup is best-effort */ }
   } }
+}
+
+/**
+ * Creates one AMap instance for the lifetime of a cockpit session. Route
+ * overlays are replaced in-place while the idle marker and map DOM remain.
+ */
+export function renderAMapWorkspace(
+  amap: AMapApi,
+  container: HTMLElement,
+  options: AMapWorkspaceOptions,
+): AMapWorkspaceHandle | null {
+  let palette = THEMES[options.theme]
+  let map: AMapMap
+  let idleMarker: AMapOverlay | undefined
+  let routeOverlays: AMapOverlay[] = []
+  let moveTo: ((progress: number) => void) | undefined
+  let currentProgress: number | undefined
+  let pendingProgress: number | undefined
+  let currentPath: LngLatPoint[] | undefined
+  let following = options.mode === 'route'
+  let destroyed = false
+  let routeGeneration = 0
+
+  try {
+    map = new amap.Map(container, { zoom: 14, center: [121.4737, 31.2304], ...(palette.mapStyle ? { mapStyle: palette.mapStyle } : {}) })
+    idleMarker = new amap.Marker({
+      position: [121.4737, 31.2304], zIndex: 70, anchor: 'center',
+      content: '<span class="amap-cockpit-car" aria-hidden="true"><span></span></span>',
+    })
+    map.add(idleMarker)
+    map.setZoomAndCenter(14, [121.4737, 31.2304])
+  } catch {
+    try { map!.destroy() } catch { /* construction failed */ }
+    options.onRuntimeFailure?.()
+    return null
+  }
+
+  const clearRoute = () => {
+    if (routeOverlays.length > 0) map.remove(routeOverlays)
+    routeOverlays = []
+    moveTo = undefined
+    currentProgress = undefined
+    currentPath = undefined
+  }
+  const drawWorkspaceRoute = (path: LngLatPoint[], progress: number | undefined) => {
+    clearRoute()
+    if (idleMarker) map.remove(idleMarker)
+    const route = new amap.Polyline({
+      path: path.map((point) => [point.lng, point.lat]), strokeColor: palette.route,
+      strokeWeight: 6, strokeOpacity: 0.9, lineJoin: 'round', zIndex: 50,
+    })
+    map.add(route)
+    routeOverlays.push(route)
+    currentPath = path
+    // A route always starts with a vehicle marker, even if the simulator has
+    // not emitted its first snapshot yet. Later progress ticks update it in
+    // place instead of requiring another route search.
+    const normalized = normalizedProgress(progress ?? 0)
+    if (normalized === undefined) { map.setFitView(routeOverlays); return }
+    const xy = path.map((point) => ({ x: point.lng, y: point.lat }))
+    const lengths = segmentLengths(xy)
+    if (!lengths.some((length) => length > 0)) { map.setFitView(routeOverlays); return }
+    const effectiveProgress = pendingProgress ?? normalized
+    pendingProgress = undefined
+    const markerPoint = pointAtProgress(xy, lengths, effectiveProgress)
+    currentProgress = effectiveProgress
+    const tail = new amap.Polyline({
+      path: traversedPath(xy, lengths, effectiveProgress).map((point) => [point.x, point.y]),
+      strokeColor: palette.traversed, strokeWeight: 6, strokeOpacity: 0.9, zIndex: 60,
+    })
+    const marker = new amap.Marker({
+      position: [markerPoint.x, markerPoint.y], zIndex: 70, anchor: 'center',
+      content: '<span class="amap-cockpit-car" aria-hidden="true"><span></span></span>',
+    })
+    map.add([tail, marker])
+    routeOverlays.push(tail, marker)
+    moveTo = (next: number) => {
+      const valid = normalizedProgress(next)
+      if (valid === undefined) return
+      currentProgress = valid
+      const point = pointAtProgress(xy, lengths, valid)
+      marker.setPosition([point.x, point.y])
+      marker.setAngle?.(headingAtProgress(xy, lengths, valid))
+      tail.setPath(traversedPath(xy, lengths, valid).map((covered) => [covered.x, covered.y]))
+      if (following) {
+        if (map.setCenter) map.setCenter([point.x, point.y], false)
+        else map.setZoomAndCenter(14, [point.x, point.y])
+      }
+    }
+    if (following) map.setZoomAndCenter(14, [markerPoint.x, markerPoint.y])
+    else map.setFitView(routeOverlays)
+  }
+
+  const leaveFollow = () => {
+    if (!following) return
+    following = false
+    options.onManualInteraction?.()
+  }
+  map.on?.('dragstart', leaveFollow)
+  map.on?.('zoomstart', leaveFollow)
+
+  const setRoute = async (sketch: RouteSketch): Promise<boolean> => {
+    if (destroyed) return false
+    const requestGeneration = ++routeGeneration
+    const path = await searchRoute(amap, map, sketch, () => {
+      if (!destroyed && requestGeneration === routeGeneration) options.onRuntimeFailure?.()
+    })
+    if (path.length < 2 || destroyed || requestGeneration !== routeGeneration) return false
+    try {
+      drawWorkspaceRoute(path, sketch.progress)
+      return true
+    } catch {
+      options.onRuntimeFailure?.()
+      return false
+    }
+  }
+
+  const handle: AMapWorkspaceHandle = {
+    setMode: async (mode, sketch, progress) => {
+      if (mode === 'idle') {
+        routeGeneration += 1
+        pendingProgress = undefined
+        clearRoute()
+        if (idleMarker) map.add(idleMarker)
+        map.setZoomAndCenter(14, [121.4737, 31.2304])
+        return true
+      }
+      if (!sketch) return false
+      return setRoute({ ...sketch, ...(progress === undefined ? {} : { progress }) })
+    },
+    setTheme: (next: 'light' | 'dark') => {
+      const nextPalette = THEMES[next]
+      if (nextPalette === palette || destroyed) return
+      palette = nextPalette
+      try {
+        map.setMapStyle?.(palette.mapStyle ?? 'amap://styles/normal')
+        if (currentPath) {
+          const progress = currentProgress
+          drawWorkspaceRoute(currentPath, progress)
+          if (following && currentProgress !== undefined) {
+            const xy = currentPath.map((point) => ({ x: point.lng, y: point.lat }))
+            const lengths = segmentLengths(xy)
+            const at = pointAtProgress(xy, lengths, currentProgress)
+            map.setZoomAndCenter(14, [at.x, at.y])
+          }
+        }
+      } catch {
+        // Cosmetic theme changes must not tear down a working map session.
+      }
+    },
+    setRoute,
+    setProgress: (progress) => {
+      if (destroyed || normalizedProgress(progress) === undefined) return
+      if (moveTo) {
+        pendingProgress = undefined
+        moveTo(progress)
+      } else {
+        pendingProgress = progress
+      }
+    },
+    setFollow: (follow) => { following = follow },
+    recenter: () => {
+      following = true
+      if (currentProgress !== undefined) moveTo?.(currentProgress)
+    },
+    destroy: () => {
+      if (destroyed) return
+      destroyed = true
+      try {
+        map.off?.('dragstart', leaveFollow)
+        map.off?.('zoomstart', leaveFollow)
+        clearRoute()
+        if (idleMarker) map.remove(idleMarker)
+        map.destroy()
+      } catch { /* unmount cleanup is best-effort */ }
+    },
+  }
+
+  return handle
 }
 
 export type AMapRouteOptions = {
@@ -200,8 +399,7 @@ function drawRoute(
   const path = extractPath(result)
   if (path.length < 2) throw new Error('empty route path')
 
-  let currentTheme = options.theme
-  let palette = THEMES[currentTheme]
+  let palette = THEMES[options.theme]
   let overlays: AMapOverlay[] = []
   let following = options.mode === 'follow'
   let vehicle: LngLatPoint | undefined
@@ -294,16 +492,16 @@ function drawRoute(
       }
     },
     setTheme: (next: 'light' | 'dark') => {
-      if (next === currentTheme) return
-      currentTheme = next
-      palette = THEMES[next]
+      const nextPalette = THEMES[next]
+      if (nextPalette === palette) return
+      palette = nextPalette
       try {
         map.setMapStyle?.(palette.mapStyle ?? 'amap://styles/normal')
         drawPath(currentPath, currentProgress)
         if (following && vehicle) map.setZoomAndCenter(14, [vehicle.lng, vehicle.lat])
         else map.setFitView(overlays)
       } catch {
-        // Theme changes are cosmetic; keep the existing route if the map rejects one.
+        // A rejected cosmetic theme update must not replace a working route.
       }
     },
     setRoute: async (sketch: RouteSketch) => {

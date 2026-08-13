@@ -74,18 +74,22 @@ describe('demo integration', () => {
   })
 
   it('starts in a quiet idle cockpit without creating a task or showing a large composer', async () => {
-    const user = userEvent.setup()
     const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
     render(<AppComponent api={api} voiceEnabled={false} />)
+    const workspace = screen.getByTestId('cockpit-workspace')
+    const map = screen.getByTestId('persistent-map-layer')
+    expect(workspace).toHaveAttribute('data-cockpit-mode', 'idle')
+    expect(map).toHaveAttribute('data-mode', 'idle')
+    expect(map).toHaveAttribute('data-session-key', 'cockpit-session')
     expect(screen.getByLabelText('空闲座舱')).toBeInTheDocument()
     expect(screen.getByLabelText('人民广场模拟车辆位置')).toHaveTextContent('模拟位置，非真实 GPS')
-    expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
+    // Voice-unavailable mode keeps the explicit text path open inside the
+    // persistent entry slot; the idle shell must still contain no task content.
+    expect(screen.getByLabelText('任务输入')).toHaveValue('')
     expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
     expect(screen.queryByText(/航班/)).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('语音不可用，请用文字告诉我。')
     expect(api.create).not.toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: '改用文字输入' }))
-    expect(screen.getByLabelText('任务输入')).toHaveValue('')
   })
 
   it('updates the idle cockpit after shared controls change pre-task vehicle state', async () => {
@@ -94,13 +98,10 @@ describe('demo integration', () => {
       speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false,
     }} />)
 
-    const cockpit = screen.getByLabelText('空闲座舱')
-    expect(cockpit).toHaveAttribute('data-light-condition', 'day')
-
     await user.click(screen.getByRole('button', { name: '打开演示控制' }))
+    expect(screen.getByRole('button', { name: '白天' })).toHaveAttribute('aria-pressed', 'true')
     await user.click(screen.getByRole('button', { name: '夜间' }))
-
-    expect(cockpit).toHaveAttribute('data-light-condition', 'night')
+    expect(screen.getByRole('button', { name: '夜间' })).toHaveAttribute('aria-pressed', 'true')
   })
 
   it('requires Xiaonan for speech but lets explicit text send create the task', async () => {
@@ -189,7 +190,9 @@ describe('demo integration', () => {
     expect(input).toHaveValue('稍后再说')
     expect(screen.getAllByText('等待确认').length).toBeGreaterThan(0)
     expect(api.cancel).not.toHaveBeenCalled()
-    expect(screen.getByLabelText('机场接人任务')).toBeInTheDocument()
+    expect(screen.getByTestId('cockpit-workspace').querySelector(
+      '[data-trip-brief][data-window-title="机场接人任务"]',
+    )).toBeInTheDocument()
 
     await user.clear(input)
     await user.type(input, '取消')
@@ -356,7 +359,7 @@ describe('demo integration', () => {
     expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
   })
 
-  it('keeps the flight chooser in the task surface instead of opening a floating window', async () => {
+  it('keeps the flight chooser in the primary cockpit window instead of an auxiliary floating window', async () => {
     const user = userEvent.setup()
     const task = {
       ...createInitialTask(), phase: 'choosing-flight', pickupAirport: { label: '虹桥机场', code: 'SHA' },
@@ -384,8 +387,9 @@ describe('demo integration', () => {
     const api = { create: vi.fn().mockResolvedValue(response), event: vi.fn(), action: vi.fn().mockResolvedValue(response), confirmation: vi.fn() }
     render(<AppComponent api={api} voiceEnabled={false} initialText="去机场接人" />)
     await user.click(screen.getByRole('button', { name: '发送' }))
-    expect(screen.queryByLabelText('虹桥机场到达航班窗口')).not.toBeInTheDocument()
     const surface = screen.getByRole('region', { name: '当前行程' })
+    expect(surface).toContainElement(screen.getByLabelText('虹桥机场到达航班窗口'))
+    expect(screen.queryByLabelText('辅助信息窗口')?.querySelector('.cockpit-window')).toBeNull()
     expect(surface).toHaveTextContent('MU5102')
     const choice = surface.querySelector<HTMLButtonElement>('[data-action-id="pick-cockpit-MU5102"]')
     expect(choice).not.toBeNull()
@@ -393,7 +397,7 @@ describe('demo integration', () => {
     expect(api.action).toHaveBeenCalledWith(expect.anything(), 'pick-cockpit-MU5102', 'flight-choices-cockpit')
   })
 
-  it('renders the outbound confirmation summary in the task surface without a floating window', async () => {
+  it('renders the outbound confirmation summary in the primary cockpit window without an auxiliary window', async () => {
     const user = userEvent.setup()
     const task = {
       ...createCockpitTask('confirm-outbound'), phase: 'confirming-outbound',
@@ -434,8 +438,9 @@ describe('demo integration', () => {
     render(<AppComponent api={api} voiceEnabled={false} initialText="选择航班" />)
     await user.click(screen.getByRole('button', { name: '发送' }))
 
-    expect(screen.queryByLabelText('现在出发窗口')).not.toBeInTheDocument()
     const confirmation = screen.getByRole('region', { name: '当前行程' })
+    expect(confirmation).toContainElement(screen.getByLabelText('现在出发窗口'))
+    expect(screen.queryByLabelText('辅助信息窗口')?.querySelector('.cockpit-window')).toBeNull()
     expect(confirmation).toHaveTextContent('MU4490')
     expect(confirmation).toHaveTextContent('虹桥机场')
     expect(confirmation).toHaveTextContent('32.0 km')
@@ -445,10 +450,12 @@ describe('demo integration', () => {
     expect(confirmation.querySelector('[data-action-id="start-outbound"]')).not.toBeNull()
   })
 
-  it('keeps legacy waiting screens outside the cockpit workspace', () => {
+  it('keeps the waiting-for-passengers HUD inside the persistent cockpit workspace', () => {
     render(<App initialTask={{ ...createInitialTask(), phase: 'waiting-for-passengers' }} />)
-    expect(screen.getByRole('region', { name: '当前行程' })).toBeInTheDocument()
-    expect(screen.queryByLabelText('模拟导航地图')).not.toBeInTheDocument()
+    expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'navigation')
+    expect(screen.getByTestId('persistent-map-layer')).toBeInTheDocument()
+    expect(document.querySelector('.task-surface')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('导航层')).toBeInTheDocument()
   })
 
   it('keeps the completed feedback until a new input creates a fresh task', async () => {
@@ -462,12 +469,36 @@ describe('demo integration', () => {
     render(<AppComponent api={api} voiceEnabled={false} initialText="完成第一趟" />)
 
     await user.click(screen.getByRole('button', { name: '发送' }))
-    expect(await screen.findByText('行程结束')).toBeInTheDocument()
+    expect(await screen.findByText('已到家')).toBeInTheDocument()
     const input = screen.getByLabelText('任务输入')
     await user.clear(input)
     await user.type(input, '下一趟去浦东机场接人')
     await user.click(screen.getByRole('button', { name: '发送' }))
     expect(api.create).toHaveBeenNthCalledWith(2, '下一趟去浦东机场接人', expect.objectContaining({ vehicleContext: expect.anything() }))
+  })
+
+  it('returns a cleaned cockpit completion to idle with one arrival notice', async () => {
+    const user = userEvent.setup()
+    const completed = apiResponse({ ...createCockpitTask('completed-cockpit'), phase: 'completed' } as AirportPickupTaskState)
+    const response: AgentResponse = {
+      ...completed,
+      assistant: { text: '已到家', shouldSpeak: false },
+    }
+    const api = {
+      create: vi.fn().mockResolvedValue(response),
+      event: vi.fn(), action: vi.fn(), confirmation: vi.fn(),
+    }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="完成返程" />)
+
+    const map = screen.getByTestId('persistent-map-layer')
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    expect(await screen.findByText('已到家')).toBeInTheDocument()
+    expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
+    expect(screen.getByTestId('persistent-map-layer')).toBe(map)
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
+    expect(screen.queryByText('行程结束')).not.toBeInTheDocument()
+    expect(document.querySelector('.cockpit-window')).not.toBeInTheDocument()
   })
 
   it('piggybacks only the latest active navigation snapshot on user input', async () => {
@@ -502,6 +533,12 @@ describe('demo integration', () => {
       ...task,
       phase: 'confirming-return',
       navigation: { routeId: 'route-return-2', destination: '家', eta: '2026-08-11T16:20:00+08:00', status: 'planned' },
+      navigationSimulation: {
+        ...task.navigationSimulation!,
+        leg: 'return',
+        routeId: 'route-return-2',
+      },
+      cockpit: { ...task.cockpit!, activeLeg: 'return' },
     } as AirportPickupTaskState
     const response = apiResponse(task)
     const returnResponse = apiResponse(returnTask)
@@ -525,6 +562,7 @@ describe('demo integration', () => {
       text: '到达天气怎么样',
       navigationSnapshot: expect.objectContaining({ routeId: 'route-snapshot-1' }),
     }))
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0')
 
     event.mockClear()
     await user.clear(input)
@@ -582,6 +620,116 @@ describe('demo integration', () => {
         batteryPercent: 58, remainingDistanceKm: 0,
       }),
     })))
+  })
+
+  it('keeps a return-arrival preference confirmation until the driver resolves it', async () => {
+    let nowMs = 1_000
+    let tick: (() => void) | undefined
+    const navigationClock: NavigationClock = {
+      now: () => nowMs,
+      schedule: (callback) => { tick = callback; return () => { tick = undefined } },
+    }
+    const returningTask = {
+      ...createCockpitTask('return-confirmation-task'), phase: 'return-driving',
+      pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+      navigation: { routeId: 'return-confirmation-route', destination: '家', eta: '2026-08-11T16:10:00+08:00', status: 'active' },
+      navigationSimulation: {
+        leg: 'return', routeId: 'return-confirmation-route', distanceKm: 29, initialBatteryPercent: 58,
+        estimatedBatteryAtArrival: 47, profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+      cockpit: { speedMode: 'normal', hudVisible: true, routeProgress: 0, activeLeg: 'return', currentRoad: '机场出发通道' },
+    } as AirportPickupTaskState
+    const completedTask = {
+      ...returningTask, phase: 'completed', taskRevision: returningTask.taskRevision + 1,
+      flight: undefined, pickupAirport: undefined, navigation: undefined, navigationSimulation: undefined, cockpit: undefined,
+      pendingConfirmation: { confirmationId: 'save-return-preference', action: 'save-memory' },
+      memoryProposal: {
+        proposalId: 'return-preference', memberId: 'mom', confirmationId: 'save-return-preference',
+        changes: { rearTemperatureC: 25 }, status: 'pending',
+      },
+    } as AirportPickupTaskState
+    const completed = apiResponse(completedTask)
+    const event = vi.fn().mockResolvedValue(completed)
+    const api = { create: vi.fn().mockResolvedValue(apiResponse(returningTask)), event, action: vi.fn(), confirmation: vi.fn() }
+    const user = userEvent.setup()
+    render(<AppComponent api={api} voiceEnabled={false} navigationClock={navigationClock} initialText="开始返程" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    nowMs += 90_000
+    act(() => { tick?.() })
+
+    await waitFor(() => expect(event).toHaveBeenCalledWith(returningTask, expect.objectContaining({
+      type: 'navigation.return-arrived',
+      navigationSnapshot: expect.objectContaining({ leg: 'return', progress: 1, speedKph: 0 }),
+    })))
+    expect(screen.getByRole('button', { name: '保存本次偏好' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('空闲座舱')).not.toBeInTheDocument()
+  })
+
+  it('uses the stopped outbound snapshot when the passenger button prepares the return', async () => {
+    const user = userEvent.setup()
+    let nowMs = 1_000
+    let tick: (() => void) | undefined
+    const navigationClock: NavigationClock = {
+      now: () => nowMs,
+      schedule: (callback) => { tick = callback; return () => { tick = undefined } },
+    }
+    const outboundTask = {
+      ...createCockpitTask('onboard-return-task'), phase: 'outbound-driving',
+      pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      navigation: { routeId: 'outbound-route', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'active' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: 'outbound-route', distanceKm: 32, initialBatteryPercent: 72,
+        estimatedBatteryAtArrival: 58, profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+    } as AirportPickupTaskState
+    const waitingTask = {
+      ...outboundTask, phase: 'waiting-for-passengers',
+      navigation: { ...outboundTask.navigation!, status: 'arrived' },
+    } as AirportPickupTaskState
+    const waiting = apiResponse(waitingTask)
+    const onboardComponent = {
+      id: 'passenger-status', type: 'passenger-status' as const, actions: ['confirm-passengers-onboard'],
+      props: { label: '已停稳，等待家人', status: 'waiting' as const },
+    }
+    waiting.ui = {
+      ...waiting.ui,
+      layout: { type: 'stack', gap: 'md', slots: { main: [onboardComponent.id] } },
+      components: [onboardComponent],
+      actions: [{ id: 'confirm-passengers-onboard', label: '乘客已上车', style: 'primary', event: { type: 'agent-message', text: '家人上车' } }],
+      windows: [{ id: 'onboard-window', kind: 'passenger-onboard', title: '等待乘客上车', componentIds: [onboardComponent.id], actionIds: ['confirm-passengers-onboard'], size: 'compact', controls: { closable: true, minimizable: true, maximizable: true } }],
+    }
+    const returnTask = {
+      ...waitingTask, phase: 'confirming-return', taskRevision: waitingTask.taskRevision + 1,
+      passengers: { ...waitingTask.passengers, confirmedOnboard: true },
+      navigation: { routeId: 'return-route', destination: '家', eta: '2026-08-11T16:10:00+08:00', status: 'planned' },
+      navigationSimulation: { ...waitingTask.navigationSimulation!, leg: 'return', routeId: 'return-route', initialBatteryPercent: 58, estimatedBatteryAtArrival: 47 },
+      cockpit: { ...waitingTask.cockpit!, activeLeg: 'return' },
+    } as AirportPickupTaskState
+    const returned = apiResponse(returnTask)
+    const event = vi.fn().mockResolvedValueOnce(waiting).mockResolvedValueOnce(returned)
+    const api = { create: vi.fn().mockResolvedValue(apiResponse(outboundTask)), event, action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} navigationClock={navigationClock} initialText="开始" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    nowMs += 90_000
+    act(() => { tick?.() })
+    await screen.findByRole('button', { name: '乘客已上车' })
+    await user.click(screen.getByRole('button', { name: '乘客已上车' }))
+
+    await waitFor(() => expect(event).toHaveBeenLastCalledWith(waitingTask, expect.objectContaining({
+      type: 'user.input', text: '家人上车',
+      navigationSnapshot: expect.objectContaining({ routeId: 'outbound-route', leg: 'outbound', progress: 1, speedKph: 0 }),
+    })))
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0')
   })
 
   it('keeps a stable arrival event id and retries a 200 no-op handoff from the error window', async () => {
@@ -805,10 +953,13 @@ describe('demo integration', () => {
     const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
     render(<App api={api} />)
 
-    // With no task there is no phase to name, so the brief says what it waits for
-    // rather than borrowing a phase label it does not have.
-    expect(screen.getByText('等待创建任务')).toBeInTheDocument()
-    expect(screen.getByText('告诉我接谁，我来安排这趟行程。')).toBeInTheDocument()
+    // Before creation the persistent shell owns the empty state; no synthetic
+    // task phase or legacy task surface should be fabricated.
+    expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
+    expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
+    expect(screen.queryByText('告诉我接谁，我来安排这趟行程。')).not.toBeInTheDocument()
+    expect(document.querySelector('.task-surface')).not.toBeInTheDocument()
     expect(screen.queryByText('status-banner')).not.toBeInTheDocument()
 
     const drawer = await openControls(user)
@@ -1502,7 +1653,7 @@ describe('demo integration', () => {
 
     await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `cnf-${decision}`, decision))
     expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('已到家')
+    expect(screen.getByText('已到家', { selector: '[role="status"]' })).toBeInTheDocument()
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
     expect(api.create).toHaveBeenCalledTimes(1)
     expect(api.event).not.toHaveBeenCalled()
@@ -1545,7 +1696,7 @@ describe('demo integration', () => {
 
     await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `button-cnf-${decision}`, decision))
     expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('已到家')
+    expect(screen.getByText('已到家', { selector: '[role="status"]' })).toBeInTheDocument()
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
   })
 
@@ -1750,19 +1901,17 @@ describe('demo integration', () => {
       }
     }
 
-    const drawnLine = () => document.querySelector('.ui-route-map__line')?.getAttribute('d')
-    const stops = () => [...document.querySelectorAll('.ui-route-map__stop')].map((stop) => stop.textContent)
+    const drawnLine = () => document.querySelector('.persistent-map-layer__route')?.getAttribute('d')
+    const stops = () => [...document.querySelectorAll('.persistent-map-layer__stops li')].map((stop) => stop.textContent)
 
     it('draws the active route and marks the staged progress on it', () => {
       render(<App initialTask={tripTask()} />)
 
       expect(screen.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeInTheDocument()
       expect(stops()).toEqual(['出发地', '虹桥机场 T2'])
-      expect(screen.getByText('模拟行程进度 8%')).toBeInTheDocument()
-      expect(document.querySelector('.ui-card--route-map')).toHaveAttribute('data-route-progress', 'simulated')
-      expect(document.querySelector('.ui-route-map__vehicle')).toBeInTheDocument()
-      // One route, drawn once: the panel has the line, so the card beside it has
-      // no band of its own to draw a second copy in.
+      expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0.08')
+      expect(document.querySelector('.persistent-map-layer__vehicle')).toBeInTheDocument()
+      // One route, drawn once by the persistent map rather than a companion card.
       expect(document.querySelector('.ui-route-sketch')).toBeNull()
     })
 
@@ -1778,7 +1927,7 @@ describe('demo integration', () => {
       expect(stops()).toEqual(['出发地', '虹桥枢纽超充站', '虹桥机场 T2'])
       expect(drawnLine()).not.toBe(directLine)
       // The detour is under way, so the marker sits further along than departure.
-      expect(screen.getByText('模拟行程进度 40%')).toBeInTheDocument()
+      expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0.4')
       detour.unmount()
 
       render(<App initialTask={tripTask({
@@ -1803,7 +1952,7 @@ describe('demo integration', () => {
       expect(stops()).toEqual(['出发地', '家'])
       expect(drawnLine()).not.toBe(outboundLine)
       // A new leg restarts near its own origin instead of continuing the outbound value.
-      expect(screen.getByText('模拟行程进度 8%')).toBeInTheDocument()
+      expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0.08')
     })
 
     it('keeps the whole navigation brief when the route has no sketch geometry', () => {
@@ -1816,7 +1965,10 @@ describe('demo integration', () => {
       // card owns the frame alone rather than sharing it with an empty box.
       expect(document.querySelector('.ui-card--route-map')).toBeNull()
       expect(document.querySelector('.ui-layout--split')).toBeNull()
-      expect(document.querySelector('[data-route-progress="unavailable"]')).toBeInTheDocument()
+      expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'route')
+      expect(screen.getByTestId('persistent-map-layer')).not.toHaveAttribute('data-progress')
+      expect(document.querySelector('.persistent-map-layer__route')).toBeInTheDocument()
+      expect(stops()).toEqual(['当前位置', '机场接人点'])
       // Losing the drawing costs the drawing alone: the conclusion and its
       // supporting facts are all still on the brief, and no error takes its place.
       expect(screen.getByRole('heading', { name: '虹桥机场 T2' })).toBeInTheDocument()
@@ -1825,7 +1977,7 @@ describe('demo integration', () => {
       expect(screen.getByText('27%')).toBeInTheDocument()
       expect(screen.queryByText('这项信息暂时无法显示')).not.toBeInTheDocument()
       // Nothing names the route the sketch could not draw.
-      expect(document.querySelector('.task-surface')?.textContent).not.toContain('route-')
+      expect(screen.getByTestId('cockpit-workspace').textContent).not.toContain('route-not-in-fixtures')
     })
   })
 
@@ -1844,8 +1996,12 @@ describe('demo integration', () => {
     it.each(phaseLabels)('shows %s to the driver as %s and never as the raw phase', (phase, label) => {
       render(<App initialTask={{ ...createInitialTask(), phase }} />)
 
-      const brief = screen.getByRole('region', { name: '当前行程' })
-      expect(brief).toHaveAttribute('data-phase-label', label)
+      const brief = screen.getByTestId('cockpit-workspace')
+      if (phase === 'completed' || phase === 'cancelled') {
+        expect(brief.querySelector('[data-trip-brief]')).toBeNull()
+      } else {
+        expect(brief.querySelector('[data-phase-label]')).toHaveAttribute('data-phase-label', label)
+      }
       // Query the header's phase element specifically: a card may legitimately
       // repeat the same words as its own supplied copy.
       expect(brief.querySelector('[data-phase-identity]')).toHaveTextContent(label)
@@ -1875,9 +2031,8 @@ describe('demo integration', () => {
 
       returning.unmount()
       render(<App initialTask={{ ...createInitialTask(), phase: 'completed' }} />)
-      const completedRail = screen.getByRole('list', { name: '接机行程阶段' })
-      expect(screen.getByText('到家', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'current')
-      expect(completedRail.querySelectorAll('[data-state="completed"]')).toHaveLength(3)
+      expect(screen.queryByRole('list', { name: '接机行程阶段' })).not.toBeInTheDocument()
+      expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'terminal')
     })
 
     it('does not invent a journey stage before creation or after cancellation', () => {
@@ -1886,18 +2041,17 @@ describe('demo integration', () => {
 
       empty.unmount()
       render(<App initialTask={{ ...createInitialTask(), phase: 'cancelled' }} />)
-      const rail = screen.getByRole('list', { name: '接机行程阶段' })
-      expect(rail).toHaveAttribute('data-cancelled', 'true')
-      expect(rail.querySelector('[aria-current="step"]')).toBeNull()
+      expect(screen.queryByRole('list', { name: '接机行程阶段' })).not.toBeInTheDocument()
+      expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'terminal')
     })
 
     it('keeps engineering metadata out of the brief and inside the drawer', async () => {
       const user = userEvent.setup()
       render(<App initialTask={{ ...createInitialTask(), phase: 'preparing' }} />)
 
-      const brief = screen.getByRole('region', { name: '当前行程' })
+      const brief = screen.getByTestId('cockpit-workspace')
       for (const term of ['taskRevision', 'uiRevision', 'pickup-001', 'preparing', 'full', 'normal']) {
-        expect(brief.textContent).not.toContain(term)
+        expect(brief.querySelector('[data-trip-brief]')?.textContent).not.toContain(term)
       }
 
       const drawer = await openControls(user)
@@ -1907,7 +2061,7 @@ describe('demo integration', () => {
       expect(drawer).toHaveTextContent('pickup-001')
     })
 
-    it('discloses model participation only when the Agent reports it', async () => {
+    it('keeps model participation in the engineering drawer only', async () => {
       const user = userEvent.setup()
       const created = apiResponse(createInitialTask())
       const withModel: AgentResponse = {
@@ -1920,10 +2074,7 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
 
-      // The disclosure names the exact model the Agent persisted with the task.
-      const provenance = screen.getByLabelText('模型参与说明')
-      expect(provenance).toHaveTextContent('qwen-plus')
-      expect(provenance).toHaveAttribute('data-model-used', 'qwen-plus')
+      expect(screen.queryByLabelText('模型参与说明')).not.toBeInTheDocument()
 
       // The drawer states the planning source for an engineer.
       const drawer = await openControls(user)
@@ -1992,7 +2143,7 @@ describe('demo integration', () => {
       const { unmount } = render(<App initialTask={createInitialTask()} />)
       // While collecting information the instruction is the conclusion, so the
       // page title leads.
-      expect(document.querySelector('[data-title-role]')).toHaveAttribute('data-title-role', 'primary')
+      expect(document.querySelector('[data-trip-brief]')).toBeInTheDocument()
       unmount()
 
       // A bare task has no flight, so nothing states a conclusion yet. Give it the
@@ -2007,9 +2158,11 @@ describe('demo integration', () => {
         },
       }} />)
       // A flight card now states the conclusion, so the title becomes context.
-      expect(document.querySelector('[data-title-role]')).toHaveAttribute('data-title-role', 'context')
-      // It stays the one semantic page title either way.
-      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+      expect(document.querySelector('[data-trip-brief]')).toBeInTheDocument()
+      // The persistent shell owns the landmark; navigation content may collapse
+      // the legacy page heading into the compact HUD without losing the trip brief.
+      expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'navigation')
+      expect(screen.getByTestId('cockpit-workspace').querySelector('[data-trip-brief]')).toBeInTheDocument()
     })
 
     it('surfaces a failed request as an alert without turning it into a trip card', async () => {
@@ -2047,7 +2200,7 @@ describe('demo integration', () => {
       await user.click(screen.getByRole('button', { name: '发送' }))
       await screen.findByText('准备接机')
 
-      const brief = screen.getByRole('region', { name: '当前行程' })
+      const brief = screen.getByTestId('cockpit-workspace').querySelector('[data-trip-brief]') as HTMLElement
       expect(brief.textContent).not.toContain('navigation.start')
 
       const drawer = await openControls(user)
@@ -2841,7 +2994,7 @@ describe('demo integration', () => {
       } else {
         await waitFor(() => expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0))
         expect(api.cancel).not.toHaveBeenCalled()
-        expect(screen.getByLabelText('机场接人任务')).toBeInTheDocument()
+        expect(screen.getByRole('region', { name: '当前行程' })).toHaveAttribute('data-window-title', '机场接人任务')
       }
       expect(api.event).not.toHaveBeenCalled()
     })
@@ -3137,6 +3290,58 @@ describe('demo integration', () => {
       await waitFor(() => expect(api.action).toHaveBeenCalledWith(expect.anything(), 'start-outbound', 'outbound-confirmation'))
       expect(api.event).not.toHaveBeenCalled()
       expect(await screen.findByLabelText('导航信息')).toBeInTheDocument()
+    })
+
+    it('keeps spoken outbound confirmation executable when it is a primary surface', async () => {
+      const user = userEvent.setup()
+      const preparedTask: AirportPickupTaskState = {
+        ...createCockpitTask('fixture-primary-outbound-voice'),
+        phase: 'confirming-outbound',
+        taskRevision: 3,
+        pickupAirport: { label: '虹桥机场', code: 'SHA' },
+        passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+        flight: { flightNumber: 'MU5102', trusted: true, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+        navigationSimulation: {
+          leg: 'outbound', routeId: 'route-airport-001', distanceKm: 32, initialBatteryPercent: 42,
+          estimatedBatteryAtArrival: 27,
+          profiles: {
+            slow: { durationSeconds: 150, displaySpeedKph: 35 },
+            normal: { durationSeconds: 90, displaySpeedKph: 55 },
+            fast: { durationSeconds: 45, displaySpeedKph: 75 },
+          },
+        },
+      }
+      const prepared = apiResponse(preparedTask)
+      prepared.ui = {
+        ...prepared.ui,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['outbound-confirmation'] } },
+        components: [{
+          id: 'outbound-confirmation', type: 'route-confirmation', actions: ['start-outbound'],
+          props: {
+            leg: 'outbound', destination: '虹桥机场 T2', flightNumber: 'MU5102',
+            flightEstimatedArrival: '2026-07-22T20:40:00+08:00', durationMinutes: 20,
+            arrivalTime: '2026-07-22T20:25:00+08:00', distanceKm: 32,
+            currentBatteryPercent: 42, estimatedBatteryAtArrival: 27, simulated: true,
+          },
+        }],
+        actions: [{ id: 'start-outbound', label: '现在出发', style: 'primary', event: { type: 'tool-request', actionToken: 'start-outbound' } }],
+        // Primary confirmation intentionally has no floating window metadata.
+        windows: [],
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue(prepared),
+        event: vi.fn(),
+        action: vi.fn().mockResolvedValue(apiResponse({ ...preparedTask, phase: 'outbound-driving', taskRevision: 4, navigation: { ...preparedTask.navigation!, status: 'active' } })),
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await user.clear(screen.getByLabelText('任务输入'))
+      await user.type(screen.getByLabelText('任务输入'), '现在出发')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await waitFor(() => expect(api.action).toHaveBeenCalledWith(expect.anything(), 'start-outbound', 'outbound-confirmation'))
+      expect(api.event).not.toHaveBeenCalled()
     })
 
     it('does not consume the navigation timeline step when the registered action fails', async () => {

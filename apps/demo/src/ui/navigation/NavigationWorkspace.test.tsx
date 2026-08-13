@@ -182,6 +182,23 @@ describe('NavigationWorkspace', () => {
     expect(screen.getByLabelText('模拟导航地图')).toBe(map)
   })
 
+  it('can provide simulator and HUD without mounting a second map', () => {
+    const clock = manualClock()
+    render(
+      <NavigationWorkspace
+        task={task()}
+        spec={spec()}
+        initialVehicle={vehicle}
+        clock={clock}
+        pending={false}
+        renderMap={false}
+      />,
+    )
+
+    expect(screen.queryByLabelText('模拟导航地图')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('导航信息')).toBeInTheDocument()
+  })
+
   it('keeps the map mounted when the outbound route is replaced by the return leg', () => {
     const clock = manualClock()
     const rendered = render(

@@ -41,6 +41,11 @@ export type ComposeContext = {
 /** The pre-departure screen's own question, asked as ordinary user input. */
 export const ASK_DEPARTURE_TIME_ACTION_ID = 'ask-departure-time'
 
+/** Airport choices replay ordinary user input so Planner remains the authority. */
+export const SELECT_PUDONG_AIRPORT_ACTION_ID = 'select-pudong-airport'
+export const SELECT_HONGQIAO_AIRPORT_ACTION_ID = 'select-hongqiao-airport'
+export const CONFIRM_PASSENGERS_ONBOARD_ACTION_ID = 'confirm-passengers-onboard'
+
 /**
  * The two answers to the departure recommendation, both on the card that makes
  * it. Neither is 出发 — that is `start-navigation`, and it lives in the global
@@ -185,7 +190,16 @@ export function composeAgentSpec(
   let requiresConfirm = false
 
   if (task.phase === 'collecting-airport') {
-    components = [{ id: 'airport-required', type: 'status-banner', props: { level: 'info', title: '你要去哪个机场？', message: '例如虹桥机场或浦东机场。' } }]
+    components = [{
+      id: 'airport-required',
+      type: 'status-banner',
+      props: { level: 'info', title: '你要去哪个机场？', message: '例如虹桥机场或浦东机场。' },
+      actions: [SELECT_PUDONG_AIRPORT_ACTION_ID, SELECT_HONGQIAO_AIRPORT_ACTION_ID],
+    }]
+    actions = [
+      { id: SELECT_PUDONG_AIRPORT_ACTION_ID, label: '浦东机场', style: 'primary', event: { type: 'agent-message', text: '浦东机场' } },
+      { id: SELECT_HONGQIAO_AIRPORT_ACTION_ID, label: '虹桥机场', style: 'secondary', event: { type: 'agent-message', text: '虹桥机场' } },
+    ]
   } else if (task.phase === 'choosing-flight') {
     const board = flightChoicesComponent(toolResults['flight.list-arrivals']?.data)
     components = board ? [board.component] : [{ id: 'flight-loading', type: 'status-banner', props: { level: 'info', title: '正在查询最近航班' } }]
@@ -466,7 +480,16 @@ export function composeAgentSpec(
         status: waiting ? 'waiting' : 'landed',
         ...(meetingPoint ? { meetingPoint: meetingPoint.name } : {}),
       },
+      ...(waiting ? { actions: [CONFIRM_PASSENGERS_ONBOARD_ACTION_ID] } : {}),
     }]
+    if (waiting) {
+      actions = [{
+        id: CONFIRM_PASSENGERS_ONBOARD_ACTION_ID,
+        label: '乘客已上车',
+        style: 'primary',
+        event: { type: 'agent-message', text: '家人上车' },
+      }]
+    }
   } else if (task.flight && (task.flight.status === 'cancelled' || task.flight.status === 'delayed')) {
     // Exception flight states outrank active navigation and pending charging.
     density = 'compact'
