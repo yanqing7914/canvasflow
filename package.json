@@ -18,7 +18,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:voice-wake": "node scripts/probe-local-wake.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.31.0",

@@ -84,6 +84,8 @@ The demo uses these task routes:
 - `POST /v1/tasks/:taskId/cancel`
 - `POST /v1/tasks/:taskId/reset`
 - `GET /v1/tasks/:taskId/events` with `Accept: text/event-stream`
+- `GET /v1/voice/capabilities`
+- `POST /v1/voice/transcribe` (raw PCM16LE, enabled when `CANVASFLOW_ASR_URL` is set)
 
 Mutation requests use client or operation idempotency keys. SSE clients receive `task.updated` snapshots and can resume with the last emitted event ID.
 
@@ -109,10 +111,79 @@ Mutation requests use client or operation idempotency keys. SSE clients receive 
 | `AGENT_CALENDAR_ENDPOINT` | `https://open.feishu.cn` | Optional HTTPS Lark open-platform origin; its host must be on the allowlist. |
 | `AGENT_CALENDAR_TIMEOUT_MS` | `5000` | Optional calendar request timeout in milliseconds, from 1 through 30000. |
 | `DEMO_STATIC_DIR` | unset | Static directory served by the Agent server. The preview launcher sets it to `apps/demo/dist`. |
+| `CANVASFLOW_ASR_URL` | unset | Optional PCM16LE ASR provider. Receives raw 16 kHz mono audio and returns `{ "text": string, "confidence": number }`. |
 
 `fixture` and `mock` use the built-in deterministic Provider registry. `live` is intentionally fail-closed: the runtime requires an explicitly injected provider factory that guarantees durable external idempotency. Model planning is independently configured: rules remain the first path, and the model can only supply validated canonicalization for otherwise unknown supported input. Missing, failed, timed-out, low-confidence, stale, terminal, or idempotent-replay inputs do not call the model and retain the deterministic behavior. Successful model plans persist their model ID in the task snapshot and return it as `meta.modelUsed`; rules and deterministic fallbacks omit that field.
 
 The live calendar follows the same shape: the adapter is consulted outside the SQLite transaction, only for turns the deterministic planner classifies as schedule queries, and any failure falls back to the fixture calendar — the schedule card labels its provenance (`live` or `fixture`) truthfully.
+
+## Deploying local voice
+
+The voice runtime is browser-side, but its static assets and response headers are part of the deployment contract.
+
+1. Install Node 22, clone the repository, and install dependencies:
+
+   ```bash
+   npm ci
+   ```
+
+2. Fetch the pinned KWS/VAD model assets:
+
+   ```bash
+   bash scripts/fetch-voice-models.sh
+   ```
+
+   This downloads the Silero model and KWS ONNX files into `apps/demo/public/voice/` and verifies SHA-256. The generated files are intentionally not committed to Git.
+
+3. Build the pinned sherpa-onnx WASM runtime. The build host needs the pinned Emscripten 4.0.23 toolchain, CMake, Ninja, and Git:
+
+   ```bash
+   EMSCRIPTEN=/opt/emsdk/upstream/emscripten bash scripts/voice-build-kws-wasm.sh
+   node scripts/voice-assets.mjs
+   ```
+
+   If CI stores the generated runtime in an artifact/cache instead, copy the four files under `apps/demo/public/voice/kws/` before `npm run build` and run the asset probe.
+
+4. Build and start the combined preview server:
+
+   ```bash
+   npm run build
+   AGENT_DATABASE_PATH=.canvasflow/agent.sqlite \
+   AGENT_PROVIDER_MODE=fixture \
+   AGENT_PORT=4173 \
+   npm run preview
+   ```
+
+   The server serves `apps/demo/dist` and the Agent API from the same origin. For development, use `npm run dev` and open `http://localhost:5173`.
+
+5. Enable product-grade shared PCM ASR by setting the provider URL on the Agent server:
+
+   ```bash
+   CANVASFLOW_ASR_URL=https://asr.example.internal/transcribe \
+   AGENT_PORT=4173 \
+   npm run preview
+   ```
+
+   The provider receives `POST` raw PCM16LE (`16,000 Hz`, mono) and must return JSON such as `{"text":"查天气","confidence":0.92}`. Without this variable, the UI intentionally falls back to wake-then-Web-Speech compatibility mode.
+
+6. Put HTTPS in front of the server in production. The proxy must preserve:
+
+   ```text
+   Cross-Origin-Opener-Policy: same-origin
+   Cross-Origin-Embedder-Policy: credentialless
+   ```
+
+   Microphone access requires `https://` (or `localhost`). Do not terminate TLS on a different origin from the page unless the `/v1` API, `/voice/*` assets, and these headers remain same-origin and reachable.
+
+7. Verify after deployment:
+
+   ```bash
+   curl -fsS https://your-host/health
+   curl -fsS https://your-host/v1/voice/capabilities
+   npm run test:voice-wake   # run against a local server with VOICE_PROBE_URL if needed
+   ```
+
+   Then test a real Mac microphone/AirPods manually: enable voice, say `小南`, wait for “正在聆听”, and say a command. Record wake hit rate, false wakes during 30 minutes of playback, and whether the first command word is preserved.
 
 Never commit credentials or `.env` files. Live Provider credentials must be supplied by the deployment environment.
 
@@ -152,16 +223,17 @@ It also checks that a voice attempt leaves the task usable and that the text pat
 
 ## Voice Input
 
-The demo accepts spoken task input through the browser's own Web Speech API, with no server of ours and no added dependency. `packages/voice` holds a pure state machine (`idle → listening → transcribing → submitting → speaking`, plus `error`) and the peripheral adapter; neither knows anything about airport pickup.
+The shipped idle cockpit now uses an in-browser sherpa-onnx keyword spotter for `小南` and a local Silero VAD over one shared 16 kHz microphone capture. Audio remains local while the cockpit is armed. After KWS fires, the command recognizer prefers the shared PCM16LE endpoint (`/v1/voice/transcribe`) and falls back to the browser Web Speech API only when `/v1/voice/capabilities` reports that no ASR provider is configured. `packages/voice` keeps both the hands-free state machine and the editable push-to-talk machine independent from airport-pickup business logic.
 
 - A recognized transcript lands in the existing task input, where it can be corrected before 发送 submits it.
 - The text path closes while the microphone is capturing or its transcript is in flight, because the field still holds the previous turn's words until the voice turn hands new ones back. It reopens as soon as there is something to confirm. Typing an answer during playback barges in first, so the car stops talking instead of talking over the driver.
 - Submission goes through the same Agent API call as typed text, tagged `source: 'voice'` with the engine's confidence. The frontend performs no task understanding; the spoken reply is whatever the Agent returns in `assistant`, played only when `shouldSpeak` is set.
 - The demo drawer ships eight deterministic WAV fixtures. They cover task creation, noisy confirmation, flight selection/number entry, arrival weather, policy-gated navigation, and both branches of the rain advisory; state-bound samples are disabled until the matching UI capability is visible.
 - Pressing the microphone during playback barges in and starts a new turn.
-- Every failure — no speech API, an insecure origin, a denied microphone, silence, a timeout — states what happened in the voice status line and leaves the text field usable, so a voice failure never blocks the task.
+- Every failure — missing model assets, missing isolation headers, no command speech API, an insecure origin, a denied microphone, silence, or a timeout — states what happened in the voice status line and leaves the text field usable, so a voice failure never blocks the task.
 - Voice failures never mutate `TaskState`, and a rejected submission keeps the transcript in the field for a text retry.
-- Wake word and local voice activity detection are out of scope for the POC.
+- The KWS runtime/model and VAD model are generated assets rather than Git blobs. Run `bash scripts/fetch-voice-models.sh`, then build the pinned sherpa runtime with `bash scripts/voice-build-kws-wasm.sh`; `node scripts/voice-assets.mjs` verifies all installed files and the `x iǎo n án` token sequence.
+- Set `CANVASFLOW_ASR_URL` on the Agent server to enable shared PCM command recognition. The adapter sends a 200 ms pre-roll for follow-up/barge-in turns, while the initial wake turn avoids replaying the keyword itself.
 
 ## Known Limitations
 
@@ -171,12 +243,13 @@ The demo accepts spoken task input through the browser's own Web Speech API, wit
 - The built-in server cannot start in `live` Provider mode without an injected durable provider factory.
 - Real flight, navigation, vehicle, messaging, and memory backends require deployment-specific adapters, credentials, reliability limits, and operational review.
 - Fixture geometry and task facts are fictional competition data, not production navigation or aviation data.
-- Speech recognition availability and accuracy depend on the browser and its speech service. Headless Chromium exposes the API without a service behind it, so the E2E suite asserts that a voice attempt never blocks the task rather than replaying a real recognition turn.
+- Keyword spotting and VAD are local. Command recognition uses the configured PCM provider or, when absent, the browser speech service as an explicit compatibility fallback. CI covers the local acoustic path with a deterministic fake microphone WAV and covers business flows through canonical fixture transcripts; real-device hit/false-wake and ASR accuracy remain a manual release gate.
 
 ## Third-Party Notices
 
-[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) records the three third-party
-packages in the browser runtime (`react`, `react-dom`, `zod`, all MIT), what
+[THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) records the browser packages
+and generated local voice assets (`react`, `react-dom`, `zod`,
+`onnxruntime-web`, sherpa-onnx KWS, and Silero VAD), what
 `packages/voice` owes to [cockpit-agent](https://github.com/SuperdeMan/cockpit-agent)
 (Apache-2.0) and how much of it is borrowed architecture versus borrowed code, and
 which evaluated projects were not adopted. Every license there was verified against

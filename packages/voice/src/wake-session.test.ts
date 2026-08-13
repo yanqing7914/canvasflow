@@ -142,4 +142,19 @@ describe('wake session', () => {
       { source: 'voice', recognitionSource: 'microphone' },
     ])
   })
+
+  it('lets a local runtime consume reset controls without submitting ordinary commands', () => {
+    const h = harness()
+    h.session.authorize()
+    h.session.recognitionStarted()
+    h.session.wakeDetected()
+
+    expect(h.session.receive('查天气', { controlsOnly: true })).toBe('ignored')
+    expect(h.calls.some((call) => call.name === 'submit')).toBe(false)
+    expect(h.session.snapshot().state).toBe('follow-up')
+
+    expect(h.session.receive('重新开始', { controlsOnly: true })).toBe('accepted')
+    expect(h.session.snapshot().state).toBe('reset-confirmation')
+    expect(h.calls.at(-1)).toEqual({ name: 'speak', args: ['当前任务还没有完成，确定要重新开始吗？'] })
+  })
 })

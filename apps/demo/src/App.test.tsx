@@ -12,6 +12,7 @@ import { createFakeSpeech } from './test/speech'
 import type { CockpitUISpec } from './ui/navigation/contracts'
 import type { NavigationClock } from './ui/navigation/simulator'
 import { AgentApiError } from './agent-client'
+import type { LocalHandsFreeControllerOptions } from './voice/localHandsFreeController'
 
 // Legacy cases intentionally start from the historical typed draft. Production
 // and the dedicated empty-input test below render AppComponent directly.
@@ -20,6 +21,58 @@ function App(props: ComponentProps<typeof AppComponent>) {
 }
 
 describe('demo integration', () => {
+  it('arms the local KWS/VAD runtime instead of opening always-on Web Speech', async () => {
+    const enable = vi.fn(async () => true)
+    const dispose = vi.fn()
+    const localHandsFreeFactory = vi.fn(() => ({
+      enable,
+      disable: vi.fn(async () => undefined),
+      snapshot: vi.fn(() => ({ state: 'ARMED' as const, enabled: true, speechActive: false })),
+      turnEnded: vi.fn(),
+      ttsStarted: vi.fn(),
+      ttsEnded: vi.fn(),
+      dispose,
+    }))
+    render(<AppComponent localHandsFreeFactory={localHandsFreeFactory} />)
+
+    screen.getByRole('button', { name: '启用小南语音唤醒' }).click()
+
+    await waitFor(() => expect(enable).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: '小南语音状态' })).toHaveTextContent('等待唤醒')
+  })
+
+  it('keeps local reset controls on the reset-confirmation path', async () => {
+    let localOptions: LocalHandsFreeControllerOptions | undefined
+    const localHandsFreeFactory = vi.fn((options: LocalHandsFreeControllerOptions) => {
+      localOptions = options
+      return {
+        enable: vi.fn(async () => true),
+        disable: vi.fn(async () => undefined),
+        snapshot: vi.fn(() => ({ state: 'ARMED' as const, enabled: true, speechActive: false })),
+        turnEnded: vi.fn(),
+        ttsStarted: vi.fn(),
+        ttsEnded: vi.fn(),
+        dispose: vi.fn(),
+      }
+    })
+    const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} localHandsFreeFactory={localHandsFreeFactory} />)
+
+    screen.getByRole('button', { name: '启用小南语音唤醒' }).click()
+    await waitFor(() => expect(localOptions).toBeDefined())
+    act(() => { localOptions?.onWake?.() })
+
+    await act(async () => {
+      await expect(localOptions?.onSubmit('重新开始', {
+        source: 'voice',
+        recognitionSource: 'microphone',
+      })).resolves.toBe(true)
+    })
+
+    expect(api.create).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '小南语音状态' })).toHaveTextContent('等待确认')
+  })
+
   it('starts in a quiet idle cockpit without creating a task or showing a large composer', async () => {
     const user = userEvent.setup()
     const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
@@ -72,6 +125,20 @@ describe('demo integration', () => {
     await user.click(screen.getAllByRole('button', { name: '发送' }).at(-1)!)
     typed.unmount()
     expect(typedApi.create).toHaveBeenCalledWith('查天气', expect.objectContaining({ vehicleContext: expect.anything() }))
+  })
+
+  it('accepts Chrome pinyin output for the Xiaonan wake word', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const created = apiResponse(createCockpitTask('wake-pinyin'))
+    const api = { create: vi.fn().mockResolvedValue(created), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    act(() => { speech.engine().emit('xiao n，查天气', true, 0.88) })
+
+    await waitFor(() => expect(api.create).toHaveBeenCalledWith('查天气', expect.objectContaining({ source: 'voice' })))
   })
 
   it('gives reset confirmation priority over ordinary wake command handling', async () => {
@@ -208,6 +275,23 @@ describe('demo integration', () => {
       expect(speech.engines).toHaveLength(2)
       act(() => { speech.engine().onstart?.() })
       expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('restarts when Chrome reports a transient network error without onend', async () => {
+    vi.useFakeTimers()
+    try {
+      const speech = createFakeSpeech()
+      render(<AppComponent api={{ create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }} speech={speech.deps} />)
+
+      act(() => { screen.getByRole('button', { name: '启用小南语音唤醒' }).click() })
+      act(() => { speech.engine().onstart?.() })
+      act(() => { speech.engine().fail('network'); vi.advanceTimersByTime(180) })
+
+      expect(speech.engines).toHaveLength(2)
+      expect(speech.engine().started).toBe(1)
     } finally {
       vi.useRealTimers()
     }

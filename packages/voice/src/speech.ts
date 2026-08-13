@@ -15,6 +15,7 @@ export type SpeechRecognitionResultLike = {
   isFinal: boolean
   length: number
   0: SpeechRecognitionAlternativeLike
+  [index: number]: SpeechRecognitionAlternativeLike
 }
 
 export type SpeechRecognitionEventLike = {
