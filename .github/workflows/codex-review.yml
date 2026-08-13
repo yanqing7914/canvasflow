@@ -357,17 +357,81 @@ jobs:
           CODEX_FINAL_MESSAGE: ${{ steps.codex.outputs.final-message || steps.codex_fallback.outputs.final-message }}
           PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
 
+  fork-review:
+    name: review
+    needs: resolve-pr
+    # Fork PRs cannot receive the upstream review API key. Produce an explicit
+    # check result with guidance instead of leaving the merge gate ambiguous.
+    if: needs.resolve-pr.outputs.head-repository != github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      verdict: MANUAL_REVIEW_REQUIRED
+    steps:
+      - name: Explain fork review gate
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ needs.resolve-pr.outputs.number }}
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body: 'Codex review is skipped for fork PRs because repository secrets are not exposed to forked code. A maintainer must review this PR manually or ask the contributor to move the change to a same-repository branch before it can follow the automatic merge path.',
+            })
+
+  review-verdict:
+    name: review-verdict
+    needs:
+      - resolve-pr
+      - review
+      - fork-review
+    if: always()
+    runs-on: ubuntu-latest
+    outputs:
+      verdict: ${{ steps.verdict.outputs.verdict }}
+      eligible-for-auto-merge: ${{ steps.verdict.outputs.eligible-for-auto-merge }}
+    steps:
+      - name: Resolve effective review verdict
+        id: verdict
+        run: |
+          set -euo pipefail
+          if [ "${HEAD_REPOSITORY}" = "${GITHUB_REPOSITORY}" ]; then
+            if [ "${REVIEW_RESULT}" != "success" ]; then
+              echo "Same-repository Codex review did not complete successfully." >&2
+              exit 1
+            fi
+            echo "verdict=${REVIEW_VERDICT}" >> "$GITHUB_OUTPUT"
+            echo "eligible-for-auto-merge=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${FORK_REVIEW_RESULT}" != "success" ]; then
+            echo "Fork review guidance job did not complete successfully." >&2
+            exit 1
+          fi
+          echo "verdict=${FORK_REVIEW_VERDICT}" >> "$GITHUB_OUTPUT"
+          echo "eligible-for-auto-merge=false" >> "$GITHUB_OUTPUT"
+        env:
+          HEAD_REPOSITORY: ${{ needs.resolve-pr.outputs.head-repository }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          REVIEW_RESULT: ${{ needs.review.result }}
+          REVIEW_VERDICT: ${{ needs.review.outputs.verdict }}
+          FORK_REVIEW_RESULT: ${{ needs.fork-review.result }}
+          FORK_REVIEW_VERDICT: ${{ needs.fork-review.outputs.verdict }}
+
   auto-merge:
     name: auto-merge
     needs:
       - resolve-pr
-      - review
+      - review-verdict
     # Auto-merge only ordinary same-repo PRs into dev. The dev -> main release
     # PR stays owner-managed and is never merged automatically.
     if: >-
-      needs.review.outputs.verdict == 'PASS' &&
-      needs.resolve-pr.outputs.base-ref == 'dev' &&
-      needs.resolve-pr.outputs.draft == 'false'
+      needs['review-verdict'].outputs.verdict == 'PASS' &&
+      needs['review-verdict'].outputs['eligible-for-auto-merge'] == 'true' &&
+      needs['resolve-pr'].outputs['base-ref'] == 'dev' &&
+      needs['resolve-pr'].outputs.draft == 'false'
     runs-on: ubuntu-latest
     permissions:
       checks: read
