@@ -224,6 +224,16 @@ a:focus-visible {
   .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__eta {
     padding-inline: clamp(12px, 1.2vw, 20px);
   }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary .ui-route-facts {
+    column-gap: clamp(8px, 1vw, 16px);
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary .ui-metric {
+    padding-inline: clamp(6px, .8vw, 12px);
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary .ui-metric__value {
+    font-size: clamp(20px, 1.3vw, 26px);
+    letter-spacing: -0.07em;
+  }
 }
 .cockpit-primary-panel .ui-layout,
 .cockpit-primary-panel .ui-slot,
