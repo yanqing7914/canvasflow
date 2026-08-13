@@ -217,6 +217,13 @@ a:focus-visible {
   .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__arrival {
     padding-inline: clamp(12px, 1.4vw, 22px);
   }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--navigation-summary {
+    grid-template-columns: minmax(0, .85fr) auto minmax(0, 1.15fr);
+    column-gap: clamp(14px, 1.5vw, 24px);
+  }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-navigation-brief__eta {
+    padding-inline: clamp(12px, 1.2vw, 20px);
+  }
 }
 .cockpit-primary-panel .ui-layout,
 .cockpit-primary-panel .ui-slot,
