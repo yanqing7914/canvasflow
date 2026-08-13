@@ -8,11 +8,11 @@ export type CockpitStatusBarProps = {
 }
 
 function displayDate(value: Date): string {
-  return new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' }).format(value)
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'short' }).format(value)
 }
 
 function displayTime(value: Date): string {
-  return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false }).format(value)
+  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false }).format(value)
 }
 
 /** Quiet, persistent vehicle facts; task changes do not replace this layer. */
