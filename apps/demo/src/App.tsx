@@ -203,7 +203,12 @@ function cockpitActionForVoice(
   const window = spec.windows?.find((candidate) => candidate.componentIds.includes(wanted.componentId))
   const component = spec.components.find((candidate) => candidate.id === wanted.componentId)
   const action = registeredAction(spec, wanted.actionId)
-  if (!window?.actionIds?.includes(wanted.actionId)
+  // Primary confirmation surfaces are intentionally not floating windows. They
+  // still own the same signed tool action, so the absence of `windows` metadata
+  // must not downgrade a spoken confirmation to generic user.input.
+  const ownsAction = window?.actionIds?.includes(wanted.actionId)
+    || (task.phase === 'confirming-outbound' && wanted.componentId === 'outbound-confirmation')
+  if (!ownsAction
     || !component?.actions?.includes(wanted.actionId)
     || action?.event.type !== 'tool-request'
     || action.event.actionToken !== wanted.actionId) return undefined

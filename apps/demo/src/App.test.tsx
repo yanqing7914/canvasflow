@@ -3292,6 +3292,58 @@ describe('demo integration', () => {
       expect(await screen.findByLabelText('导航信息')).toBeInTheDocument()
     })
 
+    it('keeps spoken outbound confirmation executable when it is a primary surface', async () => {
+      const user = userEvent.setup()
+      const preparedTask: AirportPickupTaskState = {
+        ...createCockpitTask('fixture-primary-outbound-voice'),
+        phase: 'confirming-outbound',
+        taskRevision: 3,
+        pickupAirport: { label: '虹桥机场', code: 'SHA' },
+        passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+        flight: { flightNumber: 'MU5102', trusted: true, status: 'scheduled', scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00', terminal: 'T2' },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场 T2', eta: '2026-07-22T20:25:00+08:00', status: 'planned' },
+        navigationSimulation: {
+          leg: 'outbound', routeId: 'route-airport-001', distanceKm: 32, initialBatteryPercent: 42,
+          estimatedBatteryAtArrival: 27,
+          profiles: {
+            slow: { durationSeconds: 150, displaySpeedKph: 35 },
+            normal: { durationSeconds: 90, displaySpeedKph: 55 },
+            fast: { durationSeconds: 45, displaySpeedKph: 75 },
+          },
+        },
+      }
+      const prepared = apiResponse(preparedTask)
+      prepared.ui = {
+        ...prepared.ui,
+        layout: { type: 'stack', gap: 'md', slots: { main: ['outbound-confirmation'] } },
+        components: [{
+          id: 'outbound-confirmation', type: 'route-confirmation', actions: ['start-outbound'],
+          props: {
+            leg: 'outbound', destination: '虹桥机场 T2', flightNumber: 'MU5102',
+            flightEstimatedArrival: '2026-07-22T20:40:00+08:00', durationMinutes: 20,
+            arrivalTime: '2026-07-22T20:25:00+08:00', distanceKm: 32,
+            currentBatteryPercent: 42, estimatedBatteryAtArrival: 27, simulated: true,
+          },
+        }],
+        actions: [{ id: 'start-outbound', label: '现在出发', style: 'primary', event: { type: 'tool-request', actionToken: 'start-outbound' } }],
+        // Primary confirmation intentionally has no floating window metadata.
+        windows: [],
+      }
+      const api = {
+        create: vi.fn().mockResolvedValue(prepared),
+        event: vi.fn(),
+        action: vi.fn().mockResolvedValue(apiResponse({ ...preparedTask, phase: 'outbound-driving', taskRevision: 4, navigation: { ...preparedTask.navigation!, status: 'active' } })),
+        confirmation: vi.fn(),
+      }
+      render(<App api={api} />)
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await user.clear(screen.getByLabelText('任务输入'))
+      await user.type(screen.getByLabelText('任务输入'), '现在出发')
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await waitFor(() => expect(api.action).toHaveBeenCalledWith(expect.anything(), 'start-outbound', 'outbound-confirmation'))
+      expect(api.event).not.toHaveBeenCalled()
+    })
+
     it('does not consume the navigation timeline step when the registered action fails', async () => {
       const user = userEvent.setup()
       const audio = createFakeFixtureAudio()

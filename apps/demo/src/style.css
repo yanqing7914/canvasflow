@@ -241,6 +241,13 @@ a:focus-visible {
     font-size: clamp(18px, 1.1vw, 21px);
     letter-spacing: -0.08em;
   }
+  /* Some primary specs render a single authored component and therefore do not
+     carry the multi-component renderer marker above. Keep that equivalent DOM
+     shape on the same Linux-safe metric budget. */
+  .cockpit-primary-panel .ui-metric__value {
+    font-size: clamp(18px, 1.1vw, 21px);
+    letter-spacing: -0.08em;
+  }
 }
 .cockpit-primary-panel .ui-layout,
 .cockpit-primary-panel .ui-slot,
