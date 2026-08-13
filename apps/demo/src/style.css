@@ -195,6 +195,15 @@ a:focus-visible {
   height: auto;
   min-height: 0;
 }
+.cockpit-primary-panel .ui-metric {
+  /* Metric spacing was authored for the old full-page surface. Inside the
+     persistent window that 30px-per-side budget truncates supporting labels
+     and figures even though the card itself fits. Compress only the horizontal
+     inset here so the map keeps its stage and every supplied fact stays legible. */
+  padding-right: clamp(8px, 1vw, 14px);
+  padding-left: clamp(8px, 1vw, 14px);
+}
+.cockpit-primary-panel .ui-metric:first-child { padding-left: 0; }
 .cockpit-primary-panel .ui-layout,
 .cockpit-primary-panel .ui-slot,
 .cockpit-primary-panel .ui-component {
