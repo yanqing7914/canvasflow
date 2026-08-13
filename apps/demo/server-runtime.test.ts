@@ -307,6 +307,17 @@ describe('loadLocalEnvironment', () => {
     expect(environment.AMAP_SECURITY_JS_CODE).toBe('from-deployment')
   })
 
+  it('preserves an explicitly empty environment value', async () => {
+    // Empty is a deliberate operator choice: it disables the local credential
+    // and keeps the supported keyless path even when .env.local has a value.
+    const filePath = await envFile('AMAP_SECURITY_JS_CODE=from-file\n')
+    const environment: NodeJS.ProcessEnv = { AMAP_SECURITY_JS_CODE: '' }
+
+    loadLocalEnvironment(filePath, environment)
+
+    expect(environment.AMAP_SECURITY_JS_CODE).toBe('')
+  })
+
   it('treats a blank assignment as absent so the keyless default survives', async () => {
     // env.example ships with empty values; reading it must not define the key.
     const filePath = await envFile('VITE_AMAP_JS_KEY=\nAMAP_SECURITY_JS_CODE=\n')

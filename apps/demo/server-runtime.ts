@@ -121,7 +121,7 @@ export function loadLocalEnvironment(
     const key = trimmed.slice(0, separator).trim()
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
     // Set once: an explicit environment variable outranks the file.
-    if (environment[key] !== undefined && environment[key] !== '') continue
+    if (Object.prototype.hasOwnProperty.call(environment, key)) continue
     const value = trimmed.slice(separator + 1).trim()
     if (!value) continue
     environment[key] = value.replace(/^(['"])(.*)\1$/, '$2')
