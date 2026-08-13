@@ -26,6 +26,43 @@ export const E2E_FAIL_AUTO_MESSAGE_SEND = 'AGENT_E2E_FAIL_AUTO_MESSAGE_SEND'
 export const CANVASFLOW_E2E = 'CANVASFLOW_E2E'
 export const CANVASFLOW_E2E_NOW = 'CANVASFLOW_E2E_NOW'
 
+export const LOCAL_VOICE_ISOLATION_HEADERS = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'credentialless',
+} as const
+
+export const VOICE_ASR_PREFIX = '/v1/voice/transcribe'
+export const VOICE_CAPABILITIES_PREFIX = '/v1/voice/capabilities'
+
+export async function proxyVoiceTranscription(
+  request: import('node:http').IncomingMessage,
+  response: ServerResponse,
+  environment: NodeJS.ProcessEnv = process.env,
+  fetchImpl: typeof fetch = fetch,
+): Promise<void> {
+  const upstream = environment.CANVASFLOW_ASR_URL
+  if (!upstream) {
+    response.writeHead(503, { ...LOCAL_VOICE_ISOLATION_HEADERS, 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: 'PCM ASR provider is not configured' }))
+    return
+  }
+  const chunks: Buffer[] = []
+  for await (const chunk of request) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk))
+  const result = await fetchImpl(upstream, {
+    method: 'POST',
+    headers: {
+      'content-type': request.headers['content-type'] ?? 'audio/pcm;format=s16le;rate=16000;channels=1',
+      'x-voice-generation': String(request.headers['x-voice-generation'] ?? ''),
+    },
+    body: Buffer.concat(chunks),
+  })
+  response.writeHead(result.status, {
+    ...LOCAL_VOICE_ISOLATION_HEADERS,
+    'content-type': result.headers.get('content-type') ?? 'application/json; charset=utf-8',
+  })
+  response.end(Buffer.from(await result.arrayBuffer()))
+}
+
 type RuntimeClock = {
   now: () => string
   nowMs: () => number
@@ -188,8 +225,24 @@ export function createAgentServer(options: AgentServerOptions = {}) {
   const agentHandler = createAgentHttpHandler(gateway)
   return createServer((request, response) => {
     if (request.method === 'GET' && request.url === '/health') {
-      response.writeHead(200, { 'content-type': 'application/json' })
+      response.writeHead(200, {
+        ...LOCAL_VOICE_ISOLATION_HEADERS,
+        'content-type': 'application/json',
+      })
       response.end('{"ok":true}')
+      return
+    }
+    if (request.method === 'POST' && request.url?.split('?', 1)[0] === VOICE_ASR_PREFIX) {
+      void proxyVoiceTranscription(request, response).catch(() => {
+        if (!response.headersSent) response.writeHead(502, { ...LOCAL_VOICE_ISOLATION_HEADERS, 'content-type': 'application/json' })
+        if (!response.writableEnded) response.end(JSON.stringify({ error: 'PCM ASR provider failed' }))
+      })
+      return
+    }
+    if (request.method === 'GET' && request.url?.split('?', 1)[0] === VOICE_CAPABILITIES_PREFIX) {
+      const pcmAsr = Boolean(process.env.CANVASFLOW_ASR_URL)
+      response.writeHead(200, { ...LOCAL_VOICE_ISOLATION_HEADERS, 'cache-control': 'no-store', 'content-type': 'application/json' })
+      response.end(JSON.stringify({ pcmAsr }))
       return
     }
     if (request.method === 'GET' && request.url?.startsWith(AMAP_SERVICE_PREFIX)) {
@@ -261,12 +314,18 @@ async function serveStatic(staticDirectory: string, url: string, response: Serve
   try {
     const file = (await stat(requested)).isDirectory() ? join(requested, 'index.html') : requested
     const body = await readFile(file)
-    response.writeHead(200, { 'content-type': contentType(file) })
+    response.writeHead(200, {
+      ...LOCAL_VOICE_ISOLATION_HEADERS,
+      'content-type': contentType(file),
+    })
     response.end(body)
   } catch {
     try {
       const body = await readFile(join(staticDirectory, 'index.html'))
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.writeHead(200, {
+        ...LOCAL_VOICE_ISOLATION_HEADERS,
+        'content-type': 'text/html; charset=utf-8',
+      })
       response.end(body)
     } catch {
       response.writeHead(404).end()

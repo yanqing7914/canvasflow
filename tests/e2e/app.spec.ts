@@ -1708,7 +1708,9 @@ test('falls back to text when the browser has no speech recognition', async ({ p
 
   await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
-  await expect(page.getByLabel('空闲座舱状态').getByText('语音不可用', { exact: true })).toBeVisible()
+  // Local KWS owns the idle wake path now, so removing Web Speech no longer
+  // disables the microphone entry. Command ASR remains a post-wake adapter.
+  await expect(page.getByRole('button', { name: '启用小南语音唤醒' })).toBeEnabled()
 
   await sendText(page, '我现在要去机场接妈妈和豆豆')
   await readControls(page, 'collecting-information')
@@ -1765,7 +1767,9 @@ test('replays cockpit fixtures through default wake mode without SpeechRecogniti
   })
   await page.goto('/')
 
-  await expect(page.getByLabel('空闲座舱状态').getByText('语音不可用', { exact: true })).toBeVisible()
+  // Local KWS owns the idle wake path now, so removing Web Speech no longer
+  // disables the microphone entry. Command ASR remains a post-wake adapter.
+  await expect(page.getByRole('button', { name: '启用小南语音唤醒' })).toBeEnabled()
 
   // A low-confidence fixture is still a confirmation turn in the shipped
   // wake-word mode. With no browser speech service, its canonical transcript

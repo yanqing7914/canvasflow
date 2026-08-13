@@ -33,6 +33,13 @@ export type WakeSessionDeps = {
   clearTimer?: (handle: unknown) => void
 }
 
+export type WakeSessionReceiveOptions = {
+  recognitionSource?: VoiceRecognitionSource
+  confidence?: number
+  /** Only consume reset controls; leave ordinary commands to another runtime. */
+  controlsOnly?: boolean
+}
+
 const DEFAULT_FOLLOW_UP_MS = 5_000
 const DEFAULT_RESET_CONFIRM_MS = 5_000
 const RESET_PROMPT = '当前任务还没有完成，确定要重新开始吗？'
@@ -112,10 +119,10 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
     }, resetConfirmMs)
   }
 
-  function beginFollowUp() {
+  function beginFollowUp(announce = true) {
     clearSessionTimer()
     transition('follow-up')
-    speak('我在')
+    if (announce) speak('我在')
     armTimer(() => {
       if (speaking) effects.stopSpeaking?.()
       speaking = false
@@ -161,11 +168,18 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
       transition('needs-authorization')
     },
 
+    /** Acoustic KWS already supplied feedback, so it may open follow-up silently. */
+    wakeDetected(options: { announce?: boolean } = {}) {
+      if (state !== 'waiting-wake') return false
+      beginFollowUp(options.announce ?? false)
+      return true
+    },
+
     setSpeaking(active: boolean) {
       speaking = active
     },
 
-    receive(input: string, options: { recognitionSource?: VoiceRecognitionSource; confidence?: number } = {}) {
+    receive(input: string, options: WakeSessionReceiveOptions = {}) {
       if (options.recognitionSource === 'system-tts') return 'ignored' as const
       if (state === 'needs-authorization' || state === 'authorizing') return 'ignored' as const
 
@@ -191,6 +205,13 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
           return 'reset-cancelled' as const
         }
         return 'ignored' as const
+      }
+
+
+      if (options.controlsOnly) {
+        if (!isResetCommand(input)) return 'ignored' as const
+        askResetConfirmation()
+        return 'accepted' as const
       }
 
       if (state === 'follow-up') {

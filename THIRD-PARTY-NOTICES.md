@@ -14,13 +14,29 @@ Every license statement below was verified against the upstream repository on
 No third-party source is vendored into this repository. Nothing under `packages/`
 or `apps/` is a copy, fork, or bundle of another project's tree.
 
-The shipped browser runtime has three third-party dependencies:
+The shipped browser runtime has four third-party package dependencies plus two
+locally downloaded voice-model/runtime asset families:
 
 | Package | Declared range (installed) | License | Verified from |
 |---|---|---|---|
 | `react` | `^19.1.0` (19.2.7) | MIT | https://github.com/react/react/blob/main/LICENSE |
 | `react-dom` | `^19.1.0` (19.2.7) | MIT | https://github.com/react/react/blob/main/LICENSE |
 | `zod` | `^4.0.5` (4.4.3) | MIT | https://github.com/colinhacks/zod/blob/main/LICENSE |
+| `onnxruntime-web` | `^1.27.0` (1.27.0) | MIT | https://github.com/microsoft/onnxruntime/blob/main/LICENSE |
+
+Local voice assets are not tracked by Git. `scripts/voice-assets-manifest.json`
+pins their source URL, SHA-256, size, installed files, and declared license:
+
+| Asset | Use | License recorded by upstream |
+|---|---|---|
+| `sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01` | Runtime-configurable Mandarin keyword model | Apache-2.0 |
+| `sherpa-onnx` KWS WASM runtime, pinned commit `e1edbfee...` | Local keyword inference | Apache-2.0 |
+| `silero_vad.onnx` from the sherpa-onnx release asset | Local speech endpoint detection | MIT |
+
+The build script applies one compatibility modification to the generated
+Emscripten JavaScript: it exposes `wasmMemory.buffer` instead of a resizable view
+because Chrome's `TextDecoder` rejects the latter during model initialization.
+The generated JavaScript therefore differs from the unmodified sherpa build.
 
 `apps/demo/package.json` also declares `vite`, `@vitejs/plugin-react`, and `tsx`
 under `dependencies`; they are build and dev-server tooling, not part of the
@@ -30,9 +46,10 @@ this file is about attribution for what the project uses and borrows, and a
 generated full-tree dependency license inventory would be a different artifact
 with a different purpose.
 
-The only binary assets in the tree are the eight voice fixtures
-(`fixtures/airport-pickup/voice/*.wav`, mono 16-bit PCM); every other tracked file
-is text authored here. Their own README
+The tracked binary assets are the deterministic voice fixtures
+(`fixtures/airport-pickup/voice/*.wav`, mono 16-bit PCM). Generated KWS/VAD
+models and runtime files under `apps/demo/public/voice/` are ignored and must be
+reproduced by the pinned scripts. The fixtures' own README
 describes them as fictional demo utterances rather than production recordings or
 user data, and no external corpus, voice talent, or synthesis service is named
 anywhere in the repository. Nothing here contradicts that, but it is a claim read
@@ -68,20 +85,16 @@ no timers of its own, timers and effects injected as dependencies so the whole
 loop is testable in Node, a table of named timers with a clear-all, and a single
 transition funnel that reports each state change to an `onState` effect.
 
-What is not shared is the machine. Upstream's states are `IDLE / ARMED /
-LISTENING / THINKING / SPEAKING / FOLLOWUP`, driven by a wake word and voice
-activity detection; ours are `idle / listening / transcribing / submitting /
-speaking / error`, driven by a button press and a transcript the user can edit
-before confirming. Only `listening` and `speaking` exist in both, and they do not
-mean the same thing. Upstream's own header says push-to-talk and text input do
-not enter its FSM (`voiceLoop.mjs:13`) — our machine is exactly the path
-upstream excludes. None of upstream's substance is here: no wake word, no VAD, no
-barge-in confirmation window, no echo fingerprinting, no self-trigger counting,
-no exit-word or filler heuristics, no endpoint grace merging, no metrics. Where
-the two files do the same kind of thing they do not do it the same way — our
-named timers are a `Map` with `setNamedTimer(name, fn, ms)`, upstream's are an
-object with `_setTimer(name, ms, fn)`; ours is a closure factory, upstream's a
-class; ours suppresses same-state transitions, upstream's does not.
+The original push-to-talk machine remains distinct: its states are `idle /
+listening / transcribing / submitting / speaking / error`, driven by a button
+press and an editable transcript. The new `hands-free.ts` intentionally adopts
+the mature upstream state vocabulary (`IDLE / ARMED / LISTENING / THINKING /
+SPEAKING / FOLLOW_UP`) and timing concepts while expressing them as CanvasFlow
+interfaces and effects. It does not copy upstream's business controller, ASR
+transport, echo fingerprinting, exit/filler heuristics, endpoint grace merging,
+or metrics. CanvasFlow keeps task mutations behind the existing Agent API and
+uses separately authored adapters for AudioWorklet capture, sherpa KWS, Silero
+VAD, and Web Speech command recognition.
 
 **Judgment: ordinary technical borrowing of an architecture.** Attribution is
 credit given, not an obligation discharged.

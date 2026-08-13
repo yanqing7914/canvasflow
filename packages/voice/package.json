@@ -4,5 +4,9 @@
   "private": true,
   "type": "module",
   "exports": "./src/index.ts",
-  "scripts": { "build": "tsc --noEmit", "typecheck": "tsc --noEmit", "test": "vitest run src" }
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --root ../.. packages/voice/src"
+  }
 }

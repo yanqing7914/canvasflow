@@ -17,6 +17,12 @@ export function launcherSpawnOptions(env, platform = process.platform) {
   return { stdio: 'inherit', env, shell: platform === 'win32' }
 }
 
+/** Any child exit before coordinated shutdown makes the two-process dev stack unusable. */
+export function unexpectedChildExitCode(code) {
+  if (typeof code === 'number' && code !== 0) return code
+  return 1
+}
+
 const isMain = process.argv[1] !== undefined
   && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
 
@@ -47,10 +53,9 @@ if (isMain) {
     const child = spawn(npm, args, launcherSpawnOptions(env))
     child.on('exit', (code, signal) => {
       if (stopping) return
-      if (code !== 0 && signal === null) {
-        console.error(`${name} exited with code ${code ?? 'unknown'}`)
-        stop(code ?? 1)
-      }
+      const reason = signal === null ? `code ${code ?? 'unknown'}` : `signal ${signal}`
+      console.error(`${name} exited unexpectedly with ${reason}`)
+      stop(unexpectedChildExitCode(code, signal))
     })
     return child
   })

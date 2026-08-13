@@ -18,3 +18,29 @@ export type {
   WakeSessionSnapshot,
   WakeSessionState,
 } from './wake-session'
+export {
+  HANDS_FREE_STATE,
+  createHandsFreeMachine,
+} from './hands-free'
+export { createVoiceMetrics } from './voice-metrics'
+export type { VoiceMetric, VoiceMetricName } from './voice-metrics'
+export type {
+  CommandRecognitionOptions,
+  CommandRecognitionSession,
+  CommandRecognizer,
+  CommandRecognizerListener,
+  DetectorSession,
+  HandsFreeCommand,
+  HandsFreeConfig,
+  HandsFreeEffects,
+  HandsFreeErrorStage,
+  HandsFreeInputSource,
+  HandsFreeMachine,
+  HandsFreeMachineDeps,
+  HandsFreeSnapshot,
+  HandsFreeState,
+  VadDetector,
+  VadDetectorListener,
+  WakeDetector,
+  WakeDetectorListener,
+} from './hands-free'

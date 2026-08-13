@@ -1,7 +1,7 @@
 import { normalizeTranscript } from './transcript'
 
 export const WAKE_WORD = '小南'
-export const WAKE_WORD_ALIASES = ['小南', '小楠', '晓南', '小蓝'] as const
+export const WAKE_WORD_ALIASES = ['小南', '小楠', '晓南', '小蓝', '笑南', '笑男'] as const
 export type WakeWordAlias = (typeof WAKE_WORD_ALIASES)[number]
 
 export type WakeWordMatch = {
@@ -13,18 +13,40 @@ export type WakeWordMatch = {
 
 const SEPARATOR = /^[\s，,、。.!！?？:：；;：\-—]+/u
 
+// Chrome's zh-CN recognizer can transliterate the wake word to ASCII. Keep
+// these forms explicit and anchored so ordinary mentions of "xiao" do not
+// arm the cockpit accidentally.
+const PHONETIC_WAKE_PREFIXES = ['xiaonan', 'xiaon'] as const
+
+function normalizeWakeSpacing(text: string): string {
+  // ASR engines commonly insert a space between adjacent Han characters or
+  // split the pinyin syllables; remove only those presentation spaces.
+  return text
+    .replace(/(?<=[\p{Script=Han}])\s+(?=[\p{Script=Han}])/gu, '')
+    .replace(/\s+/gu, ' ')
+}
+
 /**
  * Matches Xiaonan only at the start, optionally after "你好". Chinese ASR
  * commonly omits punctuation between a name and command, so the entire exact
  * alias is the conservative boundary rather than a fuzzy phonetic search.
  */
 export function matchWakeWord(input: string): WakeWordMatch {
-  const text = normalizeTranscript(input)
+  const text = normalizeWakeSpacing(normalizeTranscript(input))
   if (!text) return { matched: false, command: '' }
 
   let rest = text
   if (rest.startsWith('你好')) {
     rest = rest.slice(2).replace(SEPARATOR, '')
+  }
+
+  const compactRest = rest.toLocaleLowerCase('en-US').replace(/\s+/gu, '')
+  const phonetic = PHONETIC_WAKE_PREFIXES.find((candidate) => compactRest.startsWith(candidate))
+  if (phonetic) {
+    const tail = compactRest.slice(phonetic.length)
+    if (!tail || SEPARATOR.test(tail) || [...tail].length >= 2) {
+      return { matched: true, alias: '小南', command: tail.replace(SEPARATOR, '') }
+    }
   }
 
   const alias = WAKE_WORD_ALIASES.find((candidate) => rest.startsWith(candidate))

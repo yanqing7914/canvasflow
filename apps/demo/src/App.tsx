@@ -34,6 +34,7 @@ import { WindowManager } from './ui/navigation/WindowManager'
 import { GLASS_TIERS, useGlassTier } from './ui/glass-capability'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 import { matchWakeWord } from '@canvasflow/voice'
+import { createLocalHandsFreeController, type LocalHandsFreeController } from './voice/localHandsFreeController'
 import { IdleCockpit } from './ui/idle/IdleCockpit'
 import { amapLoaderSnapshot, retryAMap, subscribeAMapLoader, switchAMapKey, type AMapLoaderSnapshot } from './ui/amap/loader'
 import {
@@ -413,6 +414,7 @@ export default function App({
   initialText = '',
   voiceAutoSubmit = true,
   wakeWordEnabled = true,
+  localHandsFreeFactory = createLocalHandsFreeController,
 }: {
   api?: DemoAgentApi
   initialTask?: AirportPickupTaskState
@@ -436,6 +438,8 @@ export default function App({
   voiceAutoSubmit?: boolean
   /** Compatibility seam for legacy fixture tests; the shipped UI requires Xiaonan. */
   wakeWordEnabled?: boolean
+  /** Test seam for the local KWS/VAD product runtime. */
+  localHandsFreeFactory?: typeof createLocalHandsFreeController
 }) {
   const localOnly = initialTask !== undefined || Object.keys(composeContext).length > 0
   const [startingVehicleContext] = useState<VehicleContext>(() => initialVehicleContext ?? demoVehicleContext())
@@ -477,17 +481,25 @@ export default function App({
   const navigationSnapshotRef = useRef<NavigationCommandSnapshot | undefined>(undefined)
   const speechCoordinatorRef = useRef<NavigationSpeechCoordinator<QueuedNavigationCommand> | null>(null)
   const sendInputRef = useRef<(value: string, meta?: VoiceSubmitMeta) => Promise<InputOutcome>>(async () => ({ sent: false }))
-  const wakeCommandQueueRef = useRef<Array<{ transcript: string; meta: VoiceSubmitMeta; generation: number }>>([])
+  const wakeCommandQueueRef = useRef<Array<{
+    transcript: string
+    meta: VoiceSubmitMeta
+    generation: number
+    resolve?: (outcome: InputOutcome) => void
+  }>>([])
   const wakeCommandDrainingRef = useRef(false)
   const wakeCommandDrainGenerationRef = useRef(0)
-  const enqueueWakeCommandRef = useRef<(transcript: string, meta: VoiceSubmitMeta) => void>(() => {})
+  const enqueueWakeCommandRef = useRef<(transcript: string, meta: VoiceSubmitMeta) => Promise<InputOutcome>>(async () => ({ sent: false }))
   const systemUtteranceSequenceRef = useRef(0)
   const cockpitOperationSequenceRef = useRef(0)
   const arrivalEventIdsRef = useRef(new Map<NavigationLeg, string>())
   const wakeSessionRef = useRef<ReturnType<typeof createWakeSession> | null>(null)
+  const localHandsFreeRef = useRef<LocalHandsFreeController | null>(null)
   const wakeRecognitionRef = useRef<SpeechRecognitionLike | null>(null)
   const wakeRecognitionSourceRef = useRef<VoiceRecognitionSource>('microphone')
   const wakeRestartRef = useRef(false)
+  const wakeRestartTimerRef = useRef<number | undefined>(undefined)
+  const wakeTransientFailuresRef = useRef(0)
   const fixtureReplayRef = useRef(0)
   const confirmProductResetRef = useRef<() => Promise<void>>(async () => {})
   const openWakeRecognitionRef = useRef<() => boolean>(() => false)
@@ -745,7 +757,7 @@ export default function App({
     setWakeError(undefined)
     setQueuedVoiceNotice(undefined)
     mutationGenerationRef.current += 1
-    wakeCommandQueueRef.current.length = 0
+    for (const queued of wakeCommandQueueRef.current.splice(0)) queued.resolve?.({ sent: false })
     wakeCommandDrainGenerationRef.current += 1
     wakeCommandDrainingRef.current = false
     setRetryNavigationLeg(undefined)
@@ -777,7 +789,7 @@ export default function App({
     // Reset supersedes every command from the previous task generation. Detach
     // an in-flight drain too: its request may never settle, but it must not keep
     // future wake commands blocked after reset succeeds or fails.
-    wakeCommandQueueRef.current.length = 0
+    for (const queued of wakeCommandQueueRef.current.splice(0)) queued.resolve?.({ sent: false })
     wakeCommandDrainGenerationRef.current += 1
     wakeCommandDrainingRef.current = false
     setQueuedVoiceNotice(undefined)
@@ -1008,6 +1020,7 @@ export default function App({
         const command = wakeCommandQueueRef.current[0]!
         if (command.generation !== mutationGenerationRef.current) {
           wakeCommandQueueRef.current.shift()
+          command.resolve?.({ sent: false })
           continue
         }
         if (pendingRef.current) {
@@ -1019,28 +1032,32 @@ export default function App({
         // head would make that invalidation discard a newly queued command too.
         wakeCommandQueueRef.current.shift()
         const outcome = await sendInputRef.current(command.transcript, command.meta)
+        command.resolve?.(outcome)
         if (drainGeneration !== wakeCommandDrainGenerationRef.current || command.generation !== mutationGenerationRef.current) return
         if (!outcome.sent) {
           parkVoiceTranscript(command.transcript, '语音指令未能提交，原话已保留，可直接重试。', command.meta)
-          wakeCommandQueueRef.current.length = 0
+          for (const queued of wakeCommandQueueRef.current.splice(0)) queued.resolve?.({ sent: false })
           break
         }
         setQueuedVoiceNotice(wakeCommandQueueRef.current.length > 0
           ? `正在处理下一条语音指令（剩余 ${wakeCommandQueueRef.current.length} 条）`
           : undefined)
-        if (outcome.speak) enqueueSystemSpeech(outcome.speak)
+        if (outcome.speak && !command.resolve) enqueueSystemSpeech(outcome.speak)
       }
     } finally {
       if (drainGeneration === wakeCommandDrainGenerationRef.current) wakeCommandDrainingRef.current = false
     }
   }
 
-  function enqueueWakeCommand(transcript: string, meta: VoiceSubmitMeta) {
-    wakeCommandQueueRef.current.push({ transcript, meta, generation: mutationGenerationRef.current })
+  function enqueueWakeCommand(transcript: string, meta: VoiceSubmitMeta): Promise<InputOutcome> {
+    let resolve!: (outcome: InputOutcome) => void
+    const completion = new Promise<InputOutcome>((next) => { resolve = next })
+    wakeCommandQueueRef.current.push({ transcript, meta, generation: mutationGenerationRef.current, resolve })
     if (wakeCommandQueueRef.current.length > 1 || pendingRef.current) {
       setQueuedVoiceNotice(`已记住「${transcript}」，将在当前操作完成后执行。`)
     }
     void drainWakeCommandQueue()
+    return completion
   }
   enqueueWakeCommandRef.current = enqueueWakeCommand
 
@@ -1063,17 +1080,27 @@ export default function App({
       handlers: {
         onSpeakEnd: () => {
           wakeSessionRef.current?.setSpeaking(false)
+          const handsFree = localHandsFreeRef.current
+          const generation = handsFree?.snapshot().activeTurnGeneration
+          if (generation !== undefined) handsFree?.ttsEnded(generation)
           speechCoordinatorRef.current?.utteranceEnd()
         },
         onSpeakError: () => {
           wakeSessionRef.current?.setSpeaking(false)
+          const handsFree = localHandsFreeRef.current
+          const generation = handsFree?.snapshot().activeTurnGeneration
+          if (generation !== undefined) handsFree?.ttsEnded(generation)
           speechCoordinatorRef.current?.utteranceError()
         },
       },
     })
     const coordinator = createNavigationSpeechCoordinator<QueuedNavigationCommand>({
       speak: ({ text: utterance }) => {
-        return controller.speak(utterance)
+        const handsFree = localHandsFreeRef.current
+        const generation = handsFree?.snapshot().activeTurnGeneration
+        const started = controller.speak(utterance)
+        if (started && generation !== undefined) handsFree?.ttsStarted(generation)
+        return started
       },
       stopSpeaking: () => {
         controller.stopSpeaking()
@@ -1161,6 +1188,10 @@ export default function App({
 
   function closeWakeRecognition() {
     wakeRestartRef.current = false
+    if (wakeRestartTimerRef.current !== undefined) {
+      window.clearTimeout(wakeRestartTimerRef.current)
+      wakeRestartTimerRef.current = undefined
+    }
     const engine = wakeRecognitionRef.current
     wakeRecognitionRef.current = null
     if (!engine) return
@@ -1172,6 +1203,15 @@ export default function App({
       else engine.stop()
     } catch { /* recognition already closed */ }
   }
+
+  // Local KWS owns the shipped always-on wake path. Keep an explicit kill
+  // switch for hosts that cannot serve the model/COOP headers; missing assets
+  // fail visibly instead of silently falling back to online Web Speech wake.
+  const localWakeFeatureEnabled = localHandsFreeFactory !== createLocalHandsFreeController
+    || import.meta.env.VITE_LOCAL_WAKE_ENABLED !== '0'
+  const useLocalHandsFree = wakeWordEnabled
+    && speech?.createRecognition === undefined
+    && localWakeFeatureEnabled
 
   function restoreWakeRecognitionAfterFixture(replay: number, wasListening: boolean) {
     if (!wasListening || replay !== fixtureReplayRef.current) return
@@ -1192,11 +1232,17 @@ export default function App({
     engine.lang = 'zh-CN'
     engine.continuous = true
     engine.interimResults = true
+    engine.maxAlternatives = 5
     engine.onresult = (event) => {
       for (let index = event.resultIndex; index < event.results.length; index += 1) {
         const result = event.results[index]
-        const alternative = result?.[0]
-        if (!result?.isFinal || !alternative?.transcript) continue
+        if (!result?.isFinal || !result.length) continue
+        const alternatives = Array.from({ length: result.length }, (_, altIndex) => result[altIndex]).filter(
+          (alternative): alternative is NonNullable<typeof alternative> => Boolean(alternative?.transcript),
+        )
+        const wakeAlternative = alternatives.find((alternative) => matchWakeWord(alternative.transcript).matched)
+        const alternative = wakeAlternative ?? alternatives[0]
+        if (!alternative) continue
         const transcript = alternative.transcript
         const activeSpeech = speechCoordinatorRef.current?.snapshot().activeUtterance?.text
         if (activeSpeech && normalizeVoiceEcho(transcript) === normalizeVoiceEcho(activeSpeech)) continue
@@ -1208,7 +1254,16 @@ export default function App({
       }
     }
     engine.onerror = (event) => {
-      if (event.error === 'no-speech' && wakeRestartRef.current) return
+      // Chrome can report a transient network/service interruption even while
+      // the microphone remains active. Let onend run the normal restart path;
+      // permission and capture failures still surface as retryable errors.
+      if ((event.error === 'no-speech' || event.error === 'network') && wakeRestartRef.current) {
+        if (wakeTransientFailuresRef.current < 3) {
+          wakeTransientFailuresRef.current += 1
+          scheduleWakeRecognitionRestart()
+          return
+        }
+      }
       wakeRestartRef.current = false
       wakeSessionRef.current?.recognitionFailed()
       setWakeError(event.error === 'not-allowed' || event.error === 'service-not-allowed'
@@ -1218,16 +1273,12 @@ export default function App({
     engine.onend = () => {
       wakeRecognitionRef.current = null
       if (!wakeRestartRef.current) return
-      window.setTimeout(() => {
-        if (!wakeRestartRef.current) return
-        if (!openWakeRecognition()) {
-          wakeRestartRef.current = false
-          wakeSessionRef.current?.recognitionFailed()
-          setWakeError('语音监听已中断，请点击「重试语音」继续，或改用文字输入。')
-        }
-      }, 180)
+      scheduleWakeRecognitionRestart()
     }
-    engine.onstart = () => wakeSessionRef.current?.recognitionStarted()
+    engine.onstart = () => {
+      wakeTransientFailuresRef.current = 0
+      wakeSessionRef.current?.recognitionStarted()
+    }
     wakeRecognitionRef.current = engine
     wakeRestartRef.current = true
     try { engine.start() } catch {
@@ -1236,12 +1287,65 @@ export default function App({
     }
     return true
   }
+
+  function scheduleWakeRecognitionRestart() {
+    if (wakeRestartTimerRef.current !== undefined) return
+    wakeRestartTimerRef.current = window.setTimeout(() => {
+      wakeRestartTimerRef.current = undefined
+      if (!wakeRestartRef.current) return
+      if (!openWakeRecognition()) {
+        wakeRestartRef.current = false
+        wakeSessionRef.current?.recognitionFailed()
+        setWakeError('语音监听已中断，请点击「重试语音」继续，或改用文字输入。')
+      }
+    }, 180)
+  }
   openWakeRecognitionRef.current = openWakeRecognition
 
   useEffect(() => {
     const session = createWakeSession({
       effects: {
         requestRecognition: () => {
+          if (useLocalHandsFree) {
+            localHandsFreeRef.current?.dispose()
+            const controller = localHandsFreeFactory({
+              onWake: () => {
+                speechCoordinatorRef.current?.clear()
+                wakeSessionRef.current?.wakeDetected()
+              },
+              onSubmit: async (command, meta) => {
+                const wakeSession = wakeSessionRef.current
+                const wakeState = wakeSession?.snapshot().state
+                const controlResult = wakeSession?.receive(command, { ...meta, controlsOnly: true })
+                if (wakeState === 'reset-confirmation') {
+                  const result = controlResult ?? 'ignored'
+                  return result === 'ignored'
+                }
+                if (controlResult === 'accepted') return true
+                const outcome = await enqueueWakeCommandRef.current(command, meta)
+                if (!outcome.sent) return false
+                if (outcome.speak) enqueueSystemSpeech(outcome.speak)
+                return true
+              },
+              stopSpeaking: () => speechCoordinatorRef.current?.clear(),
+              onError: (message) => {
+                session.recognitionFailed()
+                setWakeError(message)
+              },
+            })
+            localHandsFreeRef.current = controller
+            void controller.enable().then((enabled) => {
+              if (localHandsFreeRef.current !== controller) return
+              if (enabled) {
+                session.recognitionStarted()
+                setWakeError(undefined)
+              } else if (session.snapshot().state !== 'needs-authorization') {
+                session.recognitionFailed()
+                setWakeError('本地语音唤醒启动失败，请点击「重试语音」或使用文字输入。')
+              }
+            })
+            return
+          }
           if (!openWakeRecognitionRef.current()) {
             session.recognitionFailed()
             setWakeError('当前浏览器无法启用语音唤醒，请使用文字输入。')
@@ -1261,15 +1365,30 @@ export default function App({
     setWakeSession(session.snapshot())
     return () => {
       closeWakeRecognition()
+      localHandsFreeRef.current?.dispose()
+      localHandsFreeRef.current = null
       session.dispose()
       wakeSessionRef.current = null
     }
-  }, [speech])
+  }, [localHandsFreeFactory, speech, useLocalHandsFree])
 
   function enableWakeVoice() {
     setWakeError(undefined)
     wakeRecognitionSourceRef.current = 'microphone'
     if (wakeSession.state === 'needs-authorization') wakeSessionRef.current?.authorize()
+    else if (useLocalHandsFree) {
+      const controller = localHandsFreeRef.current
+      if (!controller) wakeSessionRef.current?.recognitionFailed()
+      else void controller.enable().then((enabled) => {
+        if (enabled) {
+          wakeSessionRef.current?.recognitionStarted()
+          setWakeError(undefined)
+        } else {
+          wakeSessionRef.current?.recognitionFailed()
+          setWakeError('本地语音唤醒启动失败，请点击「重试语音」或使用文字输入。')
+        }
+      })
+    }
     else if (!openWakeRecognition()) {
       wakeSessionRef.current?.recognitionFailed()
       setWakeError('当前浏览器无法启用语音唤醒，请重试或使用文字输入。')
@@ -1989,7 +2108,7 @@ export default function App({
   const isCompleted = task?.phase === 'completed'
   const isTerminal = task?.phase === 'completed' || task?.phase === 'cancelled'
   const idleVoiceUnavailable = !voiceEnabled
-    || (!speech?.createRecognition && (!isRecognitionSupported() || !isSecureContextOk()))
+    || (!useLocalHandsFree && !speech?.createRecognition && (!isRecognitionSupported() || !isSecureContextOk()))
   const playedEventCount = task
     ? task.processedEventIds.filter((eventId) => playableEventIds.has(eventId)).length
     : 0

@@ -15,6 +15,8 @@ import {
   CANVASFLOW_E2E,
   CANVASFLOW_E2E_NOW,
   E2E_FAIL_AUTO_MESSAGE_SEND,
+  LOCAL_VOICE_ISOLATION_HEADERS,
+  proxyVoiceTranscription,
   e2eClockFromEnvironment,
   serverHost,
   serverPort,
@@ -174,6 +176,9 @@ describe('agent server runtime', () => {
     if (!address || typeof address === 'string') throw new Error('server did not expose a TCP address')
     const response = await fetch(`http://127.0.0.1:${address.port}/health`)
     expect(response.status).toBe(200)
+    expect(Object.fromEntries(
+      Object.keys(LOCAL_VOICE_ISOLATION_HEADERS).map((name) => [name, response.headers.get(name)]),
+    )).toEqual(LOCAL_VOICE_ISOLATION_HEADERS)
     await expect(response.json()).resolves.toEqual({ ok: true })
   })
 
@@ -207,6 +212,9 @@ describe('agent server runtime', () => {
 
     const response = await fetch(`http://127.0.0.1:${address.port}/`)
     expect(response.status).toBe(200)
+    expect(Object.fromEntries(
+      Object.keys(LOCAL_VOICE_ISOLATION_HEADERS).map((name) => [name, response.headers.get(name)]),
+    )).toEqual(LOCAL_VOICE_ISOLATION_HEADERS)
     await expect(response.text()).resolves.toContain('CanvasFlow')
   })
 })
@@ -360,5 +368,55 @@ describe('proxyAMapService', () => {
 
     expect(capture.status).toBe(502)
     expect(capture.body).not.toContain('secret-code')
+  })
+})
+
+describe('proxyVoiceTranscription', () => {
+  function fakeResponse() {
+    const capture = { status: 0, body: '', headers: {} as Record<string, string> }
+    const response = {
+      headersSent: false,
+      writableEnded: false,
+      writeHead(status: number, headers?: Record<string, string>) {
+        capture.status = status
+        capture.headers = headers ?? {}
+        this.headersSent = true
+      },
+      end(chunk?: Buffer | string) {
+        if (chunk) capture.body += chunk.toString()
+        this.writableEnded = true
+      },
+    }
+    return { response: response as never, capture }
+  }
+
+  it('fails closed when no ASR provider is configured', async () => {
+    const { response, capture } = fakeResponse()
+    await proxyVoiceTranscription({
+      async *[Symbol.asyncIterator]() { yield Buffer.from([1, 2]) },
+      headers: {},
+    } as never, response, {}, vi.fn() as never)
+    expect(capture.status).toBe(503)
+    expect(capture.body).toContain('not configured')
+  })
+
+  it('forwards PCM bytes and preserves provider response', async () => {
+    const { response, capture } = fakeResponse()
+    let body = new Uint8Array()
+    const fetchImpl = vi.fn(async (_url: string, init: RequestInit) => {
+      body = new Uint8Array(await new Response(init.body).arrayBuffer())
+      return new Response('{"text":"查天气","confidence":0.9}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    await proxyVoiceTranscription({
+      async *[Symbol.asyncIterator]() { yield Buffer.from([1, 2, 3]) },
+      headers: { 'content-type': 'audio/pcm', 'x-voice-generation': '4' },
+    } as never, response, { CANVASFLOW_ASR_URL: 'http://asr.test/transcribe' }, fetchImpl as never)
+    expect(fetchImpl).toHaveBeenCalledWith('http://asr.test/transcribe', expect.objectContaining({ method: 'POST' }))
+    expect([...body]).toEqual([1, 2, 3])
+    expect(capture.status).toBe(200)
+    expect(capture.body).toContain('查天气')
   })
 })

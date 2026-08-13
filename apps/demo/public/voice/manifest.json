@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "status": "generated-assets-required",
+  "keyword": {
+    "text": "小南",
+    "tokens": ["x", "iǎo", "n", "án"]
+  },
+  "sourceManifest": "scripts/voice-assets-manifest.json",
+  "install": "bash scripts/fetch-voice-models.sh",
+  "buildRuntime": "EMSCRIPTEN=/path/to/emsdk/upstream/emscripten bash scripts/voice-build-kws-wasm.sh",
+  "probe": "node scripts/voice-assets.mjs",
+  "gitignoreRequired": [
+    "apps/demo/public/voice/**/*.onnx",
+    "apps/demo/public/voice/**/*.wasm",
+    "apps/demo/public/voice/**/*.data"
+  ],
+  "gitNote": "Generated voice binaries must remain untracked. Add these ignore rules in a dedicated repository change before committing assets."
+}
