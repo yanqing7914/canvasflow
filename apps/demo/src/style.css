@@ -258,7 +258,9 @@ a:focus-visible {
 
 .demo-shell[data-navigation-toolbar='expanded'] {
   --cockpit-toolbar-space: max(190px, calc(env(safe-area-inset-top) + 174px));
-  --cockpit-entry-space: max(190px, calc(env(safe-area-inset-bottom) + 174px));
+  /* Firefox has no SpeechRecognition, so its fallback composer also includes
+     the capability notice. Reserve that full stack below maximized windows. */
+  --cockpit-entry-space: max(250px, calc(env(safe-area-inset-bottom) + 234px));
 }
 
 /* The Agent's theme applies to the whole driver-facing cockpit, not just the
