@@ -235,8 +235,11 @@ a:focus-visible {
     letter-spacing: -0.07em;
   }
   .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-metric__value {
-    font-size: clamp(20px, 1.3vw, 26px);
-    letter-spacing: -0.07em;
+    /* CI falls back from the DIN-family display faces to a wider generic
+       monospace face. Keep every primary-window metric within its track on
+       that fallback while preserving the tabular dashboard hierarchy. */
+    font-size: clamp(18px, 1.1vw, 21px);
+    letter-spacing: -0.08em;
   }
 }
 .cockpit-primary-panel .ui-layout,
