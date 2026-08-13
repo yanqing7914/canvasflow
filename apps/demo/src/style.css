@@ -205,14 +205,16 @@ a:focus-visible {
 }
 .cockpit-primary-panel .ui-metric:first-child { padding-left: 0; }
 @media (min-width: 1180px) {
-  .cockpit-primary-panel .ui-card--flight-status {
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-card--flight-status {
     /* The legacy desktop card reserves 260 + 340 + 250px before gaps, which is
        wider than the 860px persistent window on Linux font metrics. Preserve
-       the three-band hierarchy but let every track shrink within the window. */
+       the three-band hierarchy but let every track shrink within the window.
+       Include the renderer state in this selector so the later legacy
+       full-page rule cannot restore its fixed minimum tracks. */
     grid-template-columns: minmax(0, .9fr) minmax(0, 1.15fr) minmax(0, .75fr);
     column-gap: clamp(14px, 1.6vw, 26px);
   }
-  .cockpit-primary-panel .ui-flight-brief__arrival {
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-flight-brief__arrival {
     padding-inline: clamp(12px, 1.4vw, 22px);
   }
 }
