@@ -291,7 +291,7 @@ export function createAgentServer(options: AgentServerOptions = {}) {
       return
     }
     if (staticDirectory && request.method === 'GET' && !request.url?.startsWith('/v1/')) {
-      void serveStatic(staticDirectory, request.url ?? '/', response).catch(() => {
+      void serveStatic(staticDirectory, request.url ?? '/', request.headers.accept, response).catch(() => {
         if (!response.headersSent) response.writeHead(500)
         if (!response.writableEnded) response.end()
       })
@@ -336,7 +336,12 @@ export function resolveStaticPath(
   return requested
 }
 
-async function serveStatic(staticDirectory: string, url: string, response: ServerResponse) {
+async function serveStatic(
+  staticDirectory: string,
+  url: string,
+  accept: string | undefined,
+  response: ServerResponse,
+) {
   let pathname: string
   try {
     pathname = decodeURIComponent(new URL(url, 'http://localhost').pathname)
@@ -349,7 +354,14 @@ async function serveStatic(staticDirectory: string, url: string, response: Serve
     response.writeHead(404).end()
     return
   }
-  const canFallbackToIndex = pathname === '/' || extname(pathname) === ''
+  // Deep links may legitimately contain dots (versions, emails, slugs). Browser
+  // navigations advertise HTML, while script/style/image fetches do not, so the
+  // Accept header separates SPA routes from missing assets without guessing from
+  // the pathname alone. Keep the historical extensionless fallback for clients
+  // that omit Accept entirely.
+  const canFallbackToIndex = pathname === '/'
+    || extname(pathname) === ''
+    || accept?.split(',').some((value) => value.trim().toLowerCase().startsWith('text/html')) === true
   try {
     const file = (await stat(requested)).isDirectory() ? join(requested, 'index.html') : requested
     const body = await readFile(file)

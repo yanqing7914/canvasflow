@@ -233,6 +233,12 @@ describe('agent server runtime', () => {
     const spaRoute = await fetch(`http://127.0.0.1:${address.port}/trip/pickup-001`)
     expect(spaRoute.status).toBe(200)
     await expect(spaRoute.text()).resolves.toContain('CanvasFlow')
+
+    const dottedSpaRoute = await fetch(`http://127.0.0.1:${address.port}/trip/v2.1`, {
+      headers: { accept: 'text/html,application/xhtml+xml' },
+    })
+    expect(dottedSpaRoute.status).toBe(200)
+    await expect(dottedSpaRoute.text()).resolves.toContain('CanvasFlow')
   })
 })
 
