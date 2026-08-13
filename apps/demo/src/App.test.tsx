@@ -12,6 +12,7 @@ import { createFakeSpeech } from './test/speech'
 import type { CockpitUISpec } from './ui/navigation/contracts'
 import type { NavigationClock } from './ui/navigation/simulator'
 import { AgentApiError } from './agent-client'
+import type { LocalHandsFreeControllerOptions } from './voice/localHandsFreeController'
 
 // Legacy cases intentionally start from the historical typed draft. Production
 // and the dedicated empty-input test below render AppComponent directly.
@@ -20,7 +21,59 @@ function App(props: ComponentProps<typeof AppComponent>) {
 }
 
 describe('demo integration', () => {
-  it('starts in a quiet idle cockpit without creating a task or showing flight content', async () => {
+  it('arms the local KWS/VAD runtime instead of opening always-on Web Speech', async () => {
+    const enable = vi.fn(async () => true)
+    const dispose = vi.fn()
+    const localHandsFreeFactory = vi.fn(() => ({
+      enable,
+      disable: vi.fn(async () => undefined),
+      snapshot: vi.fn(() => ({ state: 'ARMED' as const, enabled: true, speechActive: false })),
+      turnEnded: vi.fn(),
+      ttsStarted: vi.fn(),
+      ttsEnded: vi.fn(),
+      dispose,
+    }))
+    render(<AppComponent localHandsFreeFactory={localHandsFreeFactory} />)
+
+    screen.getByRole('button', { name: '启用小南语音唤醒' }).click()
+
+    await waitFor(() => expect(enable).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('button', { name: '小南语音状态' })).toHaveTextContent('等待唤醒')
+  })
+
+  it('keeps local reset controls on the reset-confirmation path', async () => {
+    let localOptions: LocalHandsFreeControllerOptions | undefined
+    const localHandsFreeFactory = vi.fn((options: LocalHandsFreeControllerOptions) => {
+      localOptions = options
+      return {
+        enable: vi.fn(async () => true),
+        disable: vi.fn(async () => undefined),
+        snapshot: vi.fn(() => ({ state: 'ARMED' as const, enabled: true, speechActive: false })),
+        turnEnded: vi.fn(),
+        ttsStarted: vi.fn(),
+        ttsEnded: vi.fn(),
+        dispose: vi.fn(),
+      }
+    })
+    const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} localHandsFreeFactory={localHandsFreeFactory} />)
+
+    screen.getByRole('button', { name: '启用小南语音唤醒' }).click()
+    await waitFor(() => expect(localOptions).toBeDefined())
+    act(() => { localOptions?.onWake?.() })
+
+    await act(async () => {
+      await expect(localOptions?.onSubmit('重新开始', {
+        source: 'voice',
+        recognitionSource: 'microphone',
+      })).resolves.toBe(true)
+    })
+
+    expect(api.create).not.toHaveBeenCalled()
+    expect(screen.getByRole('button', { name: '小南语音状态' })).toHaveTextContent('等待确认')
+  })
+
+  it('starts in a quiet idle cockpit without creating a task or showing a large composer', async () => {
     const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
     render(<AppComponent api={api} voiceEnabled={false} />)
     const workspace = screen.getByTestId('cockpit-workspace')
@@ -73,6 +126,20 @@ describe('demo integration', () => {
     await user.click(screen.getAllByRole('button', { name: '发送' }).at(-1)!)
     typed.unmount()
     expect(typedApi.create).toHaveBeenCalledWith('查天气', expect.objectContaining({ vehicleContext: expect.anything() }))
+  })
+
+  it('accepts Chrome pinyin output for the Xiaonan wake word', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const created = apiResponse(createCockpitTask('wake-pinyin'))
+    const api = { create: vi.fn().mockResolvedValue(created), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.() })
+    act(() => { speech.engine().emit('xiao n，查天气', true, 0.88) })
+
+    await waitFor(() => expect(api.create).toHaveBeenCalledWith('查天气', expect.objectContaining({ source: 'voice' })))
   })
 
   it('gives reset confirmation priority over ordinary wake command handling', async () => {
@@ -211,6 +278,23 @@ describe('demo integration', () => {
       expect(speech.engines).toHaveLength(2)
       act(() => { speech.engine().onstart?.() })
       expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('restarts when Chrome reports a transient network error without onend', async () => {
+    vi.useFakeTimers()
+    try {
+      const speech = createFakeSpeech()
+      render(<AppComponent api={{ create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }} speech={speech.deps} />)
+
+      act(() => { screen.getByRole('button', { name: '启用小南语音唤醒' }).click() })
+      act(() => { speech.engine().onstart?.() })
+      act(() => { speech.engine().fail('network'); vi.advanceTimersByTime(180) })
+
+      expect(speech.engines).toHaveLength(2)
+      expect(speech.engine().started).toBe(1)
     } finally {
       vi.useRealTimers()
     }
@@ -536,6 +620,116 @@ describe('demo integration', () => {
         batteryPercent: 58, remainingDistanceKm: 0,
       }),
     })))
+  })
+
+  it('keeps a return-arrival preference confirmation until the driver resolves it', async () => {
+    let nowMs = 1_000
+    let tick: (() => void) | undefined
+    const navigationClock: NavigationClock = {
+      now: () => nowMs,
+      schedule: (callback) => { tick = callback; return () => { tick = undefined } },
+    }
+    const returningTask = {
+      ...createCockpitTask('return-confirmation-task'), phase: 'return-driving',
+      pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: true },
+      navigation: { routeId: 'return-confirmation-route', destination: '家', eta: '2026-08-11T16:10:00+08:00', status: 'active' },
+      navigationSimulation: {
+        leg: 'return', routeId: 'return-confirmation-route', distanceKm: 29, initialBatteryPercent: 58,
+        estimatedBatteryAtArrival: 47, profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+      cockpit: { speedMode: 'normal', hudVisible: true, routeProgress: 0, activeLeg: 'return', currentRoad: '机场出发通道' },
+    } as AirportPickupTaskState
+    const completedTask = {
+      ...returningTask, phase: 'completed', taskRevision: returningTask.taskRevision + 1,
+      flight: undefined, pickupAirport: undefined, navigation: undefined, navigationSimulation: undefined, cockpit: undefined,
+      pendingConfirmation: { confirmationId: 'save-return-preference', action: 'save-memory' },
+      memoryProposal: {
+        proposalId: 'return-preference', memberId: 'mom', confirmationId: 'save-return-preference',
+        changes: { rearTemperatureC: 25 }, status: 'pending',
+      },
+    } as AirportPickupTaskState
+    const completed = apiResponse(completedTask)
+    const event = vi.fn().mockResolvedValue(completed)
+    const api = { create: vi.fn().mockResolvedValue(apiResponse(returningTask)), event, action: vi.fn(), confirmation: vi.fn() }
+    const user = userEvent.setup()
+    render(<AppComponent api={api} voiceEnabled={false} navigationClock={navigationClock} initialText="开始返程" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    nowMs += 90_000
+    act(() => { tick?.() })
+
+    await waitFor(() => expect(event).toHaveBeenCalledWith(returningTask, expect.objectContaining({
+      type: 'navigation.return-arrived',
+      navigationSnapshot: expect.objectContaining({ leg: 'return', progress: 1, speedKph: 0 }),
+    })))
+    expect(screen.getByRole('button', { name: '保存本次偏好' })).toBeInTheDocument()
+    expect(screen.queryByLabelText('空闲座舱')).not.toBeInTheDocument()
+  })
+
+  it('uses the stopped outbound snapshot when the passenger button prepares the return', async () => {
+    const user = userEvent.setup()
+    let nowMs = 1_000
+    let tick: (() => void) | undefined
+    const navigationClock: NavigationClock = {
+      now: () => nowMs,
+      schedule: (callback) => { tick = callback; return () => { tick = undefined } },
+    }
+    const outboundTask = {
+      ...createCockpitTask('onboard-return-task'), phase: 'outbound-driving',
+      pickupAirport: { label: '虹桥机场 T2', code: 'SHA' },
+      passengers: { memberIds: ['mom'], names: ['妈妈'], confirmedOnboard: false },
+      navigation: { routeId: 'outbound-route', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'active' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: 'outbound-route', distanceKm: 32, initialBatteryPercent: 72,
+        estimatedBatteryAtArrival: 58, profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+    } as AirportPickupTaskState
+    const waitingTask = {
+      ...outboundTask, phase: 'waiting-for-passengers',
+      navigation: { ...outboundTask.navigation!, status: 'arrived' },
+    } as AirportPickupTaskState
+    const waiting = apiResponse(waitingTask)
+    const onboardComponent = {
+      id: 'passenger-status', type: 'passenger-status' as const, actions: ['confirm-passengers-onboard'],
+      props: { label: '已停稳，等待家人', status: 'waiting' as const },
+    }
+    waiting.ui = {
+      ...waiting.ui,
+      layout: { type: 'stack', gap: 'md', slots: { main: [onboardComponent.id] } },
+      components: [onboardComponent],
+      actions: [{ id: 'confirm-passengers-onboard', label: '乘客已上车', style: 'primary', event: { type: 'agent-message', text: '家人上车' } }],
+      windows: [{ id: 'onboard-window', kind: 'passenger-onboard', title: '等待乘客上车', componentIds: [onboardComponent.id], actionIds: ['confirm-passengers-onboard'], size: 'compact', controls: { closable: true, minimizable: true, maximizable: true } }],
+    }
+    const returnTask = {
+      ...waitingTask, phase: 'confirming-return', taskRevision: waitingTask.taskRevision + 1,
+      passengers: { ...waitingTask.passengers, confirmedOnboard: true },
+      navigation: { routeId: 'return-route', destination: '家', eta: '2026-08-11T16:10:00+08:00', status: 'planned' },
+      navigationSimulation: { ...waitingTask.navigationSimulation!, leg: 'return', routeId: 'return-route', initialBatteryPercent: 58, estimatedBatteryAtArrival: 47 },
+      cockpit: { ...waitingTask.cockpit!, activeLeg: 'return' },
+    } as AirportPickupTaskState
+    const returned = apiResponse(returnTask)
+    const event = vi.fn().mockResolvedValueOnce(waiting).mockResolvedValueOnce(returned)
+    const api = { create: vi.fn().mockResolvedValue(apiResponse(outboundTask)), event, action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} navigationClock={navigationClock} initialText="开始" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+    nowMs += 90_000
+    act(() => { tick?.() })
+    await screen.findByRole('button', { name: '乘客已上车' })
+    await user.click(screen.getByRole('button', { name: '乘客已上车' }))
+
+    await waitFor(() => expect(event).toHaveBeenLastCalledWith(waitingTask, expect.objectContaining({
+      type: 'user.input', text: '家人上车',
+      navigationSnapshot: expect.objectContaining({ routeId: 'outbound-route', leg: 'outbound', progress: 1, speedKph: 0 }),
+    })))
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0')
   })
 
   it('keeps a stable arrival event id and retries a 200 no-op handoff from the error window', async () => {

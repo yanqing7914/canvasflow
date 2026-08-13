@@ -12,6 +12,8 @@ export type PersistentMapLayerProps = {
   progress?: number
   theme: 'light' | 'dark'
   sessionKey: string
+  /** Resets exhausted runtime recovery when a new business task starts. */
+  recoveryKey?: string
   routeKey?: string
   mapRetryNonce?: number
   follow?: boolean
@@ -24,7 +26,7 @@ export type PersistentMapLayerProps = {
 
 /** Stable cockpit map shell. AMap owns one basemap; only its overlays change. */
 export function PersistentMapLayer({
-  mode, sketch, progress, theme, sessionKey, routeKey = mode, mapRetryNonce = 0,
+  mode, sketch, progress, theme, sessionKey, recoveryKey = sessionKey, routeKey = mode, mapRetryNonce = 0,
   follow = true, recenterNonce = 0, onManualInteraction, onRecenter, onRuntimeFailure, onRuntimeReady,
 }: PersistentMapLayerProps) {
   const container = useRef<HTMLDivElement>(null)
@@ -62,6 +64,20 @@ export function PersistentMapLayer({
     runtimeRetriesRemaining.current = keyCount > 0 ? Math.max(0, keyCount - 1) : undefined
     recoveryInFlight.current = false
   }, [mapRetryNonce, sessionKey])
+
+  useEffect(() => {
+    const keyCount = amapLoaderSnapshot().keyCount
+    runtimeRetriesRemaining.current = keyCount > 0 ? Math.max(0, keyCount - 1) : undefined
+    recoveryInFlight.current = false
+    if (source !== 'fallback' || keyCount === 0) return
+    // A failed previous trip must not poison the next one. Retrying a fallback
+    // handle is safe; a healthy AMap handle stays mounted and is never rebuilt.
+    invalidateAMap({ rotate: false })
+    setLoadRevision((value) => value + 1)
+  // `source` intentionally is not a dependency: this effect is a business
+  // session boundary, not another reaction to the recovery it starts.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recoveryKey])
 
   const recoverRuntime = () => {
     if (recoveryInFlight.current) return

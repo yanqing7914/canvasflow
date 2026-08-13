@@ -460,13 +460,13 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await waitingPassenger.getByRole('button', { name: '乘客已上车', exact: true }).click()
   const onboardRequest = await onboardRequestPromise
   const onboardResponse = await onboardResponsePromise
-  expect(onboardRequest.postDataJSON()).toMatchObject({ event: { type: 'user.input', text: '家人上车' } })
+  expect(onboardRequest.postDataJSON()).toMatchObject({
+    event: {
+      type: 'user.input', text: '家人上车',
+      navigationSnapshot: { leg: 'outbound', progress: 1, speedKph: 0, remainingDistanceKm: 0 },
+    },
+  })
   expect(onboardResponse.ok()).toBe(true)
-  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'passengers-onboard')
-  const passenger = await primaryWindow(page, 'passenger-onboard')
-  await expect(passenger).toContainText('乘客已上车')
-
-  await sendText(page, '开始回家')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-return')
   const returnConfirmation = await primaryWindow(page, 'return-confirmation')
   await expect(returnConfirmation).toContainText('家')
@@ -1705,10 +1705,10 @@ test('falls back to text when the browser has no speech recognition', async ({ p
   await page.goto('/')
 
   await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
-  // Voice cannot run at all, so the composer is already open: the toggle labels
-  // itself as 收起文字输入 and stays disabled because the turn depends on it.
-  await expect(page.getByRole('button', { name: '收起文字输入' })).toBeDisabled()
-  await expect(page.getByLabel('语音状态')).toContainText(/语音不可用|不支持语音识别/u)
+  await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+  // Local KWS owns the idle wake path now, so removing Web Speech no longer
+  // disables the microphone entry. Command ASR remains a post-wake adapter.
+  await expect(page.getByRole('button', { name: '启用小南语音唤醒' })).toBeEnabled()
 
   await sendText(page, '我现在要去机场接妈妈和豆豆')
   await readControls(page, 'collecting-information')
@@ -1765,7 +1765,9 @@ test('replays cockpit fixtures through default wake mode without SpeechRecogniti
   })
   await page.goto('/')
 
-  await expect(page.getByLabel('语音状态')).toContainText(/语音不可用|不支持语音识别/u)
+  // Local KWS owns the idle wake path now, so removing Web Speech no longer
+  // disables the microphone entry. Command ASR remains a post-wake adapter.
+  await expect(page.getByRole('button', { name: '启用小南语音唤醒' })).toBeEnabled()
 
   // A low-confidence fixture is still a confirmation turn in the shipped
   // wake-word mode. With no browser speech service, its canonical transcript

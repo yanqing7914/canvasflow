@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "assets": [
+    {
+      "id": "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01",
+      "kind": "kws-archive",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01.tar.bz2",
+      "sha256": "b2f7c89690dc8ce4c6ed6afeab7cd800c36ad1421fb6b6302b4a4b194cf7f35f",
+      "size": 32654866,
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "path": "apps/demo/public/voice/kws/encoder-epoch-12-avg-2-chunk-16-left-64.onnx",
+          "sha256": "859cd6decc23f35e6ddb3a6ddb7172a57f6de7b54288728c2433ab94b7635c59",
+          "size": 12152560
+        },
+        {
+          "path": "apps/demo/public/voice/kws/decoder-epoch-12-avg-2-chunk-16-left-64.onnx",
+          "sha256": "fb581d6734511676e246e0dff2fea01b31b0913176cb3ca64576dbab0a177774",
+          "size": 675349
+        },
+        {
+          "path": "apps/demo/public/voice/kws/joiner-epoch-12-avg-2-chunk-16-left-64.onnx",
+          "sha256": "fcf43a2edf687e2e1bc8a2b2cf53129d3b0d693d90dcc4202e2d53b43db6c43c",
+          "size": 253410
+        },
+        {
+          "path": "apps/demo/public/voice/kws/tokens.txt",
+          "sha256": "72316508d9119696145abc6f1f8cdc46287535c34e5ce7e595f845cb1499cf2e",
+          "size": 1627
+        }
+      ]
+    },
+    {
+      "id": "silero-vad",
+      "kind": "silero-vad",
+      "source": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+      "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+      "size": 643854,
+      "license": "MIT",
+      "files": [
+        {
+          "path": "apps/demo/public/voice/models/silero_vad.onnx",
+          "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+          "size": 643854
+        }
+      ]
+    },
+    {
+      "id": "sherpa-onnx-kws-wasm",
+      "kind": "kws-runtime",
+      "source": "https://codeload.github.com/k2-fsa/sherpa-onnx/tar.gz/e1edbfee666116b6c2c0129b377055b4e096b3c9",
+      "sha256": "1533d492419a10bed385518780d892cc175fbabdf0a1ab78d0b02b786c16138f",
+      "size": 11451251,
+      "license": "Apache-2.0",
+      "files": [
+        {
+          "path": "apps/demo/public/voice/kws/sherpa-onnx-kws.js",
+          "sha256": "03b44e372795fd907e84eecd29419e1d052dc6704ac06935c9bf9fe19b3e3434",
+          "size": 9925
+        },
+        {
+          "path": "apps/demo/public/voice/kws/sherpa-onnx-wasm-kws-main.js",
+          "sha256": "4424c7fb06984605bda3d7bcefdf501d7928c45584dff31f823927894094ea48",
+          "size": 80878
+        },
+        {
+          "path": "apps/demo/public/voice/kws/sherpa-onnx-wasm-kws-main.wasm",
+          "sha256": "a9b41b1518ae3a41252dfeb045bc2b4741caa771a6146aba55a786c97c9a58d9",
+          "size": 12497788
+        },
+        {
+          "path": "apps/demo/public/voice/kws/sherpa-onnx-wasm-kws-main.data",
+          "sha256": "1333803cb1cb3033dd4711a686a3aa6954e9f7865fd2d0bb283a95cf0c8de6ef",
+          "size": 13084730
+        }
+      ]
+    }
+  ]
+}

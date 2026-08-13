@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { launcherSpawnOptions, npmExecutable } from './dev.mjs'
+import { launcherSpawnOptions, npmExecutable, unexpectedChildExitCode } from './dev.mjs'
 
 /**
  * The launcher itself execs npm and forwards stdio, so its platform decisions
@@ -30,5 +30,11 @@ describe('dev launcher platform handling', () => {
     // This suite imported dev.mjs at the top; reaching this assertion at all
     // means the main-guard kept the spawns from running under the test runner.
     expect(typeof launcherSpawnOptions).toBe('function')
+  })
+
+  it('treats every uncoordinated child exit as a launcher failure', () => {
+    expect(unexpectedChildExitCode(0)).toBe(1)
+    expect(unexpectedChildExitCode(7)).toBe(7)
+    expect(unexpectedChildExitCode(null)).toBe(1)
   })
 })

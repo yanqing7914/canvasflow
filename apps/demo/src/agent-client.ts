@@ -352,7 +352,14 @@ export class AgentApiClient {
     try {
       payload = await response.json()
     } catch {
-      throw new AgentApiProtocolError('Agent API returned invalid JSON', response.status, undefined)
+      const isServerFailure = response.status >= 500
+      throw new AgentApiProtocolError(
+        isServerFailure
+          ? `Agent 服务不可用（HTTP ${response.status}），请确认本地 Agent 服务已启动后重试。`
+          : `Agent API returned invalid JSON (HTTP ${response.status})`,
+        response.status,
+        undefined,
+      )
     }
 
     if (!response.ok) {

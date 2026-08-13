@@ -177,6 +177,17 @@ describe('AgentApiClient', () => {
     await expect(api.get('pickup-001')).rejects.toMatchObject({ status: 500 })
   })
 
+  it('reports a stopped Agent service instead of calling the proxy response invalid JSON', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('Agent proxy unavailable', { status: 500 }))
+    const api = client(fetchMock)
+
+    await expect(api.get('pickup-001')).rejects.toMatchObject({
+      name: 'AgentApiProtocolError',
+      status: 500,
+      message: 'Agent 服务不可用（HTTP 500），请确认本地 Agent 服务已启动后重试。',
+    })
+  })
+
   it('subscribes to validated task updates and closes the EventSource', () => {
     const listeners = new Map<string, EventListener>()
     const source: TaskUpdateSource = {

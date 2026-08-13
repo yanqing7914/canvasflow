@@ -15,6 +15,17 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Local voice models and generated sherpa runtime are reproducible assets.
+# Keep only the directory placeholders and runtime manifest in Git.
+apps/demo/public/voice/**/*.onnx
+apps/demo/public/voice/**/*.wasm
+apps/demo/public/voice/**/*.data
+apps/demo/public/voice/kws/sherpa-onnx-kws.js
+apps/demo/public/voice/kws/sherpa-onnx-wasm-kws-main.js
+apps/demo/public/voice/**/tokens.txt
+!apps/demo/public/voice/**/.gitkeep
+!apps/demo/public/voice/manifest.json
+
 # Written into the workspace by the Codex review job, alongside the checkout it
 # describes. Ignored so a local reproduction of that step cannot be committed.
 .codex-review-prompt.md
