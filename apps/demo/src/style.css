@@ -234,6 +234,10 @@ a:focus-visible {
     font-size: clamp(20px, 1.3vw, 26px);
     letter-spacing: -0.07em;
   }
+  .cockpit-primary-panel .ui-spec-renderer[data-single-component="false"] .ui-metric__value {
+    font-size: clamp(20px, 1.3vw, 26px);
+    letter-spacing: -0.07em;
+  }
 }
 .cockpit-primary-panel .ui-layout,
 .cockpit-primary-panel .ui-slot,
