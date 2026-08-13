@@ -1,5 +1,6 @@
 import { createServer, type ServerResponse } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
 import { AgentGateway } from '@canvasflow/agent'
 import { createAgentHttpHandler, type AgentHttpGateway } from '@canvasflow/agent/http'
@@ -87,6 +88,43 @@ export function e2eClockFromEnvironment(
     // Preserve the authored offset for fixtures and user-facing local dates.
     now: () => configured,
     nowMs: () => timestamp,
+  }
+}
+
+/**
+ * Read `KEY=value` lines from a local env file into the process environment.
+ *
+ * Vite loads `.env.local` for the browser build, but only for `VITE_`-prefixed
+ * vars — the server-only ones (the AMap security code) would otherwise never
+ * reach this process, leaving the proxy silently unconfigured. Values already
+ * present in the environment win, so a real deployment's variables are never
+ * overwritten by a developer's file.
+ *
+ * Values are never logged. A missing or unreadable file is not an error: the
+ * keyless path is the supported default.
+ */
+export function loadLocalEnvironment(
+  filePath: string,
+  environment: NodeJS.ProcessEnv = process.env,
+): void {
+  let contents: string
+  try {
+    contents = readFileSync(filePath, 'utf8')
+  } catch {
+    return
+  }
+  for (const line of contents.split('\n')) {
+    const trimmed = line.trim()
+    if (!trimmed || trimmed.startsWith('#')) continue
+    const separator = trimmed.indexOf('=')
+    if (separator <= 0) continue
+    const key = trimmed.slice(0, separator).trim()
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue
+    // Set once: an explicit environment variable outranks the file.
+    if (Object.prototype.hasOwnProperty.call(environment, key)) continue
+    const value = trimmed.slice(separator + 1).trim()
+    if (!value) continue
+    environment[key] = value.replace(/^(['"])(.*)\1$/, '$2')
   }
 }
 
@@ -253,7 +291,7 @@ export function createAgentServer(options: AgentServerOptions = {}) {
       return
     }
     if (staticDirectory && request.method === 'GET' && !request.url?.startsWith('/v1/')) {
-      void serveStatic(staticDirectory, request.url ?? '/', response).catch(() => {
+      void serveStatic(staticDirectory, request.url ?? '/', request.headers.accept, response).catch(() => {
         if (!response.headersSent) response.writeHead(500)
         if (!response.writableEnded) response.end()
       })
@@ -298,7 +336,12 @@ export function resolveStaticPath(
   return requested
 }
 
-async function serveStatic(staticDirectory: string, url: string, response: ServerResponse) {
+async function serveStatic(
+  staticDirectory: string,
+  url: string,
+  accept: string | undefined,
+  response: ServerResponse,
+) {
   let pathname: string
   try {
     pathname = decodeURIComponent(new URL(url, 'http://localhost').pathname)
@@ -311,6 +354,14 @@ async function serveStatic(staticDirectory: string, url: string, response: Serve
     response.writeHead(404).end()
     return
   }
+  // Deep links may legitimately contain dots (versions, emails, slugs). Browser
+  // navigations advertise HTML, while script/style/image fetches do not, so the
+  // Accept header separates SPA routes from missing assets without guessing from
+  // the pathname alone. Keep the historical extensionless fallback for clients
+  // that omit Accept entirely.
+  const canFallbackToIndex = pathname === '/'
+    || extname(pathname) === ''
+    || accept?.split(',').some((value) => value.trim().toLowerCase().startsWith('text/html')) === true
   try {
     const file = (await stat(requested)).isDirectory() ? join(requested, 'index.html') : requested
     const body = await readFile(file)
@@ -320,6 +371,10 @@ async function serveStatic(staticDirectory: string, url: string, response: Serve
     })
     response.end(body)
   } catch {
+    if (!canFallbackToIndex) {
+      response.writeHead(404).end()
+      return
+    }
     try {
       const body = await readFile(join(staticDirectory, 'index.html'))
       response.writeHead(200, {
