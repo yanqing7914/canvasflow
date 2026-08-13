@@ -41,6 +41,7 @@ const returning: RouteSketch = {
 function workspaceHandle() {
   return {
     setMode: vi.fn(async () => true),
+    setTheme: vi.fn(),
     setRoute: vi.fn(async () => true),
     setProgress: vi.fn(),
     setFollow: vi.fn(),
@@ -99,6 +100,18 @@ describe('PersistentMapLayer', () => {
     expect(handle.setMode).toHaveBeenCalledTimes(1)
     expect(handle.setProgress).toHaveBeenLastCalledWith(0.7)
     expect(view.container.querySelector('.persistent-map-layer__vehicle')?.getAttribute('cx')).not.toBe(startX)
+  })
+
+  it('updates AMap theme in place without rebuilding the workspace handle', async () => {
+    const handle = workspaceHandle()
+    stub.renderAMapWorkspace.mockReturnValue(handle)
+    const view = render(<PersistentMapLayer mode="idle" theme="dark" sessionKey="cockpit" />)
+    await act(async () => {})
+
+    view.rerender(<PersistentMapLayer mode="idle" theme="light" sessionKey="cockpit" />)
+    expect(stub.renderAMapWorkspace).toHaveBeenCalledOnce()
+    expect(handle.setTheme).toHaveBeenCalledWith('light')
+    expect(handle.destroy).not.toHaveBeenCalled()
   })
 
   it('keeps the offline route named and readable while AMap is unavailable', async () => {

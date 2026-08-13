@@ -471,6 +471,9 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   const returnConfirmation = await primaryWindow(page, 'return-confirmation')
   await expect(returnConfirmation).toContainText('家')
   await expect(page.locator('.navigation-workspace')).toHaveAttribute('data-leg', 'outbound')
+  // The planned return route starts at the airport. It must not inherit the
+  // completed outbound snapshot and briefly place the vehicle at home.
+  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0')
   await returnConfirmation.getByRole('button', { name: '开始返程', exact: true }).click()
   await expect(page.locator('.navigation-workspace')).toHaveAttribute('data-leg', 'return')
   await expect(page.getByLabel('导航层')).toContainText('返程导航')

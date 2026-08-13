@@ -27,12 +27,14 @@ function fakeAMap() {
   const destroy = vi.fn()
   const remove = vi.fn()
   const setCenter = vi.fn()
+  const setMapStyle = vi.fn()
   const map = {
     add: vi.fn(),
     remove,
     setFitView: vi.fn(),
     setZoomAndCenter: vi.fn(),
     setCenter,
+    setMapStyle,
     destroy,
   }
 
@@ -85,6 +87,7 @@ function fakeAMap() {
     markerPositions,
     polylineOptions,
     remove,
+    setMapStyle,
     tailPaths,
   }
 }
@@ -131,6 +134,23 @@ describe('renderAMapWorkspace', () => {
     handle.setProgress(0.6)
     expect(fake.markerPositions).toHaveLength(3)
     expect(fake.markerPositions[2]).not.toEqual(fake.markerPositions[1])
+  })
+
+  it('updates basemap and route palette in place when the cockpit theme changes', async () => {
+    const fake = fakeAMap()
+    const handle = renderAMapWorkspace(fake.amap, document.createElement('div'), {
+      mode: 'idle', theme: 'dark',
+    })!
+    await expect(handle.setMode('route', sketch, 0.5)).resolves.toBe(true)
+    const routeCount = fake.polylineOptions.length
+
+    handle.setTheme('light')
+
+    expect(fake.mapOptions).toHaveLength(1)
+    expect(fake.setMapStyle).toHaveBeenCalledWith('amap://styles/normal')
+    expect(fake.polylineOptions).toHaveLength(routeCount + 2)
+    expect(fake.polylineOptions.slice(-2).map((options) => options.strokeColor)).toEqual(['#246bfd', '#9aa7b8'])
+    expect(fake.destroy).not.toHaveBeenCalled()
   })
 
   it('ignores an obsolete route response after returning to idle', async () => {

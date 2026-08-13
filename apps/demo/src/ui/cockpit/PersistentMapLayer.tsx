@@ -134,6 +134,7 @@ export function PersistentMapLayer({
   }, [mode, progress])
 
   useEffect(() => { handle.current?.setFollow(follow) }, [follow, source])
+  useEffect(() => { handle.current?.setTheme(theme) }, [theme, source])
   useEffect(() => { if (recenterNonce > 0) handle.current?.recenter() }, [recenterNonce])
 
   return (

@@ -48,6 +48,7 @@ export type AMapPositionHandle = { destroy: () => void }
 /** A map handle whose basemap survives idle/route transitions. */
 export type AMapWorkspaceHandle = {
   setMode: (mode: 'idle' | 'route', sketch?: RouteSketch, progress?: number) => Promise<boolean>
+  setTheme: (theme: 'light' | 'dark') => void
   setRoute: (sketch: RouteSketch) => Promise<boolean>
   setProgress: (progress: number) => void
   setFollow: (follow: boolean) => void
@@ -101,13 +102,14 @@ export function renderAMapWorkspace(
   container: HTMLElement,
   options: AMapWorkspaceOptions,
 ): AMapWorkspaceHandle | null {
-  const palette = THEMES[options.theme]
+  let palette = THEMES[options.theme]
   let map: AMapMap
   let idleMarker: AMapOverlay | undefined
   let routeOverlays: AMapOverlay[] = []
   let moveTo: ((progress: number) => void) | undefined
   let currentProgress: number | undefined
   let pendingProgress: number | undefined
+  let currentPath: LngLatPoint[] | undefined
   let following = options.mode === 'route'
   let destroyed = false
   let routeGeneration = 0
@@ -131,6 +133,7 @@ export function renderAMapWorkspace(
     routeOverlays = []
     moveTo = undefined
     currentProgress = undefined
+    currentPath = undefined
   }
   const drawWorkspaceRoute = (path: LngLatPoint[], progress: number | undefined) => {
     clearRoute()
@@ -141,6 +144,7 @@ export function renderAMapWorkspace(
     })
     map.add(route)
     routeOverlays.push(route)
+    currentPath = path
     // A route always starts with a vehicle marker, even if the simulator has
     // not emitted its first snapshot yet. Later progress ticks update it in
     // place instead of requiring another route search.
@@ -216,6 +220,26 @@ export function renderAMapWorkspace(
       }
       if (!sketch) return false
       return setRoute({ ...sketch, ...(progress === undefined ? {} : { progress }) })
+    },
+    setTheme: (next: 'light' | 'dark') => {
+      const nextPalette = THEMES[next]
+      if (nextPalette === palette || destroyed) return
+      palette = nextPalette
+      try {
+        map.setMapStyle?.(palette.mapStyle ?? 'amap://styles/normal')
+        if (currentPath) {
+          const progress = currentProgress
+          drawWorkspaceRoute(currentPath, progress)
+          if (following && currentProgress !== undefined) {
+            const xy = currentPath.map((point) => ({ x: point.lng, y: point.lat }))
+            const lengths = segmentLengths(xy)
+            const at = pointAtProgress(xy, lengths, currentProgress)
+            map.setZoomAndCenter(14, [at.x, at.y])
+          }
+        }
+      } catch {
+        // Cosmetic theme changes must not tear down a working map session.
+      }
     },
     setRoute,
     setProgress: (progress) => {
