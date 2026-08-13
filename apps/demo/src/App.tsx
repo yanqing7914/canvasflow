@@ -208,6 +208,7 @@ function cockpitActionForVoice(
   // must not downgrade a spoken confirmation to generic user.input.
   const ownsAction = window?.actionIds?.includes(wanted.actionId)
     || (task.phase === 'confirming-outbound' && wanted.componentId === 'outbound-confirmation')
+    || (task.phase === 'confirming-return' && wanted.componentId === 'return-confirmation')
   if (!ownsAction
     || !component?.actions?.includes(wanted.actionId)
     || action?.event.type !== 'tool-request'

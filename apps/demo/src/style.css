@@ -248,6 +248,12 @@ a:focus-visible {
     font-size: clamp(18px, 1.1vw, 21px);
     letter-spacing: -0.08em;
   }
+  /* The legacy fixture/layout path uses the same cabin metric grid outside the
+     persistent shell. Linux's generic monospace fallback is wider there too. */
+  .ui-spec-renderer[data-single-component="false"] .ui-cabin-grid .ui-metric__value {
+    font-size: clamp(18px, 1.1vw, 21px);
+    letter-spacing: -0.08em;
+  }
 }
 .cockpit-primary-panel .ui-layout,
 .cockpit-primary-panel .ui-slot,
