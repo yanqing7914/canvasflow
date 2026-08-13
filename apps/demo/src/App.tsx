@@ -1535,10 +1535,11 @@ export default function App({
     if (!voiceFixtureReady) return false
     if (sample.id === 'create-airport-pickup' || sample.id === 'noisy-create') return !task
     if (!response || !spec) return false
+    const derivedView = deriveCockpitView(spec)
     const driving = isDrivingVehicle(vehicleContext)
     if (sample.id === 'choose-hongqiao') return response.task.phase === 'collecting-airport'
     if (sample.id === 'select-first-flight' || sample.id === 'select-third-flight' || sample.id === 'refresh-flights') {
-      return response.task.phase === 'choosing-flight' && Boolean(spec.windows?.some((window) => window.kind === 'flight-list'))
+      return response.task.phase === 'choosing-flight' && derivedView.primaryWindow?.kind === 'flight-list'
     }
     if (sample.id === 'flight-number') {
       return response.task.phase === 'collecting-information' && response.task.flight === undefined
@@ -1547,7 +1548,7 @@ export default function App({
       return response.task.phase !== 'completed' && response.task.phase !== 'cancelled'
     }
     if (sample.id === 'start-navigation') {
-      return response.task.phase === 'confirming-outbound' && Boolean(spec.windows?.some((window) => window.kind === 'outbound-confirmation'))
+      return response.task.phase === 'confirming-outbound' && derivedView.primaryWindow?.kind === 'outbound-confirmation'
     }
     if (sample.id === 'speed-up' || sample.id === 'speed-down') {
       return response.task.phase === 'outbound-driving' || response.task.phase === 'return-driving'
@@ -2007,6 +2008,7 @@ export default function App({
   // the airport and confirming the return still need their primary task card.
   const hideNavigationPrimary = navigationActive && cockpitView.mode === 'navigation'
     && task?.phase !== 'waiting-for-passengers'
+    && task?.phase !== 'passengers-onboard'
     && task?.phase !== 'confirming-return'
   const entryContent = (
     <>
@@ -2045,7 +2047,7 @@ export default function App({
         </button>
       </div>
       <p className="voice-status" role="status" aria-label="语音状态" aria-live="polite">
-        {voiceStatus || (!task ? idleNotice : '')}
+        {voiceStatus}
       </p>
       {composerReason ? (
         <form
@@ -2160,7 +2162,7 @@ export default function App({
             onHudVisibilityChange={setHudVisibility}
           />
         ) : null}
-        auxiliary={cockpitContract && auxiliarySpec && runtimeTask && windowVehicle && cockpitView.auxiliaryWindows.length > 0 ? (
+        auxiliary={cockpitContract && auxiliarySpec && runtimeTask && windowVehicle ? (
           <WindowManager
             key={runtimeTask.taskId}
             spec={auxiliarySpec}

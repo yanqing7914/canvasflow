@@ -101,6 +101,17 @@ describe('PersistentMapLayer', () => {
     expect(view.container.querySelector('.persistent-map-layer__vehicle')?.getAttribute('cx')).not.toBe(startX)
   })
 
+  it('keeps the offline route named and readable while AMap is unavailable', async () => {
+    stub.loadAMap.mockResolvedValue(null)
+    const view = render(<PersistentMapLayer mode="route" sketch={{ ...outbound, progress: 0.25 }} routeKey="outbound" theme="dark" sessionKey="cockpit" />)
+    await act(async () => {})
+
+    expect(view.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeInTheDocument()
+    expect(view.getByRole('list', { name: '路线途经点' })).toHaveTextContent('人民广场虹桥机场 T2')
+    expect(view.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0.25')
+    expect(view.getByText(/模拟行程进度 25%/)).toBeInTheDocument()
+  })
+
   it('offers a recenter action after manual map interaction', async () => {
     const handle = workspaceHandle()
     let manualInteraction: (() => void) | undefined

@@ -54,6 +54,8 @@ export function PersistentMapLayer({
   const drawing = useMemo(() => mode === 'route' && sketch
     ? buildRouteSketchDrawing({ ...sketch, ...(progress === undefined ? {} : { progress }) }, ROUTE_MAP_DRAWING_OPTIONS)
     : undefined, [mode, progress, sketch])
+  const effectiveProgress = mode === 'route' ? (progress ?? sketch?.progress) : undefined
+  const destination = drawing?.markers.at(-1)?.name
 
   useEffect(() => {
     const keyCount = amapLoaderSnapshot().keyCount
@@ -135,21 +137,41 @@ export function PersistentMapLayer({
   useEffect(() => { if (recenterNonce > 0) handle.current?.recenter() }, [recenterNonce])
 
   return (
-    <section className="persistent-map-layer" data-testid="persistent-map-layer" data-map-source={source} data-mode={mode} data-session-key={sessionKey} data-progress={mode === 'route' && progress !== undefined ? String(progress) : undefined} aria-label={mode === 'route' ? '模拟导航地图' : '座舱地图'}>
+    <section className="persistent-map-layer" data-testid="persistent-map-layer" data-map-source={source} data-mode={mode} data-session-key={sessionKey} data-progress={effectiveProgress === undefined ? undefined : String(effectiveProgress)} aria-label={mode === 'route' ? '模拟导航地图' : '座舱地图'}>
       <div ref={container} className="persistent-map-layer__basemap" data-active={source === 'amap'} aria-hidden="true" />
       <div className="persistent-map-layer__fallback" aria-hidden={source === 'amap'}>
         {drawing ? (
-          <svg viewBox={`0 0 ${ROUTE_MAP_VIEWBOX.width} ${ROUTE_MAP_VIEWBOX.height}`} preserveAspectRatio="xMidYMid meet">
-            <path className="persistent-map-layer__route" d={drawing.path} />
-            {drawing.vehicle && <circle className="persistent-map-layer__vehicle" cx={drawing.vehicle.x} cy={drawing.vehicle.y} r="10" />}
-          </svg>
+          <>
+            <svg
+              viewBox={`0 0 ${ROUTE_MAP_VIEWBOX.width} ${ROUTE_MAP_VIEWBOX.height}`}
+              preserveAspectRatio="xMidYMid meet"
+              role="img"
+              aria-label={`前往${destination ?? '目的地'}的路线示意`}
+            >
+              <path className="persistent-map-layer__route" d={drawing.path} />
+              {drawing.markers.map((marker) => (
+                <circle
+                  key={marker.key}
+                  className="persistent-map-layer__stop"
+                  data-role={marker.role}
+                  cx={marker.x}
+                  cy={marker.y}
+                  r="7"
+                />
+              ))}
+              {drawing.vehicle && <circle className="persistent-map-layer__vehicle" cx={drawing.vehicle.x} cy={drawing.vehicle.y} r="10" />}
+            </svg>
+            <ol className="persistent-map-layer__stops" aria-label="路线途经点">
+              {drawing.markers.map((marker) => <li key={marker.key}>{marker.name}</li>)}
+            </ol>
+          </>
         ) : (
           <><span className="persistent-map-layer__car"><span /></span><span className="persistent-map-layer__location">上海 · 人民广场</span></>
         )}
       </div>
       <span className="persistent-map-layer__source">
         {source === 'amap' ? '高德道路图层' : source === 'loading' ? '地图服务连接中' : '离线地图示意'}
-        {mode === 'route' && progress !== undefined ? ` · 模拟行程进度 ${Math.round(progress * 100)}%` : ''}
+        {effectiveProgress !== undefined ? ` · 模拟行程进度 ${Math.round(effectiveProgress * 100)}%` : ''}
       </span>
       {!follow && mode === 'route' ? (
         <button

@@ -275,7 +275,7 @@ describe('demo integration', () => {
     expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
   })
 
-  it('keeps the flight chooser in the task surface instead of opening a floating window', async () => {
+  it('keeps the flight chooser in the primary cockpit window instead of an auxiliary floating window', async () => {
     const user = userEvent.setup()
     const task = {
       ...createInitialTask(), phase: 'choosing-flight', pickupAirport: { label: '虹桥机场', code: 'SHA' },
@@ -303,8 +303,9 @@ describe('demo integration', () => {
     const api = { create: vi.fn().mockResolvedValue(response), event: vi.fn(), action: vi.fn().mockResolvedValue(response), confirmation: vi.fn() }
     render(<AppComponent api={api} voiceEnabled={false} initialText="去机场接人" />)
     await user.click(screen.getByRole('button', { name: '发送' }))
-    expect(screen.queryByLabelText('虹桥机场到达航班窗口')).not.toBeInTheDocument()
     const surface = screen.getByRole('region', { name: '当前行程' })
+    expect(surface).toContainElement(screen.getByLabelText('虹桥机场到达航班窗口'))
+    expect(screen.queryByLabelText('辅助信息窗口')?.querySelector('.cockpit-window')).toBeNull()
     expect(surface).toHaveTextContent('MU5102')
     const choice = surface.querySelector<HTMLButtonElement>('[data-action-id="pick-cockpit-MU5102"]')
     expect(choice).not.toBeNull()
@@ -312,7 +313,7 @@ describe('demo integration', () => {
     expect(api.action).toHaveBeenCalledWith(expect.anything(), 'pick-cockpit-MU5102', 'flight-choices-cockpit')
   })
 
-  it('renders the outbound confirmation summary in the task surface without a floating window', async () => {
+  it('renders the outbound confirmation summary in the primary cockpit window without an auxiliary window', async () => {
     const user = userEvent.setup()
     const task = {
       ...createCockpitTask('confirm-outbound'), phase: 'confirming-outbound',
@@ -353,8 +354,9 @@ describe('demo integration', () => {
     render(<AppComponent api={api} voiceEnabled={false} initialText="选择航班" />)
     await user.click(screen.getByRole('button', { name: '发送' }))
 
-    expect(screen.queryByLabelText('现在出发窗口')).not.toBeInTheDocument()
     const confirmation = screen.getByRole('region', { name: '当前行程' })
+    expect(confirmation).toContainElement(screen.getByLabelText('现在出发窗口'))
+    expect(screen.queryByLabelText('辅助信息窗口')?.querySelector('.cockpit-window')).toBeNull()
     expect(confirmation).toHaveTextContent('MU4490')
     expect(confirmation).toHaveTextContent('虹桥机场')
     expect(confirmation).toHaveTextContent('32.0 km')
@@ -383,7 +385,7 @@ describe('demo integration', () => {
     render(<AppComponent api={api} voiceEnabled={false} initialText="完成第一趟" />)
 
     await user.click(screen.getByRole('button', { name: '发送' }))
-    expect(await screen.findByText('行程结束')).toBeInTheDocument()
+    expect(await screen.findByText('已到家')).toBeInTheDocument()
     const input = screen.getByLabelText('任务输入')
     await user.clear(input)
     await user.type(input, '下一趟去浦东机场接人')
@@ -1450,7 +1452,7 @@ describe('demo integration', () => {
 
     await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `cnf-${decision}`, decision))
     expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('已到家')
+    expect(screen.getByText('已到家', { selector: '[role="status"]' })).toBeInTheDocument()
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
     expect(api.create).toHaveBeenCalledTimes(1)
     expect(api.event).not.toHaveBeenCalled()
@@ -1493,7 +1495,7 @@ describe('demo integration', () => {
 
     await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `button-cnf-${decision}`, decision))
     expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
-    expect(screen.getByRole('status')).toHaveTextContent('已到家')
+    expect(screen.getByText('已到家', { selector: '[role="status"]' })).toBeInTheDocument()
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
   })
 
@@ -1698,19 +1700,17 @@ describe('demo integration', () => {
       }
     }
 
-    const drawnLine = () => document.querySelector('.ui-route-map__line')?.getAttribute('d')
-    const stops = () => [...document.querySelectorAll('.ui-route-map__stop')].map((stop) => stop.textContent)
+    const drawnLine = () => document.querySelector('.persistent-map-layer__route')?.getAttribute('d')
+    const stops = () => [...document.querySelectorAll('.persistent-map-layer__stops li')].map((stop) => stop.textContent)
 
     it('draws the active route and marks the staged progress on it', () => {
       render(<App initialTask={tripTask()} />)
 
       expect(screen.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeInTheDocument()
       expect(stops()).toEqual(['出发地', '虹桥机场 T2'])
-      expect(screen.getByText('模拟行程进度 8%')).toBeInTheDocument()
-      expect(document.querySelector('.ui-card--route-map')).toHaveAttribute('data-route-progress', 'simulated')
-      expect(document.querySelector('.ui-route-map__vehicle')).toBeInTheDocument()
-      // One route, drawn once: the panel has the line, so the card beside it has
-      // no band of its own to draw a second copy in.
+      expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0.08')
+      expect(document.querySelector('.persistent-map-layer__vehicle')).toBeInTheDocument()
+      // One route, drawn once by the persistent map rather than a companion card.
       expect(document.querySelector('.ui-route-sketch')).toBeNull()
     })
 
@@ -1726,7 +1726,7 @@ describe('demo integration', () => {
       expect(stops()).toEqual(['出发地', '虹桥枢纽超充站', '虹桥机场 T2'])
       expect(drawnLine()).not.toBe(directLine)
       // The detour is under way, so the marker sits further along than departure.
-      expect(screen.getByText('模拟行程进度 40%')).toBeInTheDocument()
+      expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0.4')
       detour.unmount()
 
       render(<App initialTask={tripTask({
@@ -1751,7 +1751,7 @@ describe('demo integration', () => {
       expect(stops()).toEqual(['出发地', '家'])
       expect(drawnLine()).not.toBe(outboundLine)
       // A new leg restarts near its own origin instead of continuing the outbound value.
-      expect(screen.getByText('模拟行程进度 8%')).toBeInTheDocument()
+      expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-progress', '0.08')
     })
 
     it('keeps the whole navigation brief when the route has no sketch geometry', () => {
@@ -1764,7 +1764,10 @@ describe('demo integration', () => {
       // card owns the frame alone rather than sharing it with an empty box.
       expect(document.querySelector('.ui-card--route-map')).toBeNull()
       expect(document.querySelector('.ui-layout--split')).toBeNull()
-      expect(document.querySelector('[data-route-progress="unavailable"]')).toBeInTheDocument()
+      expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'route')
+      expect(screen.getByTestId('persistent-map-layer')).not.toHaveAttribute('data-progress')
+      expect(document.querySelector('.persistent-map-layer__route')).toBeInTheDocument()
+      expect(stops()).toEqual(['当前位置', '机场接人点'])
       // Losing the drawing costs the drawing alone: the conclusion and its
       // supporting facts are all still on the brief, and no error takes its place.
       expect(screen.getByRole('heading', { name: '虹桥机场 T2' })).toBeInTheDocument()
@@ -1773,7 +1776,7 @@ describe('demo integration', () => {
       expect(screen.getByText('27%')).toBeInTheDocument()
       expect(screen.queryByText('这项信息暂时无法显示')).not.toBeInTheDocument()
       // Nothing names the route the sketch could not draw.
-      expect(screen.getByTestId('cockpit-workspace').querySelector('[data-trip-brief]')?.textContent).not.toContain('route-')
+      expect(screen.getByTestId('cockpit-workspace').textContent).not.toContain('route-not-in-fixtures')
     })
   })
 
@@ -1793,7 +1796,11 @@ describe('demo integration', () => {
       render(<App initialTask={{ ...createInitialTask(), phase }} />)
 
       const brief = screen.getByTestId('cockpit-workspace')
-      expect(brief.querySelector('[data-phase-label]')).toHaveAttribute('data-phase-label', label)
+      if (phase === 'completed' || phase === 'cancelled') {
+        expect(brief.querySelector('[data-trip-brief]')).toBeNull()
+      } else {
+        expect(brief.querySelector('[data-phase-label]')).toHaveAttribute('data-phase-label', label)
+      }
       // Query the header's phase element specifically: a card may legitimately
       // repeat the same words as its own supplied copy.
       expect(brief.querySelector('[data-phase-identity]')).toHaveTextContent(label)
@@ -1823,9 +1830,8 @@ describe('demo integration', () => {
 
       returning.unmount()
       render(<App initialTask={{ ...createInitialTask(), phase: 'completed' }} />)
-      const completedRail = screen.getByRole('list', { name: '接机行程阶段' })
-      expect(screen.getByText('到家', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'current')
-      expect(completedRail.querySelectorAll('[data-state="completed"]')).toHaveLength(3)
+      expect(screen.queryByRole('list', { name: '接机行程阶段' })).not.toBeInTheDocument()
+      expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'terminal')
     })
 
     it('does not invent a journey stage before creation or after cancellation', () => {
@@ -1834,9 +1840,8 @@ describe('demo integration', () => {
 
       empty.unmount()
       render(<App initialTask={{ ...createInitialTask(), phase: 'cancelled' }} />)
-      const rail = screen.getByRole('list', { name: '接机行程阶段' })
-      expect(rail).toHaveAttribute('data-cancelled', 'true')
-      expect(rail.querySelector('[aria-current="step"]')).toBeNull()
+      expect(screen.queryByRole('list', { name: '接机行程阶段' })).not.toBeInTheDocument()
+      expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'terminal')
     })
 
     it('keeps engineering metadata out of the brief and inside the drawer', async () => {
@@ -1953,8 +1958,10 @@ describe('demo integration', () => {
       }} />)
       // A flight card now states the conclusion, so the title becomes context.
       expect(document.querySelector('[data-trip-brief]')).toBeInTheDocument()
-      // It stays the one semantic page title either way.
-      expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+      // The persistent shell owns the landmark; navigation content may collapse
+      // the legacy page heading into the compact HUD without losing the trip brief.
+      expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'navigation')
+      expect(screen.getByTestId('cockpit-workspace').querySelector('[data-trip-brief]')).toBeInTheDocument()
     })
 
     it('surfaces a failed request as an alert without turning it into a trip card', async () => {
@@ -2786,7 +2793,7 @@ describe('demo integration', () => {
       } else {
         await waitFor(() => expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0))
         expect(api.cancel).not.toHaveBeenCalled()
-        expect(screen.getByLabelText('机场接人任务')).toBeInTheDocument()
+        expect(screen.getByRole('region', { name: '当前行程' })).toHaveAttribute('data-window-title', '机场接人任务')
       }
       expect(api.event).not.toHaveBeenCalled()
     })

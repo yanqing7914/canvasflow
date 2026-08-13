@@ -127,10 +127,13 @@ export function runtimeWindows(spec: UISpec): CockpitWindowSpec[] {
 }
 
 export function workspaceWindows(spec: UISpec): CockpitWindowSpec[] {
+  const rawWindows = (spec as unknown as { windows?: unknown }).windows
   const declared = runtimeWindows(spec)
-  if (declared.length > 0) return declared
+  // An explicit empty list is a server-owned statement that no auxiliary
+  // windows exist. Only synthesize a legacy window when the field is absent.
+  if (Array.isArray(rawWindows)) return declared
   const componentIds = spec.components
-    .filter((component) => component.type !== 'route-map' && component.type !== 'navigation-summary')
+    .filter((component) => component.type !== 'route-map')
     .map((component) => component.id)
   if (componentIds.length === 0) return []
   return [{

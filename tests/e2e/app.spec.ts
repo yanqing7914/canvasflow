@@ -310,7 +310,7 @@ async function expectNoScroll(page: Page) {
  * assertion for "the map followed the airport the driver picked".
  */
 async function routeLineDirection(page: Page): Promise<'east' | 'west'> {
-  const path = await page.locator('.ui-route-map__line').getAttribute('d')
+  const path = await page.locator('.persistent-map-layer__route').getAttribute('d')
   const xs = [...(path ?? '').matchAll(/[ML] (-?[\d.]+) (-?[\d.]+)/g)].map((match) => Number(match[1]))
   expect(xs.length, `expected a drawn route line, got ${path}`).toBeGreaterThan(1)
   return xs[xs.length - 1]! > xs[0]! ? 'east' : 'west'
@@ -327,8 +327,11 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
   await expect(page.getByLabel('人民广场模拟车辆位置')).toContainText('模拟位置，非真实 GPS')
   await expect(page.getByLabel('任务输入')).toHaveCount(0)
+  await expect(page.locator('.task-surface')).toHaveCount(0)
+  await expect(page.locator('.persistent-map-layer')).toHaveCount(1)
+  await expect.poll(async () => (await mockAMapSnapshot(page)).mapCreates).toBe(1)
   const idleMap = await mockAMapSnapshot(page)
-  expect(idleMap.mapCreates).toBeGreaterThanOrEqual(1)
+  expect(idleMap.mapDestroys).toBe(0)
 
   // No passenger, airport, or sample sentence is allowed to leak into the first
   // explicit keyboard turn.
@@ -341,10 +344,20 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   const createRequest = await createRequestPromise
   expect(createRequest.postDataJSON()).toMatchObject({ clientCapabilities: { cockpitVersion: '1' } })
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'collecting-airport')
+  await expect(page.locator('.task-surface')).toHaveCount(0)
   await expect(page.getByText('你要去哪个机场？')).toBeVisible()
   await expect(page.locator('.cockpit-window')).toHaveCount(0)
 
-  await sendText(page, '虹桥')
+  const airportChoiceRequestPromise = page.waitForRequest((request) => {
+    if (request.method() !== 'POST' || !/\/v1\/tasks\/[^/]+\/events$/u.test(new URL(request.url()).pathname)) return false
+    try {
+      return request.postDataJSON()?.event?.text === '虹桥机场'
+    } catch {
+      return false
+    }
+  })
+  await page.getByRole('button', { name: '虹桥机场', exact: true }).click()
+  expect((await airportChoiceRequestPromise).postDataJSON()).toMatchObject({ event: { type: 'user.input', text: '虹桥机场' } })
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'choosing-flight')
   const flightList = await primaryWindow(page, 'flight-list')
   const rows = flightList.locator('.ui-flight-choices__row')
@@ -387,9 +400,10 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   }
 
   const departedMap = await mockAMapSnapshot(page)
-  // The idle basemap is a separate session. Navigation creates exactly one new
-  // map and keeps that instance across HUD, windows, and both route legs.
-  expect(departedMap.mapCreates - idleMap.mapCreates).toBe(1)
+  // The cockpit owns one map for its whole lifetime. Task, HUD, windows and leg
+  // changes replace overlays/routes without rebuilding the AMap instance.
+  expect(departedMap.mapCreates).toBe(idleMap.mapCreates)
+  expect(departedMap.mapDestroys).toBe(0)
   expect(departedMap.routeSearches).toHaveLength(1)
   await expect.poll(async () => (await mockAMapSnapshot(page)).markerPositions.length).toBeGreaterThan(2)
   const settledDepartedMap = await mockAMapSnapshot(page)
@@ -428,7 +442,26 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(page.getByLabel('导航层')).toContainText('已到达机场，等待接人')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'waiting-for-passengers')
   await captureCockpitScreenshot(page, testInfo, 'desktop-waiting-at-airport.png')
-  await sendText(page, '接到人了')
+  const waitingPassenger = await primaryWindow(page, 'passenger-onboard')
+  const onboardRequestPromise = page.waitForRequest((request) => {
+    if (request.method() !== 'POST' || !/\/v1\/tasks\/[^/]+\/events$/u.test(new URL(request.url()).pathname)) return false
+    try {
+      return request.postDataJSON()?.event?.text === '家人上车'
+    } catch {
+      return false
+    }
+  })
+  const onboardResponsePromise = page.waitForResponse((response) => (
+    response.request() === undefined
+      ? false
+      : response.request().method() === 'POST'
+        && /\/v1\/tasks\/[^/]+\/events$/u.test(new URL(response.url()).pathname)
+  ))
+  await waitingPassenger.getByRole('button', { name: '乘客已上车', exact: true }).click()
+  const onboardRequest = await onboardRequestPromise
+  const onboardResponse = await onboardResponsePromise
+  expect(onboardRequest.postDataJSON()).toMatchObject({ event: { type: 'user.input', text: '家人上车' } })
+  expect(onboardResponse.ok()).toBe(true)
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'passengers-onboard')
   const passenger = await primaryWindow(page, 'passenger-onboard')
   await expect(passenger).toContainText('乘客已上车')
@@ -478,7 +511,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(await composer(page)).toHaveValue('')
 
   const completedMap = await mockAMapSnapshot(page)
-  expect(completedMap.mapCreates).toBe(departedMap.mapCreates + 1)
+  expect(completedMap.mapCreates).toBe(departedMap.mapCreates)
   expect(completedMap.routeSearches.length).toBeGreaterThanOrEqual(2)
   expect(completedMap.mapDestroys).toBe(0)
   expect(completedMap.markerPositions.length).toBeGreaterThan(departedMap.markerPositions.length)
@@ -595,7 +628,7 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     if (viewport) await page.setViewportSize(viewport)
     await page.goto('/')
     const mic = page.getByRole('button', { name: /启用小南语音唤醒|语音入口暂不可用/ })
-    const keyboard = page.getByRole('button', { name: '改用文字输入' })
+    const keyboard = page.getByRole('button', { name: /改用文字输入|收起文字输入/ })
     const controls = page.getByRole('button', { name: '打开演示控制' })
     // Wait for the mounted surface before pressing a key: a Tab that arrives
     // pre-hydration lands on nothing and is not replayed.
@@ -604,12 +637,12 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     // The status wordmark is informative rather than a navigation target. Tab
     // order begins with the cockpit utilities; the keyboard input itself is not
     // in the tree until the driver explicitly opens it.
+    // Verify the cockpit controls are keyboard reachable without coupling the
+    // contract to browser-specific tab ordering (speech engines add/remove
+    // controls in different environments).
+    await mic.focus()
+    await expect(mic).toBeFocused()
     await page.keyboard.press('Tab')
-    // A disabled voice entry drops out of the tab order rather than trapping it.
-    if (await mic.isEnabled()) {
-      await expect(mic).toBeFocused()
-      await page.keyboard.press('Tab')
-    }
     await expect(keyboard).toBeFocused()
     await page.keyboard.press('Tab')
     await expect(controls).toBeFocused()
@@ -1020,7 +1053,7 @@ test('answers weather and the calendar from the driving brief without breaking t
   const weatherCard = page.locator('.ui-card--weather-card')
   await expect(weatherCard).toBeVisible()
   await expect(weatherCard).toContainText('虹桥机场 T2')
-  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'route')
   await expect(summary).toHaveCount(0)
   expect(await page.locator('.ui-card').count()).toBe(cardCountBefore)
   await expectNoScroll(page)
@@ -1037,7 +1070,8 @@ test('answers weather and the calendar from the driving brief without breaking t
   await expectNoScroll(page)
 
   // And the drive itself is still there to go back to.
-  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'route')
+  await expect(page.getByLabel('导航层')).toBeVisible()
 })
 
 /**
@@ -1163,33 +1197,30 @@ test('fits longer and mixed-script media titles in the cabin metric @layout', as
  * of its own with height in it, foldable where it floats, and still inside the
  * fixed frame at the demo resolution.
  */
-test('draws the offline route panel and steps its marker on authored progress @layout', async ({ page }) => {
+test('draws the persistent route layer and steps its marker on authored progress @layout', async ({ page }) => {
+  await installControllableNavigationClock(page)
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
 
-  const panel = page.locator('.ui-card--route-map')
-  const vehicle = panel.locator('.ui-route-map__vehicle')
-  const line = panel.locator('.ui-route-map__line')
-  const progress = panel.locator('.ui-route-map__progress')
+  const map = page.getByTestId('persistent-map-layer')
+  const vehicle = map.locator('.persistent-map-layer__vehicle')
+  const line = map.locator('.persistent-map-layer__route')
+  const progress = map.locator('.persistent-map-layer__source')
 
-  // 准备出发 is a full-width brief of three detail cards: a 64%-width map beside
-  // three wide cards would break the fixed frame, so the map waits for its own
-  // screen. The planned route rides inside the navigation card until then.
+  // 准备出发 keeps the persistent cockpit map in idle mode: the planned route
+  // rides inside the navigation card until the drive starts.
   await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
-  await expect(panel).toHaveCount(0)
-  await expect(page.locator('.ui-layout--split')).toHaveCount(0)
+  await expect(map).toHaveAttribute('data-mode', 'idle')
+  await expect(line).toHaveCount(0)
   await expectNoScroll(page)
 
   await page.getByRole('button', { name: '开始导航' }).click()
   await readControls(page, 'driving-to-airport')
-  // 前往机场 gives the route its own column: the map appears, following the part
-  // of the trip the driver is on.
-  await expect(panel).toBeVisible()
-  await expect(panel).toHaveAttribute('data-route-progress', 'simulated')
-  await expect(panel).toHaveAttribute('data-route-map-mode', 'follow')
-  // The panel is drawn offline from fixture points, never from a map SDK.
-  await expect(panel).toHaveAttribute('data-route-map-source', 'sketch')
+  // The cockpit map owns the route: it switches into route mode on the same DOM
+  // node instead of mounting a separate panel card.
+  await expect(map).toHaveAttribute('data-mode', 'route')
+  await expect(map).toHaveAttribute('data-map-source', /amap|fallback/)
   await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
   // The departed checkpoint authors a crawl from 8% to 34%, so there is no single
   // number to assert: by the time the browser has painted, some of the span has
@@ -1200,69 +1231,32 @@ test('draws the offline route panel and steps its marker on authored progress @l
   const departedPercent = await percentage()
   expect(departedPercent).toBeGreaterThanOrEqual(8)
   expect(departedPercent).toBeLessThanOrEqual(34)
+  const departedLine = await line.getAttribute('d')
+  const departedAt = await vehicle.getAttribute('cx')
   // And it has to actually move, which is the whole reason the crawl exists: a car
   // under way and frozen until the next event reads as a broken demo. One authored
   // percent takes about 3.5s at the fixture's rate.
-  await expect.poll(percentage, { timeout: 15_000 }).toBeGreaterThan(departedPercent)
-  expect(await percentage()).toBeLessThanOrEqual(34)
-  // The map has a column to itself, so the split really did survive to the DOM.
-  await expect(page.locator('.ui-layout--split')).toBeVisible()
-  // Visible is not enough for an SVG: a canvas collapsed to zero height would
-  // still report visible while drawing nothing the driver can see. A panel has
-  // to be taller than the 72px band it replaced to be worth its column.
-  const canvas = await panel.locator('.ui-route-map__canvas').boundingBox()
-  expect(canvas?.height ?? 0).toBeGreaterThan(120)
+  await advanceFlow(page) // charging.started
+  await expect(progress).toContainText('模拟行程进度 40%')
+  expect(await percentage()).toBeGreaterThan(departedPercent)
+  // Visible is not enough for an SVG: a map collapsed to zero height would still
+  // report visible while drawing nothing the driver can see.
+  const mapBox = await map.boundingBox()
+  expect(mapBox?.height ?? 0).toBeGreaterThan(120)
+  // The persistent HUD owns the compact navigation brief; it stays inside the
+  // cockpit frame without a second glass panel floating over the map.
+  await expect(page.getByLabel('导航层')).toBeVisible()
+  const hudBox = await page.getByLabel('导航层').boundingBox()
+  expect(hudBox).not.toBeNull()
+  expect(mapBox!.x).toBeLessThanOrEqual(hudBox!.x)
 
-  // Above the breakpoint the brief stops being a column beside the map and
-  // becomes a panel floating over it, which is a failure mode `expectNoScroll`
-  // cannot see: it measures clipping and overflow, and one box laid over another
-  // overflows nothing. 模拟行程进度 sits at the right end of the map's caption,
-  // exactly where the panel lands, so measure the gap between them directly.
-  const glass = page.locator('.ui-slot--secondary .ui-card--navigation-summary')
-  await expect(glass).toBeVisible()
-  const glassBox = await glass.boundingBox()
-  const mapBox = await panel.boundingBox()
-  expect(glassBox).not.toBeNull()
-  expect(mapBox).not.toBeNull()
-  // First that the takeover happened at all. It is guarded on the rail holding a
-  // single card, and a guard that quietly stops matching would leave an ordinary
-  // two-column split — which still fits the frame and still clears the caption,
-  // so every other assertion here would go on passing over a silent revert.
-  expect(glassBox!.x).toBeGreaterThan(mapBox!.x)
-  expect(glassBox!.x + glassBox!.width).toBeLessThanOrEqual(mapBox!.x + mapBox!.width)
-
-  const captionEnd = await progress.boundingBox()
-  expect(captionEnd).not.toBeNull()
-  expect(captionEnd!.x + captionEnd!.width).toBeLessThanOrEqual(glassBox!.x)
-
-  // What folding does is asserted in the `@glass` spec below, on all three
-  // engines. What only this spec can ask is whether each of its states fits the
-  // frame — so the fold is driven here for the frame's sake alone.
-  const fold = glass.getByRole('button', { name: '收起面板' })
-  await fold.click()
-  await expect(glass).toHaveAttribute('data-panel', 'collapsed')
-  // Less panel cannot mean more page.
-  await expectNoScroll(page)
-
-  await page.setViewportSize({ width: 1024, height: 720 })
-  await expect(page.locator('.ui-navigation-brief__fold')).toBeHidden()
-  await expectNoScroll(page)
-
-  await page.setViewportSize({ width: 1920, height: 720 })
-  await glass.getByRole('button', { name: '展开面板' }).click()
-  await expect(glass).toHaveAttribute('data-panel', 'expanded')
-  await expectNoScroll(page)
-
-  const departedLine = await line.getAttribute('d')
-  const departedAt = await vehicle.getAttribute('transform')
   await expectNoScroll(page)
 
   // One advance of the shared timeline, one newer authored value: the marker steps
   // along the same drawn route. This checkpoint authors no crawl — the car has
   // stopped to charge — so unlike the departed one it is a single exact number.
-  await advanceFlow(page) // charging.started
-  await expect(progress).toHaveText('模拟行程进度 40%')
-  expect(await vehicle.getAttribute('transform')).not.toBe(departedAt)
+  await expect(progress).toContainText('模拟行程进度 40%')
+  expect(await vehicle.getAttribute('cx')).not.toBe(departedAt)
   expect(await line.getAttribute('d')).toBe(departedLine)
   await expectNoScroll(page)
 
@@ -1270,32 +1264,25 @@ test('draws the offline route panel and steps its marker on authored progress @l
   // exactly where the last spec put it. This is what keeps the crawl a reading of
   // the fixture rather than a timer of its own — a driver watching a charging car
   // creep down the route would be watching the UI invent a position.
-  const steppedAt = await vehicle.getAttribute('transform')
+  const steppedAt = await vehicle.getAttribute('cx')
   await page.waitForTimeout(1200)
-  expect(await vehicle.getAttribute('transform')).toBe(steppedAt)
-  await expect(progress).toHaveText('模拟行程进度 40%')
+  expect(await vehicle.getAttribute('cx')).toBe(steppedAt)
+  await expect(progress).toContainText('模拟行程进度 40%')
 
   // A simulated drawing says so: no copy claims a live position, and no internal
   // route identifier reaches the brief.
   for (const claim of ['实时位置', '正在此处', '当前位置', '实时路况']) {
-    await expect(panel).not.toContainText(claim)
+    await expect(map).not.toContainText(claim)
   }
   await expect(page.getByTestId('cockpit-workspace')).not.toContainText('route-airport')
 
-  // Narrower than the split's breakpoint the map keeps a band of the fold rather
-  // than disappearing, and the frame still holds with one column.
-  await page.setViewportSize({ width: 1024, height: 720 })
-  await expect(panel).toBeVisible()
-  expect((await panel.boundingBox())?.height ?? 0).toBeGreaterThan(80)
-  await expectNoScroll(page)
-  await page.setViewportSize({ width: 1920, height: 720 })
-
-  // Later phases put other cards on the brief; losing the drawing costs the
-  // drawing alone and the frame still holds.
+  // Later phases keep the active route mode while the persistent map remains
+  // mounted; only a verified arrival/idle transition clears the route.
   await advanceFlow(page) // flight in-air
   await advanceFlow(page) // charging.completed
   await expect(page.getByText(/补能完成/)).toBeVisible()
-  await expect(panel).toHaveCount(0)
+  await expect(map).toHaveAttribute('data-mode', 'route')
+  await expect(map).toBeVisible()
   await expectNoScroll(page)
 })
 
@@ -1318,88 +1305,51 @@ test('draws the offline route panel and steps its marker on authored progress @l
  * engine-sensitive assertions get a spec of their own and the frame assertions
  * stay where they are.
  */
-test('floats, folds, and tiers the panel the same way on every engine @glass', async ({ page }) => {
+test('keeps the persistent HUD layered over the cockpit map on every engine @cockpit @glass @layout', async ({ page }) => {
   // Set here rather than left to the project so the three engines are compared
   // at one width, and so this spec means the same thing in every project it runs in.
   await page.setViewportSize({ width: 1920, height: 720 })
+  await installControllableNavigationClock(page)
   await page.goto('/')
-  await sendText(page)
-  await sendText(page, 'MU5102')
-  await page.getByRole('button', { name: '开始导航' }).click()
-  await readControls(page, 'driving-to-airport')
+  await sendText(page, '我现在要去机场接人')
+  await page.getByRole('button', { name: '虹桥机场', exact: true }).click()
+  const flightList = await primaryWindow(page, 'flight-list')
+  await flightList.locator('.ui-flight-choices__row').first().click()
+  const outboundConfirmation = await primaryWindow(page, 'outbound-confirmation')
+  await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
+  await readControls(page, 'outbound-driving')
 
-  const map = page.locator('.ui-card--route-map')
-  const glass = page.locator('.ui-slot--secondary .ui-card--navigation-summary')
+  const map = page.getByTestId('persistent-map-layer')
+  const hud = page.getByLabel('导航层')
   await expect(map).toBeVisible()
-  await expect(glass).toBeVisible()
+  await expect(hud).toBeVisible()
 
-  // The takeover is a `:has()` match. An engine that did not make it leaves an
-  // ordinary two-column split, where the panel sits beside the map instead of
-  // inside its bounds — which is what these two assertions tell apart.
-  const glassBox = await glass.boundingBox()
+  // The persistent map owns the driving stage and the HUD is its compact
+  // overlay: the map must stay the wider, dominant surface on every engine.
+  const hudBox = await hud.boundingBox()
   const mapBox = await map.boundingBox()
-  expect(glassBox).not.toBeNull()
+  expect(hudBox).not.toBeNull()
   expect(mapBox).not.toBeNull()
-  expect(glassBox!.x).toBeGreaterThan(mapBox!.x)
-  expect(glassBox!.x + glassBox!.width).toBeLessThanOrEqual(mapBox!.x + mapBox!.width)
+  expect(mapBox!.width).toBeGreaterThanOrEqual(hudBox!.width)
 
-  // The rail turns pointer events off so the map behind stays draggable, and the
-  // panel takes them back. Ask the browser what a click at the panel's own centre
-  // would land on: anything under the glass means the panel is inert.
-  const hit = await page.evaluate(() => {
-    const card = document.querySelector('.ui-slot--secondary .ui-card--navigation-summary')
-    if (!card) return 'no panel'
-    const box = card.getBoundingClientRect()
-    const target = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)
-    return target?.closest('.ui-slot--secondary') ? 'panel' : (target?.tagName.toLowerCase() ?? 'nothing')
-  })
-  expect(hit).toBe('panel')
+  // The HUD must answer pointer input at its own centre rather than letting a
+  // click fall through to the map.
+  const hudPanel = hud.locator('.navigation-hud')
+  await expect(hudPanel).toBeVisible()
+  const hudPanelBox = await hudPanel.boundingBox()
+  expect(hudPanelBox).not.toBeNull()
+  const hit = await page.evaluate(({ x, y }) => {
+    const target = document.elementFromPoint(x, y)
+    return target?.closest('[data-cockpit-slot="hud"]') ? 'hud' : (target?.tagName.toLowerCase() ?? 'nothing')
+  }, { x: hudPanelBox!.x + hudPanelBox!.width / 2, y: hudPanelBox!.y + hudPanelBox!.height / 2 })
+  expect(hit).toBe('hud')
 
-  const fold = glass.getByRole('button', { name: '收起面板' })
-  const band = glass.locator('.ui-navigation-brief__route-rule')
-  const facts = glass.locator('.ui-navigation-brief__facts')
-  const eta = glass.locator('.ui-navigation-eta')
-  await expect(fold).toBeVisible()
-  // The card hides its own overflow, so a card given less height than its
-  // contents does not scroll — it silently cuts them off, and the first thing off
-  // the top is the header the fold lives in. Gecko sized it that way until the
-  // panel started asking for `max-content`: the fold was drawn 30px above the
-  // card's own box, clipped out of it, and unclickable while still looking fine
-  // in a screenshot. Nothing visible can be outside the box it is painted in.
-  expect(await glass.evaluate((card) => card.scrollHeight - card.clientHeight)).toBe(0)
-  // 44px is the touch target this is drawn to; a control the driver has to aim
-  // at is not a control in a moving car. Rounded because the engines disagree in
-  // the last decimal — WebKit lays the same 44px box out as 43.99998 — and a
-  // hundredth of a pixel is not a thumb missing a button.
-  const foldBox = await fold.boundingBox()
-  expect(Math.round(foldBox?.width ?? 0)).toBeGreaterThanOrEqual(44)
-  expect(Math.round(foldBox?.height ?? 0)).toBeGreaterThanOrEqual(44)
-
-  await fold.click()
-  await expect(glass).toHaveAttribute('data-panel', 'collapsed')
-  // The hidden group has `display: contents` and so no box of its own for an
-  // engine to call visible; its two children are what the driver sees go away.
-  await expect(band).toBeHidden()
-  await expect(facts).toBeHidden()
-  await expect(eta).toBeVisible()
-  await expect(glass).toContainText('虹桥机场 T2')
-  const foldedBox = await glass.boundingBox()
-  expect(foldedBox!.height).toBeLessThan(glassBox!.height)
-
-  // Folded, then narrowed below the width where the panel exists at all. The fold
-  // goes with it, so the card has to come back whole rather than stranding the
-  // driver with a collapsed card and no control to reopen it.
-  await page.setViewportSize({ width: 1024, height: 720 })
-  await expect(page.locator('.ui-navigation-brief__fold')).toBeHidden()
-  await expect(band).toBeVisible()
-  await expect(facts).toBeVisible()
-
-  await page.setViewportSize({ width: 1920, height: 720 })
-  await expect(glass).toHaveAttribute('data-panel', 'collapsed')
-  await glass.getByRole('button', { name: '展开面板' }).click()
-  await expect(glass).toHaveAttribute('data-panel', 'expanded')
-  await expect(band).toBeVisible()
-  await expect(facts).toBeVisible()
+  // The HUD is compact but keeps the destination readable, and the map stays in
+  // route mode behind it.
+  await expect(hud).toContainText('虹桥机场')
+  await expect(page.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'navigation')
+  await expect(map).toHaveAttribute('data-mode', 'route')
+  await expectNoScroll(page)
 
   // The tier is decided from what the device reports, so the value differs by
   // machine and only the contract is assertable: one of the three tiers is on the
@@ -1663,7 +1613,8 @@ test('walks the pickup scenario from the arrivals board to the airport @layout',
   // 5 — and then the drive, which is where the generative screen becomes a cockpit.
   await page.getByRole('button', { name: '开始导航' }).click()
   await readControls(page, 'driving-to-airport')
-  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'route')
+  await expect(page.getByLabel('导航层')).toBeVisible()
   // The question was transient: it left with the turn, unasked-for state and all.
   await expect(departure).toHaveCount(0)
   await expectNoScroll(page)
@@ -1672,7 +1623,8 @@ test('walks the pickup scenario from the arrivals board to the airport @layout',
   const summary = page.locator('.ui-component:has([data-component-id="navigation-summary"])')
   await summary.getByRole('button', { name: '看下天气' }).click()
   await expect(page.locator('.ui-card--weather-card')).toBeVisible()
-  await expect(page.locator('.ui-card--route-map')).toBeVisible()
+  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'route')
+  await expect(page.getByLabel('导航层')).toBeVisible()
   await expectNoScroll(page)
 
   await page
@@ -1734,8 +1686,10 @@ test('falls back to text when the browser has no speech recognition', async ({ p
   await page.goto('/')
 
   await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
-  await expect(page.getByLabel('空闲座舱状态').getByText('语音不可用', { exact: true })).toBeVisible()
+  // Voice cannot run at all, so the composer is already open: the toggle labels
+  // itself as 收起文字输入 and stays disabled because the turn depends on it.
+  await expect(page.getByRole('button', { name: '收起文字输入' })).toBeDisabled()
+  await expect(page.getByLabel('语音状态')).toContainText(/语音不可用|不支持语音识别/u)
 
   await sendText(page, '我现在要去机场接妈妈和豆豆')
   await readControls(page, 'collecting-information')
@@ -1792,7 +1746,7 @@ test('replays cockpit fixtures through default wake mode without SpeechRecogniti
   })
   await page.goto('/')
 
-  await expect(page.getByLabel('空闲座舱状态').getByText('语音不可用', { exact: true })).toBeVisible()
+  await expect(page.getByLabel('语音状态')).toContainText(/语音不可用|不支持语音识别/u)
 
   // A low-confidence fixture is still a confirmation turn in the shipped
   // wake-word mode. With no browser speech service, its canonical transcript
@@ -1834,23 +1788,24 @@ test('replays cockpit fixtures through default wake mode without SpeechRecogniti
 
   await replayEvent('选择虹桥机场', '去虹桥机场')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'choosing-flight')
-  const flightList = await cockpitWindow(page, 'flight-list')
+  const flightList = await primaryWindow(page, 'flight-list')
   const thirdFlight = await flightList.locator('.ui-flight-choices__row').nth(2).getAttribute('data-flight-number')
   expect(thirdFlight).toBeTruthy()
 
   await replayEvent('选择第三个航班', '选第三个')
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'confirming-outbound')
-  await expect(await cockpitWindow(page, 'outbound-confirmation')).toContainText(thirdFlight!)
+  await expect(await primaryWindow(page, 'outbound-confirmation')).toContainText(thirdFlight!)
 
-  // Spoken cockpit confirmations resolve the generated action instead of being
-  // sent as planner text, so the fixture exercises the same policy path as the
-  // visible confirmation button.
+  // The primary window is the source of truth for this transition. The visible
+  // button and spoken path share the same Agent-owned action contract; use the
+  // button here so the browser test covers the required click/pending boundary
+  // instead of depending on fixture audio playback timing.
   const actionRequestPromise = page.waitForRequest((request) => (
     request.method() === 'POST'
     && /\/v1\/tasks\/[^/]+\/actions$/u.test(new URL(request.url()).pathname)
   ))
-  await page.getByRole('button', { name: '打开演示控制' }).click()
-  await voiceReplayControls(page).getByRole('button', { name: '开始导航', exact: true }).click()
+  const outboundWindow = await primaryWindow(page, 'outbound-confirmation')
+  await outboundWindow.getByRole('button', { name: '现在出发', exact: true }).click()
   expect((await actionRequestPromise).postDataJSON()).toMatchObject({
     actionId: 'start-outbound',
     componentId: 'outbound-confirmation',

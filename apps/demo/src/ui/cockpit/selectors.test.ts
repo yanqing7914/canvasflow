@@ -13,6 +13,14 @@ function spec(phase: CockpitUISpec['phase'], windows: NonNullable<CockpitUISpec[
   } as CockpitUISpec
 }
 
+function componentSpec(phase: CockpitUISpec['phase'], component: UISpec['components'][number]): UISpec {
+  return {
+    ...spec(phase),
+    components: [component],
+    actions: component.actions?.map((id) => ({ id, label: id, style: 'primary' as const, event: { type: 'agent-message' as const, text: id } })) ?? [],
+  } as UISpec
+}
+
 const controls = { closable: true, minimizable: true, maximizable: true }
 
 describe('deriveCockpitView', () => {
@@ -50,6 +58,49 @@ describe('deriveCockpitView', () => {
     const view = deriveCockpitView(spec('collecting-information'))
     expect(view.mode).toBe('primary')
     expect(view.primaryWindow).toBeUndefined()
+    expect(view.auxiliaryWindows).toEqual([])
+  })
+
+  it('derives a primary flight window when the server explicitly has no auxiliary windows', () => {
+    const view = deriveCockpitView(componentSpec('choosing-flight', {
+      id: 'flight-choices',
+      type: 'flight-choices',
+      props: {
+        arrivalCityName: '上海',
+        dateLabel: '今天',
+        choices: [
+          {
+            flightNumber: 'MU5102', airlineName: '东方航空', originName: '上海',
+            status: 'scheduled', statusLabel: '计划', arrivalTimeLabel: '14:20',
+            terminal: 'T1', airportName: '虹桥机场', actionId: 'pick-MU5102',
+          },
+          {
+            flightNumber: 'CA1887', airlineName: '中国国航', originName: '北京',
+            status: 'scheduled', statusLabel: '计划', arrivalTimeLabel: '14:28',
+            terminal: 'T2', airportName: '浦东机场', actionId: 'pick-CA1887',
+          },
+        ],
+        freshness: 'fixture',
+      },
+      actions: [],
+    }))
+
+    expect(view.primaryWindow).toEqual(expect.objectContaining({
+      kind: 'flight-list',
+      componentIds: ['flight-choices'],
+    }))
+    expect(view.auxiliaryWindows).toEqual([])
+  })
+
+  it('derives outbound confirmation content without inventing an auxiliary window', () => {
+    const view = deriveCockpitView(componentSpec('confirming-outbound', {
+      id: 'outbound-confirmation',
+      type: 'route-confirmation',
+      props: { leg: 'outbound', destination: '虹桥机场', durationMinutes: 20, arrivalTime: '2026-08-13T10:00:00+08:00', distanceKm: 20, currentBatteryPercent: 42, estimatedBatteryAtArrival: 30, simulated: true },
+      actions: ['start-outbound'],
+    }))
+
+    expect(view.primaryWindow?.kind).toBe('outbound-confirmation')
     expect(view.auxiliaryWindows).toEqual([])
   })
 })
