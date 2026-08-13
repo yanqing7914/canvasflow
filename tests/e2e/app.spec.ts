@@ -1705,7 +1705,10 @@ test('falls back to text when the browser has no speech recognition', async ({ p
   await page.goto('/')
 
   await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: '改用文字输入' })).toBeEnabled()
+  // Without command ASR the keyboard is already open and intentionally cannot
+  // be dismissed, so the driver always retains a usable input path.
+  await expect(page.getByRole('button', { name: '收起文字输入' })).toBeDisabled()
+  await expect(page.getByLabel('任务输入')).toBeEnabled()
   // Local KWS owns the idle wake path now, so removing Web Speech no longer
   // disables the microphone entry. Command ASR remains a post-wake adapter.
   await expect(page.getByRole('button', { name: '启用小南语音唤醒' })).toBeEnabled()
