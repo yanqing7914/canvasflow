@@ -338,20 +338,30 @@ export class AgentApiClient {
         ...(input.body === undefined ? {} : { body: JSON.stringify(input.body) }),
       })
     } catch (cause) {
+      clearTimeout(timeout)
       if (controller.signal.aborted) {
         const error = new Error('请求超时，请重试。')
         error.name = REQUEST_TIMEOUT
         throw error
       }
       throw cause
-    } finally {
-      clearTimeout(timeout)
     }
 
     let payload: unknown
+    let bodyTimeout: ReturnType<typeof setTimeout> | undefined
     try {
-      payload = await response.json()
-    } catch {
+      payload = await Promise.race([
+        response.json(),
+        new Promise<never>((_, reject) => { bodyTimeout = setTimeout(() => {
+          const error = new Error('请求超时，请重试。')
+          error.name = REQUEST_TIMEOUT
+          reject(error)
+        }, this.#requestTimeoutMs) }),
+      ])
+    } catch (cause) {
+      clearTimeout(timeout)
+      if (bodyTimeout !== undefined) clearTimeout(bodyTimeout)
+      if (cause instanceof Error && cause.name === REQUEST_TIMEOUT) throw cause
       const isServerFailure = response.status >= 500
       throw new AgentApiProtocolError(
         isServerFailure
@@ -361,6 +371,8 @@ export class AgentApiClient {
         undefined,
       )
     }
+    if (bodyTimeout !== undefined) clearTimeout(bodyTimeout)
+    clearTimeout(timeout)
 
     if (!response.ok) {
       const error = agentErrorResponseSchema.safeParse(payload)

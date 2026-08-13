@@ -2031,7 +2031,11 @@ export default function App({
     return () => document.removeEventListener('keydown', handleDrawerKeyDown)
   }, [closeControls, controlsOpen])
 
-  const micState = voice.available ? voice.state : 'unavailable'
+  // Local hands-free wake is an independent capability. Firefox and other
+  // hosts may not expose SpeechRecognition while still providing the local
+  // wake controller, so do not force the keyboard composer in that path.
+  const voiceCapabilityUnavailable = !voice.available && !(voiceEnabled && wakeWordEnabled && useLocalHandsFree)
+  const micState = voiceCapabilityUnavailable ? 'unavailable' : voice.state
   const microphoneCopy = wakeWordEnabled
     ? wakeError ? { aria: '重试语音唤醒', text: '重试语音' } : wakeButtonLabels[wakeSession.state]
     : voiceButtonLabels[micState]
@@ -2051,7 +2055,7 @@ export default function App({
           ? '正在提交…'
           : voice.state === 'speaking'
             ? voice.speaking ?? '正在播报'
-            : (!voice.available ? '语音不可用，请用文字告诉我。' : ''))
+            : (voiceCapabilityUnavailable ? '语音不可用，请用文字告诉我。' : ''))
 
   // The keyboard is not a permanent fixture of the cabin. It appears when the
   // turn genuinely needs it and steps back out when it does not, so the journey
@@ -2061,7 +2065,7 @@ export default function App({
   // screen until the Gateway accepts them, rather than blinking out and back.
   const composerReason: ComposerReason | undefined = voice.state === 'transcribing' || voice.state === 'submitting'
     ? 'transcript'
-    : !voice.available
+    : voiceCapabilityUnavailable
       ? 'unavailable'
       : voice.error
         ? 'error'

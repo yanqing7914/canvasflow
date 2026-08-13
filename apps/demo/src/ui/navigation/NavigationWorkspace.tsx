@@ -63,8 +63,12 @@ export const RETURN_SKETCH: RouteSketch = {
  */
 export function navigationSketchForTask(task: RuntimeNavigationTask, spec: UISpec): RouteSketch {
   const routeComponent = spec.components.find((component) => component.type === 'route-map')
-  if (routeComponent?.type === 'route-map') return routeComponent.props.routeSketch
   const leg = task.cockpit?.activeLeg ?? task.navigationSimulation?.leg ?? drivingLegForPhase(task.phase)
+  if (routeComponent?.type === 'route-map') {
+    const authored = routeComponent.props.routeSketch
+    const destination = authored.waypoints.at(-1)?.name?.toLowerCase() ?? ''
+    if (leg !== 'return' || destination.includes('家') || destination.includes('home')) return authored
+  }
   return leg === 'return' ? RETURN_SKETCH : OUTBOUND_SKETCH
 }
 

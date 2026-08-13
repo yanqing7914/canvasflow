@@ -1781,6 +1781,36 @@ export class AgentGateway {
       || request.event.type === 'passengers.onboard'
       || request.event.type === 'navigation.return-arrived'
     if (!allowedTypedEvent) return this.#cockpitNoop(current, request, startedAt, '当前状态没有变化。')
+    if (request.event.type === 'passengers.onboard' && current.task.phase === 'waiting-for-passengers') {
+      const onboard = applyEvent(current.task, request.event, this.#preferences)
+      if (onboard.phase !== 'passengers-onboard') {
+        return this.#cockpitNoop(current, request, startedAt, '请先到达机场并停车，再确认乘客上车。')
+      }
+      const vehicle = current.toolResults?.['vehicle.get-status']?.data ?? current.requestContext?.vehicle
+      const routeReads = this.#orchestrator.resolveCockpitRoute?.(taskId, request.clientRequestId, {
+        leg: 'return', vehicle,
+      })
+      if (!routeReads) throw new AgentGatewayError('PROVIDER_FAILED', 'Return route provider is unavailable', true, current)
+      const route = {
+        ...routeReads.route,
+        data: {
+          ...routeReads.route.data,
+          estimatedBatteryAtArrival: returnBatteryAtArrival(onboard, routeReads.route.data.distanceKm, routeReads.vehicle.data.batteryPercent),
+        },
+      }
+      const next = requestCockpitReturn(onboard, {
+        route: route.data,
+        batteryPercent: routeReads.vehicle.data.batteryPercent,
+        at: timestamp,
+      })
+      const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
+        ...current.toolResults, 'navigation.plan-route': route, 'vehicle.get-status': routeReads.vehicle,
+      }, current.requestContext, current.effectReceipts)))
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+      return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+        text: '乘客已上车，返程路线已准备好，请确认开始返程。', shouldSpeak,
+      })
+    }
     if (request.event.type === 'navigation.outbound-arrived' || request.event.type === 'navigation.return-arrived') {
       const arrival = this.#sanitizeCockpitSnapshot(current, request.event.navigationSnapshot, timestamp, true)
       const expectedLeg = request.event.type === 'navigation.outbound-arrived' ? 'outbound' : 'return'

@@ -93,6 +93,27 @@ describe('AgentApiClient', () => {
     vi.useRealTimers()
   })
 
+  it('times out when response headers arrive but the JSON body never settles', async () => {
+    vi.useFakeTimers()
+    const result = agentResponse()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => new Promise(() => undefined),
+    })
+    const api = new AgentApiClient('/v1', {
+      fetch: fetchMock as unknown as typeof fetch,
+      requestTimeoutMs: 100,
+      createId: () => 'body-timeout',
+    })
+    const request = api.create('查天气')
+    const assertion = expect(request).rejects.toMatchObject({ name: REQUEST_TIMEOUT, message: '请求超时，请重试。' })
+    await vi.advanceTimersByTimeAsync(100)
+    await assertion
+    vi.useRealTimers()
+    void result
+  })
+
   it('routes get, event, action, confirmation, cancel, and reset through canonical endpoints', async () => {
     const result = agentResponse()
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(result)))
