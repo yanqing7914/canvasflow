@@ -125,6 +125,13 @@ export interface ReadToolOrchestration {
    * the schedule-unavailable reply.
    */
   resolveSchedule?(taskId: string, requestId: string, input: { date: string; now?: string }): SuccessfulToolResult<ListUpcomingEventsOutput>
+  /** Re-evaluates charging against the vehicle and distances at query time. */
+  resolveCharging?(taskId: string, requestId: string, input: {
+    batteryPercent: number
+    remainingRangeKm: number
+    outboundDistanceKm: number
+    returnDistanceKm: number
+  }): SuccessfulToolResult<ChargingRecommendationOutput>
   /**
    * The arrivals board for the demo's one pickup city, on the fixture date.
    * Optional for the same reason as the two above; without it the Agent asks
@@ -306,6 +313,21 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       requestId,
       input,
       toolResultSchema(listUpcomingEventsOutputSchema),
+    )
+  }
+
+  resolveCharging(taskId: string, requestId: string, input: {
+    batteryPercent: number
+    remainingRangeKm: number
+    outboundDistanceKm: number
+    returnDistanceKm: number
+  }): SuccessfulToolResult<ChargingRecommendationOutput> {
+    return this.#call(
+      'charging.recommend',
+      taskId,
+      requestId,
+      { ...input, safetyReservePercent: this.#safetyReservePercent },
+      toolResultSchema(chargingRecommendationOutputSchema),
     )
   }
 

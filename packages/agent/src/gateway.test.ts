@@ -492,6 +492,64 @@ describe('AgentGateway', () => {
     }))
   })
 
+  it('recomputes an underway charging query from the current route snapshot', () => {
+    const providers = createProviderRegistry()
+    const orchestrator = new ReadToolOrchestrator({ registry: providers })
+    const resolveCharging = vi.spyOn(orchestrator, 'resolveCharging')
+    const store = new MemoryTaskStore()
+    const gateway = new AgentGateway({ store, now: () => now, createId: () => '001', orchestrator, providers })
+    const started = startCockpitOutbound(gateway, 'underway-charge')
+    // The helper deliberately returns the action response, but its success is
+    // only meaningful when the provider accepted navigation.start. Use the
+    // gateway's persisted snapshot as the source of truth for this live query.
+    const active = gateway.getTask(started.task.taskId, 'underway-charge-active')
+    expect(active.task.navigation?.status).toBe('active')
+    const seed = active.task.navigationSimulation!
+    const progress = 0.5
+    const batteryPercent = (seed.initialBatteryPercent + seed.estimatedBatteryAtArrival) / 2
+    const initialVehicle = createRequest().vehicleContext
+    const remainingRangeKm = batteryPercent / initialVehicle.batteryPercent * initialVehicle.remainingRangeKm
+
+    const asked = gateway.submitEvent(active.task.taskId, {
+      clientRequestId: 'underway-charge-query', expectedTaskRevision: active.task.taskRevision,
+      event: {
+        eventId: 'underway-charge-query', type: 'user.input', text: '规划充电路线', source: 'voice', timestamp: now,
+        navigationSnapshot: {
+          routeId: seed.routeId, leg: 'outbound', progress,
+          speedKph: 55, batteryPercent, remainingRangeKm,
+          remainingDistanceKm: seed.distanceKm / 2, currentRoad: '内环高架',
+        },
+      },
+    })
+
+    expect(resolveCharging).toHaveBeenLastCalledWith(active.task.taskId, 'underway-charge-query', {
+      batteryPercent,
+      remainingRangeKm,
+      outboundDistanceKm: seed.distanceKm / 2,
+      returnDistanceKm: seed.distanceKm,
+    })
+    const card = asked.ui.components.find((component) => component.type === 'charging-recommendation')
+    if (card?.type !== 'charging-recommendation') throw new Error('expected refreshed charging recommendation')
+    const refreshed = resolveCharging.mock.results.at(-1)?.value
+    expect(card.props.currentBatteryPercent).toBe(batteryPercent)
+    expect(card.props.chargingRoute).toMatchObject({ distanceKm: seed.distanceKm / 2 })
+    expect(card.props.estimatedFinalBatteryPercent).toBe(refreshed?.data.estimatedFinalBatteryPercent)
+    expect(card.props.recommended).toBe(refreshed?.data.recommended)
+  })
+
+  it('does not show stale charging guidance while driving without a current position', () => {
+    const gateway = createGateway()
+    const started = startCockpitOutbound(gateway, 'missing-charge-position')
+
+    const asked = gateway.submitEvent(started.task.taskId, {
+      clientRequestId: 'missing-charge-position', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'missing-charge-position', type: 'user.input', text: '规划充电路线', timestamp: now },
+    })
+
+    expect(asked.ui).toEqual(started.ui)
+    expect(asked.assistant?.text).toContain('当前模拟位置')
+  })
+
   it('resolves a spoken ordinal on the cockpit flight board through the event path', () => {
     const gateway = new AgentGateway({
       store: new MemoryTaskStore(),

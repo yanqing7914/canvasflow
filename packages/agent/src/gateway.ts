@@ -2048,8 +2048,41 @@ export class AgentGateway {
     } else if (kind === 'charging') {
       const route = current.toolResults?.['navigation.plan-route']?.data
       const vehicle = commandSnapshot?.vehicle ?? current.toolResults?.['vehicle.get-status']?.data ?? current.requestContext?.vehicle
-      const charging = current.toolResults?.['charging.recommend']?.data
+      let charging = current.toolResults?.['charging.recommend']?.data
       if (!route || !vehicle || !charging) return this.#cockpitNoop(current, request, startedAt, '当前还没有可用的接机路线和车辆电量。')
+      const driving = current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving'
+      if (driving && !commandSnapshot) {
+        return this.#cockpitNoop(current, request, startedAt, '需要当前模拟位置后才能规划充电路线。')
+      }
+      let presentationRoute = route
+      if (driving && commandSnapshot) {
+        try {
+          const refreshed = this.#orchestrator.resolveCharging?.(taskId, request.clientRequestId, {
+            batteryPercent: vehicle.batteryPercent,
+            remainingRangeKm: vehicle.remainingRangeKm,
+            outboundDistanceKm: commandSnapshot.remainingDistanceKm,
+            returnDistanceKm: current.task.phase === 'outbound-driving'
+              ? current.task.navigationSimulation?.distanceKm ?? route.distanceKm
+              : 0,
+          })
+          if (!refreshed) {
+            throw new AgentGatewayError('PROVIDER_FAILED', '充电方案暂时不可用，请稍后重试。', true, current)
+          }
+          charging = refreshed.data
+          const distanceRatio = route.distanceKm > 0 ? commandSnapshot.remainingDistanceKm / route.distanceKm : 0
+          presentationRoute = {
+            ...route,
+            distanceKm: commandSnapshot.remainingDistanceKm,
+            durationMinutes: Math.max(0, Math.round(route.durationMinutes * distanceRatio)),
+          }
+        } catch (error) {
+          if (error instanceof AgentGatewayError) throw error
+          if (error instanceof ReadToolOrchestrationError) {
+            throw new AgentGatewayError(error.code, '充电方案暂时不可用，请稍后重试。', error.retryable, current)
+          }
+          this.#throwProviderError(error, current)
+        }
+      }
       component = {
         id: `charging-${request.event.eventId}`, type: 'charging-recommendation', props: {
           recommended: charging.recommended,
@@ -2059,7 +2092,7 @@ export class AgentGateway {
           suggestedDurationMinutes: charging.suggestedDurationMinutes,
           etaImpactMinutes: charging.etaImpactMinutes,
           nearbyStations: nearbyChargingStations('full', vehicle.batteryPercent),
-          chargingRoute: chargingRoutePresentation(route, current.task.navigation?.destination ?? current.task.pickupAirport?.label ?? '机场', vehicle.batteryPercent),
+          chargingRoute: chargingRoutePresentation(presentationRoute, current.task.navigation?.destination ?? current.task.pickupAirport?.label ?? '机场', vehicle.batteryPercent),
         },
       }
     } else if (kind === 'calendar') {

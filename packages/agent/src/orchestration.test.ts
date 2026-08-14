@@ -98,6 +98,32 @@ describe('ReadToolOrchestrator', () => {
     expect(result.charging.data).toMatchObject({ recommended: true })
   })
 
+  it('re-evaluates charging from the vehicle and route distances supplied at query time', () => {
+    const registry = createMutableRegistry()
+    registry['charging.recommend'] = vi.fn(registry['charging.recommend'])
+    const orchestrator = new ReadToolOrchestrator({ registry })
+
+    const result = orchestrator.resolveCharging('pickup-001', 'charging-now', {
+      batteryPercent: 31,
+      remainingRangeKm: 82,
+      outboundDistanceKm: 12,
+      returnDistanceKm: 32,
+    })
+
+    expect(registry['charging.recommend']).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: 'pickup-001', requestId: 'charging-now:charging.recommend' }),
+      {
+        batteryPercent: 31,
+        remainingRangeKm: 82,
+        outboundDistanceKm: 12,
+        returnDistanceKm: 32,
+        safetyReservePercent: 20,
+      },
+    )
+    expect(result.data.estimatedFinalBatteryPercent).toBe(14)
+    expect(result.data.recommended).toBe(true)
+  })
+
   it('rejects invalid envelopes before using provider data', () => {
     const registry = createMutableRegistry()
     registry['family.resolve-members'] = () => ({ ok: true, data: { members: [] } }) as unknown as ReturnType<ProviderRegistry['family.resolve-members']>
