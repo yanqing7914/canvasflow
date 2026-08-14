@@ -5,7 +5,7 @@
 
 ## 1. 边界
 
-当前默认待机唤醒已从持续 Web Speech 改为本地 sherpa-onnx KWS，并用共享 16 kHz PCM 驱动 Silero VAD。命令识别优先使用共享 PCM ASR；当服务端没有配置 `CANVASFLOW_ASR_URL` 时，才明确回退到唤醒后的 Web Speech 兼容路径。
+当前默认待机唤醒已从持续 Web Speech 改为本地 sherpa-onnx KWS，并用共享 16 kHz PCM 驱动 Silero VAD。命令识别优先走 `/v1/voice/stream` 双向 WebSocket，由服务端桥接豆包 SeedASR 2.0 `bigmodel_async`；流式链失败时用已有 `/v1/voice/transcribe` 批处理代理兜底，服务端完全未配置 ASR 时才回退到唤醒后的 Web Speech 兼容路径。
 
 ## 2. 文件
 
@@ -35,9 +35,9 @@
 ## 4. 下一步（尚未做）
 
 1. 用 Mac 内置麦、AirPods 和有线耳机执行真麦 DoD，校准 score/threshold 与误唤醒率。
-2. 配置真实 `CANVASFLOW_ASR_URL` provider 并用内置麦/AirPods 验收同句“小南，查天气”的首字完整率。
+2. 配置 `DOUBAO_ASR_API_KEY` 并用内置麦/AirPods 验收同句“小南，查天气”的首字完整率；`DOUBAO_ASR_RESOURCE_ID` 默认使用 `volc.seedasr.sauc.duration`。
 3. 把 VAD/KWS 推理进一步迁移到 Worker，并完成 TTS 打断与回声护栏真麦验收。
 
 ## 4. ASR 合同
 
-`POST /v1/voice/transcribe` 接收 `audio/pcm;format=s16le;rate=16000;channels=1`，请求体为裸 PCM16LE；服务端通过 `CANVASFLOW_ASR_URL` 转发，并期望 JSON `{ "text": string, "confidence": number }`。`GET /v1/voice/capabilities` 返回 `{ "pcmAsr": boolean }`，未配置 provider 时返回 `false`，前端自动回退且 UI 保留文字入口。
+`WS /v1/voice/stream` 先接收 `{ "type":"start", "generation":number }`，随后接收 PCM16LE 二进制帧，以 `{ "type":"stop" }` 结束；服务端向浏览器持续返回 `partial`，豆包最终确定稿以 `final` 返回。豆包 API Key 只存在服务端环境变量，不下发浏览器。`POST /v1/voice/transcribe` 继续作为批处理兜底，接收 `audio/pcm;format=s16le;rate=16000;channels=1`。`GET /v1/voice/capabilities` 返回 `{ "pcmAsr": boolean, "streamingAsr": boolean }`。

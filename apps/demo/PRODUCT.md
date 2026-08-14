@@ -16,9 +16,10 @@ and chose the all-lowercase form deliberately, so the case change is not a typo
 to be corrected.
 
 The visible product wordmark remains `pilotflow`. The cabin assistant's display
-name and wake phrase are **小南**. The browser listens through the standard
-`SpeechRecognition` / `webkitSpeechRecognition` entry after an explicit user
-gesture; it is a conservative browser-speech gate, not an on-device KWS model.
+name and wake phrase are **小南**. The browser listens through the local
+keyword spotter over PCM; after wake it streams the same 16 kHz audio to the
+Agent server, which bridges to Doubao SeedASR 2.0. The browser Web Speech API is
+kept only as an explicit compatibility fallback.
 
 The name appears in exactly four places:
 
@@ -47,16 +48,17 @@ from — which is how it entered the repository without review in the first plac
   the airport, approaching, waiting for passengers, returning home, and
   completing the trip. Cancellation remains a supported terminal state.
 - The demo uses simulated flight, calendar, and vehicle data. Road geometry can
-  come from AMap, while speech recognition and playback use the browser's own
-  Web Speech API, with no speech server of ours.
+  come from AMap. Speech recognition is bridged to Doubao SeedASR 2.0 through the
+  Agent server's `/v1/voice/stream` WebSocket; the browser Web Speech API is an
+  explicit compatibility fallback only.
 - A renderer action emits only the declared `action.id`. Agent or tool code
   owns authorization, confirmation, side effects, and parameter construction.
 - Missing, unknown, malformed, or offline UI data must produce a useful
   placeholder or fallback card. It must never blank the page.
-- The first microphone-lamp press authorizes browser speech recognition. After
-  authorization, only a prefix wake phrase (`小南` and a small reviewed alias
-  set) opens a voice command. Saying only `小南` opens a five-second follow-up;
-  explicit keyboard sends bypass the wake requirement.
+- The first microphone-lamp press arms local keyword spotting. Only the wake
+  phrase (`小南` and a small reviewed alias set) opens a voice command. Saying
+  only `小南` opens a five-second follow-up; explicit keyboard sends bypass the
+  wake requirement. Idle KWS/VAD never uploads audio.
 - The voice core produces a transcript and nothing more. Task interpretation
   belongs at the Agent boundary, and a transcript goes there unread: the browser
   sends the words and a `source` marker, never its own reading of them. A
@@ -78,9 +80,9 @@ from — which is how it entered the repository without review in the first plac
 - Every voice failure (no API, insecure context, denied microphone, nothing
   heard, engine error, timeout) states what happened and opens the text field.
   Voice is never the only way to continue.
-- The wake session continuously restarts browser recognition while armed and
-  can interrupt queued TTS. It ships no on-device wake model or audio artifact;
-  browser permission and engine limits are surfaced honestly with text fallback.
+- The armed wake session runs local KWS/VAD, can interrupt queued TTS, and only
+  opens the server ASR stream after wake. Browser permission, engine, and ASR
+  failures are surfaced honestly with text fallback.
 
 ## Driver-facing questions
 

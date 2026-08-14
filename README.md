@@ -24,7 +24,7 @@ flowchart LR
 - `packages/agent`: deterministic Planner and reducer, rules-first Model Gateway boundary, AgentGateway, policy-gated effects, HTTP/SSE handling, idempotency, and SQLite persistence.
 - `packages/tools`: validated fixture/mock Provider registry, side-effect runtimes, and live-provider interfaces.
 - `packages/ui`: deterministic UISpec composition and schema-safe UI projection.
-- `packages/voice`: dependency-injected voice state machine and Web Speech adapter, with no task knowledge.
+- `packages/voice`: dependency-injected hands-free/push-to-talk voice state machines and ASR/TTS seams, with no task knowledge.
 - `apps/demo`: React demo that sends task input, actions, and confirmations through the Agent HTTP API.
 - `fixtures/airport-pickup`: 16 scenario contracts plus `timelines/main-flow.json`, shared by Agent, Provider, UI, and replay tests.
 
@@ -85,7 +85,8 @@ The demo uses these task routes:
 - `POST /v1/tasks/:taskId/reset`
 - `GET /v1/tasks/:taskId/events` with `Accept: text/event-stream`
 - `GET /v1/voice/capabilities`
-- `POST /v1/voice/transcribe` (raw PCM16LE, enabled when `CANVASFLOW_ASR_URL` is set)
+- `WS /v1/voice/stream` (raw PCM16LE frames; enabled when `DOUBAO_ASR_API_KEY` is set)
+- `POST /v1/voice/transcribe` (raw PCM16LE batch fallback, enabled when `CANVASFLOW_ASR_URL` is set)
 
 Mutation requests use client or operation idempotency keys. SSE clients receive `task.updated` snapshots and can resume with the last emitted event ID.
 
@@ -111,7 +112,10 @@ Mutation requests use client or operation idempotency keys. SSE clients receive 
 | `AGENT_CALENDAR_ENDPOINT` | `https://open.feishu.cn` | Optional HTTPS Lark open-platform origin; its host must be on the allowlist. |
 | `AGENT_CALENDAR_TIMEOUT_MS` | `5000` | Optional calendar request timeout in milliseconds, from 1 through 30000. |
 | `DEMO_STATIC_DIR` | unset | Static directory served by the Agent server. The preview launcher sets it to `apps/demo/dist`. |
-| `CANVASFLOW_ASR_URL` | unset | Optional PCM16LE ASR provider. Receives raw 16 kHz mono audio and returns `{ "text": string, "confidence": number }`. |
+| `DOUBAO_ASR_API_KEY` | unset | Server-side Doubao SeedASR credential for the preferred `/v1/voice/stream` bidirectional recognizer; must never be committed. |
+| `DOUBAO_ASR_RESOURCE_ID` | `volc.seedasr.sauc.duration` | Doubao SeedASR 2.0 hourly resource id. |
+| `DOUBAO_ASR_URL` | `wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async` | Doubao bidirectional streaming endpoint. |
+| `CANVASFLOW_ASR_URL` | unset | Optional batch PCM16LE ASR provider. Receives raw 16 kHz mono audio and returns `{ "text": string, "confidence": number }`; used when the streaming path fails or is unconfigured. |
 
 `fixture` and `mock` use the built-in deterministic Provider registry. `live` is intentionally fail-closed: the runtime requires an explicitly injected provider factory that guarantees durable external idempotency. Model planning is independently configured: rules remain the first path, and the model can only supply validated canonicalization for otherwise unknown supported input. Missing, failed, timed-out, low-confidence, stale, terminal, or idempotent-replay inputs do not call the model and retain the deterministic behavior. Successful model plans persist their model ID in the task snapshot and return it as `meta.modelUsed`; rules and deterministic fallbacks omit that field.
 
@@ -156,15 +160,15 @@ The voice runtime is browser-side, but its static assets and response headers ar
 
    The server serves `apps/demo/dist` and the Agent API from the same origin. For development, use `npm run dev` and open `http://localhost:5173`.
 
-5. Enable product-grade shared PCM ASR by setting the provider URL on the Agent server:
+5. Enable product-grade bidirectional command ASR by setting the Doubao credential on the Agent server:
 
    ```bash
-   CANVASFLOW_ASR_URL=https://asr.example.internal/transcribe \
+   DOUBAO_ASR_API_KEY=... \
    AGENT_PORT=4173 \
    npm run preview
    ```
 
-   The provider receives `POST` raw PCM16LE (`16,000 Hz`, mono) and must return JSON such as `{"text":"查天气","confidence":0.92}`. Without this variable, the UI intentionally falls back to wake-then-Web-Speech compatibility mode.
+   The browser streams raw PCM16LE (`16,000 Hz`, mono) over `WS /v1/voice/stream`; the Agent server forwards it to Doubao SeedASR 2.0 (`bigmodel_async`), returns live `partial` transcripts, and commits the two-pass `definite` result as `final`. The API key never leaves the server. If the streaming path is unavailable, the UI falls back to `POST /v1/voice/transcribe` (`CANVASFLOW_ASR_URL`) and only then to wake-then-Web-Speech compatibility mode.
 
 6. Put HTTPS in front of the server in production. The proxy must preserve:
 
@@ -223,7 +227,7 @@ It also checks that a voice attempt leaves the task usable and that the text pat
 
 ## Voice Input
 
-The shipped idle cockpit now uses an in-browser sherpa-onnx keyword spotter for `小南` and a local Silero VAD over one shared 16 kHz microphone capture. Audio remains local while the cockpit is armed. After KWS fires, the command recognizer prefers the shared PCM16LE endpoint (`/v1/voice/transcribe`) and falls back to the browser Web Speech API only when `/v1/voice/capabilities` reports that no ASR provider is configured. `packages/voice` keeps both the hands-free state machine and the editable push-to-talk machine independent from airport-pickup business logic.
+The shipped idle cockpit now uses an in-browser sherpa-onnx keyword spotter for `小南` and a local Silero VAD over one shared 16 kHz microphone capture. Audio remains local while the cockpit is armed. After KWS fires, the command recognizer prefers the bidirectional PCM WebSocket (`/v1/voice/stream`, bridged to Doubao SeedASR 2.0 by the Agent server), falls back to the batch `POST /v1/voice/transcribe` provider, and uses the browser Web Speech API only when `/v1/voice/capabilities` reports that no server ASR is configured. `packages/voice` keeps both the hands-free state machine and the editable push-to-talk machine independent from airport-pickup business logic.
 
 - A recognized transcript lands in the existing task input, where it can be corrected before 发送 submits it.
 - The text path closes while the microphone is capturing or its transcript is in flight, because the field still holds the previous turn's words until the voice turn hands new ones back. It reopens as soon as there is something to confirm. Typing an answer during playback barges in first, so the car stops talking instead of talking over the driver.
@@ -233,7 +237,7 @@ The shipped idle cockpit now uses an in-browser sherpa-onnx keyword spotter for 
 - Every failure — missing model assets, missing isolation headers, no command speech API, an insecure origin, a denied microphone, silence, or a timeout — states what happened in the voice status line and leaves the text field usable, so a voice failure never blocks the task.
 - Voice failures never mutate `TaskState`, and a rejected submission keeps the transcript in the field for a text retry.
 - The KWS runtime/model and VAD model are generated assets rather than Git blobs. Run `bash scripts/fetch-voice-models.sh`, then build the pinned sherpa runtime with `bash scripts/voice-build-kws-wasm.sh`; `node scripts/voice-assets.mjs` verifies all installed files and the `x iǎo n án` token sequence.
-- Set `CANVASFLOW_ASR_URL` on the Agent server to enable shared PCM command recognition. The adapter sends a 200 ms pre-roll for follow-up/barge-in turns, while the initial wake turn avoids replaying the keyword itself.
+- Set `DOUBAO_ASR_API_KEY` on the Agent server for bidirectional streaming recognition (set `CANVASFLOW_ASR_URL` only for a batch fallback). The adapter sends a 200 ms pre-roll for follow-up/barge-in turns, while the initial wake turn avoids replaying the keyword itself. Doubao ASR is metered by audio duration; idle KWS/VAD stays local and uploads no audio.
 
 ## Known Limitations
 
@@ -243,7 +247,7 @@ The shipped idle cockpit now uses an in-browser sherpa-onnx keyword spotter for 
 - The built-in server cannot start in `live` Provider mode without an injected durable provider factory.
 - Real flight, navigation, vehicle, messaging, and memory backends require deployment-specific adapters, credentials, reliability limits, and operational review.
 - Fixture geometry and task facts are fictional competition data, not production navigation or aviation data.
-- Keyword spotting and VAD are local. Command recognition uses the configured PCM provider or, when absent, the browser speech service as an explicit compatibility fallback. CI covers the local acoustic path with a deterministic fake microphone WAV and covers business flows through canonical fixture transcripts; real-device hit/false-wake and ASR accuracy remain a manual release gate.
+- Keyword spotting and VAD are local. Command recognition uses the Doubao bidirectional PCM stream, or the configured batch PCM provider, or the browser speech service as an explicit compatibility fallback. CI covers the local acoustic path with a deterministic fake microphone WAV and covers business flows through canonical fixture transcripts; real-device hit/false-wake and ASR accuracy remain a manual release gate.
 
 ## Third-Party Notices
 
