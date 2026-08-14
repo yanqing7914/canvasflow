@@ -3019,6 +3019,147 @@ a:focus-visible {
 
 .ui-action--secondary:hover { background: var(--control-hover); }
 
+/* The airport prompt is an equal-choice decision. It deliberately opts out of
+   the default primary/secondary hierarchy which would make one airport look
+   preselected before the driver has said anything. */
+.cockpit-primary-panel[data-phase='collecting-airport'] {
+  width: min(820px, calc(100vw - 48px));
+  margin: auto;
+  padding: clamp(32px, 5vh, 58px);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--rule));
+}
+.cockpit-workspace:has(.cockpit-primary-panel[data-phase='collecting-airport']) .cockpit-workspace__primary {
+  top: 50%;
+  left: 50%;
+  width: min(820px, calc(100vw - 48px));
+  max-height: min(620px, calc(100dvh - 170px));
+  transform: translate(-50%, -50%);
+}
+.cockpit-primary-panel[data-phase='collecting-airport'] .ui-status-card--choice-prompt {
+  display: block;
+  width: 100%;
+  max-width: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.cockpit-primary-panel[data-phase='collecting-airport'] .ui-status-card--choice-prompt::before { display: none; }
+.cockpit-primary-panel[data-phase='collecting-airport'] .ui-status-card--choice-prompt .ui-status-card__content { max-width: 100%; text-align: center; }
+.cockpit-primary-panel[data-phase='collecting-airport'] .ui-status-card--choice-prompt .ui-status-card__title { max-width: none; font-size: clamp(38px, 5vw, 62px); }
+.cockpit-primary-panel[data-phase='collecting-airport'] .ui-status-card--choice-prompt .ui-status-card__message { max-width: none; margin-top: 14px; font-size: clamp(16px, 1.5vw, 20px); }
+.cockpit-primary-panel[data-phase='collecting-airport'] .ui-card__actions {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: clamp(26px, 4vh, 42px);
+  padding-top: 0;
+  border-top: 0;
+}
+.cockpit-primary-panel[data-phase='collecting-airport'] .ui-card__actions .ui-action {
+  width: 100%;
+  min-height: 66px;
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--rule));
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  color: var(--ink);
+}
+.cockpit-primary-panel[data-phase='collecting-airport'] .ui-card__actions .ui-action:hover { background: var(--accent-pale); }
+
+/* IdleHome shares the permanent map owner. Its visual layers are deliberately
+   below the task window and entry chrome, so a task starts without recreating
+   the AMap instance. */
+.cockpit-workspace[data-cockpit-mode='idle'] .cockpit-workspace__primary {
+  position: absolute;
+  inset: 0;
+  width: auto;
+  max-height: none;
+  overflow: visible;
+}
+.cockpit-workspace[data-cockpit-mode='idle'] .cockpit-primary-panel {
+  position: static;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+.idle-home { position: relative; width: 100%; height: 100%; min-height: 100dvh; pointer-events: none; }
+.idle-home button { pointer-events: auto; }
+.idle-home__living,
+.idle-home__capabilities { position: absolute; z-index: 3; display: grid; gap: 12px; width: min(330px, calc(100vw - 48px)); }
+.idle-home__living { top: 112px; left: 24px; }
+.idle-home__capabilities { top: 112px; right: 24px; }
+.idle-home__clock,
+.idle-home__widget,
+.idle-home__vehicle,
+.idle-home__speed,
+.idle-home__location,
+.idle-home__voice {
+  border: 1px solid color-mix(in srgb, var(--surface) 54%, transparent);
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--surface) 72%, transparent);
+  box-shadow: 0 18px 48px color-mix(in srgb, var(--ink) 18%, transparent);
+  backdrop-filter: blur(20px) saturate(1.14);
+}
+.idle-home__clock { padding: 19px 22px; }
+.idle-home__clock time { display: block; font-family: Bahnschrift, "DIN Alternate", sans-serif; font-size: clamp(44px, 5vw, 68px); font-weight: 750; letter-spacing: -.07em; line-height: .92; }
+.idle-home__clock p { margin: 10px 0 0; color: var(--muted); font-size: 14px; font-weight: 700; }
+.idle-home__widget { padding: 18px; }
+.idle-home__weather { display: grid; grid-template-columns: 1fr auto; gap: 12px; }
+.idle-home__widget-label,
+.idle-home__vehicle > span,
+.idle-home__speed span { display: block; color: var(--muted); font-size: 12px; font-weight: 750; letter-spacing: .04em; }
+.idle-home__weather strong { display: block; margin-top: 5px; font-size: 28px; }
+.idle-home__weather b { align-self: center; color: var(--accent); font-family: Bahnschrift, "DIN Alternate", sans-serif; font-size: 42px; letter-spacing: -.08em; }
+.idle-home__weather p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 13px; }
+.idle-home__widget button,
+.idle-home__vehicle > button { justify-self: start; border: 0; padding: 0; background: transparent; color: var(--accent-deep); font-size: 13px; font-weight: 800; }
+.idle-home__schedule header { display: flex; align-items: center; justify-content: space-between; font-weight: 800; }
+.idle-home__schedule ol { display: grid; gap: 8px; margin: 13px 0 0; padding: 0; list-style: none; }
+.idle-home__schedule li { display: grid; grid-template-columns: 45px 1fr auto; align-items: center; gap: 8px; font-size: 13px; }
+.idle-home__schedule time { color: var(--accent-deep); font-family: Bahnschrift, "DIN Alternate", sans-serif; font-weight: 800; }
+.idle-home__schedule em { color: var(--muted); font-size: 11px; font-style: normal; white-space: nowrap; }
+.idle-home__schedule em[data-status='进行中'] { color: var(--green-ink); font-weight: 800; }
+.idle-home__vehicle,
+.idle-home__speed { padding: 18px; }
+.idle-home__vehicle > strong,
+.idle-home__speed strong { display: block; margin: 6px 0 14px; color: var(--accent); font-family: Bahnschrift, "DIN Alternate", sans-serif; font-size: 42px; letter-spacing: -.07em; }
+.idle-home__vehicle dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 0 14px; }
+.idle-home__vehicle dl div { padding: 9px; border-radius: 11px; background: color-mix(in srgb, var(--control) 74%, transparent); }
+.idle-home__vehicle dt { color: var(--muted); font-size: 11px; }
+.idle-home__vehicle dd { margin: 4px 0 0; color: var(--ink); font-size: 14px; font-weight: 800; }
+.idle-home__speed { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
+.idle-home__speed > p { grid-column: 1 / -1; margin: 0 0 8px; color: var(--muted); font-size: 12px; }
+.idle-home__speed-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.idle-home__speed-actions button { min-height: 38px; border: 1px solid var(--rule); border-radius: 10px; background: var(--control); color: var(--ink); font-weight: 750; }
+.idle-home__speed-actions button:disabled { opacity: .52; }
+.idle-home__location,
+.idle-home__voice { margin: 0; padding: 9px 12px; color: var(--ink); font-size: 12px; font-weight: 700; }
+.idle-home__location span { display: block; margin-top: 3px; color: var(--muted); font-weight: 500; }
+.idle-home__voice { display: flex; align-items: center; gap: 8px; color: var(--muted); }
+.idle-home__voice i { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 12px color-mix(in srgb, var(--green) 78%, transparent); }
+.idle-vehicle-visual { position: absolute; z-index: 2; top: 50%; left: 50%; width: min(48vw, 680px); pointer-events: none; transform: translate(-50%, -43%); filter: drop-shadow(0 34px 38px rgba(39, 24, 16, .24)); }
+.idle-vehicle-visual svg { display: block; width: 100%; height: auto; }
+.idle-vehicle-visual--muted { opacity: .26; filter: saturate(.65) blur(.4px); }
+
+@media (max-width: 1040px) {
+  .idle-home__living { left: 16px; }
+  .idle-home__capabilities { right: 16px; }
+  .idle-vehicle-visual { width: min(54vw, 610px); opacity: .68; }
+}
+@media (max-width: 720px) {
+  .cockpit-workspace:has(.cockpit-primary-panel[data-phase='collecting-airport']) .cockpit-workspace__primary { top: 50%; width: calc(100vw - 24px); max-height: calc(100dvh - 130px); }
+  .cockpit-primary-panel[data-phase='collecting-airport'] { padding: 26px 20px; }
+  .cockpit-primary-panel[data-phase='collecting-airport'] .ui-card__actions { grid-template-columns: 1fr; }
+  .idle-home__living { top: 88px; left: 12px; width: min(290px, calc(100vw - 24px)); }
+  .idle-home__capabilities { top: auto; right: 12px; bottom: 94px; width: min(290px, calc(100vw - 24px)); }
+  .idle-home__schedule { display: none; }
+  .idle-vehicle-visual { top: 43%; width: min(90vw, 460px); opacity: .42; }
+  .idle-home__clock time { font-size: 46px; }
+  .idle-home__vehicle { display: none; }
+}
+
 .ui-action--unavailable {
   border-color: var(--rule);
   background: var(--control-off);

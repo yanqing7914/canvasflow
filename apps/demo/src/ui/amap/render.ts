@@ -248,14 +248,19 @@ export function renderAMapWorkspace(
     cameraTimers.add(timer)
   }
 
-  const leaveFollow = () => {
-    if (Date.now() < programmaticCameraUntil) return
+  const leaveFollow = (source: 'drag' | 'zoom') => {
+    // Programmatic road-level recentering can emit zoom notifications on some
+    // AMap builds. A real drag, however, is always an explicit driver choice
+    // and must immediately expose the return-to-vehicle affordance.
+    if (source === 'zoom' && Date.now() < programmaticCameraUntil) return
     if (!following) return
     following = false
     options.onManualInteraction?.()
   }
-  map.on?.('dragstart', leaveFollow)
-  map.on?.('zoomstart', leaveFollow)
+  const leaveFollowOnDrag = () => leaveFollow('drag')
+  const leaveFollowOnZoom = () => leaveFollow('zoom')
+  map.on?.('dragstart', leaveFollowOnDrag)
+  map.on?.('zoomstart', leaveFollowOnZoom)
 
   const setRoute = async (sketch: RouteSketch): Promise<boolean> => {
     if (destroyed) return false
@@ -356,8 +361,8 @@ export function renderAMapWorkspace(
       try {
         for (const timer of cameraTimers) clearTimeout(timer)
         cameraTimers.clear()
-        map.off?.('dragstart', leaveFollow)
-        map.off?.('zoomstart', leaveFollow)
+        map.off?.('dragstart', leaveFollowOnDrag)
+        map.off?.('zoomstart', leaveFollowOnZoom)
         clearRoute()
         if (idleMarker) map.remove(idleMarker)
         map.destroy()

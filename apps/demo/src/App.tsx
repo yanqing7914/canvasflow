@@ -45,6 +45,7 @@ import {
   type DemoControlsViewModel,
 } from './ui/cockpit'
 import { PersistentMapLayer } from './ui/cockpit/PersistentMapLayer'
+import { IdleHome } from './ui/idle/IdleHome'
 import { createLocalHandsFreeController, type LocalHandsFreeController } from './voice/localHandsFreeController'
 import { amapLoaderSnapshot, retryAMap, subscribeAMapLoader, switchAMapKey, type AMapLoaderSnapshot } from './ui/amap/loader'
 import {
@@ -2267,9 +2268,17 @@ export default function App({
                   />
                 </section>
               ) : task ? <h1 className="sr-only">机场接人</h1> : (
-                <section className="idle-cockpit" aria-label="空闲座舱">
-                  <p className="idle-cockpit__location" aria-label="人民广场模拟车辆位置">模拟位置，非真实 GPS</p>
-                </section>
+                <IdleHome
+                  vehicle={vehicleContext}
+                  voiceStatus={voiceStatus}
+                  onWeather={() => { void sendInput('查天气') }}
+                  onSchedule={() => { void sendInput('查看日程') }}
+                  onVehicleStatus={() => { void sendInput('查看车辆状态') }}
+                  // These controls are disabled while parked. Keep the existing
+                  // Agent command path ready for a future in-navigation surface.
+                  onSpeedDown={() => { void sendInput('跑慢点') }}
+                  onSpeedUp={() => { void sendInput('跑快点') }}
+                />
               )}
             </section>
           )}

@@ -34,6 +34,38 @@ function baseSpec(overrides: Partial<UISpec> = {}): UISpec {
 }
 
 describe('UISpecRenderer', () => {
+  it('keeps the normal status banner affordances outside the airport choice phase', () => {
+    const spec = baseSpec({
+      phase: 'preparing',
+      layout: { type: 'stack', gap: 'md', slots: { main: ['banner'] } },
+      components: [{ id: 'banner', type: 'status-banner', props: { level: 'info', title: '行程信息', message: '正在准备。' } }],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(document.querySelector('.ui-status-card__glyph')).toBeInTheDocument()
+    expect(screen.getByText('行程提示')).toBeInTheDocument()
+    expect(screen.getByText('信息')).toBeInTheDocument()
+  })
+
+  it('renders collecting-airport as a quiet choice prompt without alert affordances', () => {
+    const spec = baseSpec({
+      phase: 'collecting-airport',
+      layout: { type: 'stack', gap: 'md', slots: { main: ['airport-required'] } },
+      components: [{ id: 'airport-required', type: 'status-banner', props: { level: 'info', title: '去哪个机场？', message: '请选择虹桥机场或浦东机场。' } }],
+      actions: [],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    const prompt = document.querySelector('.ui-status-card--choice-prompt')
+    expect(prompt).toBeInTheDocument()
+    expect(prompt?.querySelector('.ui-status-card__glyph')).not.toBeInTheDocument()
+    expect(prompt).not.toHaveTextContent('行程提示')
+    expect(prompt).not.toHaveTextContent('信息')
+    expect(prompt).toHaveTextContent('去哪个机场？')
+  })
+
   it('renders components in layout slot order and exposes presentation state', () => {
     render(<UISpecRenderer spec={baseSpec({ layout: { type: 'row', gap: 'sm', slots: { main: ['progress', 'overview'] } }, presentation: { mode: 'replace', density: 'compact', theme: 'dark', priority: 'high' } })} onAction={vi.fn()} pending={false} />)
 

@@ -4,7 +4,7 @@ import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import AppComponent from './App'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
-import { applyEvent, createCockpitTask, createInitialTask } from '@canvasflow/agent'
+import { applyEvent, composeAgentSpec, createCockpitTask, createInitialTask } from '@canvasflow/agent'
 import type { AgentResponse, AirportPickupEvent, AirportPickupTaskState, TaskUpdateEnvelope, UISpec, VehicleContext } from '@canvasflow/schema'
 import { estimateFinalBatteryPercent, vehicleSnapshots } from '@canvasflow/tools'
 import { composePickupSpec } from '@canvasflow/ui'
@@ -90,6 +90,66 @@ describe('demo integration', () => {
     expect(screen.queryByText(/航班/)).not.toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('语音不可用，请用文字告诉我。')
     expect(api.create).not.toHaveBeenCalled()
+  })
+
+  it('renders the new idle cockpit home with one set of living/capability widgets', async () => {
+    const user = userEvent.setup()
+    const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} initialVehicleContext={{
+      speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false,
+    }} />)
+
+    expect(screen.getByRole('region', { name: '空闲座舱首页' })).toBeInTheDocument()
+    expect(screen.getByText('模拟位置：人民广场')).toBeInTheDocument()
+    expect(screen.getByText('模拟位置，非真实 GPS')).toBeInTheDocument()
+    expect(screen.getByText('多云')).toBeInTheDocument()
+    expect(screen.getByText('今日日程')).toBeInTheDocument()
+    expect(screen.getByText('Her 开发日会')).toBeInTheDocument()
+    const idleHome = screen.getByRole('region', { name: '空闲座舱首页' })
+    expect(within(idleHome).getByText('42%')).toBeInTheDocument()
+    expect(within(idleHome).getByText('112 km')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '查看天气' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '查看日程' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '查看车辆状态' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '调快' })).toBeDisabled()
+    expect(screen.queryByText('天气接口')).not.toBeInTheDocument()
+    expect(screen.queryByText('日程接口')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: '查看天气' }))
+    expect(api.create).toHaveBeenCalledWith('查天气', expect.objectContaining({ vehicleContext: expect.anything() }))
+  })
+
+  it('renders collecting-airport as a centered quiet choice without the old numbered/alert affordances', async () => {
+    const user = userEvent.setup()
+    const task = { ...createCockpitTask('airport-choice'), phase: 'collecting-airport' } as AirportPickupTaskState
+    const response: AgentResponse = {
+      requestId: 'request-airport-choice',
+      task,
+      ui: composeAgentSpec(task),
+      effects: [],
+      meta: { mode: 'fixture', durationMs: 1, fallbackUsed: false },
+    }
+    const api = { create: vi.fn().mockResolvedValue(response), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
+    render(<AppComponent api={api} voiceEnabled={false} initialText="我要去机场接人" />)
+
+    await user.click(screen.getByRole('button', { name: '发送' }))
+
+    const panel = screen.getByRole('region', { name: '当前行程' })
+    expect(panel).toHaveAttribute('data-phase', 'collecting-airport')
+    expect(panel).toHaveTextContent('去哪个机场？')
+    expect(panel).toHaveTextContent('请选择虹桥机场或浦东机场。')
+    expect(panel).not.toHaveTextContent('行程提示')
+    expect(panel).not.toHaveTextContent('信息')
+    expect(panel.querySelector('.ui-status-card__glyph')).not.toBeInTheDocument()
+    expect(screen.queryByText('1234')).not.toBeInTheDocument()
+
+    const pudong = screen.getByRole('button', { name: '浦东机场' })
+    const hongqiao = screen.getByRole('button', { name: '虹桥机场' })
+    expect(pudong).toBeEnabled()
+    expect(hongqiao).toBeEnabled()
+
+    await user.click(hongqiao)
+    expect(api.event).toHaveBeenCalledWith(expect.anything(), { type: 'user.input', text: '虹桥机场' })
   })
 
   it('updates the idle cockpit after shared controls change pre-task vehicle state', async () => {

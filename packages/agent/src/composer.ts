@@ -231,11 +231,11 @@ export function composeAgentSpec(
     components = [{
       id: 'airport-required',
       type: 'status-banner',
-      props: { level: 'info', title: '你要去哪个机场？', message: '例如虹桥机场或浦东机场。' },
+      props: { level: 'info', title: '去哪个机场？', message: '请选择虹桥机场或浦东机场。' },
       actions: [SELECT_PUDONG_AIRPORT_ACTION_ID, SELECT_HONGQIAO_AIRPORT_ACTION_ID],
     }]
     actions = [
-      { id: SELECT_PUDONG_AIRPORT_ACTION_ID, label: '浦东机场', style: 'primary', event: { type: 'agent-message', text: '浦东机场' } },
+      { id: SELECT_PUDONG_AIRPORT_ACTION_ID, label: '浦东机场', style: 'secondary', event: { type: 'agent-message', text: '浦东机场' } },
       { id: SELECT_HONGQIAO_AIRPORT_ACTION_ID, label: '虹桥机场', style: 'secondary', event: { type: 'agent-message', text: '虹桥机场' } },
     ]
   } else if (task.phase === 'choosing-flight') {
