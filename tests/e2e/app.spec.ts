@@ -639,6 +639,13 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     // Wait for the mounted surface before pressing a key: a Tab that arrives
     // pre-hydration lands on nothing and is not replayed.
     await expect(controls).toBeVisible()
+    if (viewport?.width === 375) {
+      const statusLayout = await page.locator('.cockpit-status-bar').evaluate((status) => ({
+        clientWidth: status.clientWidth,
+        scrollWidth: status.scrollWidth,
+      }))
+      expect(statusLayout.scrollWidth).toBeLessThanOrEqual(statusLayout.clientWidth)
+    }
 
     // The status wordmark is informative rather than a navigation target. Tab
     // order begins with the cockpit utilities; the keyboard input itself is not

@@ -154,7 +154,7 @@ export function PersistentMapLayer({
   useEffect(() => { if (recenterNonce > 0) handle.current?.recenter() }, [recenterNonce])
 
   return (
-    <section className="persistent-map-layer" data-testid="persistent-map-layer" data-map-source={source} data-mode={mode} data-session-key={sessionKey} data-progress={effectiveProgress === undefined ? undefined : String(effectiveProgress)} aria-label={mode === 'route' ? '模拟导航地图' : '座舱地图'}>
+    <section className="persistent-map-layer" data-testid="persistent-map-layer" data-map-source={source} data-mode={mode} data-theme={theme} data-session-key={sessionKey} data-progress={effectiveProgress === undefined ? undefined : String(effectiveProgress)} aria-label={mode === 'route' ? '模拟导航地图' : '座舱地图'}>
       <div ref={container} className="persistent-map-layer__basemap" data-active={source === 'amap'} aria-hidden="true" />
       <div className="persistent-map-layer__fallback" aria-hidden={source === 'amap'}>
         {drawing ? (
