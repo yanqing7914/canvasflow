@@ -34,7 +34,7 @@ const MAX_FLIGHT_CHOICES = 5
  */
 export type ComposeContext = {
   cabinRevertActionToken?: string
-  queryAnswer?: 'departure' | 'calendar'
+  queryAnswer?: 'departure' | 'calendar' | 'charging'
 }
 
 /** The pre-departure screen's own question, asked as ordinary user input. */
@@ -624,6 +624,11 @@ export function composeAgentSpec(
   const upcoming = composeContext?.queryAnswer === 'calendar'
     ? toolResults['calendar.list-upcoming']
     : undefined
+  const chargingQuery = composeContext?.queryAnswer === 'charging'
+    ? toolResults['charging.recommend']
+    : undefined
+  const chargingRoute = toolResults['navigation.plan-route']
+  const chargingVehicle = toolResults['vehicle.get-status']
   // What the departure answer can offer, which is not the same as what it would
   // like to. A reminder already standing has nothing left to set, and 查看日程
   // cannot be offered against a calendar nobody read — an inert button is worse
@@ -648,11 +653,32 @@ export function composeAgentSpec(
         toolResults['charging.recommend']?.data ?? { recommended: false },
       )
     : undefined
-  const queryCard = queryAnswerable
+  const queryCard: UISpec['components'][number] | undefined = queryAnswerable
     ? departure
       ? departurePlanComponent(departure, departureActions.map((action) => action.id))
       : upcoming
         ? scheduleCardComponent(upcoming.data.events, upcoming.meta.provider === 'live' ? 'live' : 'fixture', scheduleProjectedHomeMs)
+        : chargingQuery && chargingRoute && chargingVehicle
+          ? {
+              id: 'charging-query',
+              type: 'charging-recommendation' as const,
+              props: {
+                recommended: chargingQuery.data.recommended,
+                reason: chargingQuery.data.reason,
+                currentBatteryPercent: chargingVehicle.data.batteryPercent,
+                estimatedFinalBatteryPercent: chargingQuery.data.estimatedFinalBatteryPercent,
+                suggestedDurationMinutes: chargingQuery.data.suggestedDurationMinutes,
+                etaImpactMinutes: chargingQuery.data.etaImpactMinutes,
+                nearbyStations: nearbyChargingStations(density, chargingVehicle.data.batteryPercent),
+                chargingRoute: chargingRoutePresentation(
+                  chargingRoute.data,
+                  task.navigation?.destination ?? (task.flight?.arrivalAirport
+                    ? pickupDestinationForAirport(task.flight.arrivalAirport).name
+                    : '机场'),
+                  chargingVehicle.data.batteryPercent,
+                ),
+              },
+            }
         : weather
           ? weatherCardComponent(task, weather.data)
           : scheduleQuery

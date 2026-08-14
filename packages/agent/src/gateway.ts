@@ -745,7 +745,7 @@ export class AgentGateway {
     }
     if (
       request.event.type === 'user.input'
-      && (plan?.intent === 'check-weather' || plan?.intent === 'check-schedule' || plan?.intent === 'check-departure-time')
+      && (plan?.intent === 'check-weather' || plan?.intent === 'check-charging' || plan?.intent === 'check-schedule' || plan?.intent === 'check-departure-time')
       && current.task.phase !== 'completed'
       && current.task.phase !== 'cancelled'
     ) {
@@ -753,6 +753,8 @@ export class AgentGateway {
       if (replayed) return replayed
       return plan.intent === 'check-weather'
         ? this.#submitWeatherQuery(taskId, current, request, startedAt)
+        : plan.intent === 'check-charging'
+          ? this.#submitChargingQuery(taskId, current, request, startedAt)
         : plan.intent === 'check-schedule'
           ? this.#submitScheduleQuery(taskId, current, request, startedAt)
           : this.#submitDepartureQuery(taskId, current, request, startedAt)
@@ -2898,7 +2900,7 @@ export class AgentGateway {
      * Which side question this turn asked, when it asked one. Not derivable from
      * the snapshot — neither answer changes the task — so the asking turn says so.
      */
-    queryAnswer?: 'departure' | 'calendar',
+    queryAnswer?: 'departure' | 'calendar' | 'charging',
   ): StoredTask {
     // A terminal transition may defer a parked-only cabin cleanup. Keep only
     // that private receipt so a later parked event can safely finish it.
@@ -3459,6 +3461,47 @@ export class AgentGateway {
     const assistant = { text: weatherSpokenSummary(weather.data, arrivalAhead, returning), shouldSpeak: supportsTts }
     this.#recordSideAnswer(taskId, request.event.eventId, answered, assistant)
     return this.#response(request.clientRequestId, answered, [], performance.now() - startedAt, assistant)
+  }
+
+  /**
+   * Shows the trip's existing route, battery, and charging recommendation as a
+   * transient generated answer. Like weather and schedule, asking the question
+   * changes no task fact; the next accepted event restores the trip surface.
+   */
+  #submitChargingQuery(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    const route = current.toolResults?.['navigation.plan-route']
+    const charging = current.toolResults?.['charging.recommend']
+    const vehicle = current.toolResults?.['vehicle.get-status']
+    if (!route || !charging || !vehicle) {
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: '当前还没有可用的接机路线和车辆电量。',
+        shouldSpeak: supportsTts,
+      })
+    }
+
+    const published = this.#publish(
+      current.task,
+      current.toolResults,
+      current.requestContext,
+      current.effectReceipts,
+      'charging',
+    )
+    this.#persistBriefBehind(published, current)
+    const duration = charging.data.suggestedDurationMinutes
+    const assistant = {
+      text: charging.data.recommended
+        ? `已规划充电路线，当前电量 ${vehicle.data.batteryPercent}%，建议补能${duration === undefined ? '' : ` ${duration} 分钟`}。`
+        : `当前电量 ${vehicle.data.batteryPercent}%，这趟接机暂时不需要额外补能。`,
+      shouldSpeak: supportsTts,
+    }
+    this.#recordSideAnswer(taskId, request.event.eventId, published, assistant)
+    return this.#response(request.clientRequestId, published, [], performance.now() - startedAt, assistant)
   }
 
   /**
