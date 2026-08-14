@@ -40,21 +40,52 @@ async function postApi(page: Page, path: string, body: unknown) {
   })
 }
 
-/**
- * Engineering metadata and the demo player live in a modal controls drawer, never on
- * the driver-facing brief. The drawer overlays the brief with a scrim, so it is opened
- * to read, then closed again before the next interaction with the trip surface.
- */
+function controlsDialog(page: Page) {
+  return page.locator('#demo-controls-tool-window')
+}
+
+function controlsTrigger(page: Page) {
+  return page.locator('button.control-toggle')
+}
+
+function tripAction(page: Page, name: string) {
+  return page.locator('[data-cockpit-slot="primary"]')
+    .getByRole('button', { name, exact: true })
+}
+
+function tripPhase(page: Page, label: string) {
+  return page.locator(`[data-trip-brief][data-phase-label="${label}"]`)
+}
+
+/** Opens the non-modal tool window only when it is closed or minimized. */
+async function ensureControlsOpen(page: Page) {
+  const dialog = controlsDialog(page)
+  const trigger = controlsTrigger(page)
+  if (await dialog.getAttribute('hidden') !== null) {
+    await expect(trigger).toHaveAccessibleName('打开演示控制')
+    await trigger.click()
+  } else if (await dialog.getAttribute('data-mode') === 'minimized') {
+    await expect(trigger).toHaveAccessibleName('恢复演示控制')
+    await trigger.click()
+  }
+  await expect(dialog).toBeVisible()
+  return dialog
+}
+
+async function closeControls(page: Page) {
+  const dialog = controlsDialog(page)
+  if (await dialog.isVisible()) await page.keyboard.press('Escape')
+  await expect(dialog).toBeHidden()
+}
+
+/** Engineering metadata and the demo player stay in one non-modal tool window. */
 async function readControls(page: Page, expected: string | RegExp) {
-  await page.getByRole('button', { name: '打开演示控制' }).click()
-  const drawer = page.getByRole('dialog', { name: '演示控制' })
-  await expect(drawer).toContainText(expected)
-  await page.keyboard.press('Escape')
-  await expect(drawer).toBeHidden()
+  const dialog = await ensureControlsOpen(page)
+  await expect(dialog).toContainText(expected)
 }
 
 function voiceReplayControls(page: Page) {
-  return page.getByRole('dialog', { name: '演示控制' })
+  return controlsDialog(page)
     .getByRole('group', { name: '语音兜底回放' })
 }
 
@@ -115,12 +146,10 @@ async function sendText(page: Page, value = legacyTaskText) {
 }
 
 async function expectAdvanceEnabled(page: Page, enabled: boolean) {
-  await page.getByRole('button', { name: '打开演示控制' }).click()
-  const advance = page.getByRole('button', { name: /推进下一事件|行程已完成|行程已取消/ })
+  const dialog = await ensureControlsOpen(page)
+  const advance = dialog.getByRole('button', { name: /推进下一事件|行程已完成|行程已取消/ })
   if (enabled) await expect(advance).toBeEnabled()
   else await expect(advance).toBeDisabled()
-  await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeHidden()
 }
 
 async function advanceFlow(page: Page) {
@@ -128,15 +157,15 @@ async function advanceFlow(page: Page) {
     response.request().method() === 'POST'
     && /\/v1\/tasks\/[^/]+\/(events|actions)$/.test(new URL(response.url()).pathname)
   ))
-  await page.getByRole('button', { name: '打开演示控制' }).click()
-  await page.getByRole('button', { name: /推进下一事件/ }).click()
-  await page.keyboard.press('Escape')
+  const dialog = await ensureControlsOpen(page)
+  await dialog.getByRole('button', { name: /推进下一事件/ }).click()
   const response = await responsePromise
   expect(response.ok()).toBe(true)
   const result = await response.json()
   await page.evaluate(() => new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
   }))
+  await expect(dialog).toBeVisible()
   return result
 }
 
@@ -316,6 +345,27 @@ async function routeLineDirection(page: Page): Promise<'east' | 'west'> {
   return xs[xs.length - 1]! > xs[0]! ? 'east' : 'west'
 }
 
+test('keeps the idle location as a compact overlay instead of a map-blocking task card @layout', async ({ page }) => {
+  await page.goto('/')
+
+  const layout = await page.getByTestId('cockpit-workspace').evaluate(() => {
+    const primary = document.querySelector<HTMLElement>('.cockpit-workspace__primary')!.getBoundingClientRect()
+    const idle = document.querySelector<HTMLElement>('.idle-cockpit')!.getBoundingClientRect()
+    const location = document.querySelector<HTMLElement>('.idle-cockpit__location')!.getBoundingClientRect()
+    return {
+      primary: { width: primary.width, height: primary.height },
+      idle: { width: idle.width, height: idle.height },
+      location: { width: location.width, height: location.height },
+    }
+  })
+
+  expect(layout.primary.width).toBeLessThan(360)
+  expect(layout.primary.height).toBeLessThan(100)
+  expect(layout.idle.height).toBeLessThan(100)
+  expect(layout.location.width).toBeGreaterThan(0)
+  await expectNoScroll(page)
+})
+
 test('runs the real cockpit airport pickup loop over a persistent mock AMap @cockpit', async ({ page }, testInfo) => {
   test.setTimeout(60_000)
   await installMockAMap(page)
@@ -346,7 +396,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'collecting-airport')
   await expect(page.locator('.task-surface')).toHaveCount(0)
   await expect(page.getByText('你要去哪个机场？')).toBeVisible()
-  await expect(page.locator('.cockpit-window')).toHaveCount(0)
+  await expect(page.locator('.cockpit-window[data-kind]')).toHaveCount(0)
 
   const airportChoiceRequestPromise = page.waitForRequest((request) => {
     if (request.method() !== 'POST' || !/\/v1\/tasks\/[^/]+\/events$/u.test(new URL(request.url()).pathname)) return false
@@ -505,7 +555,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(completedPayload.task).not.toHaveProperty('cockpit')
   await expect(page.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
   await expect(page.getByRole('status')).toContainText('已到家')
-  await expect(page.locator('.cockpit-window')).toHaveCount(0)
+  await expect(page.locator('.cockpit-window[data-kind]')).toHaveCount(0)
   await expect(page.locator('.navigation-workspace')).toHaveCount(0)
   await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
   await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-e2e-map-node', 'persistent')
@@ -552,10 +602,10 @@ test('keeps multiple cockpit windows inside a narrow viewport @cockpit @layout',
   await sendText(page, '查天气')
   await sendText(page, '查日历')
   await sendText(page, '查看车辆状态')
-  await expect(page.locator('.cockpit-window')).toHaveCount(3)
+  await expect(page.locator('.cockpit-window[data-kind]')).toHaveCount(3)
   await expectNoHorizontalOverflow(page)
 
-  const windowLayout = await page.locator('.cockpit-window').evaluateAll((windows) => ({
+  const windowLayout = await page.locator('.cockpit-window[data-kind]').evaluateAll((windows) => ({
     viewport: { width: innerWidth, height: innerHeight },
     boxes: windows.map((window) => {
       const box = window.getBoundingClientRect()
@@ -577,12 +627,175 @@ test('keeps multiple cockpit windows inside a narrow viewport @cockpit @layout',
   // and the global demo-control toolbar must remain reachable on a phone.
   await vehicle.getByRole('button', { name: '关闭车辆状态窗口' }).click()
   await expect(page.locator('.cockpit-window[data-kind="vehicle-status"]')).toHaveCount(0)
-  await page.getByRole('button', { name: '打开演示控制' }).click()
-  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeVisible()
-  await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeHidden()
+  await page.getByRole('button', { name: '改用文字输入' }).click()
+  const controls = await ensureControlsOpen(page)
+  await expect(controls).not.toHaveAttribute('aria-modal')
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-entry-expanded', 'true')
+  const sheetLayout = await page.getByTestId('cockpit-workspace').evaluate(() => {
+    const entry = document.querySelector<HTMLElement>('.cockpit-workspace__entry')!.getBoundingClientRect()
+    const window = document.querySelector<HTMLElement>('#demo-controls-tool-window')!.getBoundingClientRect()
+    return {
+      window: { left: window.left, right: window.right, top: window.top, bottom: window.bottom },
+      entryTop: entry.top,
+      viewport: { width: innerWidth, height: innerHeight },
+      page: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
+    }
+  })
+  expect(sheetLayout.window.left).toBeGreaterThanOrEqual(12)
+  expect(sheetLayout.window.right).toBeLessThanOrEqual(sheetLayout.viewport.width - 12)
+  expect(sheetLayout.window.top).toBeGreaterThanOrEqual(0)
+  expect(sheetLayout.window.bottom).toBeLessThanOrEqual(sheetLayout.entryTop)
+  expect(sheetLayout.page).toEqual(sheetLayout.viewport)
+  await expect(page.getByLabel('任务输入')).toBeVisible()
   await expectNoHorizontalOverflow(page)
-  await captureCockpitScreenshot(page, testInfo, 'mobile-windows.png')
+  await captureCockpitScreenshot(page, testInfo, 'mobile-demo-controls-sheet.png')
+  await closeControls(page)
+})
+
+test('keeps the desktop demo tool clear of the current cockpit action @cockpit @layout', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 })
+  await installMockAMap(page)
+  await installControllableNavigationClock(page)
+  await page.goto('/')
+  await sendText(page, '去虹桥机场接人')
+  const flightList = await primaryWindow(page, 'flight-list')
+  await flightList.locator('.ui-flight-choices__row').first().click()
+  const outboundConfirmation = await primaryWindow(page, 'outbound-confirmation')
+  const primaryAction = outboundConfirmation.getByRole('button', { name: '现在出发', exact: true })
+  const controls = await ensureControlsOpen(page)
+
+  const layout = await page.getByTestId('cockpit-workspace').evaluate(() => {
+    const action = document.querySelector<HTMLElement>('[data-cockpit-slot="primary"] button:not(:disabled)')!.getBoundingClientRect()
+    const tool = document.querySelector<HTMLElement>('#demo-controls-tool-window')!.getBoundingClientRect()
+    return { actionRight: action.right, toolLeft: tool.left }
+  })
+  expect(layout.actionRight).toBeLessThanOrEqual(layout.toolLeft - 12)
+
+  await primaryAction.click()
+  await expect(page.locator('.navigation-workspace')).toBeVisible()
+  await expect(controls).toBeVisible()
+})
+
+test('keeps the compact desktop demo tool clear of the current cockpit action @cockpit @layout', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 })
+  await installMockAMap(page)
+  await installControllableNavigationClock(page)
+  await page.goto('/')
+  await sendText(page, '去虹桥机场接人')
+  const flightList = await primaryWindow(page, 'flight-list')
+  await flightList.locator('.ui-flight-choices__row').first().click()
+  const outboundConfirmation = await primaryWindow(page, 'outbound-confirmation')
+  const controls = await ensureControlsOpen(page)
+
+  const layout = await page.getByTestId('cockpit-workspace').evaluate(() => {
+    const action = document.querySelector<HTMLElement>('[data-cockpit-slot="primary"] button:not(:disabled)')!.getBoundingClientRect()
+    const tool = document.querySelector<HTMLElement>('#demo-controls-tool-window')!.getBoundingClientRect()
+    return { actionRight: action.right, toolLeft: tool.left }
+  })
+  expect(layout.actionRight).toBeLessThanOrEqual(layout.toolLeft - 12)
+
+  await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
+  await expect(page.locator('.navigation-workspace')).toBeVisible()
+  await expect(controls).toBeVisible()
+})
+
+test('keeps the tablet demo tool beside the current cockpit action @cockpit @layout', async ({ page }) => {
+  await page.setViewportSize({ width: 768, height: 1024 })
+  await installMockAMap(page)
+  await installControllableNavigationClock(page)
+  await page.goto('/')
+  await sendText(page, '去虹桥机场接人')
+  const flightList = await primaryWindow(page, 'flight-list')
+  await flightList.locator('.ui-flight-choices__row').first().click()
+  const outboundConfirmation = await primaryWindow(page, 'outbound-confirmation')
+  const controls = await ensureControlsOpen(page)
+
+  const layout = await page.getByTestId('cockpit-workspace').evaluate(() => {
+    const action = document.querySelector<HTMLElement>('[data-cockpit-slot="primary"] button:not(:disabled)')!.getBoundingClientRect()
+    const tool = document.querySelector<HTMLElement>('#demo-controls-tool-window')!.getBoundingClientRect()
+    return {
+      actionRight: action.right,
+      tool: { left: tool.left, right: tool.right },
+      viewportWidth: innerWidth,
+    }
+  })
+  expect(layout.actionRight).toBeLessThanOrEqual(layout.tool.left - 12)
+  expect(layout.tool.right).toBeLessThanOrEqual(layout.viewportWidth - 12)
+
+  await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
+  await expect(page.locator('.navigation-workspace')).toBeVisible()
+  await expect(controls).toBeVisible()
+})
+
+test('keeps the desktop tool window non-modal, draggable, and clear of the cockpit entry @layout', async ({ page }) => {
+  await page.route('**/v1/tasks', async (route) => {
+    const request = route.request()
+    if (request.method() !== 'POST') {
+      await route.continue()
+      return
+    }
+    const body = request.postDataJSON() as { clientCapabilities?: { cockpitVersion?: string } }
+    const clientCapabilities = { ...body.clientCapabilities }
+    delete clientCapabilities.cockpitVersion
+    await route.continue({ postData: JSON.stringify({ ...body, clientCapabilities }) })
+  })
+  await page.goto('/')
+  await sendText(page)
+  await sendText(page, 'MU5102')
+
+  const closedPrimaryWidth = Math.round((await page.locator('.cockpit-workspace__primary').boundingBox())?.width ?? 0)
+  const workspaceWidth = await briefWidth(page)
+  const controls = await ensureControlsOpen(page)
+  await expect(controls).not.toHaveAttribute('aria-modal')
+  expect(await briefWidth(page)).toBeLessThanOrEqual(workspaceWidth)
+  const openPrimaryWidth = Math.round((await page.locator('.cockpit-workspace__primary').boundingBox())?.width ?? 0)
+  if (closedPrimaryWidth > 860) expect(openPrimaryWidth).toBeLessThan(closedPrimaryWidth)
+  else expect(openPrimaryWidth).toBeLessThanOrEqual(closedPrimaryWidth)
+
+  await controls.getByRole('button', { name: '最小化演示控制窗口' }).click()
+  await expect(controls).toHaveAttribute('data-mode', 'minimized')
+  expect(Math.round((await page.locator('.cockpit-workspace__primary').boundingBox())?.width ?? 0)).toBe(closedPrimaryWidth)
+  await controlsTrigger(page).click()
+  await expect(controls).toHaveAttribute('data-mode', 'normal')
+
+  const initialLayout = await page.getByTestId('cockpit-workspace').evaluate(() => {
+    const primaryAction = document.querySelector<HTMLElement>('[data-cockpit-slot="primary"] button:not(:disabled)')!.getBoundingClientRect()
+    const tool = document.querySelector<HTMLElement>('#demo-controls-tool-window')!.getBoundingClientRect()
+    return { primaryActionRight: primaryAction.right, toolLeft: tool.left }
+  })
+  expect(initialLayout.primaryActionRight).toBeLessThanOrEqual(initialLayout.toolLeft - 12)
+
+  // A task action remains executable while the auxiliary tool is open.
+  await tripAction(page, '开始导航').click()
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'driving-to-airport')
+  await expect(controls).toBeVisible()
+
+  const titlebar = controls.getByTestId('cockpit-tool-window-titlebar')
+  const titlebarBox = await titlebar.boundingBox()
+  expect(titlebarBox).not.toBeNull()
+  await page.mouse.move(titlebarBox!.x + titlebarBox!.width / 2, titlebarBox!.y + titlebarBox!.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(10_000, 10_000, { steps: 8 })
+  await page.mouse.up()
+
+  const layout = await page.getByTestId('cockpit-workspace').evaluate(() => {
+    const entry = document.querySelector<HTMLElement>('.cockpit-workspace__entry')!.getBoundingClientRect()
+    const tool = document.querySelector<HTMLElement>('#demo-controls-tool-window')!.getBoundingClientRect()
+    return {
+      tool: { left: tool.left, right: tool.right, top: tool.top, bottom: tool.bottom },
+      entryTop: entry.top,
+      viewport: { width: innerWidth, height: innerHeight },
+    }
+  })
+  expect(layout.tool.left).toBeGreaterThanOrEqual(12)
+  expect(layout.tool.right).toBeLessThanOrEqual(layout.viewport.width - 12)
+  expect(layout.tool.top).toBeGreaterThanOrEqual(12)
+  expect(layout.tool.bottom).toBeLessThanOrEqual(layout.entryTop - 10)
+
+  // The real entry control must still receive a pointer click after dragging.
+  const keyboard = page.getByRole('button', { name: /改用文字输入|收起文字输入/ })
+  if (await keyboard.getAttribute('aria-pressed') !== 'true') await keyboard.click()
+  await expect(page.getByLabel('任务输入')).toBeVisible()
 })
 
 test('keeps maximized cockpit chrome and voice toolbar reachable on desktop @cockpit @layout', async ({ page }) => {
@@ -617,9 +830,8 @@ test('keeps maximized cockpit chrome and voice toolbar reachable on desktop @coc
     return { entryTop: entry.top, windowBottom: window.bottom }
   })
   expect(layout.windowBottom).toBeLessThanOrEqual(layout.entryTop)
-  await page.getByRole('button', { name: '打开演示控制' }).click()
-  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeVisible()
-  await page.keyboard.press('Escape')
+  await ensureControlsOpen(page)
+  await closeControls(page)
   await vehicle.getByRole('button', { name: '关闭车辆状态窗口' }).click()
   await expect(page.locator('.cockpit-window[data-kind="vehicle-status"]')).toHaveCount(0)
 })
@@ -655,7 +867,9 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
       await keyboard.focus()
       await expect(keyboard).toBeFocused()
     } else {
-      await expect(page.locator('input[aria-label="任务输入"]:visible')).toBeFocused()
+      const visibleInput = page.locator('input[aria-label="任务输入"]:visible')
+      await visibleInput.focus()
+      await expect(visibleInput).toBeFocused()
     }
     await controls.focus()
     await expect(controls).toBeFocused()
@@ -702,7 +916,7 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     await sendText(page, 'MU5102')
     // The demo player lives in the drawer, so tabbing on from the header reaches
     // the trip surface's own action rather than a demo control.
-    const startNavigation = page.getByRole('button', { name: '开始导航' })
+    const startNavigation = tripAction(page, '开始导航')
     await expect(startNavigation).toBeEnabled()
     await controls.focus()
     // The persistent shell has several utility controls after the drawer in DOM
@@ -767,7 +981,7 @@ async function briefWidth(page: Page) {
  */
 test('keeps the brief inside the fixed frame through every phase @layout', async ({ page }) => {
   await page.goto('/')
-  await expect(page.getByRole('button', { name: '打开演示控制' })).toBeVisible()
+  await expect(controlsTrigger(page)).toBeVisible()
   await expectNoScroll(page)
 
   await sendText(page)
@@ -783,7 +997,7 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
   await expect(scheduleStrip.locator('.ui-schedule-strip__risk')).toHaveCount(0)
   await expectNoScroll(page)
 
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await expectNoScroll(page)
 
@@ -798,17 +1012,15 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
   // Opening the drawer must not change the brief's width, and the confirmation
   // adds an action pair to the tallest phase in the flow.
   const closedWidth = await briefWidth(page)
-  await page.getByRole('button', { name: '打开演示控制' }).click()
-  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeVisible()
+  await ensureControlsOpen(page)
   expect(await briefWidth(page)).toBe(closedWidth)
   await expectNoScroll(page)
-  await page.keyboard.press('Escape')
-  await expect(page.getByRole('dialog', { name: '演示控制' })).toBeHidden()
+  await closeControls(page)
   expect(await briefWidth(page)).toBe(closedWidth)
   await expectNoScroll(page)
 
-  await page.getByRole('button', { name: '保存本次偏好' }).click()
-  await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
+  await tripAction(page, '保存本次偏好').click()
+  await expect(tripAction(page, '保存本次偏好')).toHaveCount(0)
   await expectNoScroll(page)
 })
 
@@ -834,7 +1046,7 @@ test('surfaces a transient weather card on demand without growing the preparing 
 
   // The reading is transient: the next trip event recomposes without it and the
   // schedule strip takes its slot back.
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await expect(page.locator('.ui-card--weather-card')).toHaveCount(0)
   await expectNoScroll(page)
@@ -860,7 +1072,7 @@ test('surfaces a transient schedule card on demand without growing the preparing
   await expectNoScroll(page)
 
   // Transient: the next trip event recomposes without it and the strip returns.
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await expect(page.locator('.ui-card--schedule-card')).toHaveCount(0)
   await expectNoScroll(page)
@@ -870,7 +1082,7 @@ test('raises the rain advisory en route and sends the umbrella reminder through 
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
 
   // The in-air flight update is the moment the arrival window firms up; the
@@ -882,8 +1094,8 @@ test('raises the rain advisory en route and sends the umbrella reminder through 
   const advisory = page.locator('[data-component-id="weather-advisory"]')
   await expect(advisory).toBeVisible()
   await expect(advisory).toContainText('小雨')
-  await expect(page.getByRole('button', { name: '提醒乘客带伞' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '暂不处理' })).toBeVisible()
+  await expect(tripAction(page, '提醒乘客带伞')).toBeVisible()
+  await expect(tripAction(page, '暂不处理')).toBeVisible()
   await expectNoScroll(page)
 
   // 提醒乘客带伞 arms the confirm-then-send window: the exact provider-prepared
@@ -892,7 +1104,7 @@ test('raises the rain advisory en route and sends the umbrella reminder through 
     response.request().method() === 'POST'
     && /\/v1\/tasks\/[^/]+\/events$/.test(new URL(response.url()).pathname)
   ))
-  await page.getByRole('button', { name: '提醒乘客带伞' }).click()
+  await tripAction(page, '提醒乘客带伞').click()
   expect((await prepared).ok()).toBe(true)
   await expect(page.locator('.ui-card--message-preview')).toBeVisible()
   await expect(page.locator('.ui-card--message-preview')).toContainText('带伞')
@@ -922,13 +1134,13 @@ test('dismissing the rain advisory returns the drive and never re-prompts @layou
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await advanceFlow(page) // charging.started
   await advanceFlow(page) // flight.updated in-air → advisory
   await expect(page.locator('[data-component-id="weather-advisory"]')).toBeVisible()
 
-  await page.getByRole('button', { name: '暂不处理' }).click()
+  await tripAction(page, '暂不处理').click()
   await expect(page.locator('[data-component-id="weather-advisory"]')).toHaveCount(0)
   await expect(page.locator('.ui-card--navigation-summary')).toBeVisible()
   await expectNoScroll(page)
@@ -961,7 +1173,7 @@ test('answers when to leave from the button on the brief without growing the fra
 
   // Same transient contract as the other query answers, and leaving still leads:
   // 开始导航 remains the primary control on the card that hosts the question.
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await expect(page.locator('.ui-card--departure-plan')).toHaveCount(0)
   await expectNoScroll(page)
@@ -1056,7 +1268,7 @@ test('answers weather and the calendar from the driving brief without breaking t
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await expectNoScroll(page)
 
@@ -1118,7 +1330,7 @@ test('fits longer and mixed-script media titles in the cabin metric @layout', as
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   for (let step = 0; step < 9; step += 1) await advanceFlow(page)
 
   const mediaValue = page.locator('.ui-metric', { has: page.getByText('媒体', { exact: true }) })
@@ -1229,12 +1441,12 @@ test('draws the persistent route layer and steps its marker on authored progress
 
   // 准备出发 keeps the persistent cockpit map in idle mode: the planned route
   // rides inside the navigation card until the drive starts.
-  await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
+  await expect(tripAction(page, '开始导航')).toBeEnabled()
   await expect(map).toHaveAttribute('data-mode', 'idle')
   await expect(line).toHaveCount(0)
   await expectNoScroll(page)
 
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   // The cockpit map owns the route: it switches into route mode on the same DOM
   // node instead of mounting a separate panel card.
@@ -1391,14 +1603,18 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   // Without a task there is nothing to advance, and the drawer says so.
   await expectAdvanceEnabled(page, false)
   await readControls(page, '尚无任务')
+  const controls = controlsDialog(page)
+  await expect(controls.getByRole('progressbar', { name: '演示进度' })).toHaveAttribute('aria-valuenow', '0')
 
   await sendText(page)
   await readControls(page, 'collecting-information')
   await expectAdvanceEnabled(page, true)
+  await expect(controls).toBeVisible()
+  await expect(controls.getByRole('button', { name: '推进下一事件' })).toBeEnabled()
 
   await sendText(page, 'MU5102')
   await readControls(page, 'preparing')
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
 
   await readControls(page, 'driving-to-airport')
   await readControls(page, 'navigation.start:succeeded')
@@ -1426,12 +1642,14 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await advanceFlow(page) // destination.arrived
   await readControls(page, 'completed')
   await readControls(page, 'memory.propose-update:pending-confirmation')
+  await expect(controls.getByRole('progressbar', { name: '演示进度' })).toHaveAttribute('aria-valuenow', '100')
+  await expect(controls.getByRole('button', { name: '行程已完成' })).toBeDisabled()
 
   const confirmed = page.waitForResponse((response) => (
     response.request().method() === 'POST'
     && /\/v1\/tasks\/[^/]+\/confirmations\//.test(new URL(response.url()).pathname)
   ))
-  await page.getByRole('button', { name: '保存本次偏好' }).click()
+  await tripAction(page, '保存本次偏好').click()
   const confirmation = await confirmed
   expect(confirmation.ok()).toBe(true)
   expect(await confirmation.json()).toMatchObject({
@@ -1440,7 +1658,10 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   })
   await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
   await expect(page.getByText('已到家')).toBeVisible()
-  await expect(page.getByRole('button', { name: '保存本次偏好' })).toHaveCount(0)
+  await expect(tripAction(page, '保存本次偏好')).toHaveCount(0)
+  await expect(controls).toBeVisible()
+  await expect(controls).toContainText('尚无任务')
+  await expect(controls.getByRole('progressbar', { name: '演示进度' })).toHaveAttribute('aria-valuenow', '0')
 })
 
 test('prepares the trip from a flight picked off the arrivals board', async ({ page }) => {
@@ -1459,7 +1680,7 @@ test('prepares the trip from a flight picked off the arrivals board', async ({ p
   await expect(flightCard).toContainText('CA1516')
   // The choice has been made, so the offer is gone rather than sitting under the brief.
   await expect(page.locator('.ui-flight-choices')).toHaveCount(0)
-  await expect(page.getByRole('button', { name: '开始导航' })).toBeEnabled()
+  await expect(tripAction(page, '开始导航')).toBeEnabled()
 })
 
 test('prepares the trip from a spoken ordinal against the rendered board', async ({ page }) => {
@@ -1562,7 +1783,7 @@ test('follows a 浦东 pick east, and refuses a rank aimed at the board before a
   await expect(page.getByRole('region', { name: '去浦东机场接妈妈和豆豆窗口' })).toBeVisible()
   await expect(page.locator('.ui-card--navigation-summary')).toContainText('浦东机场 T2')
 
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await expect(page.getByRole('img', { name: '前往浦东机场 T2的路线示意' })).toBeVisible()
   expect(await routeLineDirection(page)).toBe('east')
@@ -1575,7 +1796,7 @@ test('follows a 浦东 pick east, and refuses a rank aimed at the board before a
   await page.locator('.ui-flight-choices__row', { hasText: 'MU5102' }).click()
   await readControls(page, 'preparing')
   await expect(page.getByRole('region', { name: '去虹桥机场接妈妈和豆豆窗口' })).toBeVisible()
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
   expect(await routeLineDirection(page)).toBe('west')
@@ -1630,7 +1851,7 @@ test('walks the pickup scenario from the arrivals board to the airport @layout',
   await expectNoScroll(page)
 
   // 5 — and then the drive, which is where the generative screen becomes a cockpit.
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'route')
   await expect(page.getByLabel('导航层')).toBeVisible()
@@ -1726,10 +1947,11 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   // The offline fallback must not depend on a speech service or on the audio
   // actually playing: the drawer replay delivers the canonical transcript from
   // fixtures/airport-pickup/voice either way, parked for confirmation.
-  await page.getByRole('button', { name: '打开演示控制' }).click()
-  const drawer = page.getByRole('dialog', { name: '演示控制' })
-  await expect(drawer).toContainText('语音兜底回放')
-  const fallbackButtonWidths = await drawer.locator('.voice-fallback-button').evaluateAll((buttons) => (
+  const controls = await ensureControlsOpen(page)
+  await expect(controls).toContainText('语音兜底回放')
+  const fallbackButtons = controls.locator('.voice-fallback-button')
+  await expect(fallbackButtons).not.toHaveCount(0)
+  const fallbackButtonWidths = await fallbackButtons.evaluateAll((buttons) => (
     buttons.map((button) => ({
       button: button.getBoundingClientRect().width,
       cell: button.parentElement?.getBoundingClientRect().width ?? 0,
@@ -1741,7 +1963,8 @@ test('replays a fixture utterance deterministically from the demo drawer', async
     && new URL(response.url()).pathname === '/v1/tasks'
   ))
   await voiceReplayControls(page).getByRole('button', { name: '模糊接机目标', exact: true }).click()
-  await expect(drawer).toBeHidden()
+  await expect(controls).toBeVisible()
+  await expect(page.getByRole('button', { name: /改用文字输入|收起文字输入/ })).toBeVisible()
 
   // Production replay follows the hands-free voice path, so its canonical
   // transcript is accepted without exposing a separate text confirmation.
@@ -1775,7 +1998,7 @@ test('replays cockpit fixtures through default wake mode without SpeechRecogniti
   // A low-confidence fixture is still a confirmation turn in the shipped
   // wake-word mode. With no browser speech service, its canonical transcript
   // must be parked rather than silently submitted or dropped.
-  await page.getByRole('button', { name: '打开演示控制' }).click()
+  await ensureControlsOpen(page)
   await voiceReplayControls(page).getByRole('button', { name: '嘈杂样本（需确认）', exact: true }).click()
   const parked = page.getByLabel('任务输入')
   await expect(parked).toHaveValue(legacyTaskText, { timeout: 15_000 })
@@ -1801,7 +2024,7 @@ test('replays cockpit fixtures through default wake mode without SpeechRecogniti
       response.request().method() === 'POST'
       && /\/v1\/tasks\/[^/]+\/events$/u.test(new URL(response.url()).pathname)
     ))
-    await page.getByRole('button', { name: '打开演示控制' }).click()
+    await ensureControlsOpen(page)
     const replay = voiceReplayControls(page).getByRole('button', { name: label, exact: true })
     await expect(replay).toBeEnabled()
     await replay.click()
@@ -1845,7 +2068,7 @@ test('covers the main trip beats with state-bound WAV fallbacks', async ({ page 
     const requestPromise = page.waitForRequest((candidate) => (
       candidate.method() === 'POST' && expectedPath.test(new URL(candidate.url()).pathname)
     ))
-    await page.getByRole('button', { name: '打开演示控制' }).click()
+    await ensureControlsOpen(page)
     await voiceReplayControls(page).getByRole('button', { name: label, exact: true }).click()
     expect((await requestPromise).postDataJSON()).toMatchObject(
       requestBody === 'input' ? { input: { text: expectedText, source: 'voice' } } : { event: { text: expectedText, source: 'voice' } },
@@ -1853,16 +2076,16 @@ test('covers the main trip beats with state-bound WAV fallbacks', async ({ page 
   }
 
   await replay('模糊接机目标', legacyTaskText, /\/v1\/tasks$/u, 'input')
-  await expect(page.getByText('选择要接的航班')).toBeVisible()
+  await expect(page.getByRole('region', { name: '当前行程' }).getByText('选择要接的航班', { exact: true })).toBeVisible()
 
   await replay('补充航班号', '航班 MU5102', /\/v1\/tasks\/[^/]+\/events$/u, 'event')
-  await expect(page.getByText('准备出发')).toBeVisible()
+  await expect(tripPhase(page, '准备出发')).toBeVisible()
 
   await replay('查询天气', '到的时候天气怎么样', /\/v1\/tasks\/[^/]+\/events$/u, 'event')
   await expect(page.locator('.ui-card--weather-card')).toBeVisible()
 
   await page.getByRole('region', { name: '当前行程' }).getByRole('button', { name: '开始导航', exact: true }).click()
-  await expect(page.getByText('途中')).toBeVisible()
+  await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'driving-to-airport')
 
   await advanceFlow(page) // charging.started
   await advanceFlow(page) // flight.updated in-air -> advisory
@@ -1888,7 +2111,7 @@ test('replays the direct flight-number and advisory-dismiss WAV branches', async
         ? new URL(candidate.url()).pathname === '/v1/tasks'
         : /\/v1\/tasks\/[^/]+\/events$/u.test(new URL(candidate.url()).pathname))
     ))
-    await page.getByRole('button', { name: '打开演示控制' }).click()
+    await ensureControlsOpen(page)
     await voiceReplayControls(page).getByRole('button', { name: label, exact: true }).click()
     expect((await requestPromise).postDataJSON()).toMatchObject(
       requestBody === 'input' ? { input: { text: expectedText, source: 'voice' } } : { event: { text: expectedText, source: 'voice' } },
@@ -1897,7 +2120,7 @@ test('replays the direct flight-number and advisory-dismiss WAV branches', async
 
   await replay('模糊接机目标', legacyTaskText, 'input')
   await replay('补充航班号', '航班 MU5102')
-  await expect(page.getByText('准备出发')).toBeVisible()
+  await expect(tripPhase(page, '准备出发')).toBeVisible()
   await page.getByRole('region', { name: '当前行程' }).getByRole('button', { name: '开始导航', exact: true }).click()
 
   await advanceFlow(page) // charging.started
@@ -1951,7 +2174,7 @@ test('rejects the arrival memory proposal through the confirmation API', async (
 
   await sendText(page)
   await sendText(page, 'MU5102')
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
 
   for (let step = 0; step < 10; step += 1) await advanceFlow(page)
   await readControls(page, 'completed')
@@ -1959,7 +2182,7 @@ test('rejects the arrival memory proposal through the confirmation API', async (
     response.request().method() === 'POST'
     && /\/v1\/tasks\/[^/]+\/confirmations\//.test(new URL(response.url()).pathname)
   ))
-  await page.getByRole('button', { name: '暂不保存' }).click()
+  await tripAction(page, '暂不保存').click()
 
   const rejection = await rejected
   expect(rejection.ok()).toBe(true)
@@ -1969,7 +2192,7 @@ test('rejects the arrival memory proposal through the confirmation API', async (
   })
   await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
   await expect(page.getByText('已到家')).toBeVisible()
-  await expect(page.getByRole('button', { name: '暂不保存' })).toHaveCount(0)
+  await expect(tripAction(page, '暂不保存')).toHaveCount(0)
 })
 
 /**
@@ -2025,7 +2248,7 @@ test('retries a failed landing message through action and confirmation APIs', as
 
   await sendText(page)
   await sendText(page, 'MU5102')
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
   await advanceFlow(page) // charging.started
   await advanceFlow(page) // flight in-air
@@ -2089,7 +2312,7 @@ test('keeps a failed message send status visible in minimal density @layout', as
 
   await sendText(page)
   await sendText(page, 'MU5102')
-  await page.getByRole('button', { name: '开始导航' }).click()
+  await tripAction(page, '开始导航').click()
   await advanceFlow(page) // charging.started
   await advanceFlow(page) // flight in-air
   await advanceFlow(page) // charging.completed
