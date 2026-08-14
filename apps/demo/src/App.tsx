@@ -542,8 +542,12 @@ export default function App({
     || runtimeTask?.phase === 'outbound-driving'
     || runtimeTask?.phase === 'return-driving'
   )
+  // The drawer only guides an action that belongs to the current driver-facing
+  // window. Auxiliary windows may carry their own primary actions.
+  const guideWindow = cockpitContract ? deriveCockpitView(spec).primaryWindow : undefined
+  const guideSpec = guideWindow && spec ? windowUISpec(spec, guideWindow) : undefined
   const guidedAction = cockpitContract && !cockpitNavigationInProgress
-    ? spec?.actions.find((action) => action.style === 'primary')
+    ? guideSpec?.actions.find((action) => action.style === 'primary')
     : undefined
   const navigationActive = Boolean(runtimeTask && spec
     && runtimeTask.phase !== 'completed'

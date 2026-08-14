@@ -403,7 +403,10 @@ describe('demo integration', () => {
       ...composePickupSpec(createInitialTask()), taskId: task.taskId, taskRevision: task.taskRevision, phase: 'choosing-flight',
       layout: { type: 'stack' as const, gap: 'md' as const, slots: { main: [] } },
       components: [flightComponent],
-      actions: [{ id: 'pick-cockpit-MU5102', label: '选择 MU5102', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'pick-cockpit-MU5102' } }],
+      actions: [
+        { id: 'auxiliary-primary', label: '辅助操作', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'auxiliary-primary' } },
+        { id: 'pick-cockpit-MU5102', label: '选择 MU5102', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'pick-cockpit-MU5102' } },
+      ],
       windows: [{ id: 'flight-list-1', kind: 'flight-list' as const, title: '虹桥机场到达航班', componentIds: [flightComponent.id], actionIds: ['pick-cockpit-MU5102'], size: 'large' as const, controls: { closable: true, minimizable: true, maximizable: true } }],
     } as unknown as CockpitUISpec
     const response = {
