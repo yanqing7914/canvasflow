@@ -18,10 +18,16 @@ export default defineConfig({
   // cross-origin isolated. The production Node server applies the same pair.
   server: {
     headers: localVoiceHeaders,
-    proxy: { '/v1': 'http://127.0.0.1:8787', '/_AMapService': 'http://127.0.0.1:8787' },
+    proxy: {
+      '/v1': { target: 'http://127.0.0.1:8787', ws: true },
+      '/_AMapService': 'http://127.0.0.1:8787',
+    },
   },
   preview: {
     headers: localVoiceHeaders,
-    proxy: { '/v1': 'http://127.0.0.1:8787', '/_AMapService': 'http://127.0.0.1:8787' },
+    proxy: {
+      '/v1': { target: 'http://127.0.0.1:8787', ws: true },
+      '/_AMapService': 'http://127.0.0.1:8787',
+    },
   },
 })

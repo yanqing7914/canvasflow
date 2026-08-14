@@ -1,4 +1,5 @@
 import { createServer, type ServerResponse } from 'node:http'
+import type { Socket } from 'node:net'
 import { readFile, stat } from 'node:fs/promises'
 import { readFileSync } from 'node:fs'
 import { extname, join, normalize, resolve, sep } from 'node:path'
@@ -12,6 +13,8 @@ import {
   type ProviderFactory,
 } from '@canvasflow/agent/persistent'
 import { createProviderRegistry, errorResult } from '@canvasflow/tools'
+import { WebSocket, WebSocketServer } from 'ws'
+import { createDoubaoAsrSession, doubaoAsrConfigured } from './doubao-asr'
 
 export type AgentServerOptions = {
   staticDirectory?: string
@@ -33,7 +36,83 @@ export const LOCAL_VOICE_ISOLATION_HEADERS = {
 } as const
 
 export const VOICE_ASR_PREFIX = '/v1/voice/transcribe'
+export const VOICE_ASR_STREAM_PREFIX = '/v1/voice/stream'
 export const VOICE_CAPABILITIES_PREFIX = '/v1/voice/capabilities'
+
+type VoiceClientMessage = { type?: unknown; generation?: unknown }
+
+function rejectWebSocket(socket: Socket, status: number, message: string) {
+  const body = JSON.stringify({ error: message })
+  socket.write(`HTTP/1.1 ${status} ${status === 503 ? 'Service Unavailable' : 'Bad Request'}\r\n`)
+  socket.write('Connection: close\r\nContent-Type: application/json\r\n')
+  socket.write(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`)
+  socket.destroy()
+}
+
+export function installVoiceStreamingServer(
+  server: ReturnType<typeof createServer>,
+  environment: NodeJS.ProcessEnv = process.env,
+) {
+  const websocketServer = new WebSocketServer({ noServer: true, maxPayload: 256 * 1024 })
+  server.on('upgrade', (request, socket, head) => {
+    if (request.url?.split('?', 1)[0] !== VOICE_ASR_STREAM_PREFIX) return
+    if (!doubaoAsrConfigured(environment)) {
+      rejectWebSocket(socket, 503, 'Doubao streaming ASR is not configured')
+      return
+    }
+    websocketServer.handleUpgrade(request, socket, head, (client) => websocketServer.emit('connection', client, request))
+  })
+  websocketServer.on('connection', (client) => {
+    let generation = 0
+    let started = false
+    const upstream = createDoubaoAsrSession({
+      onMessage(message) {
+        if (client.readyState !== WebSocket.OPEN) return
+        client.send(JSON.stringify({
+          type: message.final ? 'final' : 'partial',
+          text: message.text,
+          definite: message.definite,
+          sequence: message.sequence,
+          generation,
+        }))
+        if (message.final) client.close(1000, 'complete')
+      },
+      onError(error) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(JSON.stringify({ type: 'error', message: error.message, generation }))
+          client.close(1011, 'upstream error')
+        }
+      },
+    }, environment)
+
+    client.on('message', (data, binary) => {
+      if (binary) {
+        if (!started) {
+          client.close(1008, 'start required')
+          return
+        }
+        upstream.send(Buffer.from(data as ArrayBuffer))
+        return
+      }
+      try {
+        const message = JSON.parse(data.toString()) as VoiceClientMessage
+        if (message.type === 'start') {
+          generation = typeof message.generation === 'number' ? message.generation : 0
+          started = true
+          client.send(JSON.stringify({ type: 'ready', generation }))
+        } else if (message.type === 'stop') {
+          upstream.finish()
+        }
+      } catch {
+        client.close(1008, 'invalid message')
+      }
+    })
+    client.once('close', () => upstream.close())
+    client.once('error', () => upstream.close())
+  })
+  server.once('close', () => websocketServer.close())
+  return websocketServer
+}
 
 export async function proxyVoiceTranscription(
   request: import('node:http').IncomingMessage,
@@ -261,7 +340,7 @@ export function createAgentServer(options: AgentServerOptions = {}) {
   const staticDirectory = options.staticDirectory ? resolve(options.staticDirectory) : undefined
   const gateway = options.gateway ?? new AgentGateway()
   const agentHandler = createAgentHttpHandler(gateway)
-  return createServer((request, response) => {
+  const server = createServer((request, response) => {
     if (request.method === 'GET' && request.url === '/health') {
       response.writeHead(200, {
         ...LOCAL_VOICE_ISOLATION_HEADERS,
@@ -278,9 +357,10 @@ export function createAgentServer(options: AgentServerOptions = {}) {
       return
     }
     if (request.method === 'GET' && request.url?.split('?', 1)[0] === VOICE_CAPABILITIES_PREFIX) {
-      const pcmAsr = Boolean(process.env.CANVASFLOW_ASR_URL)
+      const streamingAsr = doubaoAsrConfigured(process.env)
+      const pcmAsr = streamingAsr || Boolean(process.env.CANVASFLOW_ASR_URL)
       response.writeHead(200, { ...LOCAL_VOICE_ISOLATION_HEADERS, 'cache-control': 'no-store', 'content-type': 'application/json' })
-      response.end(JSON.stringify({ pcmAsr }))
+      response.end(JSON.stringify({ pcmAsr, streamingAsr }))
       return
     }
     if (request.method === 'GET' && request.url?.startsWith(AMAP_SERVICE_PREFIX)) {
@@ -299,6 +379,8 @@ export function createAgentServer(options: AgentServerOptions = {}) {
     }
     void agentHandler(request, response)
   })
+  installVoiceStreamingServer(server)
+  return server
 }
 
 export function serverHost(environment: NodeJS.ProcessEnv = process.env): string {
