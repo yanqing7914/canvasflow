@@ -25,7 +25,7 @@ import {
 } from '@canvasflow/voice'
 import { advanceMainFlowStep, mainFlowTimeline } from './main-flow'
 import { AgentApiClient, AgentApiError, demoVehicleContext, isNightAt, type AgentEventInput } from './agent-client'
-import { ArrowRightIcon, CloseIcon, ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
+import { ControlsIcon, KeyboardIcon, MicIcon } from './ui/icons'
 import { UISpecRenderer } from './ui'
 import { NavigationWorkspace, navigationSketchForTask } from './ui/navigation/NavigationWorkspace'
 import { cockpitContractPhase, runtimeWindows, windowUISpec, type CockpitUISpec, type RuntimeNavigationTask } from './ui/navigation/contracts'
@@ -34,7 +34,16 @@ import { WindowManager } from './ui/navigation/WindowManager'
 import { GLASS_TIERS, useGlassTier } from './ui/glass-capability'
 import { useVoice, type VoiceSubmitMeta } from './voice/useVoice'
 import { matchWakeWord } from '@canvasflow/voice'
-import { CockpitStatusBar, CockpitWorkspace, deriveCockpitView } from './ui/cockpit'
+import {
+  CockpitStatusBar,
+  CockpitToolWindow,
+  CockpitWorkspace,
+  DemoControlsPanel,
+  deriveCockpitView,
+  type CockpitToolWindowHandle,
+  type CockpitToolWindowMode,
+  type DemoControlsViewModel,
+} from './ui/cockpit'
 import { PersistentMapLayer } from './ui/cockpit/PersistentMapLayer'
 import { createLocalHandsFreeController, type LocalHandsFreeController } from './voice/localHandsFreeController'
 import { amapLoaderSnapshot, retryAMap, subscribeAMapLoader, switchAMapKey, type AMapLoaderSnapshot } from './ui/amap/loader'
@@ -130,6 +139,9 @@ function JourneyPhaseRail({ phase }: { phase: AirportPickupTaskState['phase'] })
             <span className="journey-rail__copy">
               <strong data-journey-label>{stage.label}</strong>
               <small>{cancelled ? '行程已停止' : stage.detail}</small>
+              {index === currentStage ? (
+                <span className="sr-only" data-phase-identity>{phaseIdentityLabels[phase]}</span>
+              ) : null}
             </span>
           </li>
         )
@@ -137,15 +149,6 @@ function JourneyPhaseRail({ phase }: { phase: AirportPickupTaskState['phase'] })
     </ol>
   )
 }
-
-const focusableControlSelector = [
-  'a[href]',
-  'button:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  'textarea:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(', ')
 
 function isDrivingVehicle(vehicle: VehicleContext): boolean {
   return vehicle.speedKph > 0 || vehicle.gear !== 'P'
@@ -449,6 +452,7 @@ export default function App({
     initialVehicleContext ? (initialVehicleContext.isNight ? 'night' : 'day') : 'auto',
   )
   const [controlsOpen, setControlsOpen] = useState(false)
+  const [controlsMode, setControlsMode] = useState<CockpitToolWindowMode>('normal')
   const [keyboardRequested, setKeyboardRequested] = useState(false)
   const pendingRef = useRef(false)
   const mutationGenerationRef = useRef(0)
@@ -486,9 +490,7 @@ export default function App({
   })
   const streamCursorRef = useRef(0)
   const controlsTriggerRef = useRef<HTMLButtonElement>(null)
-  const controlsDrawerRef = useRef<HTMLElement>(null)
-  const controlsCloseRef = useRef<HTMLButtonElement>(null)
-  const restoreControlsFocusRef = useRef(false)
+  const controlsWindowRef = useRef<CockpitToolWindowHandle>(null)
   const composerInputRef = useRef<HTMLInputElement>(null)
   const focusComposerRef = useRef(false)
   const [localTask, setLocalTask] = useState<AirportPickupTaskState | undefined>(
@@ -511,6 +513,12 @@ export default function App({
     })
   }, [composeContext, response, task])
   const spec = response?.ui ?? localSpec
+  // Agent-authored presentation owns task themes. Before the first task, the
+  // shell and map follow the vehicle's sensed cabin light so demo controls have
+  // an immediate visual effect without fabricating a task/spec.
+  const cockpitTheme = task && spec
+    ? spec.presentation.theme
+    : (vehicleContext.isNight ? 'dark' : 'light')
   const effects = useMemo(() => response?.effects ?? [], [response])
   const remoteTaskId = response?.task.taskId
   const runtimeTask = task as unknown as RuntimeNavigationTask | undefined
@@ -724,7 +732,6 @@ export default function App({
     parkedVoiceMetaRef.current = undefined
     setDraftProtected(false)
     setKeyboardRequested(false)
-    setControlsOpen(false)
     setIdleNotice(notice)
   }
 
@@ -1650,6 +1657,10 @@ export default function App({
   const voiceFixtureReady = !pending && !draftBlocksReplay
     && !wakeBlocksReplay
     && (!voice.available || voice.state === 'idle' || voice.state === 'error' || voice.state === 'speaking')
+  const voiceEngineBlocksReplay = voice.available
+    && voice.state !== 'idle'
+    && voice.state !== 'error'
+    && voice.state !== 'speaking'
 
   function isVoiceFixtureAvailable(sample: VoiceFixtureSample): boolean {
     // Reset confirmation is a live wake-session state rather than an Agent
@@ -1714,7 +1725,6 @@ export default function App({
    */
   function replayVoiceFixture(sample: VoiceFixtureSample) {
     if (!isVoiceFixtureAvailable(sample)) return
-    closeControls()
     if (wakeWordEnabled) {
       stopDegradedFixtureAudio()
       setKeyboardRequested(false)
@@ -1773,6 +1783,10 @@ export default function App({
 
   function advance() {
     if (pendingRef.current) return
+    // The cockpit flow advances through its navigation simulator and registered
+    // confirmation actions. The legacy fixture timeline targets the older task
+    // phases and must not be sent against a cockpit task.
+    if (cockpitContract) return
     if (!response) {
       if (!localOnly) return
       setLocalTask((current) => current ? advanceMainFlowStep(current, demoRuntime.preferences) : current)
@@ -1969,67 +1983,16 @@ export default function App({
   }, [keyboardRequested])
 
   const closeControls = useCallback(() => {
-    restoreControlsFocusRef.current = true
     setControlsOpen(false)
   }, [])
 
   function toggleControls() {
     if (controlsOpen) {
-      closeControls()
+      controlsWindowRef.current?.focusOrRestore()
       return
     }
     setControlsOpen(true)
   }
-
-  useEffect(() => {
-    if (controlsOpen) {
-      controlsCloseRef.current?.focus()
-      return
-    }
-    if (restoreControlsFocusRef.current) {
-      controlsTriggerRef.current?.focus()
-      restoreControlsFocusRef.current = false
-    }
-  }, [controlsOpen])
-
-  useEffect(() => {
-    if (!controlsOpen) return undefined
-
-    const handleDrawerKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault()
-        closeControls()
-        return
-      }
-      if (event.key !== 'Tab') return
-
-      const drawer = controlsDrawerRef.current
-      if (!drawer) return
-      const focusableControls = Array.from(
-        drawer.querySelectorAll<HTMLElement>(focusableControlSelector),
-      )
-      const firstControl = focusableControls[0]
-      const lastControl = focusableControls.at(-1)
-      if (!firstControl || !lastControl) {
-        event.preventDefault()
-        return
-      }
-
-      const activeElement = document.activeElement
-      if (event.shiftKey) {
-        if (activeElement === firstControl || !drawer.contains(activeElement)) {
-          event.preventDefault()
-          lastControl.focus()
-        }
-      } else if (activeElement === lastControl || !drawer.contains(activeElement)) {
-        event.preventDefault()
-        firstControl.focus()
-      }
-    }
-
-    document.addEventListener('keydown', handleDrawerKeyDown)
-    return () => document.removeEventListener('keydown', handleDrawerKeyDown)
-  }, [closeControls, controlsOpen])
 
   // Local hands-free wake is an independent capability. Firefox and other
   // hosts may not expose SpeechRecognition while still providing the local
@@ -2091,7 +2054,6 @@ export default function App({
   const progressPercent = playableEventCount === 0
     ? 0
     : isCompleted ? 100 : Math.min(100, (displayedEventCount / playableEventCount) * 100)
-  const progressLabel = isCompleted ? '播放完成' : task?.phase === 'cancelled' ? '已取消' : '播放进度'
   const advanceLabel = isCompleted ? '行程已完成' : task?.phase === 'cancelled' ? '行程已取消' : '推进下一事件'
 
   // Before the first task there is no phase to name, so the brief says what it is
@@ -2101,6 +2063,53 @@ export default function App({
   // present when a validated model plan was actually applied, so showing it never
   // overstates what the model did. Rules-only turns render nothing.
   const modelUsed = response?.meta.modelUsed
+  const mapStatus = mapRuntimeFailed
+    ? '暂时不可用'
+    : mapLoader.state === 'ready'
+      ? `运行中 · Key ${Math.min((mapLoader.keyIndex ?? 0) + 1, Math.max(mapLoader.keyCount, 1))}`
+      : mapLoader.state === 'loading'
+        ? '正在恢复'
+        : mapLoader.state === 'failed'
+          ? '暂时不可用'
+          : mapLoader.keyCount > 0 ? '等待加载' : '未配置 Web JS Key'
+  const controlsViewModel: DemoControlsViewModel = {
+    phaseLabel: phaseIdentity ?? '尚无任务',
+    rawPhase: task?.phase,
+    currentStep: task ? (isTerminal ? playableEventCount : Math.min(playableEventCount, displayedEventCount + 1)) : 0,
+    completedSteps: displayedEventCount,
+    totalSteps: playableEventCount,
+    progressPercent,
+    planningSourceLabel: response ? (modelUsed ? `模型 · ${modelUsed}` : '规则') : '未规划',
+    planningSourceExact: response ? (modelUsed ?? '规则') : undefined,
+    advanceLabel,
+    advanceDisabled: pending || cockpitContract || (!response && !localOnly) || !task || isTerminal,
+    voiceFixtures: voiceFixtureSamples.map((sample) => {
+      const available = isVoiceFixtureAvailable(sample)
+      const unavailableReason = draftBlocksReplay
+        ? '输入框里还有未发送的内容；先发送或清空它，回放才不会覆盖这些话。'
+        : pending
+          ? '演示正在处理，请稍候。'
+          : wakeBlocksReplay || voiceEngineBlocksReplay
+            ? '语音回合正在进行，结束聆听或完成确认后再回放。'
+            : sample.unavailableHint
+      return { id: sample.id, label: sample.label, available, unavailableReason }
+    }),
+    lighting,
+    lightingDisabled: pending || Boolean(task),
+    lightingHint: task
+      ? '光线条件已随任务固定。如需演示另一种光线，请重新开始任务。'
+      : '选择创建任务时车辆上报的光线；界面明暗由 Agent 决定。',
+    mapStatus,
+    mapRecoverDisabled: mapLoader.state === 'loading',
+    mapRotateDisabled: mapLoader.state === 'loading' || mapLoader.keyCount < 2,
+    effects: effects.map((effect) => `${effect.type}:${effect.status}`),
+    taskId: task?.taskId,
+    taskRevision: task?.taskRevision,
+    uiRevision: spec?.uiRevision,
+    density: spec?.presentation.density,
+    priority: spec?.presentation.priority,
+    safetyNote: '此面板仅用于演示，不会改变行程事实或跳过操作确认。',
+  }
 
   // How expensive the floating panel's blur is allowed to be on this machine.
   // Decided from what the device reports about itself rather than from which
@@ -2193,9 +2202,11 @@ export default function App({
           className="control-toggle"
           type="button"
           aria-expanded={controlsOpen}
-          aria-controls="event-console"
+          aria-controls="demo-controls-tool-window"
           aria-haspopup="dialog"
-          aria-label={controlsOpen ? '收起演示控制' : '打开演示控制'}
+          aria-label={!controlsOpen
+            ? '打开演示控制'
+            : controlsMode === 'minimized' ? '恢复演示控制' : '聚焦演示控制'}
           onClick={toggleControls}
         >
           <ControlsIcon size={22} /><span>演示控制</span>
@@ -2237,9 +2248,10 @@ export default function App({
       data-controls-open={controlsOpen}
       data-phase={task?.phase}
       data-density={spec?.presentation.density}
-      data-theme={spec?.presentation.theme}
+      data-theme={cockpitTheme}
       data-priority={spec?.presentation.priority}
       data-glass={glassTier}
+      data-entry-expanded={composerReason ? 'true' : undefined}
       data-navigation-toolbar={navigationActive ? (composerReason ? 'expanded' : 'compact') : undefined}
       style={GLASS_TIERS[glassTier]}
     >
@@ -2252,7 +2264,7 @@ export default function App({
             sketch={routeSketch}
             progress={mapProgress}
             routeKey={mapRouteKey}
-            theme={spec?.presentation.theme ?? 'dark'}
+            theme={cockpitTheme}
             sessionKey={cockpitSessionKey}
             recoveryKey={task?.taskId ?? 'idle'}
             mapRetryNonce={mapRetryNonce}
@@ -2266,7 +2278,7 @@ export default function App({
             onRuntimeReady={() => setMapRuntimeFailed(false)}
           />
         )}
-        status={<CockpitStatusBar vehicle={vehicleContext} phaseLabel={task ? phaseIdentity : undefined} />}
+        status={<CockpitStatusBar vehicle={vehicleContext} phaseLabel={phaseIdentity} />}
         feedback={(
           <>
             {!task && idleNotice ? <p className="cockpit-idle-notice" role="status">{idleNotice}</p> : null}
@@ -2318,195 +2330,45 @@ export default function App({
             onHudVisibilityChange={setHudVisibility}
           />
         ) : null}
-        auxiliary={cockpitContract && auxiliarySpec && runtimeTask && windowVehicle ? (
-          <WindowManager
-            key={runtimeTask.taskId}
-            spec={auxiliarySpec}
-            pending={pending}
-            driving={windowVehicle.runState === 'driving'}
-            vehicle={windowVehicle}
-            onAction={handleWindowAction}
-            clear={runtimeTask.phase === 'completed'}
-            preserveMissing={false}
-            onWindowClose={(windowId) => {
-              if (cockpitOperation && windowId.includes(cockpitOperation.id)) setCockpitOperation(undefined)
-            }}
-          />
-        ) : null}
+        auxiliary={(
+          <>
+            {cockpitContract && auxiliarySpec && runtimeTask && windowVehicle ? (
+              <WindowManager
+                key={runtimeTask.taskId}
+                spec={auxiliarySpec}
+                pending={pending}
+                driving={windowVehicle.runState === 'driving'}
+                vehicle={windowVehicle}
+                onAction={handleWindowAction}
+                clear={runtimeTask.phase === 'completed'}
+                preserveMissing={false}
+                onWindowClose={(windowId) => {
+                  if (cockpitOperation && windowId.includes(cockpitOperation.id)) setCockpitOperation(undefined)
+                }}
+              />
+            ) : null}
+            <CockpitToolWindow
+              ref={controlsWindowRef}
+              open={controlsOpen}
+              title="演示控制"
+              onClose={closeControls}
+              onModeChange={setControlsMode}
+            >
+              <DemoControlsPanel
+                viewModel={controlsViewModel}
+                onAdvance={advance}
+                onReplayVoiceFixture={(fixtureId) => {
+                  const sample = voiceFixtureSamples.find((candidate) => candidate.id === fixtureId)
+                  if (sample) replayVoiceFixture(sample)
+                }}
+                onSelectLighting={selectLighting}
+                onRecoverMap={recoverMap}
+              />
+            </CockpitToolWindow>
+          </>
+        )}
         entry={entryContent}
       />
-
-      {controlsOpen ? (
-        <>
-          <button
-            className="drawer-scrim"
-            type="button"
-            aria-hidden="true"
-            tabIndex={-1}
-            onClick={closeControls}
-          />
-          <aside
-            ref={controlsDrawerRef}
-            id="event-console"
-            className="event-console"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="event-console-title"
-            aria-label="Event console"
-          >
-            <div className="console-heading">
-              <div>
-                <span className="console-kicker">演示控制</span>
-                <h2 id="event-console-title">演示控制</h2>
-              </div>
-              <button
-                ref={controlsCloseRef}
-                className="console-close"
-                type="button"
-                aria-label="关闭演示控制"
-                onClick={closeControls}
-              >
-                <CloseIcon size={24} />
-              </button>
-            </div>
-
-            <div className="console-phase">
-              <span>当前阶段</span>
-              <strong>{task ? task.phase : '尚无任务'}</strong>
-            </div>
-
-            <dl className="revision-grid">
-              <div><dt>任务 ID</dt><dd>{task?.taskId ?? '—'}</dd></div>
-              <div><dt>任务版本</dt><dd>{task ? `taskRevision ${task.taskRevision}` : '—'}</dd></div>
-              <div><dt>界面版本</dt><dd>{spec ? `uiRevision ${spec.uiRevision}` : '—'}</dd></div>
-              <div><dt>信息密度</dt><dd>{spec?.presentation.density ?? '—'}</dd></div>
-              <div><dt>优先级</dt><dd>{spec?.presentation.priority ?? '—'}</dd></div>
-              <div><dt>规划来源</dt><dd>{response ? (modelUsed ?? '规则') : '—'}</dd></div>
-            </dl>
-
-            <div
-              className="console-progress"
-              aria-label="演示进度"
-              data-playable-event-count={playableEventCount}
-            >
-              <div className="console-progress__copy">
-                <span>{progressLabel}</span>
-                <strong>{displayedEventCount} / {playableEventCount}</strong>
-              </div>
-              <div className="progress-track" aria-hidden="true">
-                <span style={{ width: `${progressPercent}%` }} />
-              </div>
-            </div>
-
-            {/* Always mounted with a fixed height: receipts stream in over SSE while
-                the drawer is open, and a conditionally inserted line here used to
-                shove the advance button mid-click — the demo player (and any human
-                aiming at it) then pressed empty space. */}
-            <p className="console-effects" aria-label="Effect receipts" data-empty={effects.length === 0 || undefined}>
-              {effects.length > 0 ? effects.map((effect) => `${effect.type}:${effect.status}`).join(' · ') : '暂无回执'}
-            </p>
-
-            <div className="console-lighting" role="group" aria-label="车外光线">
-              <span className="console-lighting__title">车外光线</span>
-              <div className="console-lighting__actions">
-                {([
-                  { id: 'auto', label: '跟随时间' },
-                  { id: 'day', label: '白天' },
-                  { id: 'night', label: '夜间' },
-                ] as const).map((option) => (
-                  <button
-                    key={option.id}
-                    className="lighting-button"
-                    type="button"
-                    aria-pressed={lighting === option.id}
-                    disabled={pending || Boolean(task)}
-                    onClick={() => selectLighting(option.id)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-              <p className="console-hint">
-                {task
-                  ? '光线条件已随任务固定。如需演示另一种光线，请重新开始任务。'
-                  : '选择创建任务时车辆上报的光线；界面明暗由 Agent 决定。'}
-              </p>
-            </div>
-
-            <div className="console-map-recovery" role="group" aria-label="地图恢复">
-              <div className="console-map-recovery__copy">
-                <span>地图服务</span>
-                <strong>
-                  {mapRuntimeFailed
-                    ? '暂时不可用'
-                    : mapLoader.state === 'ready'
-                    ? `运行中 · Key ${Math.min((mapLoader.keyIndex ?? 0) + 1, Math.max(mapLoader.keyCount, 1))}`
-                    : mapLoader.state === 'loading'
-                      ? '正在恢复'
-                      : mapLoader.state === 'failed'
-                        ? '暂时不可用'
-                        : mapLoader.keyCount > 0 ? '等待加载' : '未配置 Web JS Key'}
-                </strong>
-              </div>
-              <div className="console-map-recovery__actions">
-                <button type="button" disabled={mapLoader.state === 'loading'} onClick={() => recoverMap(false)}>
-                  重新尝试地图
-                </button>
-                <button type="button" disabled={mapLoader.state === 'loading' || mapLoader.keyCount < 2} onClick={() => recoverMap(true)}>
-                  切换 Key
-                </button>
-              </div>
-              <p className="console-hint">只显示运行中的序号，不显示 Key 内容；失败时保留任务和语音状态。</p>
-            </div>
-
-            <button
-              className="advance-button"
-              type="button"
-              onClick={advance}
-              disabled={pending || (!response && !localOnly) || !task || isTerminal}
-            >
-              <span>{advanceLabel}</span>
-              <ArrowRightIcon size={24} />
-            </button>
-
-            <div className="console-voice-fallback" role="group" aria-label="语音兜底回放">
-              <span className="console-voice-fallback__title">语音兜底回放</span>
-              <div className="console-voice-fallback__actions">
-                {voiceFixtureSamples.map((sample) => (
-                  (() => {
-                    const available = isVoiceFixtureAvailable(sample)
-                    const hintId = `${sample.id}-availability-hint`
-                    return (
-                      <span key={sample.id}>
-                        <button
-                          className="voice-fallback-button"
-                          type="button"
-                          disabled={!available}
-                          aria-describedby={!available && sample.unavailableHint ? hintId : undefined}
-                          title={available ? undefined : sample.unavailableHint}
-                          onClick={() => replayVoiceFixture(sample)}
-                        >
-                          {sample.label}
-                        </button>
-                        {!available && sample.unavailableHint
-                          ? <span id={hintId} className="sr-only">{sample.unavailableHint}</span>
-                          : null}
-                      </span>
-                    )
-                  })()
-                ))}
-              </div>
-              <p className="console-hint">
-                {draftBlocksReplay
-                  ? '输入框里还有未发送的内容；先发送或清空它，回放才不会覆盖这些话。'
-                  : '播放预录语音并交付固定转写；转写始终停在输入框，需按「发送」确认后才会提交。'}
-              </p>
-            </div>
-
-            <p className="console-hint">此面板仅用于演示，不会改变行程事实或跳过操作确认。</p>
-          </aside>
-        </>
-      ) : null}
     </main>
   )
 }
