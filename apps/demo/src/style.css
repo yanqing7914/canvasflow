@@ -179,6 +179,7 @@ a:focus-visible {
   overflow: auto;
 }
 .cockpit-primary-panel { padding: 16px; border: 1px solid rgba(190, 213, 242, .22); border-radius: 18px; background: rgba(9, 17, 28, .82); box-shadow: 0 20px 50px rgba(0, 0, 0, .24); backdrop-filter: blur(20px); }
+.cockpit-primary-panel:has(> .cockpit-primary-panel__content:empty) { display: none; }
 .cockpit-primary-panel > .journey-rail {
   /* The cockpit primary window is a normal-flow layer, not the legacy
      full-screen surface the absolute placement was written for. */
@@ -5055,4 +5056,120 @@ a:focus-visible {
   .cockpit-window {
     border-radius: 14px;
   }
+}
+
+/* The persistent cockpit always sits on a night map. Agent specs may describe a
+   light document theme, but letting their inline light tokens bleed through a
+   translucent dark panel makes titles and calendar rows disappear. Keep the
+   content palette in the same high-contrast HMI family as its surrounding
+   hardware, while preserving the Agent-owned information and hierarchy. */
+.cockpit-primary-panel .ui-spec-renderer,
+.cockpit-window__body .ui-spec-renderer {
+  --surface: transparent !important;
+  --cabin: transparent !important;
+  --ink: #eef5ff !important;
+  --muted: #aabbd1 !important;
+  --rule: rgb(185 208 238 / 0.16) !important;
+  --quiet-rule: rgb(185 208 238 / 0.16) !important;
+  --blue: #82adff !important;
+  --blue-deep: #a7c7ff !important;
+  --blue-pale: rgb(96 150 255 / 0.18) !important;
+  --green: #63d69b !important;
+  --green-pale: rgb(37 128 79 / 0.27) !important;
+  --green-edge: rgb(99 214 155 / 0.48) !important;
+  --green-ink: #80e5b1 !important;
+  --amber: #efb55b !important;
+  --amber-pale: rgb(130 89 27 / 0.34) !important;
+  --amber-edge: rgb(239 181 91 / 0.46) !important;
+  --red: #ff9c9c !important;
+  --red-pale: rgb(128 39 48 / 0.34) !important;
+  --red-edge: rgb(255 156 156 / 0.46) !important;
+  --control: rgb(30 48 72 / 0.78) !important;
+  --control-hover: rgb(47 72 105 / 0.9) !important;
+  --control-off: rgb(29 40 54 / 0.82) !important;
+  --control-selected: rgb(70 105 149 / 0.6) !important;
+  --control-edge: rgb(178 207 243 / 0.24) !important;
+  --action-primary: #397cf0 !important;
+  --action-primary-hover: #4b8bfa !important;
+  --action-primary-ink: #f8fbff !important;
+  color: #eef5ff !important;
+}
+
+/* Task windows are decision surfaces, not dark framing around a document. A
+   light translucent material keeps the map visible and makes each choice feel
+   calm and direct. The numbered journey rail was intentionally removed from
+   the React tree, so no future task state can bring it back visually. */
+.cockpit-workspace {
+  --cockpit-surface: rgb(255 255 255 / 0.78);
+  --cockpit-surface-strong: rgb(255 255 255 / 0.9);
+  --cockpit-edge: rgb(255 255 255 / 0.86);
+  --cockpit-rule: rgb(25 64 110 / 0.14);
+  --cockpit-ink: #10233d;
+  --cockpit-muted: #5f7189;
+  --cockpit-blue: #236be8;
+}
+
+.cockpit-primary-panel,
+.cockpit-window {
+  border-color: var(--cockpit-edge);
+  background: linear-gradient(145deg, rgb(255 255 255 / 0.92), rgb(239 246 255 / 0.68));
+  box-shadow: 0 18px 48px rgb(19 55 96 / 0.18), inset 0 1px rgb(255 255 255 / 0.96);
+  backdrop-filter: blur(22px) saturate(1.2);
+}
+
+.cockpit-primary-panel::before { background: linear-gradient(90deg, transparent, rgb(75 135 229 / 0.42), transparent); }
+
+.cockpit-primary-panel .ui-spec-renderer,
+.cockpit-window__body .ui-spec-renderer {
+  --surface: transparent !important;
+  --cabin: transparent !important;
+  --ink: #10233d !important;
+  --muted: #62748b !important;
+  --rule: rgb(25 64 110 / 0.16) !important;
+  --quiet-rule: rgb(25 64 110 / 0.12) !important;
+  --blue: #236be8 !important;
+  --blue-deep: #1859c8 !important;
+  --blue-pale: rgb(35 107 232 / 0.1) !important;
+  --green: #197a52 !important;
+  --green-pale: rgb(41 151 100 / 0.12) !important;
+  --green-edge: rgb(33 127 83 / 0.28) !important;
+  --green-ink: #176c49 !important;
+  --amber: #a85b12 !important;
+  --amber-pale: rgb(213 135 39 / 0.12) !important;
+  --amber-edge: rgb(168 91 18 / 0.28) !important;
+  --red: #b63f45 !important;
+  --red-pale: rgb(194 67 73 / 0.1) !important;
+  --red-edge: rgb(182 63 69 / 0.26) !important;
+  --control: rgb(255 255 255 / 0.64) !important;
+  --control-hover: rgb(232 241 255 / 0.92) !important;
+  --control-off: rgb(235 240 246 / 0.8) !important;
+  --control-selected: rgb(216 231 255 / 0.84) !important;
+  --control-edge: rgb(38 91 159 / 0.2) !important;
+  --action-primary: #236be8 !important;
+  --action-primary-hover: #155acb !important;
+  --action-primary-ink: #fff !important;
+  color: #10233d !important;
+}
+
+.cockpit-primary-panel .ui-flight-choices__row {
+  border-color: rgb(32 84 151 / 0.24);
+  background: rgb(255 255 255 / 0.54);
+}
+
+.cockpit-primary-panel .ui-flight-choices__row:hover:not(:disabled) {
+  border-color: rgb(35 107 232 / 0.68);
+  background: rgb(231 241 255 / 0.82);
+}
+
+.cockpit-primary-panel .ui-card,
+.cockpit-window__body .ui-card { background: transparent !important; }
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .cockpit-primary-panel,
+  .cockpit-window { background: #f7fbff; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .cockpit-primary-panel,
+  .cockpit-window { background: #f7fbff; }
 }

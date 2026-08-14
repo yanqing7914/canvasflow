@@ -82,62 +82,6 @@ const phaseIdentityLabels: Record<AirportPickupTaskState['phase'], string> = {
   cancelled: '行程已取消',
 }
 
-const journeyStages = [
-  { id: 'prepare', label: '准备', detail: '确认航班与出发方案' },
-  { id: 'pickup', label: '接机', detail: '前往机场并接到家人' },
-  { id: 'return', label: '返程', detail: '送家人安全回家' },
-  { id: 'home', label: '到家', detail: '总结行程与偏好' },
-] as const
-
-const journeyStageByPhase: Record<AirportPickupTaskState['phase'], number | undefined> = {
-  'collecting-airport': 0,
-  'choosing-flight': 0,
-  'confirming-outbound': 0,
-  'collecting-information': 0,
-  preparing: 0,
-  'outbound-driving': 1,
-  'driving-to-airport': 1,
-  'approaching-airport': 1,
-  'waiting-for-passengers': 1,
-  'passengers-onboard': 2,
-  'confirming-return': 2,
-  'return-driving': 2,
-  'returning-home': 2,
-  completed: 3,
-  cancelled: undefined,
-}
-
-function JourneyPhaseRail({ phase }: { phase: AirportPickupTaskState['phase'] }) {
-  const currentStage = journeyStageByPhase[phase]
-  const cancelled = phase === 'cancelled'
-
-  return (
-    <ol className="journey-rail" aria-label="接机行程阶段" data-cancelled={cancelled || undefined}>
-      {journeyStages.map((stage, index) => {
-        const state = currentStage === undefined
-          ? 'upcoming'
-          : index < currentStage ? 'completed' : index === currentStage ? 'current' : 'upcoming'
-        return (
-          <li
-            className="journey-rail__stage"
-            data-state={state}
-            aria-current={state === 'current' ? 'step' : undefined}
-            key={stage.id}
-          >
-            <span className="journey-rail__marker" aria-hidden="true">
-              <span>{index + 1}</span>
-            </span>
-            <span className="journey-rail__copy">
-              <strong data-journey-label>{stage.label}</strong>
-              <small>{cancelled ? '行程已停止' : stage.detail}</small>
-            </span>
-          </li>
-        )
-      })}
-    </ol>
-  )
-}
-
 const focusableControlSelector = [
   'a[href]',
   'button:not([disabled])',
@@ -2273,7 +2217,7 @@ export default function App({
             {error ? <p className="brief-error" role="alert">{error}</p> : null}
           </>
         )}
-        primary={hideNavigationPrimary || (cockpitView.mode === 'terminal' && !terminalConfirmationVisible) || (cockpitContract && Boolean(windowSpec) && !cockpitView.primaryWindow && !terminalConfirmationVisible)
+        primary={!task || hideNavigationPrimary || (cockpitView.mode === 'terminal' && !terminalConfirmationVisible) || (cockpitContract && Boolean(windowSpec) && !cockpitView.primaryWindow && !terminalConfirmationVisible)
           ? null
           : (
             <section
@@ -2285,7 +2229,6 @@ export default function App({
               data-phase={task?.phase}
               data-phase-label={phaseIdentity}
             >
-              {task ? <JourneyPhaseRail phase={task.phase} /> : null}
               {primarySpec && task ? (
                 <section className="cockpit-primary-panel__content" aria-label={`${cockpitView.primaryWindow?.title ?? windowSpec?.title ?? '当前行程'}窗口`}>
                   <UISpecRenderer
@@ -2295,11 +2238,7 @@ export default function App({
                     spec={primarySpec}
                   />
                 </section>
-              ) : task ? <h1 className="sr-only">机场接人</h1> : (
-                <section className="idle-cockpit" aria-label="空闲座舱">
-                  <p className="idle-cockpit__location" aria-label="人民广场模拟车辆位置">模拟位置，非真实 GPS</p>
-                </section>
-              )}
+              ) : task ? <h1 className="sr-only">机场接人</h1> : null}
             </section>
           )}
         hud={navigationActive && runtimeTask && spec ? (
