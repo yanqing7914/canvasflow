@@ -185,7 +185,7 @@ describe('airport pickup Planner', () => {
     })
   })
 
-  it.each(['找附近充电站', '规划充电路线', '要不要充电'])('treats %s as a read-only charging query', (text) => {
+  it.each(['找附近充电站', '规划充电路线', '查看充电', '要不要充电'])('treats %s as a read-only charging query', (text) => {
     expect(planAirportPickup({ text, eventId: 'charge-query', timestamp })).toMatchObject({
       intent: 'check-charging', slotUpdates: {}, proposedEvents: [{ type: 'user.input', text }],
     })

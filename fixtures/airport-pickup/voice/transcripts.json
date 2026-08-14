@@ -40,6 +40,13 @@
       "requiresConfirmation": false
     },
     {
+      "id": "check-charging",
+      "file": "check-charging.wav",
+      "text": "查看充电",
+      "confidence": 0.98,
+      "requiresConfirmation": false
+    },
+    {
       "id": "start-navigation",
       "file": "start-navigation.wav",
       "text": "开始导航",

@@ -271,6 +271,7 @@ type NavigationVoiceIntent =
   | 'speed-up'
   | 'speed-down'
   | 'weather'
+  | 'charging'
   | 'calendar'
   | 'flight-detail'
   | 'vehicle-status'
@@ -284,7 +285,7 @@ type VoiceTurnConfig = {
   autoSubmit: boolean
   recognitionSource: VoiceRecognitionSource
 }
-type CockpitOperationKind = 'weather' | 'calendar' | 'flight-detail' | 'vehicle-status' | 'return-route' | 'flight-query' | 'generic'
+type CockpitOperationKind = 'weather' | 'charging' | 'calendar' | 'flight-detail' | 'vehicle-status' | 'return-route' | 'flight-query' | 'generic'
 type CockpitOperation = {
   id: string
   attempt: number
@@ -302,6 +303,7 @@ function cockpitOperationForInput(text: string): Pick<CockpitOperation, 'kind' |
   const compact = text.replace(/\s+/g, '')
   if (/查(?:最近)?航班|航班列表|查航班/.test(compact)) return { kind: 'flight-query', title: '正在查询最近航班', message: '正在生成一批新的到达航班，当前任务不会改变。' }
   if (/天气/.test(compact)) return { kind: 'weather', title: '正在查询天气', message: '按当前模拟位置查询，地图和车辆继续运行。' }
+  if (/充电|补能/.test(compact)) return { kind: 'charging', title: '正在生成充电方案', message: '按当前路线、电量和模拟位置规划，地图和车辆继续运行。' }
   if (/日历|日程/.test(compact)) return { kind: 'calendar', title: '正在生成日历', message: '正在读取今天的全部日程。' }
   if (/航班详情/.test(compact)) return { kind: 'flight-detail', title: '正在读取航班详情', message: '当前选中的航班保持不变。' }
   if (/车辆状态|电量/.test(compact)) return { kind: 'vehicle-status', title: '正在读取车辆状态', message: '窗口将使用最新模拟车辆数据。' }
@@ -313,6 +315,7 @@ function navigationVoiceIntent(text: string): NavigationVoiceIntent {
   if (/跑快点|快一点|加速/.test(compact)) return 'speed-up'
   if (/跑慢点|慢一点|减速/.test(compact)) return 'speed-down'
   if (/天气/.test(compact)) return 'weather'
+  if (/充电|补能/.test(compact)) return 'charging'
   if (/日历|日程/.test(compact)) return 'calendar'
   if (/航班详情/.test(compact)) return 'flight-detail'
   if (/车辆状态|电量/.test(compact)) return 'vehicle-status'
@@ -1680,6 +1683,10 @@ export default function App({
     }
     if (sample.id === 'flight-number') {
       return response.task.phase === 'collecting-information' && response.task.flight === undefined
+    }
+    if (sample.id === 'check-charging') {
+      return response.task.phase !== 'completed' && response.task.phase !== 'cancelled'
+        && Boolean(response.task.navigation?.routeId)
     }
     if (sample.id === 'check-weather' || sample.id === 'check-calendar' || sample.id === 'check-flight-detail' || sample.id === 'check-vehicle-status') {
       return response.task.phase !== 'completed' && response.task.phase !== 'cancelled'

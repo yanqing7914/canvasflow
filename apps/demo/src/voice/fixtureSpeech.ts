@@ -1,6 +1,7 @@
 import type { SpeechRecognitionLike } from '@canvasflow/voice'
 import transcripts from '../../../../fixtures/airport-pickup/voice/transcripts.json'
 import checkWeatherWav from '../../../../fixtures/airport-pickup/voice/check-weather.wav?url'
+import checkChargingWav from '../../../../fixtures/airport-pickup/voice/check-charging.wav?url'
 import createAirportPickupWav from '../../../../fixtures/airport-pickup/voice/create-airport-pickup.wav?url'
 import dismissWeatherAdvisoryWav from '../../../../fixtures/airport-pickup/voice/dismiss-weather-advisory.wav?url'
 import flightNumberWav from '../../../../fixtures/airport-pickup/voice/flight-number.wav?url'
@@ -60,6 +61,7 @@ export type FixtureAudioLike = {
 export type FixtureAudioFactory = (url: string) => FixtureAudioLike | null
 
 const audioUrls: Record<string, string> = {
+  'check-charging.wav': checkChargingWav,
   'check-weather.wav': checkWeatherWav,
   'create-airport-pickup.wav': createAirportPickupWav,
   'dismiss-weather-advisory.wav': dismissWeatherAdvisoryWav,
@@ -98,6 +100,7 @@ const sampleLabels: Record<string, string> = {
   'flight-number': '补充航班号',
   'noisy-create': '嘈杂样本（需确认）',
   'check-weather': '查询天气',
+  'check-charging': '查看充电',
   'check-calendar': '查看日程',
   'check-flight-detail': '查看航班详情',
   'check-vehicle-status': '查看车辆状态',
@@ -128,6 +131,7 @@ const sampleUnavailableHints: Record<string, string> = {
   'flight-number': '仅旧版缺少航班号的任务可用',
   'noisy-create': '仅在尚未创建任务时可用',
   'check-weather': '需先创建任务；途中会按模拟位置查询',
+  'check-charging': '需先创建任务并生成接机路线；途中会按模拟位置重新规划',
   'check-calendar': '需先创建任务',
   'check-flight-detail': '需先选择航班',
   'check-vehicle-status': '需先创建任务',
