@@ -179,6 +179,7 @@ a:focus-visible {
   overflow: auto;
 }
 .cockpit-primary-panel { padding: 16px; border: 1px solid rgba(190, 213, 242, .22); border-radius: 18px; background: rgba(9, 17, 28, .82); box-shadow: 0 20px 50px rgba(0, 0, 0, .24); backdrop-filter: blur(20px); }
+.cockpit-primary-panel:has(> .cockpit-primary-panel__content:empty) { display: none; }
 .cockpit-primary-panel > .journey-rail {
   /* The cockpit primary window is a normal-flow layer, not the legacy
      full-screen surface the absolute placement was written for. */
@@ -4636,4 +4637,539 @@ a:focus-visible {
   color: var(--muted);
   font-size: clamp(19px, 1.5vw, 24px);
   line-height: 1.55;
+}
+
+/* Cockpit-specific card treatment. The map is the stage; task information is a
+   compact, glanceable layer above it rather than a page-sized white document. */
+.cockpit-workspace {
+  --cockpit-surface: rgb(8 17 29 / 0.78);
+  --cockpit-surface-strong: rgb(7 15 26 / 0.9);
+  --cockpit-edge: rgb(187 212 244 / 0.2);
+  --cockpit-rule: rgb(185 208 238 / 0.16);
+  --cockpit-ink: #eef5ff;
+  --cockpit-muted: #aabbd1;
+  --cockpit-blue: #82adff;
+}
+
+.cockpit-workspace__primary {
+  top: 88px;
+  left: clamp(14px, 1.7vw, 28px);
+  width: min(620px, 43vw);
+  max-height: calc(100dvh - 150px);
+  scrollbar-width: thin;
+  scrollbar-color: rgb(145 181 232 / 0.56) transparent;
+}
+
+.cockpit-primary-panel {
+  position: relative;
+  padding: 12px;
+  border-color: var(--cockpit-edge);
+  border-radius: 16px;
+  background:
+    linear-gradient(145deg, rgb(23 39 60 / 0.82), rgb(7 15 26 / 0.72)),
+    var(--cockpit-surface);
+  box-shadow: 0 22px 54px rgb(0 0 0 / 0.3), inset 0 1px rgb(255 255 255 / 0.08);
+  backdrop-filter: blur(18px) saturate(1.12);
+}
+
+.cockpit-primary-panel::before {
+  position: absolute;
+  top: 0;
+  right: 18px;
+  left: 18px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(142 181 244 / 0.66), transparent);
+  content: '';
+  pointer-events: none;
+}
+
+.cockpit-primary-panel > .journey-rail {
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.cockpit-primary-panel .journey-rail__stage {
+  gap: 7px;
+  padding: 7px 3px 8px 0;
+  border-top-color: var(--cockpit-rule);
+}
+
+.cockpit-primary-panel .journey-rail__stage:not(:last-child)::after {
+  top: 13px;
+  background: var(--cockpit-rule);
+}
+
+.cockpit-primary-panel .journey-rail__marker {
+  width: 20px;
+  height: 20px;
+  border-color: rgb(177 205 239 / 0.32);
+  background: rgb(10 21 35 / 0.92);
+  color: var(--cockpit-muted);
+  font-size: 10px;
+}
+
+.cockpit-primary-panel .journey-rail__copy strong {
+  color: var(--cockpit-muted);
+  font-size: 12px;
+  letter-spacing: 0.01em;
+}
+
+.cockpit-primary-panel .journey-rail__stage[data-state='current'] .journey-rail__marker {
+  border-color: var(--cockpit-blue);
+  background: var(--cockpit-blue);
+  color: #07111e;
+  box-shadow: 0 0 0 4px rgb(130 173 255 / 0.14);
+}
+
+.cockpit-primary-panel .journey-rail__stage[data-state='current'] .journey-rail__copy strong {
+  color: var(--cockpit-ink);
+}
+
+.cockpit-primary-panel .ui-spec-renderer {
+  --surface: transparent;
+  --cabin: transparent;
+  --ink: var(--cockpit-ink);
+  --muted: var(--cockpit-muted);
+  --rule: var(--cockpit-rule);
+  --quiet-rule: var(--cockpit-rule);
+  --blue: var(--cockpit-blue);
+  --blue-deep: #a7c7ff;
+  --blue-pale: rgb(96 150 255 / 0.18);
+  --green: #63d69b;
+  --green-pale: rgb(37 128 79 / 0.27);
+  --green-edge: rgb(99 214 155 / 0.48);
+  --green-ink: #80e5b1;
+  --amber: #efb55b;
+  --amber-pale: rgb(130 89 27 / 0.34);
+  --amber-edge: rgb(239 181 91 / 0.46);
+  --red: #ff9c9c;
+  --red-pale: rgb(128 39 48 / 0.34);
+  --red-edge: rgb(255 156 156 / 0.46);
+  --control: rgb(30 48 72 / 0.78);
+  --control-hover: rgb(47 72 105 / 0.9);
+  --control-off: rgb(29 40 54 / 0.82);
+  --control-selected: rgb(70 105 149 / 0.6);
+  --control-edge: rgb(178 207 243 / 0.24);
+  --action-primary: #397cf0;
+  --action-primary-hover: #4b8bfa;
+  --action-primary-ink: #f8fbff;
+  color: var(--cockpit-ink);
+  background: transparent !important;
+}
+
+.cockpit-primary-panel .ui-layout {
+  gap: 12px;
+}
+
+.cockpit-primary-panel .ui-slot {
+  gap: 10px;
+}
+
+.cockpit-primary-panel .ui-component {
+  gap: 10px;
+}
+
+.cockpit-primary-panel .ui-card {
+  min-height: 0;
+  padding: 9px 6px;
+  background: transparent !important;
+}
+
+.cockpit-primary-panel .ui-card__lead,
+.cockpit-primary-panel .ui-passenger-brief__lead {
+  margin-top: 14px;
+  font-size: clamp(30px, 2.5vw, 42px);
+  line-height: 1.13;
+}
+
+.cockpit-primary-panel .ui-card__title,
+.cockpit-primary-panel .ui-flight-brief__number,
+.cockpit-primary-panel .ui-navigation-brief__destination {
+  font-size: clamp(24px, 1.75vw, 32px);
+}
+
+.cockpit-primary-panel .ui-card__summary,
+.cockpit-primary-panel .ui-card__body > p {
+  margin-top: 10px;
+  font-size: 15px;
+}
+
+.cockpit-primary-panel .ui-flight-brief__arrival,
+.cockpit-primary-panel .ui-route-facts,
+.cockpit-primary-panel .ui-hero-metrics,
+.cockpit-primary-panel .ui-cabin-grid {
+  margin-top: 16px;
+  padding-top: 14px;
+}
+
+.cockpit-primary-panel .ui-flight-brief__time,
+.cockpit-primary-panel .ui-navigation-eta {
+  font-size: clamp(52px, 5vw, 76px) !important;
+}
+
+.cockpit-primary-panel .ui-metric__label,
+.cockpit-primary-panel .ui-flight-brief__source,
+.cockpit-primary-panel .ui-navigation-brief__eyebrow,
+.cockpit-primary-panel .ui-pickup-brief__phase {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.cockpit-primary-panel .ui-metric__value {
+  font-size: clamp(23px, 1.8vw, 32px);
+}
+
+.cockpit-primary-panel .ui-card__status-line,
+.cockpit-primary-panel .ui-detail-row {
+  margin-top: 11px;
+  font-size: 13px;
+}
+
+.cockpit-primary-panel .ui-card__actions,
+.cockpit-primary-panel .ui-actions {
+  gap: 9px;
+  padding-top: 11px;
+}
+
+.cockpit-primary-panel .ui-action,
+.cockpit-primary-panel .advance-button {
+  min-height: 48px;
+  border-radius: 10px;
+  padding: 0 16px;
+  font-size: 16px;
+}
+
+.cockpit-primary-panel .ui-flight-choices__row {
+  min-height: 60px;
+  border-color: var(--cockpit-rule);
+  border-radius: 10px;
+  background: rgb(22 38 58 / 0.56);
+}
+
+.cockpit-primary-panel .ui-flight-choices__row:hover:not(:disabled) {
+  border-color: var(--cockpit-blue);
+  background: rgb(45 74 111 / 0.68);
+}
+
+.cockpit-primary-panel .ui-flight-choices__time {
+  color: var(--cockpit-blue);
+  font-size: 21px;
+}
+
+.cockpit-workspace__feedback {
+  bottom: 16px;
+  left: clamp(14px, 1.7vw, 28px);
+  max-width: min(420px, calc(100vw - 44px));
+}
+
+.cockpit-feedback,
+.cockpit-idle-notice {
+  border-color: var(--cockpit-edge);
+  border-radius: 10px;
+  background: var(--cockpit-surface-strong);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 0.2);
+  color: #dce9f8;
+  font-size: 13px;
+  line-height: 1.45;
+  backdrop-filter: blur(14px);
+}
+
+.cockpit-windows {
+  z-index: 55;
+}
+
+.cockpit-window {
+  border-color: var(--cockpit-edge);
+  border-radius: 16px;
+  background:
+    linear-gradient(150deg, rgb(28 45 68 / 0.9), rgb(7 15 27 / 0.86)),
+    var(--cockpit-surface-strong);
+  box-shadow: 0 24px 64px rgb(0 0 0 / 0.42), inset 0 1px rgb(255 255 255 / 0.09);
+  backdrop-filter: blur(20px) saturate(1.08);
+}
+
+.cockpit-window__chrome {
+  min-height: 48px;
+  gap: 8px;
+  padding: 0 8px 0 13px;
+  border-bottom-color: var(--cockpit-rule);
+}
+
+.cockpit-window__signal {
+  width: 7px;
+  height: 7px;
+  background: var(--cockpit-blue);
+  box-shadow: 0 0 10px rgb(130 173 255 / 0.8);
+}
+
+.cockpit-window__chrome h2 {
+  color: var(--cockpit-ink);
+  font-size: 15px;
+  font-weight: 720;
+  letter-spacing: -0.015em;
+}
+
+.cockpit-window__controls {
+  gap: 2px;
+}
+
+.cockpit-window__controls button {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+  color: #c9d9ec;
+  font-size: 18px;
+}
+
+.cockpit-window__controls button:hover {
+  background: rgb(120 158 211 / 0.2);
+}
+
+.cockpit-window__body {
+  padding: 13px;
+}
+
+.cockpit-window__body .ui-spec-renderer {
+  --surface: transparent;
+  --cabin: transparent;
+  --ink: var(--cockpit-ink);
+  --muted: var(--cockpit-muted);
+  --rule: var(--cockpit-rule);
+  --quiet-rule: var(--cockpit-rule);
+  --blue: var(--cockpit-blue);
+  --blue-deep: #a7c7ff;
+  --blue-pale: rgb(96 150 255 / 0.18);
+  --control: rgb(30 48 72 / 0.78);
+  --control-hover: rgb(47 72 105 / 0.9);
+  --control-edge: rgb(178 207 243 / 0.24);
+  --action-primary: #397cf0;
+  --action-primary-hover: #4b8bfa;
+  --action-primary-ink: #f8fbff;
+  color: var(--cockpit-ink);
+  background: transparent !important;
+}
+
+.cockpit-window__body .ui-card {
+  padding-block: 7px;
+  background: transparent !important;
+}
+
+.cockpit-window__body .ui-card__lead,
+.cockpit-window__body .ui-passenger-brief__lead {
+  margin-top: 12px;
+  font-size: clamp(28px, 3.6vw, 40px);
+}
+
+.cockpit-window__body .ui-card__title,
+.cockpit-window__body .ui-flight-brief__number,
+.cockpit-window__body .ui-navigation-brief__destination {
+  font-size: clamp(23px, 3vw, 30px);
+}
+
+.cockpit-window__body .ui-flight-brief__arrival,
+.cockpit-window__body .ui-route-facts,
+.cockpit-window__body .ui-hero-metrics,
+.cockpit-window__body .ui-cabin-grid {
+  margin-top: 15px;
+  padding-top: 12px;
+}
+
+.cockpit-window__body .ui-flight-brief__time,
+.cockpit-window__body .ui-navigation-eta {
+  font-size: clamp(48px, 7vw, 68px) !important;
+}
+
+.cockpit-window__body .ui-metric__label,
+.cockpit-window__body .ui-flight-brief__source,
+.cockpit-window__body .ui-navigation-brief__eyebrow,
+.cockpit-window__body .ui-pickup-brief__phase {
+  font-size: 12px;
+}
+
+.cockpit-window__body .ui-metric__value {
+  font-size: clamp(22px, 3.1vw, 30px);
+}
+
+.cockpit-window__body .ui-action {
+  min-height: 48px;
+  font-size: 16px;
+}
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .cockpit-primary-panel,
+  .cockpit-window,
+  .cockpit-feedback,
+  .cockpit-idle-notice {
+    background: #0a1421;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .cockpit-primary-panel,
+  .cockpit-window,
+  .cockpit-feedback,
+  .cockpit-idle-notice {
+    background: #0a1421;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (max-width: 1024px) {
+  .cockpit-workspace__primary {
+    width: min(560px, 53vw);
+  }
+}
+
+@media (max-width: 720px) {
+  .cockpit-workspace__primary {
+    top: 76px;
+    left: 10px;
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - 160px);
+  }
+
+  .cockpit-primary-panel {
+    padding: 10px;
+    border-radius: 14px;
+  }
+
+  .cockpit-primary-panel .journey-rail__copy strong {
+    font-size: 11px;
+  }
+
+  .cockpit-primary-panel .ui-card__lead,
+  .cockpit-primary-panel .ui-passenger-brief__lead {
+    font-size: clamp(28px, 8vw, 38px);
+  }
+
+  .cockpit-primary-panel .ui-flight-brief__time,
+  .cockpit-primary-panel .ui-navigation-eta {
+    font-size: clamp(48px, 15vw, 68px) !important;
+  }
+
+  .cockpit-workspace__feedback {
+    bottom: 76px;
+    left: 10px;
+  }
+
+  .cockpit-window {
+    border-radius: 14px;
+  }
+}
+
+/* The persistent cockpit always sits on a night map. Agent specs may describe a
+   light document theme, but letting their inline light tokens bleed through a
+   translucent dark panel makes titles and calendar rows disappear. Keep the
+   content palette in the same high-contrast HMI family as its surrounding
+   hardware, while preserving the Agent-owned information and hierarchy. */
+.cockpit-primary-panel .ui-spec-renderer,
+.cockpit-window__body .ui-spec-renderer {
+  --surface: transparent !important;
+  --cabin: transparent !important;
+  --ink: #eef5ff !important;
+  --muted: #aabbd1 !important;
+  --rule: rgb(185 208 238 / 0.16) !important;
+  --quiet-rule: rgb(185 208 238 / 0.16) !important;
+  --blue: #82adff !important;
+  --blue-deep: #a7c7ff !important;
+  --blue-pale: rgb(96 150 255 / 0.18) !important;
+  --green: #63d69b !important;
+  --green-pale: rgb(37 128 79 / 0.27) !important;
+  --green-edge: rgb(99 214 155 / 0.48) !important;
+  --green-ink: #80e5b1 !important;
+  --amber: #efb55b !important;
+  --amber-pale: rgb(130 89 27 / 0.34) !important;
+  --amber-edge: rgb(239 181 91 / 0.46) !important;
+  --red: #ff9c9c !important;
+  --red-pale: rgb(128 39 48 / 0.34) !important;
+  --red-edge: rgb(255 156 156 / 0.46) !important;
+  --control: rgb(30 48 72 / 0.78) !important;
+  --control-hover: rgb(47 72 105 / 0.9) !important;
+  --control-off: rgb(29 40 54 / 0.82) !important;
+  --control-selected: rgb(70 105 149 / 0.6) !important;
+  --control-edge: rgb(178 207 243 / 0.24) !important;
+  --action-primary: #397cf0 !important;
+  --action-primary-hover: #4b8bfa !important;
+  --action-primary-ink: #f8fbff !important;
+  color: #eef5ff !important;
+}
+
+/* Task windows are decision surfaces, not dark framing around a document. A
+   light translucent material keeps the map visible and makes each choice feel
+   calm and direct. The numbered journey rail was intentionally removed from
+   the React tree, so no future task state can bring it back visually. */
+.cockpit-workspace {
+  --cockpit-surface: rgb(255 255 255 / 0.78);
+  --cockpit-surface-strong: rgb(255 255 255 / 0.9);
+  --cockpit-edge: rgb(255 255 255 / 0.86);
+  --cockpit-rule: rgb(25 64 110 / 0.14);
+  --cockpit-ink: #10233d;
+  --cockpit-muted: #5f7189;
+  --cockpit-blue: #236be8;
+}
+
+.cockpit-primary-panel,
+.cockpit-window {
+  border-color: var(--cockpit-edge);
+  background: linear-gradient(145deg, rgb(255 255 255 / 0.92), rgb(239 246 255 / 0.68));
+  box-shadow: 0 18px 48px rgb(19 55 96 / 0.18), inset 0 1px rgb(255 255 255 / 0.96);
+  backdrop-filter: blur(22px) saturate(1.2);
+}
+
+.cockpit-primary-panel::before { background: linear-gradient(90deg, transparent, rgb(75 135 229 / 0.42), transparent); }
+
+.cockpit-primary-panel .ui-spec-renderer,
+.cockpit-window__body .ui-spec-renderer {
+  --surface: transparent !important;
+  --cabin: transparent !important;
+  --ink: #10233d !important;
+  --muted: #62748b !important;
+  --rule: rgb(25 64 110 / 0.16) !important;
+  --quiet-rule: rgb(25 64 110 / 0.12) !important;
+  --blue: #236be8 !important;
+  --blue-deep: #1859c8 !important;
+  --blue-pale: rgb(35 107 232 / 0.1) !important;
+  --green: #197a52 !important;
+  --green-pale: rgb(41 151 100 / 0.12) !important;
+  --green-edge: rgb(33 127 83 / 0.28) !important;
+  --green-ink: #176c49 !important;
+  --amber: #a85b12 !important;
+  --amber-pale: rgb(213 135 39 / 0.12) !important;
+  --amber-edge: rgb(168 91 18 / 0.28) !important;
+  --red: #b63f45 !important;
+  --red-pale: rgb(194 67 73 / 0.1) !important;
+  --red-edge: rgb(182 63 69 / 0.26) !important;
+  --control: rgb(255 255 255 / 0.64) !important;
+  --control-hover: rgb(232 241 255 / 0.92) !important;
+  --control-off: rgb(235 240 246 / 0.8) !important;
+  --control-selected: rgb(216 231 255 / 0.84) !important;
+  --control-edge: rgb(38 91 159 / 0.2) !important;
+  --action-primary: #236be8 !important;
+  --action-primary-hover: #155acb !important;
+  --action-primary-ink: #fff !important;
+  color: #10233d !important;
+}
+
+.cockpit-primary-panel .ui-flight-choices__row {
+  border-color: rgb(32 84 151 / 0.24);
+  background: rgb(255 255 255 / 0.54);
+}
+
+.cockpit-primary-panel .ui-flight-choices__row:hover:not(:disabled) {
+  border-color: rgb(35 107 232 / 0.68);
+  background: rgb(231 241 255 / 0.82);
+}
+
+.cockpit-primary-panel .ui-card,
+.cockpit-window__body .ui-card { background: transparent !important; }
+
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .cockpit-primary-panel,
+  .cockpit-window { background: #f7fbff; }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .cockpit-primary-panel,
+  .cockpit-window { background: #f7fbff; }
 }
