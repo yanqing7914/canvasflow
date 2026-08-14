@@ -304,8 +304,10 @@ describe('AgentGateway', () => {
     })
     expect(selected.task.phase).toBe('confirming-outbound')
     expect(selected.task.flight?.flightNumber).toBe(board.props.choices[0]!.flightNumber)
+    expect(selected.task.charging).toMatchObject({ recommended: false, status: 'none' })
     expect(selected.ui.windows ?? []).toHaveLength(0)
     expect(Object.values(selected.ui.layout.slots).flat()).toContain('outbound-confirmation')
+    expect(selected.ui.components.map((component) => component.type)).not.toContain('charging-recommendation')
 
     const started = gateway.submitAction(selected.task.taskId, {
       clientRequestId: 'start-outbound', expectedTaskRevision: selected.task.taskRevision, expectedUiRevision: selected.ui.uiRevision,
@@ -448,6 +450,104 @@ describe('AgentGateway', () => {
     expect(completed.task.flight).toBeUndefined()
     expect(completed.task.cockpit).toBeUndefined()
     expect(completed.ui.windows ?? []).toHaveLength(0)
+  })
+
+  it('offers an explicit charging query on low-range cockpit pickup confirmation', () => {
+    const gateway = createGateway()
+    const request = createCockpitRequest('去虹桥机场接人', 'low-range-create')
+    request.vehicleContext = { ...request.vehicleContext, remainingRangeKm: 112 }
+    const flights = gateway.createTask(request)
+    const board = flights.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
+    const actionId = board.props.choices[0]?.actionId
+    if (!actionId) throw new Error('expected cockpit flight action')
+
+    const selected = gateway.submitAction(flights.task.taskId, {
+      clientRequestId: 'low-range-pick', expectedTaskRevision: flights.task.taskRevision,
+      expectedUiRevision: flights.ui.uiRevision, actionId, componentId: board.id, idempotencyKey: 'low-range-pick',
+    })
+
+    expect(selected.task).toMatchObject({
+      phase: 'confirming-outbound',
+      charging: { recommended: true, status: 'planned' },
+    })
+    expect(selected.ui.components.some((component) => component.id === 'charging-plan')).toBe(false)
+    expect(selected.ui.actions).toContainEqual(expect.objectContaining({ id: 'start-outbound' }))
+    expect(selected.ui.actions).toContainEqual(expect.objectContaining({ id: 'ask-charging' }))
+
+    const asked = gateway.submitEvent(selected.task.taskId, {
+      clientRequestId: 'low-range-charge-query', expectedTaskRevision: selected.task.taskRevision,
+      event: { eventId: 'low-range-charge-query', type: 'user.input', text: '规划充电路线', timestamp: now },
+    })
+    expect(asked.task.taskRevision).toBe(selected.task.taskRevision)
+    expect(asked.ui.windows).toContainEqual(expect.objectContaining({ kind: 'charging', title: '充电方案' }))
+    expect(asked.ui.components).toContainEqual(expect.objectContaining({
+      type: 'charging-recommendation',
+      props: expect.objectContaining({
+        currentBatteryPercent: 42,
+        estimatedFinalBatteryPercent: 18,
+        nearbyStations: expect.objectContaining({ items: expect.any(Array) }),
+        chargingRoute: expect.objectContaining({ destination: '虹桥机场' }),
+      }),
+    }))
+  })
+
+  it('recomputes an underway charging query from the current route snapshot', () => {
+    const providers = createProviderRegistry()
+    const orchestrator = new ReadToolOrchestrator({ registry: providers })
+    const resolveCharging = vi.spyOn(orchestrator, 'resolveCharging')
+    const store = new MemoryTaskStore()
+    const gateway = new AgentGateway({ store, now: () => now, createId: () => '001', orchestrator, providers })
+    const started = startCockpitOutbound(gateway, 'underway-charge')
+    // The helper deliberately returns the action response, but its success is
+    // only meaningful when the provider accepted navigation.start. Use the
+    // gateway's persisted snapshot as the source of truth for this live query.
+    const active = gateway.getTask(started.task.taskId, 'underway-charge-active')
+    expect(active.task.navigation?.status).toBe('active')
+    const seed = active.task.navigationSimulation!
+    const progress = 0.5
+    const batteryPercent = (seed.initialBatteryPercent + seed.estimatedBatteryAtArrival) / 2
+    const initialVehicle = createRequest().vehicleContext
+    const remainingRangeKm = batteryPercent / initialVehicle.batteryPercent * initialVehicle.remainingRangeKm
+
+    const asked = gateway.submitEvent(active.task.taskId, {
+      clientRequestId: 'underway-charge-query', expectedTaskRevision: active.task.taskRevision,
+      event: {
+        eventId: 'underway-charge-query', type: 'user.input', text: '规划充电路线', source: 'voice', timestamp: now,
+        navigationSnapshot: {
+          routeId: seed.routeId, leg: 'outbound', progress,
+          speedKph: 55, batteryPercent, remainingRangeKm,
+          remainingDistanceKm: seed.distanceKm / 2, currentRoad: '内环高架',
+        },
+      },
+    })
+
+    expect(resolveCharging).toHaveBeenLastCalledWith(active.task.taskId, 'underway-charge-query', {
+      batteryPercent,
+      remainingRangeKm,
+      outboundDistanceKm: seed.distanceKm / 2,
+      returnDistanceKm: seed.distanceKm,
+    })
+    const card = asked.ui.components.find((component) => component.type === 'charging-recommendation')
+    if (card?.type !== 'charging-recommendation') throw new Error('expected refreshed charging recommendation')
+    const refreshed = resolveCharging.mock.results.at(-1)?.value
+    expect(card.props.currentBatteryPercent).toBe(batteryPercent)
+    expect(card.props.chargingRoute).toMatchObject({ distanceKm: seed.distanceKm / 2 })
+    expect(card.props.estimatedFinalBatteryPercent).toBe(refreshed?.data.estimatedFinalBatteryPercent)
+    expect(card.props.recommended).toBe(refreshed?.data.recommended)
+  })
+
+  it('does not show stale charging guidance while driving without a current position', () => {
+    const gateway = createGateway()
+    const started = startCockpitOutbound(gateway, 'missing-charge-position')
+
+    const asked = gateway.submitEvent(started.task.taskId, {
+      clientRequestId: 'missing-charge-position', expectedTaskRevision: started.task.taskRevision,
+      event: { eventId: 'missing-charge-position', type: 'user.input', text: '规划充电路线', timestamp: now },
+    })
+
+    expect(asked.ui).toEqual(started.ui)
+    expect(asked.assistant?.text).toContain('当前模拟位置')
   })
 
   it('resolves a spoken ordinal on the cockpit flight board through the event path', () => {
@@ -1330,7 +1430,7 @@ describe('AgentGateway', () => {
     expect(updated.ui.components).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'flight-status' }),
       expect.objectContaining({ type: 'navigation-summary' }),
-      expect.objectContaining({ type: 'charging-recommendation' }),
+      expect.objectContaining({ type: 'navigation-summary' }),
     ]))
   })
 
@@ -1353,7 +1453,7 @@ describe('AgentGateway', () => {
     expect(updated.ui.components).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'flight-status', props: expect.objectContaining({ scheduledArrival: '2026-07-22T20:30:00+08:00' }) }),
       expect.objectContaining({ id: 'navigation-plan', props: expect.objectContaining({ routeId: 'route-airport-001', distanceKm: 32 }) }),
-      expect.objectContaining({ id: 'charging-plan', props: expect.objectContaining({ estimatedFinalBatteryPercent: 29 }) }),
+      expect.objectContaining({ id: 'navigation-plan', props: expect.objectContaining({ distanceKm: 32 }) }),
     ]))
     expect(updated).not.toHaveProperty('toolResults')
   })
@@ -1574,7 +1674,7 @@ describe('AgentGateway', () => {
     // Leaving leads the card; the pre-departure question follows it.
     expect(prepared.ui.components).toContainEqual(expect.objectContaining({
       id: 'navigation-plan',
-      actions: ['start-navigation', 'ask-departure-time'],
+      actions: ['start-navigation', 'ask-departure-time', 'ask-charging'],
     }))
 
     const request = {
@@ -3943,6 +4043,72 @@ describe('AgentGateway', () => {
     })
   })
 
+  describe('check-charging query turn', () => {
+    it('answers the ordinary task action with a transient generated charging route', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const action = created.ui.actions.find((candidate) => candidate.id === 'ask-charging')
+      if (action?.event.type !== 'agent-message') throw new Error('expected an agent-message charging action')
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-charging', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'charging-1', type: 'user.input', text: action.event.text, source: 'voice', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task.taskRevision).toBe(created.task.taskRevision)
+      expect(asked.task.processedEventIds).not.toContain('charging-1')
+      expect(asked.ui.uiRevision).toBeGreaterThan(created.ui.uiRevision)
+      const card = asked.ui.components.find((component) => component.type === 'charging-recommendation')
+      if (card?.type !== 'charging-recommendation') throw new Error('expected a charging recommendation')
+      expect(card.props).toMatchObject({
+        currentBatteryPercent: 42,
+        nearbyStations: { soc: '42%', items: expect.any(Array) },
+        chargingRoute: { destination: '虹桥机场 T2', distanceKm: 32, stops: expect.any(Array) },
+      })
+      expect(card.props.nearbyStations?.items.length).toBeGreaterThan(0)
+      expect(asked.assistant).toMatchObject({ shouldSpeak: true })
+      expect(asked.assistant?.text).toContain('暂时不需要额外补能')
+
+      const moved = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-after-charging', expectedTaskRevision: asked.task.taskRevision,
+        event: { eventId: 'moving-after-charging', type: 'vehicle.moving', speedKph: 30, timestamp: '2026-07-22T12:02:00+08:00' },
+      })
+      expect(moved.ui.components.some((component) => component.type === 'charging-recommendation')).toBe(false)
+      expect(moved.ui.components.some((component) => component.type === 'navigation-summary')).toBe(true)
+    })
+
+    it('replays an identical charging event id idempotently', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆，航班 MU5102'))
+      const request = {
+        clientRequestId: 'client-charging-replay', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'charging-replay', type: 'user.input' as const, text: '规划充电路线', timestamp: '2026-07-22T12:01:00+08:00' },
+      }
+
+      const first = gateway.submitEvent(created.task.taskId, request)
+      const second = gateway.submitEvent(created.task.taskId, request)
+
+      expect(second.task).toEqual(first.task)
+      expect(second.ui).toEqual(first.ui)
+      expect(second.assistant).toEqual(first.assistant)
+      expect(second.ui.components.some((component) => component.type === 'charging-recommendation')).toBe(true)
+    })
+
+    it('keeps the ordinary surface unchanged until route and vehicle reads exist', () => {
+      const gateway = createGateway()
+      const created = gateway.createTask(createRequest('接妈妈和豆豆'))
+
+      const asked = gateway.submitEvent(created.task.taskId, {
+        clientRequestId: 'client-charging-unavailable', expectedTaskRevision: created.task.taskRevision,
+        event: { eventId: 'charging-unavailable', type: 'user.input', text: '规划充电路线', timestamp: '2026-07-22T12:01:00+08:00' },
+      })
+
+      expect(asked.task).toEqual(created.task)
+      expect(asked.ui).toEqual(created.ui)
+      expect(asked.assistant?.text).toContain('还没有可用的接机路线')
+    })
+  })
+
   describe('check-schedule query turn', () => {
     it('answers with a transient schedule card that yields the surface on the next event', () => {
       const gateway = createGateway()
@@ -4546,10 +4712,10 @@ describe('AgentGateway', () => {
       return { gateway, driving }
     }
 
-    it('offers both side scenes on the driving brief and answers each from its own label', () => {
+    it('offers all side scenes on the driving brief and answers each from its own label', () => {
       const { gateway, driving } = drivingTask()
-      const offered = driving.ui.actions.filter((action) => action.id === 'ask-weather' || action.id === 'ask-schedule')
-      expect(offered).toHaveLength(2)
+      const offered = driving.ui.actions.filter((action) => action.id === 'ask-weather' || action.id === 'ask-schedule' || action.id === 'ask-charging')
+      expect(offered).toHaveLength(3)
 
       for (const [index, action] of offered.entries()) {
         if (action.event.type !== 'agent-message') throw new Error('expected an agent-message action')
@@ -4563,11 +4729,11 @@ describe('AgentGateway', () => {
         expect(asked.task.phase).toBe('driving-to-airport')
         expect(asked.task.taskRevision).toBe(driving.task.taskRevision)
         expect(asked.ui.components.some((component) => (
-          component.type === 'weather-card' || component.type === 'schedule-card'
+          component.type === 'weather-card' || component.type === 'schedule-card' || component.type === 'charging-recommendation'
         ))).toBe(true)
         // Reading one must not cost the driver the way back to the other.
         expect(asked.ui.actions.map((candidate) => candidate.id)).toEqual(
-          expect.arrayContaining(['ask-weather', 'ask-schedule']),
+          expect.arrayContaining(['ask-weather', 'ask-schedule', 'ask-charging']),
         )
       }
     })

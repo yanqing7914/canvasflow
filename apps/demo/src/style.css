@@ -4637,3 +4637,41 @@ a:focus-visible {
   font-size: clamp(19px, 1.5vw, 24px);
   line-height: 1.55;
 }
+
+/* Cockpit-style charging search and route sections, kept inside the existing
+ * charging recommendation surface so producers do not need a second component. */
+.ui-charge-brief__stations,
+.ui-charge-brief__route { margin-top: 24px; padding-top: 20px; border-top: 1px solid var(--rule); }
+.ui-charge-brief__section-heading { display: flex; align-items: center; gap: 9px; color: var(--ink); font-size: 19px; }
+.ui-charge-brief__section-heading--route { color: var(--state-ink-caution); }
+.ui-charge-brief__section-icon { display: grid; width: 30px; height: 30px; place-items: center; color: var(--state-ink-caution); }
+.ui-charge-brief__section-meta { margin-left: auto; color: var(--muted); font-size: 15px; font-weight: 500; }
+.ui-charge-brief__station-list { margin-top: 8px; }
+.ui-charge-brief__station { display: flex; gap: 13px; padding: 14px 0; border-top: 1px solid var(--quiet-rule); }
+.ui-charge-brief__station-index { display: grid; width: 32px; height: 32px; flex: 0 0 auto; place-items: center; border: 1px solid var(--rule); border-radius: 9px; color: var(--muted); font-family: Bahnschrift, monospace; font-size: 15px; }
+.ui-charge-brief__station-copy { min-width: 0; flex: 1; }
+.ui-charge-brief__station-title { display: flex; gap: 12px; justify-content: space-between; font-size: 18px; }
+.ui-charge-brief__station-title strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ui-charge-brief__station-distance { flex: 0 0 auto; color: var(--blue); font-family: Bahnschrift, monospace; }
+.ui-charge-brief__station-meta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 6px; color: var(--muted); font-size: 14px; }
+.ui-charge-brief__station-available { color: var(--state-ink-positive); }
+.ui-charge-brief__station-unavailable { color: var(--state-ink-caution); }
+.ui-charge-brief__station-rating { color: var(--state-ink-caution); }
+.ui-charge-brief__station-address { margin-top: 5px; overflow: hidden; color: var(--muted); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.ui-charge-brief__voice-hint { margin: 0; padding-top: 13px; border-top: 1px solid var(--rule); color: var(--muted); font-size: 14px; }
+.ui-charge-brief__route-stops { margin-top: 18px; }
+.ui-charge-brief__route-stop { display: flex; align-items: center; gap: 12px; min-height: 40px; color: var(--ink); }
+.ui-charge-brief__route-stop div { display: grid; gap: 3px; }
+.ui-charge-brief__route-stop small { color: var(--muted); font-size: 14px; }
+.ui-charge-brief__route-dot { width: 10px; height: 10px; flex: 0 0 auto; border-radius: 50%; background: var(--blue); }
+.ui-charge-brief__route-stop--destination .ui-charge-brief__route-dot { background: var(--state-ink-positive); }
+.ui-charge-brief__route-stop-wrap { padding-left: 5px; }
+.ui-charge-brief__route-connector { min-height: 28px; padding-left: 5px; border-left: 1px solid var(--rule); color: var(--muted); font-size: 13px; }
+.ui-charge-brief__route-connector span { padding-left: 10px; }
+.ui-charge-brief__route-stop--charge { margin-left: 0; padding: 11px 13px; border: 1px solid color-mix(in srgb, var(--state-ink-caution) 35%, transparent); border-radius: 13px; background: color-mix(in srgb, var(--state-ink-caution) 9%, transparent); }
+.ui-charge-brief__route-stop-icon { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border: 1px solid color-mix(in srgb, var(--state-ink-caution) 50%, transparent); border-radius: 9px; color: var(--state-ink-caution); }
+.ui-charge-brief__soc { margin-top: 18px; }
+.ui-charge-brief__soc-head, .ui-charge-brief__soc-foot { display: flex; justify-content: space-between; color: var(--muted); font-size: 15px; }
+.ui-charge-brief__soc-head strong { color: var(--blue); font-family: Bahnschrift, monospace; font-size: 22px; }
+.ui-charge-brief__soc-track { height: 12px; margin: 9px 0 7px; overflow: hidden; border-radius: 999px; background: var(--quiet-rule); }
+.ui-charge-brief__soc-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--state-ink-positive)); }

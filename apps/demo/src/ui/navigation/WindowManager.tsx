@@ -221,6 +221,7 @@ function WindowEmpty({ kind }: { kind: CockpitWindowKind }) {
     'flight-list': '航班信息暂时无法显示，请重新查询。',
     'outbound-confirmation': '出发方案正在准备。',
     weather: '天气结果暂时无法显示，请重新查询。',
+    charging: '充电方案暂时无法显示，请重新查询。',
     calendar: '日历结果暂时无法显示，请重新查询。',
     'flight-detail': '当前航班详情暂时无法显示。',
     'passenger-onboard': '已记录乘客上车。',

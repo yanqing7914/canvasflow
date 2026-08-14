@@ -42,7 +42,6 @@ function componentTypes(spec: { components: ReadonlyArray<{ type: string }> }) {
 const AGREE = [
   'approaching-airport',
   'charging-completed',
-  'charging-recommended',
   'flight-cancelled',
   'flight-delayed',
   'flight-in-air',
@@ -64,7 +63,7 @@ const FALLBACK = ['provider-timeout', 'invalid-ui-spec'] as const
 
 // Fixtures where the shipped composer legitimately diverges from the UI composer.
 // Each is pinned below with the reason and why the fix is out of scope here.
-const DIVERGENT = ['route-airport', 'cabin-profile-applied'] as const
+const DIVERGENT = ['route-airport', 'charging-recommended', 'cabin-profile-applied'] as const
 
 describe('composeAgentSpec fixture conformance', () => {
   it.each(AGREE)('%s: shipped composer reproduces the fixture UISpec exactly', (name) => {
@@ -75,21 +74,16 @@ describe('composeAgentSpec fixture conformance', () => {
     )
   })
 
-  it('route-airport: KNOWN DIVERGENCE — shipped composer is over-eager on charging', () => {
+  it('route-airport: shipped composer now keeps the route primary instead of auto-opening charging', () => {
     const { parsed, spec } = load('route-airport')
-    // The user has just started driving to the airport (navigation active, no
-    // flight fact yet), so the salient card is the route. The fixture / UI
-    // composer (composePickupSpec) now give the route its own column: a
-    // route-map split beside navigation-summary. composeAgentSpec instead fires
-    // its `task.charging.recommended && !task.flight` branch — which sits ahead
-    // of the `task.navigation` branch — and shows a charging card, the same
-    // class of over-eager charging fixed for the arrival phases in PR #81 ①.
-    // Fixing it is a Composer phase-decision change (PRODUCT.md Non-goal) and
-    // reorders branches that gateway.test.ts relies on, so it is deferred to a
-    // dedicated follow-up. This pins the current shipped output so that follow-up
-    // is a deliberate, reviewed change rather than silent drift.
     expect(componentTypes(parsed.expectedUISpec)).toEqual(['route-map', 'navigation-summary'])
-    expect(componentTypes(spec)).toEqual(['charging-recommendation'])
+    expect(componentTypes(spec)).toEqual(['route-map', 'navigation-summary'])
+  })
+
+  it('charging-recommended: recommendation is now user-invoked instead of replacing the trip', () => {
+    const { parsed, spec } = load('charging-recommended')
+    expect(componentTypes(parsed.expectedUISpec)).toEqual(['charging-recommendation'])
+    expect(componentTypes(spec)).toEqual(['pickup-overview', 'task-progress'])
   })
 
   it('cabin-profile-applied: KNOWN DIVERGENCE — shipped composer does not surface the applied cabin profile', () => {

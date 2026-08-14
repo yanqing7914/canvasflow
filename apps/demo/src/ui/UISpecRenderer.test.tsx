@@ -569,6 +569,34 @@ describe('UISpecRenderer', () => {
     expect(screen.getByText('完成往返后预计低于安全余量（对比 3 站）')).toBeInTheDocument()
   })
 
+  it('renders cockpit-style nearby charging stations and route details on the recommendation card', () => {
+    const spec = baseSpec({
+      layout: { type: 'stack', gap: 'md', slots: { main: ['charging'] } },
+      components: [{
+        id: 'charging',
+        type: 'charging-recommendation',
+        props: {
+          recommended: true,
+          reason: '沿途补能更稳妥',
+          currentBatteryPercent: 42,
+          estimatedFinalBatteryPercent: 18,
+          nearbyStations: { soc: '42%', items: [{ id: 's1', name: '特来电·西湖文化广场', address: '西湖区文化广场 B3 层', operator: '特来电', available: 4, total: 8, price: '1.2', distanceKm: 1.2, rating: 4.6 }] },
+          chargingRoute: { destination: '都江堰', distanceKm: 248, durationMinutes: 195, soc: '62%', stops: [{ name: '青城山服务区充电站', address: '成灌高速青城山段', atKm: 48 }] },
+        },
+      } as ComponentSpec],
+    })
+
+    render(<UISpecRenderer spec={spec} onAction={vi.fn()} pending={false} />)
+
+    expect(screen.getByRole('region', { name: 'Generated task interface' })).toHaveTextContent('附近充电站')
+    expect(screen.getByText('特来电·西湖文化广场')).toBeInTheDocument()
+    expect(screen.getByText('4/8 空闲')).toBeInTheDocument()
+    expect(screen.getByText('充电路线规划')).toBeInTheDocument()
+    expect(screen.getByText('青城山服务区充电站')).toBeInTheDocument()
+    expect(screen.getByText('约 48km 处')).toBeInTheDocument()
+    expect(screen.getByLabelText('当前电量 62%')).toBeInTheDocument()
+  })
+
   it('uses dedicated information structures for the supported trip summaries', () => {
     const spec = baseSpec({
       layout: {

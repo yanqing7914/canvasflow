@@ -1,14 +1,13 @@
 import { describe, expect, it } from 'vitest'
 import type { AirportPickupTaskState, FlightArrivalCandidate } from '@canvasflow/schema'
 import {
-  chargingStationsForDensity,
   estimateFinalBatteryPercent,
   memberPreferences,
   meetingPointKey,
   recommendedMeetingPoints,
   vehicleSnapshots,
 } from '@canvasflow/tools'
-import { ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent, weatherCardComponent } from './composer'
+import { ASK_CHARGING_ACTION_ID, ASK_DEPARTURE_TIME_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_WEATHER_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID, applyRequestPresentation, composeAgentSpec, departurePlan, scheduleCardComponent, weatherCardComponent } from './composer'
 import { applyEvent, createCockpitTask, createInitialTask } from './index'
 import { ReadToolOrchestrator } from './orchestration'
 import type { StoredTask } from './store'
@@ -44,6 +43,41 @@ describe('Agent UISpec composer', () => {
     })
   })
 
+  it('offers charging as a user-invoked auxiliary action on outbound confirmation', () => {
+    const reads = new ReadToolOrchestrator().resolveCockpitRoute('cockpit-charge', 'select-flight', {
+      leg: 'outbound', pickupAirport: { label: '虹桥机场', code: 'SHA' }, vehicle: vehicleSnapshots.parked,
+    })
+    const task: AirportPickupTaskState = {
+      ...createCockpitTask('cockpit-charge', timestamp),
+      phase: 'confirming-outbound',
+      pickupAirport: { label: '虹桥机场', code: 'SHA' },
+      flight: {
+        flightNumber: 'MU5102', airlineName: '东方航空', originName: '北京首都', status: 'in-air',
+        scheduledArrival: '2026-07-22T20:30:00+08:00', estimatedArrival: '2026-07-22T20:40:00+08:00',
+        arrivalAirport: 'SHA', arrivalAirportName: '虹桥机场', terminal: 'T2', trusted: true,
+      },
+      navigation: { routeId: reads.route.data.routeId, destination: '虹桥机场', eta: reads.route.data.arrivalTime, status: 'planned' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: reads.route.data.routeId, distanceKm: reads.route.data.distanceKm,
+        initialBatteryPercent: reads.vehicle.data.batteryPercent,
+        estimatedBatteryAtArrival: reads.route.data.estimatedBatteryAtArrival,
+        profiles: { slow: { durationSeconds: 150, displaySpeedKph: 35 }, normal: { durationSeconds: 90, displaySpeedKph: 55 }, fast: { durationSeconds: 45, displaySpeedKph: 75 } },
+      },
+      charging: { recommended: true, accepted: false, status: 'planned' },
+    }
+
+    const spec = composeAgentSpec(task, {
+      'navigation.plan-route': reads.route,
+      'vehicle.get-status': reads.vehicle,
+      'charging.recommend': reads.charging,
+    })
+
+    expect(spec.components.map((component) => component.type)).toEqual(['route-confirmation'])
+    expect(spec.components.find((component) => component.id === 'outbound-confirmation')).toMatchObject({ actions: ['start-outbound', ASK_CHARGING_ACTION_ID] })
+    expect(spec.actions).toContainEqual(expect.objectContaining({ id: ASK_CHARGING_ACTION_ID, event: { type: 'agent-message', text: '规划充电路线' } }))
+    expect(spec.actions).toContainEqual(expect.objectContaining({ id: 'start-outbound' }))
+  })
+
   it('combines provider-backed flight, route, and charging cards while preparing', () => {
     const reads = new ReadToolOrchestrator().prepareTrip('pickup-001', 'request-001', 'MU5102')
     const task = {
@@ -62,17 +96,16 @@ describe('Agent UISpec composer', () => {
     // the map earns its own column only once driving starts, where the frame has
     // room for it beside a single card. (See the split assertions in `route
     // panel` below.)
-    expect(spec.components.map((component) => component.type)).toEqual([
-      'flight-status', 'navigation-summary', 'charging-recommendation', 'schedule-strip',
-    ])
+    expect(spec.components.map((component) => component.type)).toEqual(['flight-status', 'navigation-summary', 'schedule-strip'])
     expect(spec.layout).toMatchObject({
       type: 'stack',
-      slots: { main: ['flight-status', 'navigation-plan', 'charging-plan', 'schedule-strip'] },
+      slots: { main: ['flight-status', 'navigation-plan', 'schedule-strip'] },
     })
     expect(spec.components).toContainEqual(expect.objectContaining({
       id: 'flight-status',
       props: expect.objectContaining({ scheduledArrival: reads.flight.scheduledArrival }),
     }))
+    expect(spec.components.some((component) => component.type === 'charging-recommendation')).toBe(false)
   })
 
   it('lays calendar events alongside task milestones on the preparing schedule strip', () => {
@@ -164,9 +197,7 @@ describe('Agent UISpec composer', () => {
 
     const spec = composeAgentSpec(task, withoutCalendar)
 
-    expect(spec.components.map((component) => component.type)).toEqual([
-      'flight-status', 'navigation-summary', 'charging-recommendation',
-    ])
+    expect(spec.components.map((component) => component.type)).toEqual(['flight-status', 'navigation-summary'])
   })
 
   it('lets a weather reading borrow the schedule strip slot on the four-card preparing brief', () => {
@@ -373,7 +404,7 @@ describe('Agent UISpec composer', () => {
 
     expect(spec.components).toContainEqual(expect.objectContaining({
       id: 'navigation-plan',
-      actions: [ASK_DEPARTURE_TIME_ACTION_ID],
+      actions: [ASK_DEPARTURE_TIME_ACTION_ID, ASK_CHARGING_ACTION_ID],
     }))
     // Ordinary user input, so the button and the spoken sentence reach the same
     // planner branch instead of the button needing a path of its own.
@@ -383,6 +414,7 @@ describe('Agent UISpec composer', () => {
       style: 'secondary',
       event: { type: 'agent-message', text: '什么时候出发' },
     })
+    expect(spec.actions).toContainEqual({ id: ASK_CHARGING_ACTION_ID, label: '规划充电', style: 'secondary', event: { type: 'agent-message', text: '规划充电路线' } })
   })
 
   it('works the departure time backwards from the landing it is timed against', () => {
@@ -452,12 +484,13 @@ describe('Agent UISpec composer', () => {
 
     expect(spec.components).toContainEqual(expect.objectContaining({
       id: 'navigation-summary',
-      actions: [ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID],
+      actions: [ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_CHARGING_ACTION_ID],
     }))
     // The label is the sentence, so the button teaches the voice command.
     expect(spec.actions).toEqual([
       { id: ASK_WEATHER_ACTION_ID, label: '看下天气', style: 'secondary', event: { type: 'agent-message', text: '看下天气' } },
       { id: ASK_SCHEDULE_ACTION_ID, label: '看看日程', style: 'secondary', event: { type: 'agent-message', text: '看看日程' } },
+      { id: ASK_CHARGING_ACTION_ID, label: '规划充电', style: 'secondary', event: { type: 'agent-message', text: '规划充电路线' } },
     ])
   })
 
@@ -474,7 +507,7 @@ describe('Agent UISpec composer', () => {
     const spec = composeAgentSpec(task, { 'weather.get-current': weather })
 
     // Reading the weather must not cost the driver the way back to the calendar.
-    expect(spec.actions.map((action) => action.id)).toEqual([ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID])
+    expect(spec.actions.map((action) => action.id)).toEqual([ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_CHARGING_ACTION_ID])
 
     // Underway the rail beside the map holds exactly one card — that is what makes
     // the panel read as floating over the map instead of as a second column. So the
@@ -482,7 +515,7 @@ describe('Agent UISpec composer', () => {
     // buttons across: the way to the other scene is not what asking costs.
     const answer = spec.components.find((component) => component.type === 'weather-card')
     expect(answer).toBeDefined()
-    expect(answer!.actions).toEqual([ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID])
+    expect(answer!.actions).toEqual([ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_CHARGING_ACTION_ID])
     expect(spec.components.some((component) => component.id === 'navigation-summary')).toBe(false)
     const layout = spec.layout
     if (layout?.type !== 'split') throw new Error(`expected a split layout underway, got ${layout?.type}`)
@@ -519,7 +552,7 @@ describe('Agent UISpec composer', () => {
     expect(layout.slots.secondary).toEqual([answer!.id])
     // And the way to the other scenes is still defined, so it is still reachable.
     expect(spec.actions.map((action) => action.id)).toEqual([
-      ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID,
+      ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_CHARGING_ACTION_ID, REMIND_LATER_ACTION_ID, VIEW_CALENDAR_ACTION_ID,
     ])
   })
 
@@ -1081,13 +1114,7 @@ describe('Agent UISpec composer arrival and battery consistency', () => {
       composeAgentSpec(task, toolResults),
       drivingContext(vehicle.batteryPercent, vehicle.remainingRangeKm),
     )
-    const card = spec.components.find((component) => component.id === 'charging-plan')
-    if (card?.type !== 'charging-recommendation') throw new Error('缺少补能卡片')
-
-    expect(card.props).toMatchObject({
-      currentBatteryPercent: vehicle.batteryPercent,
-      estimatedFinalBatteryPercent: providerEstimate,
-    })
+    expect(spec.components.some((component) => component.id === 'charging-plan')).toBe(false)
   })
 
   it('counts the charging alternatives the same density tier actually surfaces', () => {
@@ -1099,16 +1126,7 @@ describe('Agent UISpec composer arrival and battery consistency', () => {
     }
 
     const spec = composeAgentSpec(task)
-    const card = spec.components[0]
-    if (card?.type !== 'charging-recommendation') throw new Error('缺少补能卡片')
-
-    const { batteryPercent, remainingRangeKm } = vehicleSnapshots.parked
-    expect(spec.presentation.density).toBe('full')
-    expect(card.props).toMatchObject({
-      reason: `完成往返后预计低于安全余量（对比 ${chargingStationsForDensity('full').length} 站）`,
-      currentBatteryPercent: batteryPercent,
-      estimatedFinalBatteryPercent: estimateFinalBatteryPercent(batteryPercent, remainingRangeKm, 32, 32),
-    })
+    expect(spec.components.some((component) => component.type === 'charging-recommendation')).toBe(false)
   })
 })
 
