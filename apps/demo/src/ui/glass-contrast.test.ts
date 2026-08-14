@@ -247,14 +247,14 @@ describe('focus and locked control states', () => {
 describe('whole-cockpit night theme', () => {
   it('moves the Agent theme onto the shell that owns the cockpit surfaces', () => {
     expect(stylesheet).toContain(".demo-shell[data-theme='dark']")
-    expect(stylesheet).toContain('--cabin: #0c1015;')
-    expect(stylesheet).toContain('--surface: #141a22;')
+    expect(stylesheet).toContain('--cabin: #211711;')
+    expect(stylesheet).toContain('--surface: #30251f;')
     expect(stylesheet).toContain('background: var(--surface);')
   })
 
-  it('keeps the engineering drawer on its own light control tokens', () => {
-    const drawer = stylesheet.match(/\.event-console\s*\{([^}]*)\}/)?.[1]
-    expect(drawer).toContain('--ink: #102033;')
-    expect(drawer).toContain('--control: #ffffff;')
+  it('keeps the engineering tool window in the warm cabin palette', () => {
+    const toolWindow = stylesheet.match(/\.cockpit-tool-window\s*\{([^}]*)\}/)?.[1]
+    expect(toolWindow).toContain('--tool-ink: var(--ink);')
+    expect(toolWindow).toContain('--tool-control: color-mix(in srgb, var(--control) 76%, transparent);')
   })
 })
