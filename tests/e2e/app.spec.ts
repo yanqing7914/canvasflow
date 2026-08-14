@@ -463,6 +463,9 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(settledDepartedMap.routeSearches[0]!.origin[0]).toBeGreaterThan(settledDepartedMap.routeSearches[0]!.destination[0])
   await captureCockpitScreenshot(page, testInfo, 'desktop-map-hud.png')
 
+  // Let the programmatic follow-camera settle before simulating an actual drag.
+  // The production guard ignores camera events caused by its own recentering.
+  await page.waitForTimeout(400)
   await emitMockAMapInteraction(page, 'dragstart')
   await expect(page.getByRole('button', { name: '回到车辆位置' })).toBeVisible()
   await page.getByRole('button', { name: '回到车辆位置' }).click()
@@ -940,8 +943,11 @@ test('keeps the task window focused on the current decision at tablet width @lay
 
   await expect(page.locator('.journey-rail')).toHaveCount(0)
   await expect(page.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'primary')
-  await expect(page.getByRole('button', { name: '浦东机场' })).toBeVisible()
-  await expect(page.getByRole('button', { name: '虹桥机场' })).toBeVisible()
+  // This layout coverage exercises the intentionally retained legacy fixture
+  // timeline. Its valid first decision is an arrivals board, not cockpit airport
+  // buttons (those are asserted and clicked in the @cockpit flow above).
+  await expect(page.getByRole('region', { name: 'Generated task interface' })).toBeVisible()
+  await expect(page.getByRole('list', { name: '上海到达航班' })).toBeVisible()
   await expectNoHorizontalOverflow(page)
 })
 
