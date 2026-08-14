@@ -18,6 +18,8 @@ export type DemoControlsViewModel = {
   planningSourceExact?: string
   advanceLabel: string
   advanceDisabled: boolean
+  /** Explains the current legal next step without impersonating an Agent action. */
+  nextHint?: string
   voiceFixtures: DemoControlsVoiceFixture[]
   lighting: DemoControlsLighting
   lightingDisabled: boolean
@@ -36,7 +38,7 @@ export type DemoControlsViewModel = {
 
 export type DemoControlsPanelProps = {
   viewModel: DemoControlsViewModel
-  onAdvance: () => void
+  onGuideNext: () => void
   onReplayVoiceFixture: (fixtureId: string) => void
   onSelectLighting: (lighting: DemoControlsLighting) => void
   onRecoverMap: (rotate: boolean) => void
@@ -50,7 +52,7 @@ const lightingOptions = [
 
 export function DemoControlsPanel({
   viewModel,
-  onAdvance,
+  onGuideNext,
   onReplayVoiceFixture,
   onSelectLighting,
   onRecoverMap,
@@ -86,10 +88,11 @@ export function DemoControlsPanel({
         className="demo-controls-panel__advance"
         type="button"
         disabled={viewModel.advanceDisabled}
-        onClick={onAdvance}
+        onClick={onGuideNext}
       >
         <span>{viewModel.advanceLabel}</span><span aria-hidden="true">→</span>
       </button>
+      {viewModel.nextHint ? <p className="demo-controls-panel__next-hint" role="status">{viewModel.nextHint}</p> : null}
 
       <div className="demo-controls-panel__fixtures" role="group" aria-label="语音兜底回放">
         <span>语音兜底回放</span>

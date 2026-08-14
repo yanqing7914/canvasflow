@@ -32,6 +32,8 @@ export type UISpecRendererProps = {
   driving?: boolean
   pending: boolean
   onAction: (actionId: string, componentId: string) => void
+  /** The demo drawer may briefly direct attention to a legal existing action. */
+  guidedActionId?: string
 }
 
 type RuntimeRecord = Record<string, unknown>
@@ -915,6 +917,7 @@ function ComponentCard({
   pending,
   onAction,
   floating,
+  guidedActionId,
 }: {
   component?: unknown
   slotId: string
@@ -926,6 +929,7 @@ function ComponentCard({
   onAction: UISpecRendererProps['onAction']
   /** True only for the one card the stylesheet floats over the map as a panel. */
   floating: boolean
+  guidedActionId?: string
 }) {
   const result = componentSpecSchema.safeParse(component)
   if (!result.success) return <ComponentFallback component={component} slotId={slotId} />
@@ -960,6 +964,7 @@ function ComponentCard({
           actionById={actionById}
           pending={pending}
           onAction={onAction}
+          guidedActionId={guidedActionId}
         />
       )
     case 'departure-plan': return <DeparturePlanCard component={result.data} />
@@ -975,12 +980,14 @@ function ActionButton({
   componentId,
   pending,
   onAction,
+  guidedActionId,
 }: {
   action?: unknown
   actionId?: string
   componentId: string
   pending: boolean
   onAction: UISpecRendererProps['onAction']
+  guidedActionId?: string
 }) {
   const result = actionSpecSchema.safeParse(action)
   if (!result.success) {
@@ -998,6 +1005,7 @@ function ActionButton({
       className={`ui-action ui-action--${result.data.style}`}
       type="button"
       data-action-id={result.data.id}
+      data-guided={guidedActionId === result.data.id || undefined}
       // An action already in flight must not be submitted twice.
       disabled={pending}
       onClick={() => onAction(result.data.id, componentId)}
@@ -1118,6 +1126,7 @@ function ActionGroup({
   pending,
   onAction,
   label,
+  guidedActionId,
 }: {
   className: string
   actionIds: string[]
@@ -1126,6 +1135,7 @@ function ActionGroup({
   pending: boolean
   onAction: UISpecRendererProps['onAction']
   label?: string
+  guidedActionId?: string
 }) {
   if (actionIds.length === 0) return null
   return (
@@ -1138,6 +1148,7 @@ function ActionGroup({
           componentId={componentId}
           pending={pending}
           onAction={onAction}
+          guidedActionId={guidedActionId}
         />
       ))}
     </div>
@@ -1181,7 +1192,7 @@ function floatingPanelId(
   return parsedRail.success && parsedRail.data.type === 'navigation-summary' ? rail[0] : undefined
 }
 
-export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRendererProps) {
+export function UISpecRenderer({ spec, driving, pending, onAction, guidedActionId }: UISpecRendererProps) {
   const runtimeComponents: unknown[] = Array.isArray(spec.components) ? spec.components : []
   const runtimeActions: unknown[] = Array.isArray(spec.actions) ? spec.actions : []
   const hasRuntimeWindows = Array.isArray((spec as unknown as { windows?: unknown }).windows)
@@ -1283,6 +1294,7 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
                     pending={pending}
                     onAction={onAction}
                     floating={componentId === panelId}
+                    guidedActionId={guidedActionId}
                   />
                   <ActionGroup
                     className="ui-card__actions"
@@ -1291,6 +1303,7 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
                     componentId={componentId}
                     pending={pending}
                     onAction={onAction}
+                    guidedActionId={guidedActionId}
                   />
                 </div>
               )
@@ -1306,6 +1319,7 @@ export function UISpecRenderer({ spec, driving, pending, onAction }: UISpecRende
         componentId={globalActionComponentId}
         pending={pending}
         onAction={onAction}
+        guidedActionId={guidedActionId}
         label="Task actions"
       />
     </section>

@@ -38,7 +38,7 @@ function viewModel(overrides: Partial<DemoControlsViewModel> = {}): DemoControls
 
 function callbacks() {
   return {
-    onAdvance: vi.fn(),
+    onGuideNext: vi.fn(),
     onReplayVoiceFixture: vi.fn(),
     onSelectLighting: vi.fn(),
     onRecoverMap: vi.fn(),
@@ -56,7 +56,7 @@ describe('DemoControlsPanel', () => {
     expect(screen.getByRole('progressbar', { name: '演示进度' })).toHaveAttribute('aria-valuenow', '25')
     expect(screen.getByText('2 / 8')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '推进下一事件' }))
-    expect(actions.onAdvance).toHaveBeenCalledOnce()
+    expect(actions.onGuideNext).toHaveBeenCalledOnce()
     expect(screen.getByRole('group', { name: '语音兜底回放' })).toBeInTheDocument()
 
     expect(screen.getByText('高级工具').closest('details')).not.toHaveAttribute('open')
@@ -109,5 +109,16 @@ describe('DemoControlsPanel', () => {
     expect(screen.getByText('尚无任务')).toBeInTheDocument()
     expect(screen.getByText('未规划')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '推进下一事件' })).toBeDisabled()
+  })
+
+  it('renders a read-only navigation status instead of a fake advance action', () => {
+    render(<DemoControlsPanel viewModel={viewModel({
+      advanceLabel: '导航模拟中',
+      advanceDisabled: true,
+      nextHint: '地图会自动更新',
+    })} {...callbacks()} />)
+
+    expect(screen.getByRole('button', { name: '导航模拟中' })).toBeDisabled()
+    expect(screen.getByText('地图会自动更新')).toBeInTheDocument()
   })
 })

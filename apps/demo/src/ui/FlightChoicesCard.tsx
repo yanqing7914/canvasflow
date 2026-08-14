@@ -28,12 +28,14 @@ export function FlightChoicesCard({
   actionById,
   pending,
   onAction,
+  guidedActionId,
 }: {
   component: Extract<ComponentSpec, { type: 'flight-choices' }>
   /** Every action the spec carries, so a row can tell a defined id from a dangling one. */
   actionById: Map<string, unknown>
   pending: boolean
   onAction: (actionId: string, componentId: string) => void
+  guidedActionId?: string
 }) {
   const { props } = component
   const refreshActionId = props.refreshActionId
@@ -89,6 +91,7 @@ export function FlightChoicesCard({
                   className="ui-flight-choices__row"
                   type="button"
                   data-action-id={actionId}
+                  data-guided={guidedActionId === actionId || undefined}
                   data-flight-number={choice.flightNumber}
                   disabled={pending || !available}
                   onClick={() => onAction(actionId, component.id)}
