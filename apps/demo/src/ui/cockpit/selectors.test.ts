@@ -101,6 +101,7 @@ describe('deriveCockpitView', () => {
     }))
 
     expect(view.primaryWindow?.kind).toBe('outbound-confirmation')
+    expect(view.primaryWindow?.componentIds).toEqual(['outbound-confirmation'])
     expect(view.auxiliaryWindows).toEqual([])
   })
 })

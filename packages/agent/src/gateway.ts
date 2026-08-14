@@ -50,6 +50,8 @@ import {
   clockLabel,
   composeAgentSpec,
   composeCockpitFlightChoices,
+  chargingRoutePresentation,
+  nearbyChargingStations,
   composeFallbackSpec,
   departureAtIso,
   departurePlan,
@@ -743,7 +745,7 @@ export class AgentGateway {
     }
     if (
       request.event.type === 'user.input'
-      && (plan?.intent === 'check-weather' || plan?.intent === 'check-schedule' || plan?.intent === 'check-departure-time')
+      && (plan?.intent === 'check-weather' || plan?.intent === 'check-charging' || plan?.intent === 'check-schedule' || plan?.intent === 'check-departure-time')
       && current.task.phase !== 'completed'
       && current.task.phase !== 'cancelled'
     ) {
@@ -751,6 +753,8 @@ export class AgentGateway {
       if (replayed) return replayed
       return plan.intent === 'check-weather'
         ? this.#submitWeatherQuery(taskId, current, request, startedAt)
+        : plan.intent === 'check-charging'
+          ? this.#submitChargingQuery(taskId, current, request, startedAt)
         : plan.intent === 'check-schedule'
           ? this.#submitScheduleQuery(taskId, current, request, startedAt)
           : this.#submitDepartureQuery(taskId, current, request, startedAt)
@@ -1682,10 +1686,14 @@ export class AgentGateway {
           flight: picked,
           route: reads.route.data,
           vehicle: reads.vehicle.data,
+          charging: reads.charging.data,
           at: timestamp,
         })
         const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
-          ...current.toolResults, 'navigation.plan-route': reads.route, 'vehicle.get-status': reads.vehicle,
+          ...current.toolResults,
+          'navigation.plan-route': reads.route,
+          'vehicle.get-status': reads.vehicle,
+          'charging.recommend': reads.charging,
         }, current.requestContext, current.effectReceipts)))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
@@ -1714,11 +1722,13 @@ export class AgentGateway {
         })
         const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
           ...current.toolResults, 'navigation.plan-route': route, 'vehicle.get-status': routeReads.vehicle,
+          'charging.recommend': routeReads.charging,
         }, current.requestContext, current.effectReceipts)))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: '返程路线已准备好，请确认开始返程。', shouldSpeak })
       }
       if (plan.intent === 'check-weather') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'weather', commandSnapshot)
+      if (plan.intent === 'check-charging') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'charging', commandSnapshot)
       if (plan.intent === 'check-schedule' || plan.intent === 'view-calendar') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'calendar')
       if (plan.intent === 'check-flight-detail') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'flight-detail')
       if (plan.intent === 'check-vehicle-status') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'vehicle-status', commandSnapshot)
@@ -1748,6 +1758,7 @@ export class AgentGateway {
         })
         const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
           ...current.toolResults, 'navigation.plan-route': route, 'vehicle.get-status': routeReads.vehicle,
+          'charging.recommend': routeReads.charging,
         }, current.requestContext, current.effectReceipts)))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
@@ -1805,6 +1816,7 @@ export class AgentGateway {
       })
       const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
         ...current.toolResults, 'navigation.plan-route': route, 'vehicle.get-status': routeReads.vehicle,
+        'charging.recommend': routeReads.charging,
       }, current.requestContext, current.effectReceipts)))
       this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
@@ -1919,9 +1931,19 @@ export class AgentGateway {
         leg: 'outbound', pickupAirport: current.task.pickupAirport, vehicle: current.requestContext?.vehicle,
       })
       if (!reads) throw new AgentGatewayError('PROVIDER_FAILED', 'Route provider is unavailable', true, current)
-      const next = selectCockpitFlight({ task: current.task, flight, route: reads.route.data, vehicle: reads.vehicle.data, at: this.#eventTimestamp(current.task.updatedAt) })
+      const next = selectCockpitFlight({
+        task: current.task,
+        flight,
+        route: reads.route.data,
+        vehicle: reads.vehicle.data,
+        charging: reads.charging.data,
+        at: this.#eventTimestamp(current.task.updatedAt),
+      })
       const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
-        ...current.toolResults, 'navigation.plan-route': reads.route, 'vehicle.get-status': reads.vehicle,
+        ...current.toolResults,
+        'navigation.plan-route': reads.route,
+        'vehicle.get-status': reads.vehicle,
+        'charging.recommend': reads.charging,
       }, current.requestContext, current.effectReceipts)))
       this.#store.recordIdempotencyResult(taskId, operation, request.idempotencyKey, { stored, effects: [] })
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: `已选择 ${flight.flightNumber}，请确认现在出发。`, shouldSpeak: false })
@@ -1994,7 +2016,7 @@ export class AgentGateway {
     current: StoredTask,
     request: SubmitEventRequest,
     startedAt: number,
-    kind: 'weather' | 'calendar' | 'flight-detail' | 'vehicle-status',
+    kind: 'weather' | 'charging' | 'calendar' | 'flight-detail' | 'vehicle-status',
     commandSnapshot?: SanitizedCockpitSnapshot,
   ): AgentResponse {
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
@@ -2025,6 +2047,56 @@ export class AgentGateway {
           throw new AgentGatewayError(error.code, '天气服务暂时不可用，请稍后重试。', error.retryable, current)
         }
         this.#throwProviderError(error, current)
+      }
+    } else if (kind === 'charging') {
+      const route = current.toolResults?.['navigation.plan-route']?.data
+      const vehicle = commandSnapshot?.vehicle ?? current.toolResults?.['vehicle.get-status']?.data ?? current.requestContext?.vehicle
+      let charging = current.toolResults?.['charging.recommend']?.data
+      if (!route || !vehicle || !charging) return this.#cockpitNoop(current, request, startedAt, '当前还没有可用的接机路线和车辆电量。')
+      const driving = current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving'
+      if (driving && !commandSnapshot) {
+        return this.#cockpitNoop(current, request, startedAt, '需要当前模拟位置后才能规划充电路线。')
+      }
+      let presentationRoute = route
+      if (driving && commandSnapshot) {
+        try {
+          const refreshed = this.#orchestrator.resolveCharging?.(taskId, request.clientRequestId, {
+            batteryPercent: vehicle.batteryPercent,
+            remainingRangeKm: vehicle.remainingRangeKm,
+            outboundDistanceKm: commandSnapshot.remainingDistanceKm,
+            returnDistanceKm: current.task.phase === 'outbound-driving'
+              ? current.task.navigationSimulation?.distanceKm ?? route.distanceKm
+              : 0,
+          })
+          if (!refreshed) {
+            throw new AgentGatewayError('PROVIDER_FAILED', '充电方案暂时不可用，请稍后重试。', true, current)
+          }
+          charging = refreshed.data
+          const distanceRatio = route.distanceKm > 0 ? commandSnapshot.remainingDistanceKm / route.distanceKm : 0
+          presentationRoute = {
+            ...route,
+            distanceKm: commandSnapshot.remainingDistanceKm,
+            durationMinutes: Math.max(0, Math.round(route.durationMinutes * distanceRatio)),
+          }
+        } catch (error) {
+          if (error instanceof AgentGatewayError) throw error
+          if (error instanceof ReadToolOrchestrationError) {
+            throw new AgentGatewayError(error.code, '充电方案暂时不可用，请稍后重试。', error.retryable, current)
+          }
+          this.#throwProviderError(error, current)
+        }
+      }
+      component = {
+        id: `charging-${request.event.eventId}`, type: 'charging-recommendation', props: {
+          recommended: charging.recommended,
+          reason: charging.reason,
+          currentBatteryPercent: vehicle.batteryPercent,
+          estimatedFinalBatteryPercent: charging.estimatedFinalBatteryPercent,
+          suggestedDurationMinutes: charging.suggestedDurationMinutes,
+          etaImpactMinutes: charging.etaImpactMinutes,
+          nearbyStations: nearbyChargingStations('full', vehicle.batteryPercent),
+          chargingRoute: chargingRoutePresentation(presentationRoute, current.task.navigation?.destination ?? current.task.pickupAirport?.label ?? '机场', vehicle.batteryPercent),
+        },
       }
     } else if (kind === 'calendar') {
       try {
@@ -2068,7 +2140,7 @@ export class AgentGateway {
         },
       }
     }
-    const windowTitle = kind === 'weather' ? '天气' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
+    const windowTitle = kind === 'weather' ? '天气' : kind === 'charging' ? '充电方案' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
     const ui = this.#appendCockpitInfoWindow(taskId, current.ui, component, kind, request.event.eventId, timestamp)
     const answered: StoredTask = { ...current, task: { ...current.task, uiRevision: ui.uiRevision }, ui }
     const stored = this.#store.save(answered)
@@ -2083,19 +2155,19 @@ export class AgentGateway {
     taskId: string,
     baseUi: UISpec,
     component: UISpec['components'][number],
-    kind: 'weather' | 'calendar' | 'flight-detail' | 'vehicle-status',
+    kind: 'weather' | 'charging' | 'calendar' | 'flight-detail' | 'vehicle-status',
     eventId: string,
     timestamp: string,
   ): UISpec {
     const windowKind = kind === 'calendar' ? 'calendar' : kind
-    const windowTitle = kind === 'weather' ? '天气' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
+    const windowTitle = kind === 'weather' ? '天气' : kind === 'charging' ? '充电方案' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
     return uiSpecSchema.parse({
       ...baseUi,
       uiRevision: baseUi.uiRevision + 1,
       components: [...baseUi.components, component],
       windows: [...(baseUi.windows ?? []), {
         id: `${kind}-${eventId}`, kind: windowKind, title: windowTitle, componentIds: [component.id],
-        size: kind === 'calendar' ? 'large' : 'medium', controls: { closable: true, minimizable: true, maximizable: true },
+        size: kind === 'calendar' || kind === 'charging' ? 'large' : 'medium', controls: { closable: true, minimizable: true, maximizable: true },
       }],
       meta: { ...baseUi.meta, generatedAt: timestamp, traceId: `trace-${taskId}-${eventId}` },
     })
@@ -2864,7 +2936,7 @@ export class AgentGateway {
      * Which side question this turn asked, when it asked one. Not derivable from
      * the snapshot — neither answer changes the task — so the asking turn says so.
      */
-    queryAnswer?: 'departure' | 'calendar',
+    queryAnswer?: 'departure' | 'calendar' | 'charging',
   ): StoredTask {
     // A terminal transition may defer a parked-only cabin cleanup. Keep only
     // that private receipt so a later parked event can safely finish it.
@@ -3425,6 +3497,47 @@ export class AgentGateway {
     const assistant = { text: weatherSpokenSummary(weather.data, arrivalAhead, returning), shouldSpeak: supportsTts }
     this.#recordSideAnswer(taskId, request.event.eventId, answered, assistant)
     return this.#response(request.clientRequestId, answered, [], performance.now() - startedAt, assistant)
+  }
+
+  /**
+   * Shows the trip's existing route, battery, and charging recommendation as a
+   * transient generated answer. Like weather and schedule, asking the question
+   * changes no task fact; the next accepted event restores the trip surface.
+   */
+  #submitChargingQuery(
+    taskId: string,
+    current: StoredTask,
+    request: SubmitEventRequest,
+    startedAt: number,
+  ): AgentResponse {
+    const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    const route = current.toolResults?.['navigation.plan-route']
+    const charging = current.toolResults?.['charging.recommend']
+    const vehicle = current.toolResults?.['vehicle.get-status']
+    if (!route || !charging || !vehicle) {
+      return this.#response(request.clientRequestId, current, [], performance.now() - startedAt, {
+        text: '当前还没有可用的接机路线和车辆电量。',
+        shouldSpeak: supportsTts,
+      })
+    }
+
+    const published = this.#publish(
+      current.task,
+      current.toolResults,
+      current.requestContext,
+      current.effectReceipts,
+      'charging',
+    )
+    this.#persistBriefBehind(published, current)
+    const duration = charging.data.suggestedDurationMinutes
+    const assistant = {
+      text: charging.data.recommended
+        ? `已规划充电路线，当前电量 ${vehicle.data.batteryPercent}%，建议补能${duration === undefined ? '' : ` ${duration} 分钟`}。`
+        : `当前电量 ${vehicle.data.batteryPercent}%，这趟接机暂时不需要额外补能。`,
+      shouldSpeak: supportsTts,
+    }
+    this.#recordSideAnswer(taskId, request.event.eventId, published, assistant)
+    return this.#response(request.clientRequestId, published, [], performance.now() - startedAt, assistant)
   }
 
   /**

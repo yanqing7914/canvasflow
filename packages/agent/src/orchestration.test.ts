@@ -87,6 +87,7 @@ describe('ReadToolOrchestrator', () => {
 
   it('plans the cockpit return from the fixed pickup point, not the demo origin', () => {
     const registry = createMutableRegistry()
+    registry['charging.recommend'] = vi.fn(registry['charging.recommend'])
     const orchestrator = new ReadToolOrchestrator({ registry })
 
     const result = orchestrator.resolveCockpitRoute('pickup-001', 'return-from-pickup', { leg: 'return' })
@@ -95,6 +96,43 @@ describe('ReadToolOrchestrator', () => {
     expect(result.route.data.waypoints?.[0]).toMatchObject({
       id: 'pickup-demo', latitude: DEMO_PICKUP_POINT.latitude, longitude: DEMO_PICKUP_POINT.longitude,
     })
+    expect(registry['charging.recommend']).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: 'pickup-001', requestId: 'return-from-pickup:charging.recommend' }),
+      {
+        batteryPercent: 42,
+        remainingRangeKm: 112,
+        outboundDistanceKm: result.route.data.distanceKm,
+        returnDistanceKm: 0,
+        safetyReservePercent: 20,
+      },
+    )
+    expect(result.charging.data).toMatchObject({ recommended: false, estimatedFinalBatteryPercent: 30 })
+  })
+
+  it('re-evaluates charging from the vehicle and route distances supplied at query time', () => {
+    const registry = createMutableRegistry()
+    registry['charging.recommend'] = vi.fn(registry['charging.recommend'])
+    const orchestrator = new ReadToolOrchestrator({ registry })
+
+    const result = orchestrator.resolveCharging('pickup-001', 'charging-now', {
+      batteryPercent: 31,
+      remainingRangeKm: 82,
+      outboundDistanceKm: 12,
+      returnDistanceKm: 32,
+    })
+
+    expect(registry['charging.recommend']).toHaveBeenCalledWith(
+      expect.objectContaining({ taskId: 'pickup-001', requestId: 'charging-now:charging.recommend' }),
+      {
+        batteryPercent: 31,
+        remainingRangeKm: 82,
+        outboundDistanceKm: 12,
+        returnDistanceKm: 32,
+        safetyReservePercent: 20,
+      },
+    )
+    expect(result.data.estimatedFinalBatteryPercent).toBe(14)
+    expect(result.data.recommended).toBe(true)
   })
 
   it('rejects invalid envelopes before using provider data', () => {
