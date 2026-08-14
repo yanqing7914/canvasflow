@@ -423,8 +423,28 @@ describe('AgentGateway', () => {
       actionId: 'start-return', componentId: 'return-confirmation', idempotencyKey: 'start-return',
     })
     expect(returning.task.phase).toBe('return-driving')
-    const completed = gateway.submitEvent(returning.task.taskId, {
-      clientRequestId: 'home', expectedTaskRevision: returning.task.taskRevision,
+    const returnSpeed = returning.task.navigationSimulation!.profiles[returning.task.cockpit?.speedMode ?? 'normal'].displaySpeedKph
+    const returnCharging = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'return-charging', expectedTaskRevision: returning.task.taskRevision,
+      event: {
+        eventId: 'return-charging', type: 'user.input', text: '规划充电路线', source: 'voice', timestamp: now,
+        navigationSnapshot: {
+          routeId: returning.task.navigationSimulation!.routeId, leg: 'return', progress: 0.5,
+          speedKph: returnSpeed,
+          batteryPercent: (returning.task.navigationSimulation!.initialBatteryPercent + returning.task.navigationSimulation!.estimatedBatteryAtArrival) / 2,
+          remainingRangeKm: ((returning.task.navigationSimulation!.initialBatteryPercent + returning.task.navigationSimulation!.estimatedBatteryAtArrival) / 2)
+            / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm,
+          remainingDistanceKm: returning.task.navigationSimulation!.distanceKm / 2, currentRoad: '沪青平公路',
+        },
+      },
+    })
+    expect(returnCharging.ui.components).toContainEqual(expect.objectContaining({
+      type: 'charging-recommendation', props: expect.objectContaining({
+        chargingRoute: expect.objectContaining({ destination: '家', distanceKm: returning.task.navigationSimulation!.distanceKm / 2 }),
+      }),
+    }))
+    const completed = gateway.submitEvent(returnCharging.task.taskId, {
+      clientRequestId: 'home', expectedTaskRevision: returnCharging.task.taskRevision,
       event: {
         eventId: 'home', type: 'navigation.return-arrived', timestamp: now,
         navigationSnapshot: {

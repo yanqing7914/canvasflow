@@ -1722,6 +1722,7 @@ export class AgentGateway {
         })
         const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
           ...current.toolResults, 'navigation.plan-route': route, 'vehicle.get-status': routeReads.vehicle,
+          'charging.recommend': routeReads.charging,
         }, current.requestContext, current.effectReceipts)))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: '返程路线已准备好，请确认开始返程。', shouldSpeak })
@@ -1757,6 +1758,7 @@ export class AgentGateway {
         })
         const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
           ...current.toolResults, 'navigation.plan-route': route, 'vehicle.get-status': routeReads.vehicle,
+          'charging.recommend': routeReads.charging,
         }, current.requestContext, current.effectReceipts)))
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
@@ -1814,6 +1816,7 @@ export class AgentGateway {
       })
       const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(next, {
         ...current.toolResults, 'navigation.plan-route': route, 'vehicle.get-status': routeReads.vehicle,
+        'charging.recommend': routeReads.charging,
       }, current.requestContext, current.effectReceipts)))
       this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
       return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
