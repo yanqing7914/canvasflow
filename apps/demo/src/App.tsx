@@ -2308,7 +2308,7 @@ export default function App({
               data-phase={task?.phase}
               data-phase-label={phaseIdentity}
             >
-              {task ? <JourneyPhaseRail phase={task.phase} /> : null}
+              {task && primarySpec ? <JourneyPhaseRail phase={task.phase} /> : null}
               {primarySpec && task ? (
                 <section className="cockpit-primary-panel__content" aria-label={`${cockpitView.primaryWindow?.title ?? windowSpec?.title ?? '当前行程'}窗口`}>
                   <UISpecRenderer
