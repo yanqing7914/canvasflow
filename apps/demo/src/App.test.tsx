@@ -3047,8 +3047,54 @@ describe('demo integration', () => {
       drawer = await openControls(user)
       expect(drawer).toHaveTextContent('语音兜底回放')
       expect(fixtureReplayControls().getByRole('button', { name: '选择第一个航班' })).toBeEnabled()
+      expect(fixtureReplayControls().getByRole('button', { name: '查看充电' })).toBeDisabled()
       expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
       expect(fixtureReplayControls().getByRole('button', { name: '提醒乘客带伞' })).toBeDisabled()
+    })
+
+    it('replays the charging fallback through the Agent generated-UI path', async () => {
+      const user = userEvent.setup()
+      const audio = createFakeFixtureAudio()
+      const initial = {
+        ...createCockpitTask('fixture-charging'),
+        phase: 'confirming-outbound' as const,
+        pickupAirport: { label: '虹桥机场', code: 'SHA' },
+        navigation: { routeId: 'route-airport-001', destination: '虹桥机场', eta: '2026-07-22T20:25:00+08:00', status: 'planned' as const },
+      } as AirportPickupTaskState
+      const initialResponse = apiResponse(initial)
+      const chargingUi: UISpec = {
+        ...initialResponse.ui,
+        components: [{
+          id: 'charging-fixture-result', type: 'charging-recommendation', props: {
+            recommended: false, reason: '当前路线无需额外补能', currentBatteryPercent: 42,
+            estimatedFinalBatteryPercent: 30,
+          },
+        }],
+        layout: { type: 'stack', gap: 'md', slots: { main: [] } },
+        windows: [{
+          id: 'charging-fixture-window', kind: 'charging', title: '充电方案',
+          componentIds: ['charging-fixture-result'], size: 'large',
+          controls: { closable: true, minimizable: true, maximizable: true },
+        }],
+      }
+      const event = vi.fn().mockResolvedValue({ ...initialResponse, ui: chargingUi })
+      const api = {
+        create: vi.fn().mockResolvedValue(initialResponse), event, action: vi.fn(), confirmation: vi.fn(),
+      }
+      render(<App api={api} fixtureAudio={audio.factory} />)
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await openControls(user)
+      await user.click(fixtureReplayControls().getByRole('button', { name: '查看充电' }))
+      act(() => { audio.current().onended?.() })
+      expect(screen.getByLabelText('任务输入')).toHaveValue('查看充电')
+
+      await user.click(screen.getByRole('button', { name: '发送' }))
+      await waitFor(() => expect(event).toHaveBeenCalledWith(initial, expect.objectContaining({
+        type: 'user.input', text: '查看充电',
+      })))
+      expect(await screen.findByLabelText('充电方案窗口')).toBeInTheDocument()
+      expect(screen.getByText('当前路线无需额外补能')).toBeInTheDocument()
     })
 
     it('keeps a fixture disabled when its visible card has no matching executable action', async () => {
