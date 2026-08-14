@@ -5,6 +5,7 @@ import {
   type RoutePlanOutput,
   type UISpec,
   type VehicleContext,
+  type ChargingRecommendationOutput,
   type WindowKind,
 } from '@canvasflow/schema'
 import { NAVIGATION_SIMULATION_PROFILES } from '@canvasflow/tools'
@@ -17,6 +18,7 @@ export function selectCockpitFlight(input: {
   flight: FlightArrivalCandidate
   route: RoutePlanOutput
   vehicle: VehicleContext
+  charging?: ChargingRecommendationOutput
   at: string
 }): AirportPickupTaskState {
   if (input.task.phase !== 'choosing-flight' || !input.task.pickupAirport) return input.task
@@ -43,6 +45,9 @@ export function selectCockpitFlight(input: {
       estimatedBatteryAtArrival: input.route.estimatedBatteryAtArrival,
       profiles: NAVIGATION_SIMULATION_PROFILES,
     },
+    charging: input.charging
+      ? { ...input.task.charging, recommended: input.charging.recommended, status: input.charging.recommended ? 'planned' : 'none' }
+      : input.task.charging,
     updatedAt: input.at,
   }
 }

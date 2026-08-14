@@ -131,6 +131,33 @@ export const componentSpecSchema = z.discriminatedUnion('type', [
     props: z.object({
       recommended: z.boolean(), reason: z.string(), currentBatteryPercent: z.number(), estimatedFinalBatteryPercent: z.number(),
       suggestedDurationMinutes: z.number().optional(), etaImpactMinutes: z.number().optional(),
+      /** Optional cockpit-style nearby-station results attached to the recommendation. */
+      nearbyStations: z.object({
+        soc: z.string().optional(),
+        items: z.array(z.object({
+          id: z.string().optional(),
+          name: z.string().min(1),
+          address: z.string().optional(),
+          operator: z.string().optional(),
+          available: z.number().nonnegative().optional(),
+          total: z.number().positive().optional(),
+          price: z.string().optional(),
+          distanceKm: z.number().nonnegative().optional(),
+          rating: z.number().min(0).max(5).optional(),
+        })),
+      }).optional(),
+      /** Optional route plan showing the charging stops along the journey. */
+      chargingRoute: z.object({
+        destination: z.string().min(1),
+        distanceKm: z.number().nonnegative().optional(),
+        durationMinutes: z.number().nonnegative().optional(),
+        soc: z.string().optional(),
+        stops: z.array(z.object({
+          name: z.string().min(1),
+          address: z.string().optional(),
+          atKm: z.number().nonnegative().optional(),
+        })),
+      }).optional(),
     }),
   }),
   componentBase.extend({
@@ -387,6 +414,7 @@ export const windowKindSchema = z.enum([
   'flight-list',
   'outbound-confirmation',
   'weather',
+  'charging',
   'calendar',
   'flight-detail',
   'passenger-onboard',

@@ -217,17 +217,21 @@ export function composePickupSpec(task: AirportPickupTaskState, context: Compose
     density = chargingDensityFromContext(context)
     const stations = chargingStationsForDensity(density)
     const battery = resolveChargingBatteryProps(context, vehicleSnapshots.parked)
+    const route = routePlanFromContext(context)
+    const chargingProps = {
+      recommended: true,
+      reason: `完成往返后预计低于安全余量（对比 ${stations.length} 站）`,
+      currentBatteryPercent: battery.currentBatteryPercent,
+      estimatedFinalBatteryPercent: battery.estimatedFinalBatteryPercent,
+      suggestedDurationMinutes: chargingStation.suggestedDurationMinutes,
+      etaImpactMinutes: chargingStation.etaImpactMinutes,
+      nearbyStations: nearbyChargingStations(density, battery.currentBatteryPercent),
+      ...(route ? { chargingRoute: chargingRoutePresentation(route.destination ?? airport, route.distanceKm, route.durationMinutes, battery.currentBatteryPercent) } : {}),
+    }
     components = [{
       id: 'charging-plan',
       type: 'charging-recommendation',
-      props: {
-        recommended: true,
-        reason: `完成往返后预计低于安全余量（对比 ${stations.length} 站）`,
-        currentBatteryPercent: battery.currentBatteryPercent,
-        estimatedFinalBatteryPercent: battery.estimatedFinalBatteryPercent,
-        suggestedDurationMinutes: chargingStation.suggestedDurationMinutes,
-        etaImpactMinutes: chargingStation.etaImpactMinutes,
-      },
+      props: chargingProps,
     }]
   }
   else if (task.navigation) {
@@ -409,6 +413,55 @@ function resolveEstimatedFinalFromRecommend(context: ComposerContext): number | 
   const data = (result as { data?: unknown }).data
   if (typeof data !== 'object' || data === null) return undefined
   return finitePercent((data as { estimatedFinalBatteryPercent?: unknown }).estimatedFinalBatteryPercent)
+}
+
+function nearbyChargingStations(
+  density: ChargingPresentationDensity,
+  batteryPercent: number,
+) {
+  return {
+    soc: `${Math.round(batteryPercent)}%`,
+    items: chargingStationsForDensity(density).map((station) => ({
+      id: station.stationId,
+      name: station.name,
+      address: station.open24h ? '24 小时开放' : '营业时间以现场为准',
+      available: station.availableStalls,
+      total: station.totalStalls,
+      price: `¥${station.pricePerKwhYuan.toFixed(1)}`,
+      distanceKm: station.distanceKm,
+    })),
+  }
+}
+
+function chargingRoutePresentation(
+  destination: string,
+  distanceKm: number,
+  durationMinutes: number | undefined,
+  batteryPercent: number,
+) {
+  return {
+    destination,
+    distanceKm,
+    durationMinutes,
+    soc: `${Math.round(batteryPercent)}%`,
+    stops: [{ name: '虹桥枢纽超充站', address: '虹桥枢纽附近', atKm: Math.round(distanceKm * 0.6) }],
+  }
+}
+
+function routePlanFromContext(context: ComposerContext): { distanceKm: number; durationMinutes?: number; destination?: string } | undefined {
+  const result = context.toolResults?.['navigation.plan-route']
+  if (typeof result !== 'object' || result === null || (result as { ok?: unknown }).ok !== true) return undefined
+  const data = (result as { data?: unknown }).data
+  if (typeof data !== 'object' || data === null) return undefined
+  const distanceKm = (data as { distanceKm?: unknown }).distanceKm
+  if (typeof distanceKm !== 'number' || !Number.isFinite(distanceKm) || distanceKm < 0) return undefined
+  const durationMinutes = (data as { durationMinutes?: unknown }).durationMinutes
+  const destination = (data as { destination?: unknown }).destination
+  return {
+    distanceKm,
+    durationMinutes: typeof durationMinutes === 'number' && Number.isFinite(durationMinutes) ? durationMinutes : undefined,
+    destination: typeof destination === 'string' && destination.length > 0 ? destination : undefined,
+  }
 }
 
 function finitePercent(value: unknown): number | undefined {

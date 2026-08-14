@@ -20,6 +20,7 @@ export type PlannerIntent =
   | 'start-return'
   | 'pause-unsupported'
   | 'plan-charging'
+  | 'check-charging'
   | 'confirm-passengers-onboard'
   | 'apply-cabin-preferences'
   | 'check-weather'
@@ -211,6 +212,17 @@ export function planAirportPickup(input: PlannerInput): Plan {
       missingSlots: [],
       proposedEvents: [{ ...eventBase, type: 'user.input', text }],
       assistantText: '好的，正在为你查看接机目的地的天气。',
+    }
+  }
+
+  if (isChargingQuery(compactText)) {
+    return {
+      intent: 'check-charging',
+      confidence: 0.98,
+      slotUpdates: {},
+      missingSlots: [],
+      proposedEvents: [{ ...eventBase, type: 'user.input', text }],
+      assistantText: '好的，正在为你生成充电方案。',
     }
   }
 
@@ -406,6 +418,10 @@ function isTaskCancellation(text: string): boolean {
  */
 function isWeatherQuery(text: string): boolean {
   return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查|查下|查查|查一下|看一下)?(?:到(?:的时候|达时|那边))?(?:的)?天气(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
+}
+
+function isChargingQuery(text: string): boolean {
+  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查|查下|查查|查一下|看一下|找|找下|规划|检查)?(?:附近)?(?:的)?(?:充电站|充电路线|补能路线|充电方案|补能方案|是否需要充电|要不要充电)(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
 }
 
 /**

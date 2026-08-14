@@ -4,6 +4,7 @@ export const cockpitWindowKinds = [
   'flight-list',
   'outbound-confirmation',
   'weather',
+  'charging',
   'calendar',
   'flight-detail',
   'passenger-onboard',
@@ -150,6 +151,7 @@ export function workspaceWindows(spec: UISpec): CockpitWindowSpec[] {
 function legacyWindowKind(type: ComponentSpec['type'] | undefined): CockpitWindowKind {
   if (type === 'flight-choices') return 'flight-list'
   if (type === 'weather-card') return 'weather'
+  if (type === 'charging-recommendation') return 'charging'
   if (type === 'schedule-card' || type === 'schedule-strip') return 'calendar'
   if (type === 'passenger-status') return 'passenger-onboard'
   if (type === 'alert') return 'error'
