@@ -99,13 +99,13 @@ describe('demo integration', () => {
       speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P', isNight: false,
     }} />)
 
-    expect(screen.getByRole('region', { name: '空闲座舱首页' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '空闲座舱' })).toBeInTheDocument()
     expect(screen.getByText('模拟位置：人民广场')).toBeInTheDocument()
     expect(screen.getByText('模拟位置，非真实 GPS')).toBeInTheDocument()
     expect(screen.getByText('多云')).toBeInTheDocument()
     expect(screen.getByText('今日日程')).toBeInTheDocument()
     expect(screen.getByText('Her 开发日会')).toBeInTheDocument()
-    const idleHome = screen.getByRole('region', { name: '空闲座舱首页' })
+    const idleHome = screen.getByRole('region', { name: '空闲座舱' })
     expect(within(idleHome).getByText('42%')).toBeInTheDocument()
     expect(within(idleHome).getByText('112 km')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '查看天气' })).toBeInTheDocument()

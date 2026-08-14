@@ -58,7 +58,7 @@ export function IdleHome({
   }, [now])
 
   return (
-    <section className="idle-home" aria-label="空闲座舱首页">
+    <section className="idle-home" aria-label="空闲座舱">
       <IdleVehicleVisual />
       <aside className="idle-home__living" aria-label="生活信息">
         <section className="idle-home__clock" aria-label="当前时间">

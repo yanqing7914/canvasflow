@@ -9,7 +9,7 @@ const vehicle: VehicleContext = { speedKph: 0, batteryPercent: 42, remainingRang
 describe('IdleHome', () => {
   it('shows the three simulated home capabilities from vehicle context only once', () => {
     render(<IdleHome vehicle={vehicle} voiceStatus="等待唤醒" onWeather={() => {}} onSchedule={() => {}} onVehicleStatus={() => {}} onSpeedDown={() => {}} onSpeedUp={() => {}} />)
-    expect(screen.getByRole('region', { name: '空闲座舱首页' })).toBeInTheDocument()
+    expect(screen.getByRole('region', { name: '空闲座舱' })).toBeInTheDocument()
     expect(screen.getByText('多云')).toBeInTheDocument()
     expect(screen.getByText('Her 开发日会')).toBeInTheDocument()
     expect(screen.getByText('新建 Her')).toBeInTheDocument()

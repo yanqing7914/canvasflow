@@ -376,7 +376,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await page.getByTestId('persistent-map-layer').evaluate((node) => { node.setAttribute('data-e2e-map-node', 'persistent') })
 
   // The production entry is a quiet cabin, not a pre-created task or form.
-  await expect(page.getByRole('region', { name: '空闲座舱首页' })).toBeVisible()
+  await expect(page.getByRole('region', { name: '空闲座舱' })).toBeVisible()
   await expect(page.getByText('模拟位置：人民广场')).toBeVisible()
   await expect(page.getByText('模拟位置，非真实 GPS')).toBeVisible()
   await expect(page.getByLabel('任务输入')).toHaveCount(0)
