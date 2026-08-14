@@ -418,13 +418,47 @@ describe('AgentGateway', () => {
     expect(confirmingReturn.ui.windows?.at(-1)?.kind).toBe('return-confirmation')
     const returnCard = confirmingReturn.ui.components.find((component) => component.type === 'route-confirmation')
     expect(returnCard).toMatchObject({ props: { currentBatteryPercent: terminalBattery } })
-    const returning = gateway.submitAction(confirmingReturn.task.taskId, {
-      clientRequestId: 'start-return', expectedTaskRevision: confirmingReturn.task.taskRevision, expectedUiRevision: confirmingReturn.ui.uiRevision,
+    const parkedReturnCharging = gateway.submitEvent(confirmingReturn.task.taskId, {
+      clientRequestId: 'parked-return-charging', expectedTaskRevision: confirmingReturn.task.taskRevision,
+      event: { eventId: 'parked-return-charging', type: 'user.input', text: '规划充电路线', source: 'voice', timestamp: now },
+    })
+    const parkedChargingCard = parkedReturnCharging.ui.components.find((component) => component.type === 'charging-recommendation')
+    if (parkedChargingCard?.type !== 'charging-recommendation') throw new Error('expected parked return charging recommendation')
+    const returnDistanceKm = confirmingReturn.task.navigationSimulation!.distanceKm
+    const expectedReturnBattery = Math.round(terminalBattery * Math.max(0, terminalRange - returnDistanceKm) / terminalRange)
+    expect(parkedChargingCard.props).toMatchObject({
+      recommended: expectedReturnBattery < 20,
+      currentBatteryPercent: terminalBattery,
+      estimatedFinalBatteryPercent: expectedReturnBattery,
+      chargingRoute: { destination: '家', distanceKm: returnDistanceKm },
+    })
+    const returning = gateway.submitAction(parkedReturnCharging.task.taskId, {
+      clientRequestId: 'start-return', expectedTaskRevision: parkedReturnCharging.task.taskRevision, expectedUiRevision: parkedReturnCharging.ui.uiRevision,
       actionId: 'start-return', componentId: 'return-confirmation', idempotencyKey: 'start-return',
     })
     expect(returning.task.phase).toBe('return-driving')
-    const completed = gateway.submitEvent(returning.task.taskId, {
-      clientRequestId: 'home', expectedTaskRevision: returning.task.taskRevision,
+    const returnSpeed = returning.task.navigationSimulation!.profiles[returning.task.cockpit?.speedMode ?? 'normal'].displaySpeedKph
+    const returnCharging = gateway.submitEvent(returning.task.taskId, {
+      clientRequestId: 'return-charging', expectedTaskRevision: returning.task.taskRevision,
+      event: {
+        eventId: 'return-charging', type: 'user.input', text: '规划充电路线', source: 'voice', timestamp: now,
+        navigationSnapshot: {
+          routeId: returning.task.navigationSimulation!.routeId, leg: 'return', progress: 0.5,
+          speedKph: returnSpeed,
+          batteryPercent: (returning.task.navigationSimulation!.initialBatteryPercent + returning.task.navigationSimulation!.estimatedBatteryAtArrival) / 2,
+          remainingRangeKm: ((returning.task.navigationSimulation!.initialBatteryPercent + returning.task.navigationSimulation!.estimatedBatteryAtArrival) / 2)
+            / cockpitRequest.vehicleContext.batteryPercent * cockpitRequest.vehicleContext.remainingRangeKm,
+          remainingDistanceKm: returning.task.navigationSimulation!.distanceKm / 2, currentRoad: '沪青平公路',
+        },
+      },
+    })
+    expect(returnCharging.ui.components).toContainEqual(expect.objectContaining({
+      type: 'charging-recommendation', props: expect.objectContaining({
+        chargingRoute: expect.objectContaining({ destination: '家', distanceKm: returning.task.navigationSimulation!.distanceKm / 2 }),
+      }),
+    }))
+    const completed = gateway.submitEvent(returnCharging.task.taskId, {
+      clientRequestId: 'home', expectedTaskRevision: returnCharging.task.taskRevision,
       event: {
         eventId: 'home', type: 'navigation.return-arrived', timestamp: now,
         navigationSnapshot: {

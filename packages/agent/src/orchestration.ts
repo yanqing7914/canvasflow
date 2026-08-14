@@ -386,7 +386,9 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
         batteryPercent: vehicle.data.batteryPercent,
         remainingRangeKm: vehicle.data.remainingRangeKm,
         outboundDistanceKm: route.data.distanceKm,
-        returnDistanceKm: route.data.distanceKm,
+        // An outbound plan still has both legs ahead. A return plan starts at
+        // the airport, so only the homeward leg remains.
+        returnDistanceKm: input.leg === 'outbound' ? route.data.distanceKm : 0,
         safetyReservePercent: this.#safetyReservePercent,
       }, toolResultSchema(chargingRecommendationOutputSchema),
     )
