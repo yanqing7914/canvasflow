@@ -92,6 +92,14 @@ describe('demo integration', () => {
     expect(api.create).not.toHaveBeenCalled()
   })
 
+  it('derives the idle shell and map theme from the vehicle light condition', () => {
+    const vehicle = { speedKph: 0, batteryPercent: 42, remainingRangeKm: 112, gear: 'P' as const, isNight: true }
+    render(<AppComponent voiceEnabled={false} initialVehicleContext={vehicle} />)
+
+    expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'dark')
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-theme', 'dark')
+  })
+
   it('updates the idle cockpit after shared controls change pre-task vehicle state', async () => {
     const user = userEvent.setup()
     render(<AppComponent voiceEnabled={false} initialVehicleContext={{
@@ -100,8 +108,12 @@ describe('demo integration', () => {
 
     await user.click(screen.getByRole('button', { name: '打开演示控制' }))
     expect(screen.getByRole('button', { name: '白天' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'light')
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-theme', 'light')
     await user.click(screen.getByRole('button', { name: '夜间' }))
     expect(screen.getByRole('button', { name: '夜间' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'dark')
+    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-theme', 'dark')
   })
 
   it('requires Xiaonan for speech but lets explicit text send create the task', async () => {

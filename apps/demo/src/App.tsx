@@ -511,6 +511,12 @@ export default function App({
     })
   }, [composeContext, response, task])
   const spec = response?.ui ?? localSpec
+  // Agent-authored presentation owns task themes. Before the first task, the
+  // shell and map follow the vehicle's sensed cabin light so demo controls have
+  // an immediate visual effect without fabricating a task/spec.
+  const cockpitTheme = task && spec
+    ? spec.presentation.theme
+    : (vehicleContext.isNight ? 'dark' : 'light')
   const effects = useMemo(() => response?.effects ?? [], [response])
   const remoteTaskId = response?.task.taskId
   const runtimeTask = task as unknown as RuntimeNavigationTask | undefined
@@ -2237,7 +2243,7 @@ export default function App({
       data-controls-open={controlsOpen}
       data-phase={task?.phase}
       data-density={spec?.presentation.density}
-      data-theme={spec?.presentation.theme}
+      data-theme={cockpitTheme}
       data-priority={spec?.presentation.priority}
       data-glass={glassTier}
       data-navigation-toolbar={navigationActive ? (composerReason ? 'expanded' : 'compact') : undefined}
@@ -2252,7 +2258,7 @@ export default function App({
             sketch={routeSketch}
             progress={mapProgress}
             routeKey={mapRouteKey}
-            theme={spec?.presentation.theme ?? 'dark'}
+            theme={cockpitTheme}
             sessionKey={cockpitSessionKey}
             recoveryKey={task?.taskId ?? 'idle'}
             mapRetryNonce={mapRetryNonce}
