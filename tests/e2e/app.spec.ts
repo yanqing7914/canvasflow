@@ -45,7 +45,7 @@ function controlsDialog(page: Page) {
 }
 
 function controlsTrigger(page: Page) {
-  return page.getByRole('button', { name: /打开演示控制|聚焦演示控制|恢复演示控制/ })
+  return page.locator('button.control-toggle')
 }
 
 function tripAction(page: Page, name: string) {
@@ -676,6 +676,29 @@ test('keeps the desktop demo tool clear of the current cockpit action @cockpit @
   await expect(controls).toBeVisible()
 })
 
+test('keeps the compact desktop demo tool clear of the current cockpit action @cockpit @layout', async ({ page }) => {
+  await page.setViewportSize({ width: 1000, height: 720 })
+  await installMockAMap(page)
+  await installControllableNavigationClock(page)
+  await page.goto('/')
+  await sendText(page, '去虹桥机场接人')
+  const flightList = await primaryWindow(page, 'flight-list')
+  await flightList.locator('.ui-flight-choices__row').first().click()
+  const outboundConfirmation = await primaryWindow(page, 'outbound-confirmation')
+  const controls = await ensureControlsOpen(page)
+
+  const layout = await page.getByTestId('cockpit-workspace').evaluate(() => {
+    const action = document.querySelector<HTMLElement>('[data-cockpit-slot="primary"] button:not(:disabled)')!.getBoundingClientRect()
+    const tool = document.querySelector<HTMLElement>('#demo-controls-tool-window')!.getBoundingClientRect()
+    return { actionRight: action.right, toolLeft: tool.left }
+  })
+  expect(layout.actionRight).toBeLessThanOrEqual(layout.toolLeft - 12)
+
+  await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
+  await expect(page.locator('.navigation-workspace')).toBeVisible()
+  await expect(controls).toBeVisible()
+})
+
 test('keeps the tablet demo tool beside the current cockpit action @cockpit @layout', async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 1024 })
   await installMockAMap(page)
@@ -720,10 +743,20 @@ test('keeps the desktop tool window non-modal, draggable, and clear of the cockp
   await sendText(page)
   await sendText(page, 'MU5102')
 
+  const closedPrimaryWidth = Math.round((await page.locator('.cockpit-workspace__primary').boundingBox())?.width ?? 0)
   const workspaceWidth = await briefWidth(page)
   const controls = await ensureControlsOpen(page)
   await expect(controls).not.toHaveAttribute('aria-modal')
   expect(await briefWidth(page)).toBeLessThanOrEqual(workspaceWidth)
+  const openPrimaryWidth = Math.round((await page.locator('.cockpit-workspace__primary').boundingBox())?.width ?? 0)
+  if (closedPrimaryWidth > 860) expect(openPrimaryWidth).toBeLessThan(closedPrimaryWidth)
+  else expect(openPrimaryWidth).toBeLessThanOrEqual(closedPrimaryWidth)
+
+  await controls.getByRole('button', { name: '最小化演示控制窗口' }).click()
+  await expect(controls).toHaveAttribute('data-mode', 'minimized')
+  expect(Math.round((await page.locator('.cockpit-workspace__primary').boundingBox())?.width ?? 0)).toBe(closedPrimaryWidth)
+  await controlsTrigger(page).click()
+  await expect(controls).toHaveAttribute('data-mode', 'normal')
 
   const initialLayout = await page.getByTestId('cockpit-workspace').evaluate(() => {
     const primaryAction = document.querySelector<HTMLElement>('[data-cockpit-slot="primary"] button:not(:disabled)')!.getBoundingClientRect()

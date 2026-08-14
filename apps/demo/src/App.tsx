@@ -2245,7 +2245,7 @@ export default function App({
   return (
     <main
       className="demo-shell"
-      data-controls-open={controlsOpen}
+      data-controls-open={controlsOpen && controlsMode === 'normal'}
       data-phase={task?.phase}
       data-density={spec?.presentation.density}
       data-theme={cockpitTheme}

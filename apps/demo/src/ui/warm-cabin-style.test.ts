@@ -140,9 +140,9 @@ describe('Warm Cabin action contrast', () => {
 
   it.each(['light', 'dark'] as const)('keeps disabled actions readable in %s mode', (theme) => {
     const block = themeBlock(theme)
-    const disabled = declarationBlock('.advance-button:disabled')
+    const disabled = declarationBlock('.demo-controls-panel__advance:disabled')
     expect(disabled).toContain('background: var(--control-off);')
-    expect(disabled).toContain('color: var(--muted);')
+    expect(disabled).toMatch(/color:\s*var\(--muted\)(?:\s*!important)?;/)
     expect(contrastRatio(resolveToken(block, 'muted'), resolveToken(block, 'control-off')))
       .toBeGreaterThanOrEqual(4.5)
   })
