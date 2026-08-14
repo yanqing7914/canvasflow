@@ -202,13 +202,18 @@ describe('voice fallback fixtures', () => {
 
   it('ships the canonical main-flow and low-confidence samples', () => {
     expect(manifest).toMatchObject({ version: '1.0', language: 'zh-CN', sampleRateHz: 16000, channels: 1 })
-    expect(manifest.samples).toHaveLength(27)
+    expect(manifest.samples).toHaveLength(28)
     expect(new Set(manifest.samples.map((sample) => sample.id)).size).toBe(manifest.samples.length)
     expect(new Set(manifest.samples.map((sample) => sample.file)).size).toBe(manifest.samples.length)
     expect(manifest.samples.find((sample) => sample.id === 'noisy-create')).toMatchObject({
       requiresConfirmation: true,
     })
     expect(manifest.samples.find((sample) => sample.id === 'noisy-create')!.confidence).toBeLessThan(0.6)
+    expect(manifest.samples.find((sample) => sample.id === 'check-charging')).toMatchObject({
+      file: 'check-charging.wav',
+      text: '查看充电',
+      requiresConfirmation: false,
+    })
   })
 
   it('keeps every referenced WAV in the documented browser-ASR format', () => {

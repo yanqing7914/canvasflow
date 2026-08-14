@@ -1,6 +1,6 @@
 # Voice Fixtures
 
-The browser's natural speech path is the primary customer experience. These 27
+The browser's natural speech path is the primary customer experience. These 28
 fictional recordings provide deterministic demo replay when microphone access,
 Web Speech, audio playback, or network-backed recognition is unavailable. They
 are not ASR results, production recordings, or user data: `transcripts.json` is
@@ -12,7 +12,7 @@ the canonical text/confidence payload and each WAV is presentation audio only.
 - Airport and flight selection: `choose-hongqiao.wav`,
   `select-first-flight.wav`, `select-third-flight.wav`, `refresh-flights.wav`,
   `flight-number.wav`.
-- En-route information: `check-weather.wav`, `check-calendar.wav`,
+- En-route information: `check-weather.wav`, `check-charging.wav`, `check-calendar.wav`,
   `check-flight-detail.wav`, `check-vehicle-status.wav`.
 - Navigation controls: `start-navigation.wav`, `speed-up.wav`,
   `speed-down.wav`, `hide-hud.wav`, `show-hud.wav`.
