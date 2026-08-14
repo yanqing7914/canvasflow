@@ -171,7 +171,7 @@ export type CommandRecognizer = {
    - KWS 命中后进入现有 `wake-session`/VoiceLoop，再启动 Web Speech 命令识别。
    - 明示“两段式”限制；补权限拒绝、`onend`、重启失败和队列回填测试。
 4. **PR-3：PCM ASR 协议与产品链路**
-   - 新增 `/api/asr/stream` PCM16LE `start/stop` 契约及服务端批处理 WAV 回退。
+   - `/v1/voice/stream` 双向 WebSocket PCM16LE `start/stop` 契约，服务端桥接豆包 SeedASR 2.0 `bigmodel_async`；`POST /v1/voice/transcribe` 批处理保留为兜底。
    - 接入 wake/follow-up/barge-in pre-roll、partial/final、静音尾和断线恢复。
 5. **PR-4：上线硬化与验收**
    - 生产 headers、模型清单/哈希、第三方许可、观测指标、真麦验收脚本和回滚开关。

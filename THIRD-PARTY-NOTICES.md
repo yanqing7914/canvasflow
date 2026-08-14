@@ -94,7 +94,8 @@ interfaces and effects. It does not copy upstream's business controller, ASR
 transport, echo fingerprinting, exit/filler heuristics, endpoint grace merging,
 or metrics. CanvasFlow keeps task mutations behind the existing Agent API and
 uses separately authored adapters for AudioWorklet capture, sherpa KWS, Silero
-VAD, and Web Speech command recognition.
+VAD, a bidirectional PCM ASR stream, and Web Speech command recognition only as
+an explicit compatibility fallback.
 
 **Judgment: ordinary technical borrowing of an architecture.** Attribution is
 credit given, not an obligation discharged.
