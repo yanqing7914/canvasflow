@@ -27,13 +27,18 @@ function fakeAMap() {
   const destroy = vi.fn()
   const remove = vi.fn()
   const setCenter = vi.fn()
+  const setZoomAndCenter = vi.fn()
+  const setRotation = vi.fn()
+  const setPitch = vi.fn()
   const setMapStyle = vi.fn()
   const map = {
     add: vi.fn(),
     remove,
     setFitView: vi.fn(),
-    setZoomAndCenter: vi.fn(),
+    setZoomAndCenter,
     setCenter,
+    setRotation,
+    setPitch,
     setMapStyle,
     destroy,
   }
@@ -82,12 +87,17 @@ function fakeAMap() {
 
   return {
     amap: { Map, Driving, Polyline, Marker, LngLat } as unknown as AMapApi,
+    map,
     destroy,
     mapOptions,
     markerPositions,
     polylineOptions,
     remove,
+    setCenter,
+    setZoomAndCenter,
     setMapStyle,
+    setRotation,
+    setPitch,
     tailPaths,
   }
 }
@@ -134,6 +144,24 @@ describe('renderAMapWorkspace', () => {
     handle.setProgress(0.6)
     expect(fake.markerPositions).toHaveLength(3)
     expect(fake.markerPositions[2]).not.toEqual(fake.markerPositions[1])
+  })
+
+  it('follows the vehicle at a road-level zoom and heading in driving camera mode', async () => {
+    const fake = fakeAMap()
+    const handle = renderAMapWorkspace(fake.amap, document.createElement('div'), {
+      mode: 'idle', theme: 'light', cameraMode: 'driving',
+    })!
+
+    handle.setFollow(true)
+    await expect(handle.setMode('route', sketch, 0.25)).resolves.toBe(true)
+    expect(fake.mapOptions).toHaveLength(1)
+    expect(fake.markerPositions).toHaveLength(2)
+    expect(fake.setRotation).toHaveBeenCalled()
+    expect(fake.setPitch).toHaveBeenCalledWith(58)
+    expect(fake.setZoomAndCenter).toHaveBeenCalledWith(19, expect.any(Array))
+
+    handle.setProgress(0.6)
+    expect(fake.setCenter).toHaveBeenCalledWith(expect.any(Array), false)
   })
 
   it('updates basemap and route palette in place when the cockpit theme changes', async () => {

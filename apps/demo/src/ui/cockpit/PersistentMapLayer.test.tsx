@@ -45,6 +45,9 @@ function workspaceHandle() {
     setRoute: vi.fn(async () => true),
     setProgress: vi.fn(),
     setFollow: vi.fn(),
+    setCameraMode: vi.fn(),
+    zoomIn: vi.fn(),
+    zoomOut: vi.fn(),
     recenter: vi.fn(),
     destroy: vi.fn(),
   }
@@ -144,6 +147,33 @@ describe('PersistentMapLayer', () => {
 
     expect(handle.recenter).toHaveBeenCalledOnce()
     expect(onRecenter).toHaveBeenCalledOnce()
+  })
+
+  it('exposes map zoom controls during navigation without replacing the map handle', async () => {
+    const handle = workspaceHandle()
+    stub.renderAMapWorkspace.mockReturnValue(handle)
+    const view = render(<PersistentMapLayer mode="route" sketch={outbound} progress={0.2} routeKey="outbound" theme="dark" sessionKey="cockpit" />)
+    await act(async () => {})
+
+    fireEvent.click(view.getByRole('button', { name: '放大地图' }))
+    fireEvent.click(view.getByRole('button', { name: '缩小地图' }))
+
+    expect(handle.zoomIn).toHaveBeenCalledOnce()
+    expect(handle.zoomOut).toHaveBeenCalledOnce()
+    expect(handle.destroy).not.toHaveBeenCalled()
+  })
+
+  it('switches the existing AMap handle into driving camera mode after departure', async () => {
+    const handle = workspaceHandle()
+    stub.renderAMapWorkspace.mockReturnValue(handle)
+    const view = render(<PersistentMapLayer mode="route" sketch={outbound} progress={0.1} routeKey="outbound" theme="dark" sessionKey="cockpit" cameraMode="overview" />)
+    await act(async () => {})
+
+    view.rerender(<PersistentMapLayer mode="route" sketch={outbound} progress={0.2} routeKey="outbound" theme="dark" sessionKey="cockpit" cameraMode="driving" />)
+
+    expect(stub.renderAMapWorkspace).toHaveBeenCalledOnce()
+    expect(handle.setCameraMode).toHaveBeenLastCalledWith('driving')
+    expect(handle.destroy).not.toHaveBeenCalled()
   })
 
   it('stops after each configured key fails at runtime', async () => {

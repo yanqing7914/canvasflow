@@ -17,6 +17,7 @@ export type PersistentMapLayerProps = {
   routeKey?: string
   mapRetryNonce?: number
   follow?: boolean
+  cameraMode?: 'overview' | 'driving'
   recenterNonce?: number
   onManualInteraction?: () => void
   onRecenter?: () => void
@@ -27,7 +28,7 @@ export type PersistentMapLayerProps = {
 /** Stable cockpit map shell. AMap owns one basemap; only its overlays change. */
 export function PersistentMapLayer({
   mode, sketch, progress, theme, sessionKey, recoveryKey = sessionKey, routeKey = mode, mapRetryNonce = 0,
-  follow = true, recenterNonce = 0, onManualInteraction, onRecenter, onRuntimeFailure, onRuntimeReady,
+  follow = true, cameraMode = 'overview', recenterNonce = 0, onManualInteraction, onRecenter, onRuntimeFailure, onRuntimeReady,
 }: PersistentMapLayerProps) {
   const container = useRef<HTMLDivElement>(null)
   const handle = useRef<AMapWorkspaceHandle | undefined>(undefined)
@@ -50,9 +51,11 @@ export function PersistentMapLayer({
   const modeRef = useRef(mode)
   const sketchRef = useRef(sketch)
   const progressRef = useRef(progress)
+  const cameraModeRef = useRef(cameraMode)
   modeRef.current = mode
   sketchRef.current = sketch
   progressRef.current = progress
+  cameraModeRef.current = cameraMode
   const drawing = useMemo(() => mode === 'route' && sketch
     ? buildRouteSketchDrawing({ ...sketch, ...(progress === undefined ? {} : { progress }) }, ROUTE_MAP_DRAWING_OPTIONS)
     : undefined, [mode, progress, sketch])
@@ -108,7 +111,7 @@ export function PersistentMapLayer({
         return
       }
       const rendered = renderAMapWorkspace(amap, mount, {
-        mode: modeRef.current, sketch: sketchRef.current, progress: progressRef.current,
+        mode: modeRef.current, sketch: sketchRef.current, progress: progressRef.current, cameraMode: cameraModeRef.current,
         theme: initialTheme.current,
         onManualInteraction: () => manualInteractionCallback.current?.(),
         onRuntimeFailure: () => {
@@ -150,6 +153,7 @@ export function PersistentMapLayer({
   }, [mode, progress])
 
   useEffect(() => { handle.current?.setFollow(follow) }, [follow, source])
+  useEffect(() => { handle.current?.setCameraMode(cameraMode) }, [cameraMode, source])
   useEffect(() => { handle.current?.setTheme(theme) }, [theme, source])
   useEffect(() => { if (recenterNonce > 0) handle.current?.recenter() }, [recenterNonce])
 
@@ -201,6 +205,12 @@ export function PersistentMapLayer({
         >
           回到车辆位置
         </button>
+      ) : null}
+      {mode === 'route' ? (
+        <div className="persistent-map-layer__zoom" aria-label="地图缩放">
+          <button type="button" aria-label="放大地图" onClick={() => handle.current?.zoomIn()}>+</button>
+          <button type="button" aria-label="缩小地图" onClick={() => handle.current?.zoomOut()}>−</button>
+        </div>
       ) : null}
     </section>
   )

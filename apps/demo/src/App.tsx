@@ -2100,6 +2100,16 @@ export default function App({
   const mapRouteKey = mapRouteActive
     ? `${mapLeg ?? 'outbound'}:${mapRouteId ?? 'route'}`
     : 'idle'
+  const mapCameraMode = navigationActive && [
+    'driving-to-airport', 'approaching-airport', 'outbound-driving',
+    'returning-home', 'return-driving',
+  ].includes(runtimeTask?.phase ?? '')
+    ? 'driving' as const
+    : 'overview' as const
+  // Navigation gets its own daylight road palette. The cockpit cards may stay
+  // dark, but a dark basemap hides lane geometry and reads like a route review
+  // screen rather than an active navigation experience.
+  const mapTheme = mapCameraMode === 'driving' ? 'light' as const : spec?.presentation.theme ?? 'dark'
   // The navigation HUD owns the full-screen driving surface, but waiting at
   // the airport and confirming the return still need their primary task card.
   const hideNavigationPrimary = navigationActive && cockpitView.mode === 'navigation'
@@ -2196,11 +2206,12 @@ export default function App({
             sketch={routeSketch}
             progress={mapProgress}
             routeKey={mapRouteKey}
-            theme={spec?.presentation.theme ?? 'dark'}
+            theme={mapTheme}
             sessionKey={cockpitSessionKey}
             recoveryKey={task?.taskId ?? 'idle'}
             mapRetryNonce={mapRetryNonce}
             follow={mapFollowing}
+            cameraMode={mapCameraMode}
             onManualInteraction={() => setMapFollowing(false)}
             onRecenter={() => setMapFollowing(true)}
             onRuntimeFailure={() => {

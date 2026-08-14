@@ -12,6 +12,10 @@ export type AMapMap = {
   remove: (overlay: AMapOverlay | AMapOverlay[]) => void
   setFitView: (overlays?: AMapOverlay[] | null) => void
   setZoomAndCenter: (zoom: number, center: [number, number]) => void
+  zoomIn?: () => void
+  zoomOut?: () => void
+  setPitch?: (pitch: number) => void
+  setRotation?: (rotation: number) => void
   setMapStyle?: (style: string) => void
   setCenter?: (center: [number, number], immediately?: boolean) => void
   on?: (event: 'dragstart' | 'zoomstart', listener: () => void) => void

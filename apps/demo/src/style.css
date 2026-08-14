@@ -152,6 +152,10 @@ a:focus-visible {
 .persistent-map-layer__location { position: absolute; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); color: #b9cbe4; font-size: 13px; letter-spacing: .04em; }
 .persistent-map-layer__source { position: absolute; right: 18px; bottom: 18px; z-index: 3; color: rgba(217, 228, 244, .7); font-size: 11px; letter-spacing: .08em; }
 .persistent-map-layer__recenter { position: absolute; right: 18px; bottom: 96px; z-index: 61; min-height: 42px; border: 1px solid rgba(190, 213, 242, .28); border-radius: 12px; padding: 0 15px; background: rgba(9, 17, 28, .88); color: #edf4ff; font-weight: 750; backdrop-filter: blur(16px); }
+.persistent-map-layer__zoom { position: absolute; right: 18px; bottom: 18px; z-index: 61; display: grid; overflow: hidden; border: 1px solid rgba(190, 213, 242, .32); border-radius: 12px; background: rgba(9, 17, 28, .9); box-shadow: 0 10px 24px rgb(0 0 0 / .22); backdrop-filter: blur(16px); }
+.persistent-map-layer__zoom button { width: 42px; height: 38px; border: 0; border-bottom: 1px solid rgba(190, 213, 242, .2); background: transparent; color: #f5f9ff; font-family: Bahnschrift, "DIN Alternate", sans-serif; font-size: 26px; line-height: 1; }
+.persistent-map-layer__zoom button:last-child { border-bottom: 0; }
+.persistent-map-layer__zoom button:hover { background: rgb(99 151 233 / .25); }
 
 .cockpit-workspace__status { position: absolute; top: 18px; left: 22px; z-index: 40; }
 .cockpit-status-bar { display: flex; align-items: center; gap: 14px; padding: 9px 13px; border: 1px solid rgba(190, 213, 242, .2); border-radius: 14px; background: rgba(9, 17, 28, .78); box-shadow: 0 16px 40px rgba(0, 0, 0, .2); backdrop-filter: blur(18px); }
@@ -633,6 +637,50 @@ a:focus-visible {
 .navigation-hud__maneuver { display: flex; flex-direction: column; gap: 5px; margin-top: 16px; }
 .navigation-hud__maneuver strong { font-size: 19px; line-height: 1.35; }
 
+/* While moving, navigation must lead with the next road decision. The detailed
+   flight and vehicle grids are useful when stopped, but turn the map into a
+   dashboard table while driving. */
+.navigation-hud[data-driving='true'] {
+  top: max(92px, calc(env(safe-area-inset-top) + 76px));
+  width: min(390px, calc(100vw - 40px));
+  padding: 13px 15px 15px;
+  border-radius: 18px;
+  background: rgb(8 20 39 / 0.9);
+  box-shadow: 0 16px 42px rgb(2 12 28 / 0.28);
+}
+.navigation-hud[data-driving='true'] .navigation-hud__header { align-items: center; }
+.navigation-hud[data-driving='true'] .navigation-hud__eyebrow { font-size: 11px; }
+.navigation-hud[data-driving='true'] .navigation-hud__header strong { font-size: 17px; }
+.navigation-hud[data-driving='true'] .navigation-hud__header button { min-height: 34px; padding: 0 8px; font-size: 12px; }
+.navigation-hud[data-driving='true'] .navigation-hud__flight,
+.navigation-hud[data-driving='true'] .navigation-hud__metrics { display: none; }
+.navigation-hud[data-driving='true'] .navigation-hud__maneuver {
+  display: grid;
+  grid-template-columns: 43px minmax(0, 1fr);
+  align-items: center;
+  gap: 11px;
+  margin-top: 10px;
+  border-top: 1px solid rgb(174 205 246 / 0.15);
+  padding-top: 12px;
+}
+.navigation-hud__maneuver-mark {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #4388ff, #1659ce);
+  color: white !important;
+  font-family: Georgia, serif;
+  font-size: 30px !important;
+  font-weight: 800 !important;
+  line-height: 1;
+  box-shadow: 0 6px 15px rgb(31 102 224 / 0.36);
+}
+.navigation-hud[data-driving='true'] .navigation-hud__maneuver > div { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.navigation-hud[data-driving='true'] .navigation-hud__maneuver span:not(.navigation-hud__maneuver-mark) { font-size: 11px; }
+.navigation-hud[data-driving='true'] .navigation-hud__maneuver strong { overflow: hidden; font-size: 18px; text-overflow: ellipsis; white-space: nowrap; }
+
 .navigation-hud--minimum {
   top: max(72px, calc(env(safe-area-inset-top) + 64px));
   width: min(560px, calc(100vw - 40px));
@@ -765,8 +813,10 @@ a:focus-visible {
 .vehicle-status-grid dt { color: #9eafc3; font-size: 12px; font-weight: 650; }
 .vehicle-status-grid dd { margin: 6px 0 0; overflow: hidden; color: #f2f6fb; font-size: 17px; font-weight: 720; text-overflow: ellipsis; white-space: nowrap; }
 
-.amap-cockpit-car { display: grid; width: 42px; height: 42px; place-items: center; border: 1px solid rgba(192, 218, 255, 0.8); border-radius: 50%; background: rgba(60, 129, 255, 0.2); box-shadow: 0 0 0 8px rgba(67, 135, 255, 0.13), 0 0 22px rgba(55, 124, 255, 0.8); }
-.amap-cockpit-car span { display: block; width: 17px; height: 25px; clip-path: polygon(50% 0, 100% 100%, 50% 76%, 0 100%); background: #4a8cff; filter: drop-shadow(0 1px 1px #fff); }
+.amap-cockpit-car { position: relative; display: grid; width: 44px; height: 54px; place-items: center; border-radius: 50%; background: radial-gradient(circle, rgb(255 255 255 / .92) 0 30%, rgb(60 137 255 / .28) 31% 54%, transparent 55%); filter: drop-shadow(0 4px 7px rgb(13 50 111 / .38)); }
+.amap-cockpit-car span { position: relative; display: block; width: 22px; height: 37px; border: 2px solid #f7fbff; border-radius: 12px 12px 8px 8px; background: linear-gradient(90deg, #1d4d9e 0 11%, #eef5ff 12% 88%, #1d4d9e 89%); box-shadow: inset 0 5px 0 #315f9f, inset 0 -5px 0 #183e7d, 0 2px 5px rgb(5 34 84 / .55); }
+.amap-cockpit-car span::before { position: absolute; top: 7px; right: 3px; left: 3px; height: 12px; border-radius: 7px 7px 3px 3px; background: linear-gradient(90deg, #84bdf4, #d9eeff 50%, #84bdf4); content: ''; }
+.amap-cockpit-car span::after { position: absolute; right: 3px; bottom: 4px; left: 3px; height: 4px; border-radius: 3px; background: #ff5d59; box-shadow: 0 -17px 0 -1px #142f64; content: ''; }
 
 @media (max-width: 720px) {
   .navigation-hud { top: max(62px, calc(env(safe-area-inset-top) + 54px)); left: 12px; width: calc(100vw - 24px); padding: 15px; border-radius: 18px; }
