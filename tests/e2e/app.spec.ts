@@ -345,23 +345,25 @@ async function routeLineDirection(page: Page): Promise<'east' | 'west'> {
   return xs[xs.length - 1]! > xs[0]! ? 'east' : 'west'
 }
 
-test('keeps the idle location as a compact overlay instead of a map-blocking task card @layout', async ({ page }) => {
+test('keeps the idle home as a full cockpit surface without a map-blocking task card @layout', async ({ page }) => {
   await page.goto('/')
 
   const layout = await page.getByTestId('cockpit-workspace').evaluate(() => {
     const primary = document.querySelector<HTMLElement>('.cockpit-workspace__primary')!.getBoundingClientRect()
-    const idle = document.querySelector<HTMLElement>('.idle-cockpit')!.getBoundingClientRect()
-    const location = document.querySelector<HTMLElement>('.idle-cockpit__location')!.getBoundingClientRect()
+    const idleHome = document.querySelector<HTMLElement>('.idle-home')!.getBoundingClientRect()
+    const location = document.querySelector<HTMLElement>('.idle-home__location')!.getBoundingClientRect()
     return {
       primary: { width: primary.width, height: primary.height },
-      idle: { width: idle.width, height: idle.height },
+      idle: { width: idleHome.width, height: idleHome.height },
       location: { width: location.width, height: location.height },
     }
   })
 
-  expect(layout.primary.width).toBeLessThan(360)
-  expect(layout.primary.height).toBeLessThan(100)
-  expect(layout.idle.height).toBeLessThan(100)
+  // The idle home owns the primary slot so the map stays the stage behind it.
+  expect(layout.primary.width).toBeGreaterThan(0)
+  expect(layout.primary.height).toBeGreaterThan(0)
+  expect(layout.idle.width).toBeGreaterThan(0)
+  expect(layout.idle.height).toBeGreaterThan(0)
   expect(layout.location.width).toBeGreaterThan(0)
   await expectNoScroll(page)
 })
@@ -374,8 +376,9 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await page.getByTestId('persistent-map-layer').evaluate((node) => { node.setAttribute('data-e2e-map-node', 'persistent') })
 
   // The production entry is a quiet cabin, not a pre-created task or form.
-  await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
-  await expect(page.getByLabel('人民广场模拟车辆位置')).toContainText('模拟位置，非真实 GPS')
+  await expect(page.getByRole('region', { name: '空闲座舱' })).toBeVisible()
+  await expect(page.getByText('模拟位置：人民广场')).toBeVisible()
+  await expect(page.getByText('模拟位置，非真实 GPS')).toBeVisible()
   await expect(page.getByLabel('任务输入')).toHaveCount(0)
   await expect(page.locator('.task-surface')).toHaveCount(0)
   await expect(page.locator('.persistent-map-layer')).toHaveCount(1)
@@ -395,7 +398,8 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(createRequest.postDataJSON()).toMatchObject({ clientCapabilities: { cockpitVersion: '1' } })
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'collecting-airport')
   await expect(page.locator('.task-surface')).toHaveCount(0)
-  await expect(page.getByText('你要去哪个机场？')).toBeVisible()
+  await expect(page.getByText('去哪个机场？')).toBeVisible()
+  await expect(page.getByText('请选择虹桥机场或浦东机场。')).toBeVisible()
   await expect(page.locator('.cockpit-window[data-kind]')).toHaveCount(0)
 
   const airportChoiceRequestPromise = page.waitForRequest((request) => {

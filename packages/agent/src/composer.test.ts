@@ -24,6 +24,17 @@ describe('Agent UISpec composer', () => {
     ])
   })
 
+  it('phrases the airport question as an equal choice without numbered or warning copy', () => {
+    const spec = composeAgentSpec(createCockpitTask('cockpit-airport-copy', timestamp))
+    const component = spec.components.find((entry) => entry.id === 'airport-required')
+
+    expect(component).toMatchObject({
+      type: 'status-banner',
+      props: { title: '去哪个机场？', message: '请选择虹桥机场或浦东机场。' },
+    })
+    expect(spec.actions.map((action) => action.style)).toEqual(['secondary', 'secondary'])
+  })
+
   it('offers the real onboard business event while waiting for passengers', () => {
     const spec = composeAgentSpec({
       ...createCockpitTask('cockpit-onboard', timestamp),

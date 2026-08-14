@@ -61,6 +61,23 @@ describe('deriveCockpitView', () => {
     expect(view.auxiliaryWindows).toEqual([])
   })
 
+  it('keeps the airport question as the single non-closable primary prompt', () => {
+    const view = deriveCockpitView(componentSpec('collecting-airport', {
+      id: 'airport-required',
+      type: 'status-banner',
+      props: { level: 'info', title: '去哪个机场？', message: '请选择虹桥机场或浦东机场。' },
+      actions: ['select-pudong-airport', 'select-hongqiao-airport'],
+    }))
+
+    expect(view.mode).toBe('primary')
+    expect(view.primaryWindow).toEqual(expect.objectContaining({
+      kind: 'processing',
+      componentIds: ['airport-required'],
+      controls: { closable: false, minimizable: false, maximizable: false },
+    }))
+    expect(view.auxiliaryWindows).toEqual([])
+  })
+
   it('derives a primary flight window when the server explicitly has no auxiliary windows', () => {
     const view = deriveCockpitView(componentSpec('choosing-flight', {
       id: 'flight-choices',

@@ -855,22 +855,30 @@ function AlertCard({ component }: { component: Extract<ComponentSpec, { type: 'a
   )
 }
 
-function StatusBannerCard({ component }: { component: Extract<ComponentSpec, { type: 'status-banner' }> }) {
+function StatusBannerCard({
+  component,
+  choicePrompt = false,
+}: {
+  component: Extract<ComponentSpec, { type: 'status-banner' }>
+  /** The airport question is a choice, not an information alert. */
+  choicePrompt?: boolean
+}) {
   const tone = component.props.level === 'error' ? 'critical' : component.props.level
   return (
     <ComponentSurface
       component={component}
-      className={`ui-status-card ui-status-card--banner ui-card--${component.props.level}`}
+      className={`ui-status-card ui-status-card--banner ui-card--${component.props.level}${choicePrompt ? ' ui-status-card--choice-prompt' : ''}`}
       role={liveRegionRole(component.props.level)}
+      data={choicePrompt ? { 'data-choice-prompt': 'true' } : undefined}
     >
-      <span className="ui-status-card__glyph" aria-hidden="true">{levelIcon(component.props.level)}</span>
+      {!choicePrompt && <span className="ui-status-card__glyph" aria-hidden="true">{levelIcon(component.props.level)}</span>}
       <div className="ui-status-card__content">
-        <p className="ui-status-card__kind">行程提示</p>
+        {!choicePrompt && <p className="ui-status-card__kind">行程提示</p>}
         <h2 className="ui-status-card__title">{component.props.title}</h2>
         {component.props.message && <p className="ui-status-card__message">{component.props.message}</p>}
-        <div className="ui-status-card__state">
+        {!choicePrompt && <div className="ui-status-card__state">
           <StatusPill label={component.props.level === 'error' ? '暂不可用' : tone === 'warning' ? '请留意' : '信息'} tone={tone} />
-        </div>
+        </div>}
       </div>
     </ComponentSurface>
   )
@@ -964,7 +972,7 @@ function ComponentCard({
       )
     case 'departure-plan': return <DeparturePlanCard component={result.data} />
     case 'alert': return <AlertCard component={result.data} />
-    case 'status-banner': return <StatusBannerCard component={result.data} />
+    case 'status-banner': return <StatusBannerCard component={result.data} choicePrompt={phase === 'collecting-airport'} />
     case 'vehicle-status': return <ComponentFallback component={component} slotId={slotId} />
   }
 }
