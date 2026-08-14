@@ -418,8 +418,22 @@ describe('AgentGateway', () => {
     expect(confirmingReturn.ui.windows?.at(-1)?.kind).toBe('return-confirmation')
     const returnCard = confirmingReturn.ui.components.find((component) => component.type === 'route-confirmation')
     expect(returnCard).toMatchObject({ props: { currentBatteryPercent: terminalBattery } })
-    const returning = gateway.submitAction(confirmingReturn.task.taskId, {
-      clientRequestId: 'start-return', expectedTaskRevision: confirmingReturn.task.taskRevision, expectedUiRevision: confirmingReturn.ui.uiRevision,
+    const parkedReturnCharging = gateway.submitEvent(confirmingReturn.task.taskId, {
+      clientRequestId: 'parked-return-charging', expectedTaskRevision: confirmingReturn.task.taskRevision,
+      event: { eventId: 'parked-return-charging', type: 'user.input', text: '规划充电路线', source: 'voice', timestamp: now },
+    })
+    const parkedChargingCard = parkedReturnCharging.ui.components.find((component) => component.type === 'charging-recommendation')
+    if (parkedChargingCard?.type !== 'charging-recommendation') throw new Error('expected parked return charging recommendation')
+    const returnDistanceKm = confirmingReturn.task.navigationSimulation!.distanceKm
+    const expectedReturnBattery = Math.round(terminalBattery * Math.max(0, terminalRange - returnDistanceKm) / terminalRange)
+    expect(parkedChargingCard.props).toMatchObject({
+      recommended: expectedReturnBattery < 20,
+      currentBatteryPercent: terminalBattery,
+      estimatedFinalBatteryPercent: expectedReturnBattery,
+      chargingRoute: { destination: '家', distanceKm: returnDistanceKm },
+    })
+    const returning = gateway.submitAction(parkedReturnCharging.task.taskId, {
+      clientRequestId: 'start-return', expectedTaskRevision: parkedReturnCharging.task.taskRevision, expectedUiRevision: parkedReturnCharging.ui.uiRevision,
       actionId: 'start-return', componentId: 'return-confirmation', idempotencyKey: 'start-return',
     })
     expect(returning.task.phase).toBe('return-driving')
