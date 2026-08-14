@@ -454,6 +454,14 @@ function RouteSketchBand({
 
 function ChargingRecommendationCard({ component }: { component: Extract<ComponentSpec, { type: 'charging-recommendation' }> }) {
   const { props } = component
+  const route = props.chargingRoute
+  const stations = props.nearbyStations
+  const formatRouteDuration = (minutes?: number) => {
+    if (minutes === undefined) return ''
+    const hours = Math.floor(minutes / 60)
+    const remainder = minutes % 60
+    return `${hours ? `${hours}小时` : ''}${remainder ? `${remainder}分钟` : ''}` || '0分钟'
+  }
   return (
     <ComponentSurface component={component} className={`ui-charge-brief ${props.recommended ? 'ui-card--attention' : 'ui-card--settled'}`}>
       <header className="ui-charge-brief__header">
@@ -476,6 +484,68 @@ function ChargingRecommendationCard({ component }: { component: Extract<Componen
         <div className="ui-charge-brief__detail ui-detail-row">
           <span>行程增加约 {props.etaImpactMinutes} 分钟</span>
         </div>
+      )}
+      {stations && (
+        <section className="ui-charge-brief__stations" aria-label="附近充电站">
+          <div className="ui-charge-brief__section-heading">
+            <span className="ui-charge-brief__section-icon" aria-hidden="true"><ChargingIcon size={18} /></span>
+            <strong>附近充电站</strong>
+            {stations.soc && <span className="ui-charge-brief__section-meta">当前电量 {stations.soc}</span>}
+          </div>
+          <div className="ui-charge-brief__station-list">
+            {stations.items.map((station, index) => (
+              <div className="ui-charge-brief__station" key={station.id ?? `${station.name}-${index}`}>
+                <span className="ui-charge-brief__station-index">{index + 1}</span>
+                <div className="ui-charge-brief__station-copy">
+                  <div className="ui-charge-brief__station-title">
+                    <strong>{station.name}</strong>
+                    {station.distanceKm !== undefined && <span className="ui-charge-brief__station-distance">{station.distanceKm}km</span>}
+                  </div>
+                  <div className="ui-charge-brief__station-meta">
+                    {station.operator && <span>{station.operator}</span>}
+                    {station.available !== undefined && station.total !== undefined && <span className={station.available > 0 ? 'ui-charge-brief__station-available' : 'ui-charge-brief__station-unavailable'}>{station.available}/{station.total} 空闲</span>}
+                    {station.price && <span>{station.price}/度</span>}
+                    {station.rating !== undefined && <span className="ui-charge-brief__station-rating">★ {station.rating}</span>}
+                  </div>
+                  {station.address && <div className="ui-charge-brief__station-address">{station.address}</div>}
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="ui-charge-brief__voice-hint">说「导航去第一个」或「换一个」</p>
+        </section>
+      )}
+      {route && (
+        <section className="ui-charge-brief__route" aria-label="充电路线规划">
+          <div className="ui-charge-brief__section-heading ui-charge-brief__section-heading--route">
+            <span className="ui-charge-brief__section-icon" aria-hidden="true"><ChargingIcon size={18} /></span>
+            <strong>充电路线规划</strong>
+            {(route.distanceKm !== undefined || route.durationMinutes !== undefined) && (
+              <span className="ui-charge-brief__section-meta">
+                {route.distanceKm !== undefined ? `${route.distanceKm}km` : ''}
+                {route.distanceKm !== undefined && route.durationMinutes !== undefined ? ' · ' : ''}
+                {formatRouteDuration(route.durationMinutes)}
+              </span>
+            )}
+          </div>
+          {route.soc && (
+            <div className="ui-charge-brief__soc" aria-label={`当前电量 ${route.soc}`}>
+              <div className="ui-charge-brief__soc-head"><span>当前电量</span><strong>{route.soc}</strong></div>
+              <div className="ui-charge-brief__soc-track"><span style={{ width: `${Math.max(0, Math.min(100, Number.parseInt(route.soc, 10) || 0))}%` }} /></div>
+              <div className="ui-charge-brief__soc-foot"><span>出发地</span><span>目的地 · {route.destination}</span></div>
+            </div>
+          )}
+          <div className="ui-charge-brief__route-stops">
+            <div className="ui-charge-brief__route-stop ui-charge-brief__route-stop--origin"><span className="ui-charge-brief__route-dot" /><div><strong>出发地</strong>{route.soc && <small>当前电量 {route.soc}</small>}</div></div>
+            {route.stops.map((stop, index) => (
+              <div className="ui-charge-brief__route-stop-wrap" key={`${stop.name}-${index}`}>
+                <div className="ui-charge-brief__route-connector">{stop.atKm !== undefined && <span>约 {stop.atKm}km 处</span>}</div>
+                <div className="ui-charge-brief__route-stop ui-charge-brief__route-stop--charge"><span className="ui-charge-brief__route-stop-icon" aria-hidden="true"><ChargingIcon size={15} /></span><div><strong>{stop.name}</strong>{stop.address && <small>{stop.address}</small>}</div></div>
+              </div>
+            ))}
+            <div className="ui-charge-brief__route-stop ui-charge-brief__route-stop--destination"><span className="ui-charge-brief__route-dot" /><strong>{route.destination}</strong></div>
+          </div>
+        </section>
       )}
     </ComponentSurface>
   )

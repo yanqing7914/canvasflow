@@ -304,8 +304,10 @@ describe('AgentGateway', () => {
     })
     expect(selected.task.phase).toBe('confirming-outbound')
     expect(selected.task.flight?.flightNumber).toBe(board.props.choices[0]!.flightNumber)
+    expect(selected.task.charging).toMatchObject({ recommended: false, status: 'none' })
     expect(selected.ui.windows ?? []).toHaveLength(0)
     expect(Object.values(selected.ui.layout.slots).flat()).toContain('outbound-confirmation')
+    expect(selected.ui.components.map((component) => component.type)).not.toContain('charging-recommendation')
 
     const started = gateway.submitAction(selected.task.taskId, {
       clientRequestId: 'start-outbound', expectedTaskRevision: selected.task.taskRevision, expectedUiRevision: selected.ui.uiRevision,
@@ -448,6 +450,46 @@ describe('AgentGateway', () => {
     expect(completed.task.flight).toBeUndefined()
     expect(completed.task.cockpit).toBeUndefined()
     expect(completed.ui.windows ?? []).toHaveLength(0)
+  })
+
+  it('offers an explicit charging query on low-range cockpit pickup confirmation', () => {
+    const gateway = createGateway()
+    const request = createCockpitRequest('去虹桥机场接人', 'low-range-create')
+    request.vehicleContext = { ...request.vehicleContext, remainingRangeKm: 112 }
+    const flights = gateway.createTask(request)
+    const board = flights.ui.components.find((component) => component.type === 'flight-choices')
+    if (board?.type !== 'flight-choices') throw new Error('expected cockpit flight board')
+    const actionId = board.props.choices[0]?.actionId
+    if (!actionId) throw new Error('expected cockpit flight action')
+
+    const selected = gateway.submitAction(flights.task.taskId, {
+      clientRequestId: 'low-range-pick', expectedTaskRevision: flights.task.taskRevision,
+      expectedUiRevision: flights.ui.uiRevision, actionId, componentId: board.id, idempotencyKey: 'low-range-pick',
+    })
+
+    expect(selected.task).toMatchObject({
+      phase: 'confirming-outbound',
+      charging: { recommended: true, status: 'planned' },
+    })
+    expect(selected.ui.components.some((component) => component.id === 'charging-plan')).toBe(false)
+    expect(selected.ui.actions).toContainEqual(expect.objectContaining({ id: 'start-outbound' }))
+    expect(selected.ui.actions).toContainEqual(expect.objectContaining({ id: 'ask-charging' }))
+
+    const asked = gateway.submitEvent(selected.task.taskId, {
+      clientRequestId: 'low-range-charge-query', expectedTaskRevision: selected.task.taskRevision,
+      event: { eventId: 'low-range-charge-query', type: 'user.input', text: '规划充电路线', timestamp: now },
+    })
+    expect(asked.task.taskRevision).toBe(selected.task.taskRevision)
+    expect(asked.ui.windows).toContainEqual(expect.objectContaining({ kind: 'charging', title: '充电方案' }))
+    expect(asked.ui.components).toContainEqual(expect.objectContaining({
+      type: 'charging-recommendation',
+      props: expect.objectContaining({
+        currentBatteryPercent: 42,
+        estimatedFinalBatteryPercent: 18,
+        nearbyStations: expect.objectContaining({ items: expect.any(Array) }),
+        chargingRoute: expect.objectContaining({ destination: '虹桥机场' }),
+      }),
+    }))
   })
 
   it('resolves a spoken ordinal on the cockpit flight board through the event path', () => {
@@ -1330,7 +1372,7 @@ describe('AgentGateway', () => {
     expect(updated.ui.components).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'flight-status' }),
       expect.objectContaining({ type: 'navigation-summary' }),
-      expect.objectContaining({ type: 'charging-recommendation' }),
+      expect.objectContaining({ type: 'navigation-summary' }),
     ]))
   })
 
@@ -1353,7 +1395,7 @@ describe('AgentGateway', () => {
     expect(updated.ui.components).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'flight-status', props: expect.objectContaining({ scheduledArrival: '2026-07-22T20:30:00+08:00' }) }),
       expect.objectContaining({ id: 'navigation-plan', props: expect.objectContaining({ routeId: 'route-airport-001', distanceKm: 32 }) }),
-      expect.objectContaining({ id: 'charging-plan', props: expect.objectContaining({ estimatedFinalBatteryPercent: 29 }) }),
+      expect.objectContaining({ id: 'navigation-plan', props: expect.objectContaining({ distanceKm: 32 }) }),
     ]))
     expect(updated).not.toHaveProperty('toolResults')
   })
@@ -1574,7 +1616,7 @@ describe('AgentGateway', () => {
     // Leaving leads the card; the pre-departure question follows it.
     expect(prepared.ui.components).toContainEqual(expect.objectContaining({
       id: 'navigation-plan',
-      actions: ['start-navigation', 'ask-departure-time'],
+      actions: ['start-navigation', 'ask-departure-time', 'ask-charging'],
     }))
 
     const request = {

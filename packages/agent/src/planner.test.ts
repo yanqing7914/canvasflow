@@ -185,6 +185,12 @@ describe('airport pickup Planner', () => {
     })
   })
 
+  it.each(['找附近充电站', '规划充电路线', '要不要充电'])('treats %s as a read-only charging query', (text) => {
+    expect(planAirportPickup({ text, eventId: 'charge-query', timestamp })).toMatchObject({
+      intent: 'check-charging', slotUpdates: {}, proposedEvents: [{ type: 'user.input', text }],
+    })
+  })
+
   it.each(['先去充电', '先去补能'])('persists accepted charging when applying %s', (text) => {
     const state = createInitialTask('pickup-001', timestamp)
     const plan = planAirportPickup({ text, state, eventId: `charging-${text}`, timestamp })

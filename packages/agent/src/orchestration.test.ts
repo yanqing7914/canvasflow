@@ -95,6 +95,7 @@ describe('ReadToolOrchestrator', () => {
     expect(result.route.data.waypoints?.[0]).toMatchObject({
       id: 'pickup-demo', latitude: DEMO_PICKUP_POINT.latitude, longitude: DEMO_PICKUP_POINT.longitude,
     })
+    expect(result.charging.data).toMatchObject({ recommended: true })
   })
 
   it('rejects invalid envelopes before using provider data', () => {

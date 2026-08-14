@@ -140,7 +140,11 @@ export interface ReadToolOrchestration {
     leg: 'outbound' | 'return'
     pickupAirport?: AirportPickupTaskState['pickupAirport']
     vehicle?: VehicleContext
-  }): { route: SuccessfulToolResult<RoutePlanOutput>; vehicle: SuccessfulToolResult<VehicleStatusOutput> }
+  }): {
+    route: SuccessfulToolResult<RoutePlanOutput>
+    vehicle: SuccessfulToolResult<VehicleStatusOutput>
+    charging: SuccessfulToolResult<ChargingRecommendationOutput>
+  }
 }
 
 export class ReadToolOrchestrator implements ReadToolOrchestration {
@@ -336,22 +340,35 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
     leg: 'outbound' | 'return'
     pickupAirport?: AirportPickupTaskState['pickupAirport']
     vehicle?: VehicleContext
-  }): { route: SuccessfulToolResult<RoutePlanOutput>; vehicle: SuccessfulToolResult<VehicleStatusOutput> } {
+  }): {
+    route: SuccessfulToolResult<RoutePlanOutput>
+    vehicle: SuccessfulToolResult<VehicleStatusOutput>
+    charging: SuccessfulToolResult<ChargingRecommendationOutput>
+  } {
     const destination = input.leg === 'return'
       ? { id: 'destination-home', name: '家' }
       : input.pickupAirport?.code
         ? pickupDestinationForAirport(input.pickupAirport.code)
         : { id: 'destination-hongqiao-t2', name: input.pickupAirport?.label ?? '机场接人点' }
-    return {
-      route: this.#call(
+    const route = this.#call(
         'navigation.plan-route', taskId, requestId,
         { origin: input.leg === 'return' ? DEMO_PICKUP_POINT : this.#origin, destination }, toolResultSchema(routePlanOutputSchema),
-      ),
-      vehicle: this.#call(
+      )
+    const vehicle = this.#call(
         'vehicle.get-status', taskId, requestId,
         input.vehicle ? { context: input.vehicle } : undefined, toolResultSchema(vehicleStatusOutputSchema),
-      ),
-    }
+      )
+    const charging = this.#call(
+      'charging.recommend', taskId, requestId,
+      {
+        batteryPercent: vehicle.data.batteryPercent,
+        remainingRangeKm: vehicle.data.remainingRangeKm,
+        outboundDistanceKm: route.data.distanceKm,
+        returnDistanceKm: route.data.distanceKm,
+        safetyReservePercent: this.#safetyReservePercent,
+      }, toolResultSchema(chargingRecommendationOutputSchema),
+    )
+    return { route, vehicle, charging }
   }
 
   #call<T>(

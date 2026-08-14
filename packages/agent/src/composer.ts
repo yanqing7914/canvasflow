@@ -1,6 +1,5 @@
-import { uiSpecSchema, type AirportPickupTaskState, type CalendarEvent, type FlightArrivalCandidate, type FlightArrivalsOutput, type RouteSketch, type UISpec, type WeatherOutput } from '@canvasflow/schema'
+import { uiSpecSchema, type AirportPickupTaskState, type CalendarEvent, type FlightArrivalCandidate, type FlightArrivalsOutput, type RoutePlanOutput, type RouteSketch, type UISpec, type WeatherOutput } from '@canvasflow/schema'
 import {
-  chargingStation,
   chargingStationsForDensity,
   estimateFinalBatteryPercent,
   memberPreferences,
@@ -61,6 +60,43 @@ export const REMIND_LATER_ACTION_ID = 'remind-later'
 export const VIEW_CALENDAR_ACTION_ID = 'view-calendar'
 
 /**
+ * Projects the provider's station comparison records into the UI contract.
+ * The provider remains the source of truth; this is only a presentation shape
+ * and deliberately carries no station-control token.
+ */
+export function nearbyChargingStations(density: 'full' | 'compact' | 'minimal', soc: number) {
+  return {
+    soc: `${Math.round(soc)}%`,
+    items: chargingStationsForDensity(density).map((station) => ({
+      id: station.stationId,
+      name: station.name,
+      address: station.open24h ? '24 小时开放' : '营业时间以现场为准',
+      available: station.availableStalls,
+      total: station.totalStalls,
+      price: `¥${station.pricePerKwhYuan.toFixed(1)}`,
+      distanceKm: station.distanceKm,
+    })),
+  }
+}
+
+export function chargingRoutePresentation(
+  route: RoutePlanOutput,
+  destination: string,
+  soc: number,
+) {
+  return {
+    destination,
+    distanceKm: route.distanceKm,
+    durationMinutes: route.durationMinutes,
+    soc: `${Math.round(soc)}%`,
+    // The demo provider only guarantees a station recommendation, not a GIS
+    // waypoint. Keep the stop clearly fictional and avoid claiming a precise
+    // detour geometry that the route provider did not return.
+    stops: [{ name: '虹桥枢纽超充站', address: '虹桥枢纽附近', atKm: Math.round(route.distanceKm * 0.6) }],
+  }
+}
+
+/**
  * The two side scenes the drive can ask about without leaving it.
  *
  * The labels are the sentences. A driver who reads 看下天气 off the brief has
@@ -70,10 +106,12 @@ export const VIEW_CALENDAR_ACTION_ID = 'view-calendar'
  */
 export const ASK_WEATHER_ACTION_ID = 'ask-weather'
 export const ASK_SCHEDULE_ACTION_ID = 'ask-schedule'
+export const ASK_CHARGING_ACTION_ID = 'ask-charging'
 
 const EN_ROUTE_QUERY_ACTIONS: UISpec['actions'] = [
   { id: ASK_WEATHER_ACTION_ID, label: '看下天气', style: 'secondary', event: { type: 'agent-message', text: '看下天气' } },
   { id: ASK_SCHEDULE_ACTION_ID, label: '看看日程', style: 'secondary', event: { type: 'agent-message', text: '看看日程' } },
+  { id: ASK_CHARGING_ACTION_ID, label: '规划充电', style: 'secondary', event: { type: 'agent-message', text: '规划充电路线' } },
 ]
 
 export const SEND_UMBRELLA_REMINDER_ACTION_ID = 'send-umbrella-reminder'
@@ -210,7 +248,7 @@ export function composeAgentSpec(
     const componentId = outbound ? 'outbound-confirmation' : 'return-confirmation'
     const actionId = outbound ? 'start-outbound' : 'start-return'
     title = outbound ? '现在出发' : '确认返程'
-    components = [{
+    const routeConfirmation: UISpec['components'][number] = {
       id: componentId, type: 'route-confirmation', actions: [actionId], props: {
         leg: outbound ? 'outbound' : 'return', destination: task.navigation.destination,
         ...(outbound && task.flight ? { flightNumber: task.flight.flightNumber, flightEstimatedArrival: task.flight.estimatedArrival } : {}),
@@ -220,8 +258,12 @@ export function composeAgentSpec(
         estimatedBatteryAtArrival: task.navigationSimulation.estimatedBatteryAtArrival,
         ...(route ? { routeSketch: routeSketchFor(task, route) } : {}), simulated: true,
       },
-    }]
-    actions = [{ id: actionId, label: outbound ? '现在出发' : '开始返程', style: 'primary', event: { type: 'tool-request', actionToken: actionId } }]
+    }
+    components = [{ ...routeConfirmation, actions: [actionId, ...(outbound ? [ASK_CHARGING_ACTION_ID] : [])] }]
+    actions = [
+      { id: actionId, label: outbound ? '现在出发' : '开始返程', style: 'primary', event: { type: 'tool-request', actionToken: actionId } },
+      ...(outbound ? [{ id: ASK_CHARGING_ACTION_ID, label: '规划充电', style: 'secondary' as const, event: { type: 'agent-message' as const, text: '规划充电路线' } }] : []),
+    ]
     requiresConfirm = true
   } else if (task.phase === 'passengers-onboard') {
     title = '乘客已上车'
@@ -260,7 +302,6 @@ export function composeAgentSpec(
   } else if (task.phase === 'preparing' && task.flight && toolResults['navigation.plan-route'] && toolResults['charging.recommend'] && toolResults['vehicle.get-status']) {
     const route = toolResults['navigation.plan-route'].data
     const charging = toolResults['charging.recommend'].data
-    const vehicle = toolResults['vehicle.get-status'].data
     const plannedSketch = routeSketchFor(task, route)
     density = 'compact'
     // The pre-departure brief stays a full-width stack: it carries three detail
@@ -281,7 +322,6 @@ export function composeAgentSpec(
     components = [
       { id: 'flight-status', type: 'flight-status', props: { flightNumber: task.flight.flightNumber, status: task.flight.status, scheduledArrival: task.flight.scheduledArrival, estimatedArrival: task.flight.estimatedArrival, terminal: task.flight.terminal, baggageClaim: task.flight.baggageClaim, freshness: 'fixture' } },
       { id: 'navigation-plan', type: 'navigation-summary', props: { routeId: route.routeId, destination: plannedDestination, eta: task.navigation?.eta ?? route.arrivalTime, distanceKm: route.distanceKm, estimatedBatteryAtArrival: route.estimatedBatteryAtArrival, ...(plannedSketch ? { routeSketch: plannedSketch } : {}) } },
-      { id: 'charging-plan', type: 'charging-recommendation', props: { recommended: charging.recommended, reason: charging.reason, currentBatteryPercent: vehicle.batteryPercent, estimatedFinalBatteryPercent: charging.estimatedFinalBatteryPercent, suggestedDurationMinutes: charging.suggestedDurationMinutes, etaImpactMinutes: charging.etaImpactMinutes } },
     ]
     const calendar = toolResults['calendar.list-upcoming']
     if (calendar && calendar.data.events.length > 0) {
@@ -294,12 +334,17 @@ export function composeAgentSpec(
     // the button and the spoken sentence reach the same planner branch.
     const planIndex = components.findIndex((component) => component.id === 'navigation-plan')
     if (planIndex >= 0) {
-      components[planIndex] = { ...components[planIndex]!, actions: [ASK_DEPARTURE_TIME_ACTION_ID] }
+      components[planIndex] = { ...components[planIndex]!, actions: [ASK_DEPARTURE_TIME_ACTION_ID, ASK_CHARGING_ACTION_ID] }
       actions = [{
         id: ASK_DEPARTURE_TIME_ACTION_ID,
         label: '什么时候出发',
         style: 'secondary',
         event: { type: 'agent-message', text: '什么时候出发' },
+      }, {
+        id: ASK_CHARGING_ACTION_ID,
+        label: '规划充电',
+        style: 'secondary',
+        event: { type: 'agent-message', text: '规划充电路线' },
       }]
     }
   } else if (task.passengers.confirmedOnboard) {
@@ -501,24 +546,6 @@ export function composeAgentSpec(
       components = [...components, calendarAdvisoryCard(task.calendarAdvisory)]
       actions = CALENDAR_ADVISORY_ACTIONS
     }
-  } else if (task.charging.recommended && !task.flight) {
-    // Both battery numbers come from one snapshot so the card cannot contradict
-    // itself, and the station count matches what the same density tier surfaces.
-    const parked = vehicleSnapshots.parked
-    components = [{
-      id: 'charging-plan',
-      type: 'charging-recommendation',
-      props: {
-        recommended: true,
-        reason: `完成往返后预计低于安全余量（对比 ${chargingStationsForDensity(density).length} 站）`,
-        currentBatteryPercent: parked.batteryPercent,
-        estimatedFinalBatteryPercent: estimateFinalBatteryPercent(
-          parked.batteryPercent, parked.remainingRangeKm, DEMO_LEG_KM, DEMO_LEG_KM,
-        ),
-        suggestedDurationMinutes: chargingStation.suggestedDurationMinutes,
-        etaImpactMinutes: chargingStation.etaImpactMinutes,
-      },
-    }]
   } else if (task.navigation) {
     density = 'compact'
     const activeSketch = routeSketchFor(task, { routeId: task.navigation.routeId })
@@ -570,7 +597,7 @@ export function composeAgentSpec(
           // The drive is where the side scenes belong: the driver is committed to a
           // destination and is now asking about what happens around it. They sit on
           // the brief that carries the ETA — the number both answers are relative to.
-          actions: [ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID],
+          actions: [ASK_WEATHER_ACTION_ID, ASK_SCHEDULE_ACTION_ID, ASK_CHARGING_ACTION_ID],
         }],
         activeSketch,
         task.navigation.destination,
@@ -705,6 +732,7 @@ export function composeAgentSpec(
     },
   })
 }
+
 
 /**
  * Give the route its own column: the map on the left, the cards that describe
