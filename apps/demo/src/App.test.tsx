@@ -81,8 +81,8 @@ describe('demo integration', () => {
     expect(workspace).toHaveAttribute('data-cockpit-mode', 'idle')
     expect(map).toHaveAttribute('data-mode', 'idle')
     expect(map).toHaveAttribute('data-session-key', 'cockpit-session')
-    expect(screen.getByLabelText('空闲座舱')).toBeInTheDocument()
-    expect(screen.getByLabelText('人民广场模拟车辆位置')).toHaveTextContent('模拟位置，非真实 GPS')
+    expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
+    expect(map).toBeInTheDocument()
     // Voice-unavailable mode keeps the explicit text path open inside the
     // persistent entry slot; the idle shell must still contain no task content.
     expect(screen.getByLabelText('任务输入')).toHaveValue('')
@@ -187,7 +187,7 @@ describe('demo integration', () => {
 
     await waitFor(() => expect(api.cancel).toHaveBeenCalledWith(expect.objectContaining({ taskId: 'reset-active' }), '用户确认重新开始'))
     expect(api.event).not.toHaveBeenCalled()
-    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(await screen.findByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
     expect(controls).toBeVisible()
     expect(controls).toHaveTextContent('尚无任务')
@@ -261,7 +261,7 @@ describe('demo integration', () => {
     await waitFor(() => expect(cancel).toHaveBeenCalledTimes(2))
     expect(cancel).toHaveBeenNthCalledWith(1, active.task, '用户确认重新开始')
     expect(cancel).toHaveBeenNthCalledWith(2, latest.task, '用户确认重新开始')
-    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(await screen.findByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
 
     act(() => { speech.engine().emit('小南，我要去机场接爸爸', true, 0.9) })
@@ -728,7 +728,6 @@ describe('demo integration', () => {
       navigationSnapshot: expect.objectContaining({ leg: 'return', progress: 1, speedKph: 0 }),
     })))
     expect(screen.getByRole('button', { name: '保存本次偏好' })).toBeInTheDocument()
-    expect(screen.queryByLabelText('空闲座舱')).not.toBeInTheDocument()
   })
 
   it('uses the stopped outbound snapshot when the passenger button prepares the return', async () => {
@@ -1723,7 +1722,7 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '发送' }))
 
     await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `cnf-${decision}`, decision))
-    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(await screen.findByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
     expect(screen.getByText('已到家', { selector: '[role="status"]' })).toBeInTheDocument()
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
     expect(api.create).toHaveBeenCalledTimes(1)
@@ -1766,7 +1765,7 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: label }))
 
     await waitFor(() => expect(api.confirmation).toHaveBeenCalledWith(completedTask, `button-cnf-${decision}`, decision))
-    expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+    expect(await screen.findByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
     expect(screen.getByText('已到家', { selector: '[role="status"]' })).toBeInTheDocument()
     expect(screen.queryByLabelText('机场接人任务')).not.toBeInTheDocument()
   })
@@ -2082,40 +2081,19 @@ describe('demo integration', () => {
       expect(brief.textContent).not.toContain(phase)
     })
 
-    it('keeps the competition journey visible as the same task advances', () => {
-      const preparing = render(<App initialTask={{ ...createInitialTask(), phase: 'preparing' }} />)
+    it.each<AirportPickupTaskState['phase']>([
+      'collecting-airport',
+      'choosing-flight',
+      'confirming-outbound',
+      'waiting-for-passengers',
+      'confirming-return',
+      'outbound-driving',
+      'return-driving',
+    ])('keeps %s focused on the current decision instead of a numbered journey rail', (phase) => {
+      render(<App initialTask={{ ...createInitialTask(), phase }} />)
 
-      const rail = screen.getByRole('list', { name: '接机行程阶段' })
-      expect(rail).toHaveTextContent('准备')
-      expect(rail).toHaveTextContent('接机')
-      expect(rail).toHaveTextContent('返程')
-      expect(rail).toHaveTextContent('到家')
-      expect(screen.getByText('准备', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'current')
-      expect(screen.getByText('接机', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'upcoming')
-
-      preparing.unmount()
-      const pickup = render(<App initialTask={{ ...createInitialTask(), phase: 'waiting-for-passengers' }} />)
-      expect(screen.getByText('准备', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'completed')
-      expect(screen.getByText('接机', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'current')
-
-      pickup.unmount()
-      const returning = render(<App initialTask={{ ...createInitialTask(), phase: 'returning-home' }} />)
-      expect(screen.getByText('返程', { selector: '[data-journey-label]' }).closest('li')).toHaveAttribute('data-state', 'current')
-
-      returning.unmount()
-      render(<App initialTask={{ ...createInitialTask(), phase: 'completed' }} />)
       expect(screen.queryByRole('list', { name: '接机行程阶段' })).not.toBeInTheDocument()
-      expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'terminal')
-    })
-
-    it('does not invent a journey stage before creation or after cancellation', () => {
-      const empty = render(<App />)
-      expect(screen.queryByRole('list', { name: '接机行程阶段' })).not.toBeInTheDocument()
-
-      empty.unmount()
-      render(<App initialTask={{ ...createInitialTask(), phase: 'cancelled' }} />)
-      expect(screen.queryByRole('list', { name: '接机行程阶段' })).not.toBeInTheDocument()
-      expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'terminal')
+      expect(screen.queryByText('准备', { selector: '[data-journey-label]' })).not.toBeInTheDocument()
     })
 
     it('keeps engineering metadata out of the brief and inside the drawer', async () => {
@@ -3073,7 +3051,7 @@ describe('demo integration', () => {
 
       if (confirmsReset) {
         await waitFor(() => expect(api.cancel).toHaveBeenCalledWith(active.task, '用户确认重新开始'))
-        expect(await screen.findByLabelText('空闲座舱')).toBeInTheDocument()
+        expect(await screen.findByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
       } else {
         await waitFor(() => expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0))
         expect(api.cancel).not.toHaveBeenCalled()

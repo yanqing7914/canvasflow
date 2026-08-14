@@ -46,7 +46,7 @@ export function NavigationHUD({
     )
   }
   return (
-    <section className="navigation-hud" aria-label="导航信息">
+    <section className="navigation-hud" data-driving={snapshot.runState === 'driving'} aria-label="导航信息">
       <header className="navigation-hud__header">
         <div>
           <span className="navigation-hud__eyebrow">{snapshot.leg === 'return' ? '返程导航' : '机场接人'}</span>
@@ -68,8 +68,11 @@ export function NavigationHUD({
         <div><span>速度档位</span><strong>{speedTierLabel ?? SPEED_TIERS[snapshot.speedTier].label}</strong></div>
       </div>
       <div className="navigation-hud__maneuver">
+        <span className="navigation-hud__maneuver-mark" aria-hidden="true">↗</span>
+        <div>
         <span>当前道路 · {snapshot.road}</span>
         <strong>{snapshot.maneuver}</strong>
+        </div>
       </div>
     </section>
   )

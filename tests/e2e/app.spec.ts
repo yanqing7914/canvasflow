@@ -463,6 +463,9 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(settledDepartedMap.routeSearches[0]!.origin[0]).toBeGreaterThan(settledDepartedMap.routeSearches[0]!.destination[0])
   await captureCockpitScreenshot(page, testInfo, 'desktop-map-hud.png')
 
+  // Let the programmatic follow-camera settle before simulating an actual drag.
+  // The production guard ignores camera events caused by its own recentering.
+  await page.waitForTimeout(400)
   await emitMockAMapInteraction(page, 'dragstart')
   await expect(page.getByRole('button', { name: '回到车辆位置' })).toBeVisible()
   await page.getByRole('button', { name: '回到车辆位置' }).click()
@@ -933,30 +936,18 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
   }
 })
 
-test('keeps every journey stage readable at tablet width @layout', async ({ page }) => {
+test('keeps the task window focused on the current decision at tablet width @layout', async ({ page }) => {
   await page.setViewportSize({ width: 768, height: 720 })
   await page.goto('/')
   await sendText(page)
 
-  const rail = page.locator('.journey-rail')
-  await expect(rail).toBeVisible()
-  const stageLayout = await rail.locator('.journey-rail__stage').evaluateAll((stages) => stages.map((stage) => {
-    const label = stage.querySelector<HTMLElement>('[data-journey-label]')
-    const marker = stage.querySelector<HTMLElement>('.journey-rail__marker')
-    const copy = stage.querySelector<HTMLElement>('.journey-rail__copy')
-    if (!label || !marker || !copy) throw new Error('journey stage structure is incomplete')
-    const markerBox = marker.getBoundingClientRect()
-    const copyBox = copy.getBoundingClientRect()
-    return {
-      label: label.textContent,
-      labelClippedBy: label.scrollWidth - label.clientWidth,
-      markerOverlapsCopyBy: Math.round(markerBox.right - copyBox.left),
-    }
-  }))
-
-  expect(stageLayout).toHaveLength(4)
-  expect(stageLayout.filter((stage) => stage.labelClippedBy > 1)).toEqual([])
-  expect(stageLayout.filter((stage) => stage.markerOverlapsCopyBy > 0)).toEqual([])
+  await expect(page.locator('.journey-rail')).toHaveCount(0)
+  await expect(page.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'primary')
+  // This layout coverage exercises the intentionally retained legacy fixture
+  // timeline. Its valid first decision is an arrivals board, not cockpit airport
+  // buttons (those are asserted and clicked in the @cockpit flow above).
+  await expect(page.getByRole('region', { name: 'Generated task interface' })).toBeVisible()
+  await expect(page.getByRole('list', { name: '上海到达航班' })).toBeVisible()
   await expectNoHorizontalOverflow(page)
 })
 

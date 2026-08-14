@@ -52,6 +52,9 @@ export type AMapWorkspaceHandle = {
   setRoute: (sketch: RouteSketch) => Promise<boolean>
   setProgress: (progress: number) => void
   setFollow: (follow: boolean) => void
+  setCameraMode: (mode: 'overview' | 'driving') => void
+  zoomIn: () => void
+  zoomOut: () => void
   recenter: () => void
   destroy: () => void
 }
@@ -60,6 +63,8 @@ export type AMapWorkspaceOptions = {
   mode: 'idle' | 'route'
   sketch?: RouteSketch
   progress?: number
+  /** Overview frames the whole planned route; driving stays with the vehicle. */
+  cameraMode?: 'overview' | 'driving'
   theme: 'light' | 'dark'
   onManualInteraction?: () => void
   onRuntimeFailure?: () => void
@@ -110,12 +115,24 @@ export function renderAMapWorkspace(
   let currentProgress: number | undefined
   let pendingProgress: number | undefined
   let currentPath: LngLatPoint[] | undefined
+  let currentVehicle: { point: { x: number; y: number }; heading: number } | undefined
   let following = options.mode === 'route'
+  let cameraMode: 'overview' | 'driving' = options.cameraMode ?? 'overview'
+  let currentMode: 'idle' | 'route' = options.mode
+  let programmaticCameraUntil = 0
+  const cameraTimers = new Set<ReturnType<typeof setTimeout>>()
   let destroyed = false
   let routeGeneration = 0
 
   try {
-    map = new amap.Map(container, { zoom: 14, center: [121.4737, 31.2304], ...(palette.mapStyle ? { mapStyle: palette.mapStyle } : {}) })
+    map = new amap.Map(container, {
+      zoom: 14,
+      center: [121.4737, 31.2304],
+      viewMode: '3D',
+      pitch: 52,
+      showTraffic: true,
+      ...(palette.mapStyle ? { mapStyle: palette.mapStyle } : {}),
+    })
     idleMarker = new amap.Marker({
       position: [121.4737, 31.2304], zIndex: 70, anchor: 'center',
       content: '<span class="amap-cockpit-car" aria-hidden="true"><span></span></span>',
@@ -134,13 +151,15 @@ export function renderAMapWorkspace(
     moveTo = undefined
     currentProgress = undefined
     currentPath = undefined
+    currentVehicle = undefined
   }
   const drawWorkspaceRoute = (path: LngLatPoint[], progress: number | undefined) => {
     clearRoute()
     if (idleMarker) map.remove(idleMarker)
     const route = new amap.Polyline({
       path: path.map((point) => [point.lng, point.lat]), strokeColor: palette.route,
-      strokeWeight: 6, strokeOpacity: 0.9, lineJoin: 'round', zIndex: 50,
+      strokeWeight: cameraMode === 'driving' ? 10 : 6, strokeOpacity: 0.96, lineJoin: 'round',
+      showDir: true, dirColor: '#ffffff', isOutline: true, outlineColor: 'rgba(20, 77, 181, 0.42)', zIndex: 50,
     })
     map.add(route)
     routeOverlays.push(route)
@@ -156,10 +175,12 @@ export function renderAMapWorkspace(
     const effectiveProgress = pendingProgress ?? normalized
     pendingProgress = undefined
     const markerPoint = pointAtProgress(xy, lengths, effectiveProgress)
+    const markerHeading = headingAtProgress(xy, lengths, effectiveProgress)
     currentProgress = effectiveProgress
+    currentVehicle = { point: markerPoint, heading: markerHeading }
     const tail = new amap.Polyline({
       path: traversedPath(xy, lengths, effectiveProgress).map((point) => [point.x, point.y]),
-      strokeColor: palette.traversed, strokeWeight: 6, strokeOpacity: 0.9, zIndex: 60,
+      strokeColor: palette.traversed, strokeWeight: cameraMode === 'driving' ? 8 : 6, strokeOpacity: 0.9, zIndex: 60,
     })
     const marker = new amap.Marker({
       position: [markerPoint.x, markerPoint.y], zIndex: 70, anchor: 'center',
@@ -172,19 +193,63 @@ export function renderAMapWorkspace(
       if (valid === undefined) return
       currentProgress = valid
       const point = pointAtProgress(xy, lengths, valid)
+      const heading = headingAtProgress(xy, lengths, valid)
       marker.setPosition([point.x, point.y])
-      marker.setAngle?.(headingAtProgress(xy, lengths, valid))
+      marker.setAngle?.(heading)
       tail.setPath(traversedPath(xy, lengths, valid).map((covered) => [covered.x, covered.y]))
-      if (following) {
-        if (map.setCenter) map.setCenter([point.x, point.y], false)
-        else map.setZoomAndCenter(14, [point.x, point.y])
-      }
+      currentVehicle = { point, heading }
+      if (following) focusVehicle(point, heading)
     }
-    if (following) map.setZoomAndCenter(14, [markerPoint.x, markerPoint.y])
+    if (following && cameraMode === 'driving') {
+      focusVehicle(markerPoint, markerHeading)
+      focusAfterRoutePaint()
+    }
     else map.setFitView(routeOverlays)
   }
 
+  const focusVehicle = (point: { x: number; y: number }, heading: number) => {
+    const zoom = cameraMode === 'driving' ? 19 : 14
+    if (cameraMode === 'driving') {
+      map.setRotation?.(-heading)
+      map.setPitch?.(58)
+    }
+    let cameraPoint = point
+    if (cameraMode === 'driving' && currentPath && currentProgress !== undefined) {
+      const xy = currentPath.map((pathPoint) => ({ x: pathPoint.lng, y: pathPoint.lat }))
+      const lengths = segmentLengths(xy)
+      // Keep the car in the lower third, leaving the upper map area for the
+      // road ahead, which is the useful navigation view rather than a centered
+      // route overview.
+      // About 1.2% of a route keeps the car below center at city-driving
+      // zoom without jumping kilometres ahead on a longer airport trip.
+      cameraPoint = pointAtProgress(xy, lengths, Math.min(1, currentProgress + 0.012))
+    }
+    // AMap emits zoomstart/drag-like camera notifications for its own camera
+    // calls. Ignore that short burst so we only leave follow mode for a real
+    // user pan or pinch, not immediately after navigation begins.
+    programmaticCameraUntil = Date.now() + 350
+    if (map.setCenter) {
+      map.setCenter([cameraPoint.x, cameraPoint.y], false)
+      if (cameraMode === 'driving') map.setZoomAndCenter(zoom, [cameraPoint.x, cameraPoint.y])
+    } else {
+      map.setZoomAndCenter(zoom, [point.x, point.y])
+    }
+  }
+
+  const focusAfterRoutePaint = () => {
+    if (!following || cameraMode !== 'driving' || !currentVehicle) return
+    const focus = () => {
+      cameraTimers.delete(timer)
+      if (!destroyed && following && cameraMode === 'driving' && currentVehicle) {
+        focusVehicle(currentVehicle.point, currentVehicle.heading)
+      }
+    }
+    const timer = setTimeout(focus, 280)
+    cameraTimers.add(timer)
+  }
+
   const leaveFollow = () => {
+    if (Date.now() < programmaticCameraUntil) return
     if (!following) return
     following = false
     options.onManualInteraction?.()
@@ -211,14 +276,24 @@ export function renderAMapWorkspace(
   const handle: AMapWorkspaceHandle = {
     setMode: async (mode, sketch, progress) => {
       if (mode === 'idle') {
+        currentMode = 'idle'
         routeGeneration += 1
+        for (const timer of cameraTimers) clearTimeout(timer)
+        cameraTimers.clear()
         pendingProgress = undefined
         clearRoute()
         if (idleMarker) map.add(idleMarker)
+        map.setRotation?.(0)
         map.setZoomAndCenter(14, [121.4737, 31.2304])
         return true
       }
       if (!sketch) return false
+      // The persistent map is constructed in idle mode and promoted to route
+      // mode later. Entering a new leg should behave like a navigation start:
+      // follow the vehicle and frame it at road level. A route replacement
+      // within the same leg keeps the driver's manual follow choice.
+      if (currentMode === 'idle') following = true
+      currentMode = 'route'
       return setRoute({ ...sketch, ...(progress === undefined ? {} : { progress }) })
     },
     setTheme: (next: 'light' | 'dark') => {
@@ -251,7 +326,26 @@ export function renderAMapWorkspace(
         pendingProgress = progress
       }
     },
-    setFollow: (follow) => { following = follow },
+    setFollow: (follow) => {
+      following = follow
+      if (following && currentVehicle) focusVehicle(currentVehicle.point, currentVehicle.heading)
+    },
+    setCameraMode: (next) => {
+      if (next === cameraMode || destroyed) return
+      cameraMode = next
+      if (currentPath) drawWorkspaceRoute(currentPath, currentProgress)
+      if (following && currentVehicle) focusVehicle(currentVehicle.point, currentVehicle.heading)
+    },
+    zoomIn: () => {
+      following = false
+      map.zoomIn?.()
+      options.onManualInteraction?.()
+    },
+    zoomOut: () => {
+      following = false
+      map.zoomOut?.()
+      options.onManualInteraction?.()
+    },
     recenter: () => {
       following = true
       if (currentProgress !== undefined) moveTo?.(currentProgress)
@@ -260,6 +354,8 @@ export function renderAMapWorkspace(
       if (destroyed) return
       destroyed = true
       try {
+        for (const timer of cameraTimers) clearTimeout(timer)
+        cameraTimers.clear()
         map.off?.('dragstart', leaveFollow)
         map.off?.('zoomstart', leaveFollow)
         clearRoute()
@@ -551,7 +647,10 @@ function searchRoute(
   return new Promise((resolve) => {
     let driving: AMapDriving
     try {
-      driving = new amap.Driving({ map })
+      // We only need AMap.Driving for road geometry. Supplying `map` makes the
+      // plugin draw its own route and asynchronously call fitView(), which
+      // overwrites the driver's close follow camera with a whole-route view.
+      driving = new amap.Driving()
     } catch {
       onRuntimeFailure?.()
       resolve([])

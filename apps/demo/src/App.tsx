@@ -91,65 +91,6 @@ const phaseIdentityLabels: Record<AirportPickupTaskState['phase'], string> = {
   cancelled: '行程已取消',
 }
 
-const journeyStages = [
-  { id: 'prepare', label: '准备', detail: '确认航班与出发方案' },
-  { id: 'pickup', label: '接机', detail: '前往机场并接到家人' },
-  { id: 'return', label: '返程', detail: '送家人安全回家' },
-  { id: 'home', label: '到家', detail: '总结行程与偏好' },
-] as const
-
-const journeyStageByPhase: Record<AirportPickupTaskState['phase'], number | undefined> = {
-  'collecting-airport': 0,
-  'choosing-flight': 0,
-  'confirming-outbound': 0,
-  'collecting-information': 0,
-  preparing: 0,
-  'outbound-driving': 1,
-  'driving-to-airport': 1,
-  'approaching-airport': 1,
-  'waiting-for-passengers': 1,
-  'passengers-onboard': 2,
-  'confirming-return': 2,
-  'return-driving': 2,
-  'returning-home': 2,
-  completed: 3,
-  cancelled: undefined,
-}
-
-function JourneyPhaseRail({ phase }: { phase: AirportPickupTaskState['phase'] }) {
-  const currentStage = journeyStageByPhase[phase]
-  const cancelled = phase === 'cancelled'
-
-  return (
-    <ol className="journey-rail" aria-label="接机行程阶段" data-cancelled={cancelled || undefined}>
-      {journeyStages.map((stage, index) => {
-        const state = currentStage === undefined
-          ? 'upcoming'
-          : index < currentStage ? 'completed' : index === currentStage ? 'current' : 'upcoming'
-        return (
-          <li
-            className="journey-rail__stage"
-            data-state={state}
-            aria-current={state === 'current' ? 'step' : undefined}
-            key={stage.id}
-          >
-            <span className="journey-rail__marker" aria-hidden="true">
-              <span>{index + 1}</span>
-            </span>
-            <span className="journey-rail__copy">
-              <strong data-journey-label>{stage.label}</strong>
-              <small>{cancelled ? '行程已停止' : stage.detail}</small>
-              {index === currentStage ? (
-                <span className="sr-only" data-phase-identity>{phaseIdentityLabels[phase]}</span>
-              ) : null}
-            </span>
-          </li>
-        )
-      })}
-    </ol>
-  )
-}
-
 function isDrivingVehicle(vehicle: VehicleContext): boolean {
   return vehicle.speedKph > 0 || vehicle.gear !== 'P'
 }
@@ -2172,6 +2113,16 @@ export default function App({
   const mapRouteKey = mapRouteActive
     ? `${mapLeg ?? 'outbound'}:${mapRouteId ?? 'route'}`
     : 'idle'
+  const mapCameraMode = navigationActive && [
+    'driving-to-airport', 'approaching-airport', 'outbound-driving',
+    'returning-home', 'return-driving',
+  ].includes(runtimeTask?.phase ?? '')
+    ? 'driving' as const
+    : 'overview' as const
+  // Navigation gets its own daylight road palette. The cockpit cards may stay
+  // in the agent-authored cabin theme, but a dark basemap hides lane geometry
+  // and reads like a route review screen rather than an active navigation.
+  const mapTheme = mapCameraMode === 'driving' ? 'light' as const : (task && spec ? spec.presentation.theme : cockpitTheme)
   // The navigation HUD owns the full-screen driving surface, but waiting at
   // the airport and confirming the return still need their primary task card.
   const hideNavigationPrimary = navigationActive && cockpitView.mode === 'navigation'
@@ -2271,11 +2222,12 @@ export default function App({
             sketch={routeSketch}
             progress={mapProgress}
             routeKey={mapRouteKey}
-            theme={cockpitTheme}
+            theme={mapTheme}
             sessionKey={cockpitSessionKey}
             recoveryKey={task?.taskId ?? 'idle'}
             mapRetryNonce={mapRetryNonce}
             follow={mapFollowing}
+            cameraMode={mapCameraMode}
             onManualInteraction={() => setMapFollowing(false)}
             onRecenter={() => setMapFollowing(true)}
             onRuntimeFailure={() => {
@@ -2304,7 +2256,7 @@ export default function App({
               data-phase={task?.phase}
               data-phase-label={phaseIdentity}
             >
-              {task ? <JourneyPhaseRail phase={task.phase} /> : null}
+              {task && phaseIdentity ? <span className="sr-only" data-phase-identity>{phaseIdentity}</span> : null}
               {primarySpec && task ? (
                 <section className="cockpit-primary-panel__content" aria-label={`${cockpitView.primaryWindow?.title ?? windowSpec?.title ?? '当前行程'}窗口`}>
                   <UISpecRenderer
