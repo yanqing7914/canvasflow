@@ -4288,6 +4288,11 @@ a:focus-visible {
 .demo-controls-panel__advance { display: flex; width: 100%; min-height: 58px; align-items: center; justify-content: space-between; border: 0; border-radius: 15px; padding: 0 18px; background: var(--accent); color: var(--action-primary-ink) !important; box-shadow: 0 12px 28px color-mix(in srgb, var(--accent-deep) 30%, transparent); font-size: 17px; font-weight: 800; }
 .demo-controls-panel__advance:hover:not(:disabled) { background: var(--accent-deep); }
 .demo-controls-panel__advance:disabled { background: var(--control-off); color: var(--muted) !important; box-shadow: none; }
+.demo-controls-panel__next-hint { margin: -5px 0 0; color: var(--tool-muted); font-size: 12px; line-height: 1.5; }
+.ui-action[data-guided='true'],
+.ui-flight-choices__row[data-guided='true'] { animation: guided-action 900ms ease-in-out 2; outline: 3px solid color-mix(in srgb, var(--accent) 72%, transparent); outline-offset: 4px; }
+@keyframes guided-action { 50% { transform: translateY(-2px); box-shadow: 0 0 0 7px color-mix(in srgb, var(--accent) 17%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .ui-action[data-guided='true'], .ui-flight-choices__row[data-guided='true'] { animation: none; } }
 
 .demo-controls-panel__fixtures { display: grid; gap: 9px; }
 .demo-controls-panel__fixtures > div { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }

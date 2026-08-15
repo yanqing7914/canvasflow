@@ -463,7 +463,10 @@ describe('demo integration', () => {
       ...composePickupSpec(createInitialTask()), taskId: task.taskId, taskRevision: task.taskRevision, phase: 'choosing-flight',
       layout: { type: 'stack' as const, gap: 'md' as const, slots: { main: [] } },
       components: [flightComponent],
-      actions: [{ id: 'pick-cockpit-MU5102', label: '选择 MU5102', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'pick-cockpit-MU5102' } }],
+      actions: [
+        { id: 'auxiliary-primary', label: '辅助操作', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'auxiliary-primary' } },
+        { id: 'pick-cockpit-MU5102', label: '选择 MU5102', style: 'primary' as const, event: { type: 'tool-request' as const, actionToken: 'pick-cockpit-MU5102' } },
+      ],
       windows: [{ id: 'flight-list-1', kind: 'flight-list' as const, title: '虹桥机场到达航班', componentIds: [flightComponent.id], actionIds: ['pick-cockpit-MU5102'], size: 'large' as const, controls: { closable: true, minimizable: true, maximizable: true } }],
     } as unknown as CockpitUISpec
     const response = {
@@ -479,6 +482,10 @@ describe('demo integration', () => {
     expect(surface).toHaveTextContent('MU5102')
     const choice = surface.querySelector<HTMLButtonElement>('[data-action-id="pick-cockpit-MU5102"]')
     expect(choice).not.toBeNull()
+    await openControls(user)
+    await user.click(screen.getByRole('button', { name: '查看并选择 MU5102' }))
+    expect(choice).toHaveFocus()
+    expect(choice).toHaveAttribute('data-guided', 'true')
     await user.click(choice!)
     expect(api.action).toHaveBeenCalledWith(expect.anything(), 'pick-cockpit-MU5102', 'flight-choices-cockpit')
   })
@@ -534,9 +541,15 @@ describe('demo integration', () => {
     expect(confirmation).toHaveTextContent('29%')
     expect(confirmation).toHaveTextContent('20 分钟')
     expect(confirmation.querySelector('[data-action-id="start-outbound"]')).not.toBeNull()
+
+    await openControls(user)
+    const guide = screen.getByRole('button', { name: '查看并现在出发' })
+    await user.click(guide)
+    expect(confirmation.querySelector('[data-action-id="start-outbound"]')).toHaveFocus()
+    expect(confirmation.querySelector('[data-action-id="start-outbound"]')).toHaveAttribute('data-guided', 'true')
   })
 
-  it('disables the legacy timeline advance for a cockpit task', async () => {
+  it('reports the navigation simulator instead of advancing the legacy timeline for a cockpit task', async () => {
     const user = userEvent.setup()
     const task = {
       ...createCockpitTask('cockpit-advance-guard'),
@@ -566,7 +579,8 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '发送' }))
     await openControls(user)
 
-    expect(screen.getByRole('button', { name: '推进下一事件' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '导航模拟中' })).toBeDisabled()
+    expect(screen.getByText('地图会自动更新')).toBeInTheDocument()
     expect(api.event).not.toHaveBeenCalled()
     expect(api.action).not.toHaveBeenCalled()
   })
@@ -3581,7 +3595,7 @@ describe('demo integration', () => {
       expect(screen.getByRole('region', { name: '当前行程' })).toHaveAttribute('data-phase', 'confirming-outbound')
 
       await openControls(user)
-      expect(screen.getByRole('button', { name: '推进下一事件' })).toBeDisabled()
+      expect(screen.getByRole('button', { name: '查看并现在出发' })).toBeEnabled()
       expect(event).not.toHaveBeenCalled()
       expect(action).toHaveBeenCalledWith(expect.anything(), 'start-outbound', 'outbound-confirmation')
     })

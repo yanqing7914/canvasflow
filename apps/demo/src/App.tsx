@@ -398,6 +398,8 @@ export default function App({
   )
   const [controlsOpen, setControlsOpen] = useState(false)
   const [controlsMode, setControlsMode] = useState<CockpitToolWindowMode>('normal')
+  const [guidedActionId, setGuidedActionId] = useState<string>()
+  const [guidableActionId, setGuidableActionId] = useState<string>()
   const [keyboardRequested, setKeyboardRequested] = useState(false)
   const pendingRef = useRef(false)
   const mutationGenerationRef = useRef(0)
@@ -480,6 +482,18 @@ export default function App({
     || runtimeTask.pickupAirport
     || cockpitWindows.length > 0
   ))
+  const cockpitNavigationInProgress = cockpitContract && (
+    navigationStatus === 'active'
+    || runtimeTask?.phase === 'outbound-driving'
+    || runtimeTask?.phase === 'return-driving'
+  )
+  // The drawer only guides an action that belongs to the current driver-facing
+  // window. Auxiliary windows may carry their own primary actions.
+  const guideWindow = cockpitContract ? deriveCockpitView(spec).primaryWindow : undefined
+  const guideSpec = guideWindow && spec ? windowUISpec(spec, guideWindow) : undefined
+  const guidedAction = cockpitContract && !cockpitNavigationInProgress
+    ? guideSpec?.actions.find((action) => action.style === 'primary')
+    : undefined
   const navigationActive = Boolean(runtimeTask && spec
     && runtimeTask.phase !== 'completed'
     && runtimeTask.phase !== 'cancelled'
@@ -1744,6 +1758,37 @@ export default function App({
     void advanceApiFlow(response)
   }
 
+  function guideNext() {
+    if (!cockpitContract) {
+      advance()
+      return
+    }
+    if (!guidedAction || guidableActionId !== guidedAction.id) return
+    setGuidedActionId(guidedAction.id)
+    setControlsOpen(false)
+  }
+
+  useEffect(() => {
+    if (!guidedActionId) return
+    // Compare the attribute rather than interpolating untrusted ids into a CSS
+    // selector: valid Agent ids can contain selector metacharacters.
+    const target = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-action-id]'))
+      .find((candidate) => candidate.dataset.actionId === guidedActionId)
+    window.setTimeout(() => target?.focus(), 0)
+    const timer = window.setTimeout(() => setGuidedActionId(undefined), 2_400)
+    return () => window.clearTimeout(timer)
+  }, [guidedActionId])
+
+  useEffect(() => {
+    if (!guidedAction || !controlsOpen) {
+      setGuidableActionId(undefined)
+      return
+    }
+    const target = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-action-id]'))
+      .find((candidate) => candidate.dataset.actionId === guidedAction.id)
+    setGuidableActionId(target ? guidedAction.id : undefined)
+  }, [controlsOpen, guidedAction])
+
   async function advanceApiFlow(current: AgentResponse) {
     const index = stepIndex
     const step = mainFlowTimeline.steps[index]
@@ -2003,7 +2048,11 @@ export default function App({
   const progressPercent = playableEventCount === 0
     ? 0
     : isCompleted ? 100 : Math.min(100, (displayedEventCount / playableEventCount) * 100)
-  const advanceLabel = isCompleted ? '行程已完成' : task?.phase === 'cancelled' ? '行程已取消' : '推进下一事件'
+  const advanceLabel = cockpitNavigationInProgress
+    ? '导航模拟中'
+    : guidedAction
+      ? `查看并${guidedAction.label}`
+      : isCompleted ? '行程已完成' : task?.phase === 'cancelled' ? '行程已取消' : '推进下一事件'
 
   // Before the first task there is no phase to name, so the brief says what it is
   // waiting for rather than borrowing a phase label it does not have.
@@ -2031,7 +2080,10 @@ export default function App({
     planningSourceLabel: response ? (modelUsed ? `模型 · ${modelUsed}` : '规则') : '未规划',
     planningSourceExact: response ? (modelUsed ?? '规则') : undefined,
     advanceLabel,
-    advanceDisabled: pending || cockpitContract || (!response && !localOnly) || !task || isTerminal,
+    advanceDisabled: pending || cockpitNavigationInProgress || (cockpitContract ? guidableActionId !== guidedAction?.id : (!response && !localOnly) || !task || isTerminal),
+    nextHint: cockpitNavigationInProgress
+      ? '地图会自动更新'
+      : guidedAction ? '将焦点带到驾驶界面的下一项合法操作，不会代替你确认。' : undefined,
     voiceFixtures: voiceFixtureSamples.map((sample) => {
       const available = isVoiceFixtureAvailable(sample)
       const unavailableReason = draftBlocksReplay
@@ -2263,8 +2315,9 @@ export default function App({
                   <UISpecRenderer
                     driving={isDrivingVehicle(vehicleContext)}
                     onAction={handleAction}
-                    pending={pending}
-                    spec={primarySpec}
+                  pending={pending}
+                  spec={primarySpec}
+                  guidedActionId={guidedActionId}
                   />
                 </section>
               ) : task ? <h1 className="sr-only">机场接人</h1> : (
@@ -2324,7 +2377,7 @@ export default function App({
             >
               <DemoControlsPanel
                 viewModel={controlsViewModel}
-                onAdvance={advance}
+                onGuideNext={guideNext}
                 onReplayVoiceFixture={(fixtureId) => {
                   const sample = voiceFixtureSamples.find((candidate) => candidate.id === fixtureId)
                   if (sample) replayVoiceFixture(sample)
