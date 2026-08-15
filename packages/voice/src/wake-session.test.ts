@@ -21,6 +21,23 @@ function harness() {
   return { session, calls, scheduledMs, fireTimer: () => timer?.() }
 }
 
+function continuousHarness() {
+  const calls: Array<{ name: string; args: unknown[] }> = []
+  const scheduledMs: number[] = []
+  const session = createWakeSession({
+    continuousFollowUp: true,
+    setTimer: (_fn, ms) => { scheduledMs.push(ms); return 1 },
+    effects: {
+      submit: (...args) => calls.push({ name: 'submit', args }),
+      reset: () => calls.push({ name: 'reset', args: [] }),
+      resetCancelled: (reason) => calls.push({ name: 'resetCancelled', args: [reason] }),
+    },
+  })
+  session.authorize()
+  session.recognitionStarted()
+  return { session, calls, scheduledMs }
+}
+
 describe('wake session', () => {
   it('requires native recognition onstart before waiting for a wake word', () => {
     const h = harness()
@@ -100,6 +117,45 @@ describe('wake session', () => {
     h.fireTimer()
     expect(h.session.snapshot().state).toBe('waiting-wake')
     expect(h.calls.at(-1)).toMatchObject({ name: 'onTimeout', args: ['follow-up'] })
+  })
+
+  it('keeps a continuous session open after one wake and across submitted commands', () => {
+    const h = continuousHarness()
+
+    h.session.receive('小南，我要去机场接人', { recognitionSource: 'microphone' })
+    expect(h.session.snapshot().state).toBe('follow-up')
+    h.session.receive('虹桥机场', { recognitionSource: 'microphone' })
+    h.session.receive('第三个', { recognitionSource: 'microphone' })
+
+    expect(h.calls.filter((call) => call.name === 'submit').map((call) => call.args[0])).toEqual([
+      '我要去机场接人',
+      '虹桥机场',
+      '第三个',
+    ])
+    expect(h.session.snapshot().state).toBe('follow-up')
+    expect(h.scheduledMs).toEqual([])
+  })
+
+  it('returns to continuous listening after reset confirmation is resolved', () => {
+    const h = continuousHarness()
+    h.session.receive('小南')
+    h.session.receive('重新开始')
+    h.session.receive('取消')
+    expect(h.session.snapshot().state).toBe('follow-up')
+
+    h.session.receive('重新开始')
+    h.session.receive('确定')
+    expect(h.session.snapshot().state).toBe('follow-up')
+    expect(h.calls.map((call) => call.name)).toContain('reset')
+  })
+
+  it('ends continuous listening on an explicit voice command', () => {
+    const h = continuousHarness()
+    h.session.receive('小南，我要去机场接人')
+
+    expect(h.session.receive('结束对话')).toBe('conversation-ended')
+    expect(h.session.snapshot().state).toBe('waiting-wake')
+    expect(h.session.receive('虹桥机场')).toBe('ignored')
   })
 
   it('requires explicit reset confirmation and supports confirm/cancel/timeout', () => {

@@ -84,6 +84,8 @@ export type HandsFreeEffects = {
 export type HandsFreeConfig = {
   falseWakeMs?: number
   followUpMs?: number
+  /** Keep the follow-up state armed until disable or an engine failure. */
+  continuousFollowUp?: boolean
   bargeInMs?: number
 }
 
@@ -123,6 +125,7 @@ export function createHandsFreeMachine(deps: HandsFreeMachineDeps) {
   const effects = deps.effects ?? {}
   const falseWakeMs = deps.config?.falseWakeMs ?? DEFAULT_FALSE_WAKE_MS
   const followUpMs = deps.config?.followUpMs ?? DEFAULT_FOLLOW_UP_MS
+  const continuousFollowUp = deps.config?.continuousFollowUp ?? false
   const bargeInMs = deps.config?.bargeInMs ?? DEFAULT_BARGE_IN_MS
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
   const clearTimer = deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as never))
@@ -227,6 +230,7 @@ export function createHandsFreeMachine(deps: HandsFreeMachineDeps) {
     listeningSource = undefined
     invalidateTurn(false)
     transition(HANDS_FREE_STATE.FOLLOW_UP)
+    if (continuousFollowUp) return
     const lifecycle = lifecycleGeneration
     setNamedTimer('follow-up', () => {
       if (lifecycle !== lifecycleGeneration || state !== HANDS_FREE_STATE.FOLLOW_UP) return

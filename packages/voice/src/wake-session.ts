@@ -28,6 +28,8 @@ export type WakeSessionEffects = {
 export type WakeSessionDeps = {
   effects?: WakeSessionEffects
   followUpMs?: number
+  /** Keep accepting wake-free commands until recognition fails or the session is cancelled. */
+  continuousFollowUp?: boolean
   resetConfirmMs?: number
   setTimer?: (fn: () => void, ms: number) => unknown
   clearTimer?: (handle: unknown) => void
@@ -49,6 +51,11 @@ function isResetCommand(text: string) {
   return /^(?:重新开始|重来|重置)$/u.test(normalized)
 }
 
+function isEndConversationCommand(text: string) {
+  const normalized = normalizeTranscript(text).replace(/[，,。.!！?？：:；;]+$/u, '')
+  return /^(?:结束对话|退出对话|停止聆听|小南休息|休息|休息吧)$/u.test(normalized)
+}
+
 function resetDecision(text: string): 'confirm' | 'cancel' | undefined {
   const normalized = normalizeTranscript(text).replace(/[，,。.!！?？：:；;]+$/u, '')
   if (/^(?:确定|是)$/u.test(normalized)) return 'confirm'
@@ -59,6 +66,7 @@ function resetDecision(text: string): 'confirm' | 'cancel' | undefined {
 export function createWakeSession(deps: WakeSessionDeps = {}) {
   const effects = deps.effects ?? {}
   const followUpMs = deps.followUpMs ?? DEFAULT_FOLLOW_UP_MS
+  const continuousFollowUp = deps.continuousFollowUp ?? false
   const resetConfirmMs = deps.resetConfirmMs ?? DEFAULT_RESET_CONFIRM_MS
   const setTimer = deps.setTimer ?? ((fn: () => void, ms: number) => setTimeout(fn, ms))
   const clearTimer = deps.clearTimer ?? ((handle: unknown) => clearTimeout(handle as never))
@@ -98,7 +106,7 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
     const text = normalizeTranscript(command)
     if (!text) return
     clearSessionTimer()
-    transition('waiting-wake')
+    transition(continuousFollowUp ? 'follow-up' : 'waiting-wake')
     effects.submit?.(text, {
       source: 'voice',
       ...(confidence === undefined ? {} : { confidence }),
@@ -113,7 +121,7 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
     armTimer(() => {
       if (speaking) effects.stopSpeaking?.()
       speaking = false
-      transition('waiting-wake')
+      transition(continuousFollowUp ? 'follow-up' : 'waiting-wake')
       effects.resetCancelled?.('timeout')
       effects.onTimeout?.('reset-confirmation')
     }, resetConfirmMs)
@@ -123,6 +131,7 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
     clearSessionTimer()
     transition('follow-up')
     if (announce) speak('我在')
+    if (continuousFollowUp) return
     armTimer(() => {
       if (speaking) effects.stopSpeaking?.()
       speaking = false
@@ -132,11 +141,19 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
   }
 
   function receiveCommand(command: string, source?: VoiceRecognitionSource, confidence?: number) {
+    if (isEndConversationCommand(command)) {
+      clearSessionTimer()
+      if (speaking) effects.stopSpeaking?.()
+      speaking = false
+      transition('waiting-wake')
+      return 'conversation-ended' as const
+    }
     if (isResetCommand(command)) {
       askResetConfirmation()
-      return
+      return 'reset-requested' as const
     }
     submit(command, source, confidence)
+    return 'submitted' as const
   }
 
   return {
@@ -192,7 +209,7 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
           clearSessionTimer()
           if (speaking) effects.stopSpeaking?.()
           speaking = false
-          transition('waiting-wake')
+          transition(continuousFollowUp ? 'follow-up' : 'waiting-wake')
           effects.reset?.()
           return 'reset-confirmed' as const
         }
@@ -200,7 +217,7 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
           clearSessionTimer()
           if (speaking) effects.stopSpeaking?.()
           speaking = false
-          transition('waiting-wake')
+          transition(continuousFollowUp ? 'follow-up' : 'waiting-wake')
           effects.resetCancelled?.('cancelled')
           return 'reset-cancelled' as const
         }
@@ -209,6 +226,10 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
 
 
       if (options.controlsOnly) {
+        if (isEndConversationCommand(input)) {
+          receiveCommand(input, source, options.confidence)
+          return 'conversation-ended' as const
+        }
         if (!isResetCommand(input)) return 'ignored' as const
         askResetConfirmation()
         return 'accepted' as const
@@ -220,8 +241,8 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
         if (!command) return 'ignored' as const
         if (speaking) effects.stopSpeaking?.()
         speaking = false
-        receiveCommand(command, source, options.confidence)
-        return 'accepted' as const
+        const outcome = receiveCommand(command, source, options.confidence)
+        return outcome === 'conversation-ended' ? outcome : 'accepted' as const
       }
 
       const wake = matchWakeWord(input)
@@ -229,7 +250,10 @@ export function createWakeSession(deps: WakeSessionDeps = {}) {
       if (speaking) effects.stopSpeaking?.()
       speaking = false
       if (!wake.command) beginFollowUp()
-      else receiveCommand(wake.command, source, options.confidence)
+      else {
+        const outcome = receiveCommand(wake.command, source, options.confidence)
+        if (outcome === 'conversation-ended') return outcome
+      }
       return 'accepted' as const
     },
 

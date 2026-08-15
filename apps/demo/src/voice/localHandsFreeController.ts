@@ -114,6 +114,7 @@ export function createLocalHandsFreeController(options: LocalHandsFreeController
     wakeDetector,
     vadDetector,
     commandRecognizer,
+    config: { continuousFollowUp: true },
     effects: {
       onState: () => options.onSnapshot?.(machine.snapshot()),
       onWake: options.onWake,

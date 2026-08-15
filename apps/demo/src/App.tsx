@@ -1123,9 +1123,12 @@ export default function App({
   // fail visibly instead of silently falling back to online Web Speech wake.
   const localWakeFeatureEnabled = localHandsFreeFactory !== createLocalHandsFreeController
     || import.meta.env.VITE_LOCAL_WAKE_ENABLED !== '0'
+  // Production has no injected SpeechRecognition dependency, so it uses the
+  // shared PCM path (and the configured Doubao gateway) even in Chrome. Tests
+  // and embedders that inject a recognizer keep their explicit seam.
   const useLocalHandsFree = wakeWordEnabled
-    && speech?.createRecognition === undefined
     && localWakeFeatureEnabled
+    && (speech?.createRecognition === undefined || import.meta.env.VITE_VOICE_ASR_PROVIDER === 'doubao')
 
   function restoreWakeRecognitionAfterFixture(replay: number, wasListening: boolean) {
     if (!wasListening || replay !== fixtureReplayRef.current) return
@@ -1218,6 +1221,7 @@ export default function App({
 
   useEffect(() => {
     const session = createWakeSession({
+      continuousFollowUp: true,
       effects: {
         requestRecognition: () => {
           if (useLocalHandsFree) {
@@ -1235,6 +1239,7 @@ export default function App({
                   const result = controlResult ?? 'ignored'
                   return result === 'ignored'
                 }
+                if (controlResult === 'conversation-ended') return false
                 if (controlResult === 'accepted') return true
                 const outcome = await enqueueWakeCommandRef.current(command, meta)
                 if (!outcome.sent) return false
@@ -1594,8 +1599,7 @@ export default function App({
   // or a parked transcript stay until they are sent or cleared by hand.
   const draftBlocksReplay = draftProtected && text.trim() !== ''
   const wakeBlocksReplay = wakeWordEnabled && (
-    wakeSession.state === 'follow-up'
-    || wakeSession.state === 'reset-confirmation'
+    wakeSession.state === 'reset-confirmation'
     || wakeCommandDrainingRef.current
     || wakeCommandQueueRef.current.length > 0
   )
@@ -2039,7 +2043,7 @@ export default function App({
         : pending
           ? '演示正在处理，请稍候。'
           : wakeBlocksReplay || voiceEngineBlocksReplay
-            ? '语音回合正在进行，结束聆听或完成确认后再回放。'
+            ? '语音回合正在进行；说“结束对话”或完成确认后再回放。'
             : sample.unavailableHint
       return { id: sample.id, label: sample.label, available, unavailableReason }
     }),
