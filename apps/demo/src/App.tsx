@@ -1123,9 +1123,12 @@ export default function App({
   // fail visibly instead of silently falling back to online Web Speech wake.
   const localWakeFeatureEnabled = localHandsFreeFactory !== createLocalHandsFreeController
     || import.meta.env.VITE_LOCAL_WAKE_ENABLED !== '0'
+  // Production has no injected SpeechRecognition dependency, so it uses the
+  // shared PCM path (and the configured Doubao gateway) even in Chrome. Tests
+  // and embedders that inject a recognizer keep their explicit seam.
   const useLocalHandsFree = wakeWordEnabled
-    && speech?.createRecognition === undefined
     && localWakeFeatureEnabled
+    && (speech?.createRecognition === undefined || import.meta.env.VITE_VOICE_ASR_PROVIDER === 'doubao')
 
   function restoreWakeRecognitionAfterFixture(replay: number, wasListening: boolean) {
     if (!wasListening || replay !== fixtureReplayRef.current) return
