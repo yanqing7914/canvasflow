@@ -327,7 +327,7 @@ export function planAirportPickup(input: PlannerInput): Plan {
       missingSlots,
       proposedEvents: [{ ...eventBase, type: 'user.input', text }],
       assistantText: cockpit && missingSlots.includes('airport')
-        ? '去哪个机场？请选择虹桥机场或浦东机场。'
+        ? '你要去虹桥机场还是浦东机场？'
         : cockpit && statedAirport
           ? `好的，我帮你查${statedAirport.label}最近航班。`
           : missingSlots.includes('flightNumber')

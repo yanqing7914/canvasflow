@@ -119,6 +119,28 @@ a:focus-visible {
   color: var(--ink, #2c2824);
 }
 
+/* The car is parked in a cabin, not over a map. Keep the pre-navigation
+   surface dark and atmospheric so the active task window is the only bright
+   object on stage. Navigation keeps its map-owned palette. */
+.cockpit-workspace[data-cockpit-mode='idle'],
+.cockpit-workspace[data-cockpit-mode='primary'] {
+  background:
+    radial-gradient(ellipse at 50% 115%, rgba(73, 126, 148, .2), transparent 52%),
+    radial-gradient(ellipse at 14% 12%, rgba(255, 255, 255, .08), transparent 28%),
+    linear-gradient(135deg, #0d151c 0%, #16242d 52%, #0b1117 100%);
+}
+.cockpit-workspace[data-cockpit-mode='idle']::before,
+.cockpit-workspace[data-cockpit-mode='primary']::before {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(105deg, transparent 0 26%, rgba(255, 255, 255, .035) 26.1% 26.25%, transparent 26.4% 64%, rgba(255, 255, 255, .025) 64.1% 64.25%, transparent 64.4%),
+    radial-gradient(ellipse at 50% 100%, transparent 0 35%, rgba(0, 0, 0, .25) 78%);
+  content: '';
+  pointer-events: none;
+}
+
 .cockpit-workspace__map,
 .persistent-map-layer,
 .persistent-map-layer__basemap,
@@ -3063,9 +3085,8 @@ a:focus-visible {
 }
 .cockpit-primary-panel[data-phase='collecting-airport'] .ui-card__actions .ui-action:hover { background: var(--accent-pale); }
 
-/* IdleHome shares the permanent map owner. Its visual layers are deliberately
-   below the task window and entry chrome, so a task starts without recreating
-   the AMap instance. */
+/* IdleHome owns the pre-navigation cabin stage. AMap is intentionally absent
+   until formal navigation begins, while entry chrome stays above the cabin. */
 .cockpit-workspace[data-cockpit-mode='idle'] .cockpit-workspace__primary {
   position: absolute;
   inset: 0;
@@ -3103,18 +3124,25 @@ a:focus-visible {
   backdrop-filter: blur(20px) saturate(1.14);
 }
 .idle-home__clock { padding: 19px 22px; }
+.idle-home__eyebrow { display: block; margin-bottom: 10px; color: var(--accent-deep); font-size: 12px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
 .idle-home__clock time { display: block; font-family: Bahnschrift, "DIN Alternate", sans-serif; font-size: clamp(44px, 5vw, 68px); font-weight: 750; letter-spacing: -.07em; line-height: .92; }
 .idle-home__clock p { margin: 10px 0 0; color: var(--muted); font-size: 14px; font-weight: 700; }
 .idle-home__widget { padding: 18px; }
 .idle-home__weather { display: grid; grid-template-columns: 1fr auto; gap: 12px; }
+.idle-home__weather header,
+.idle-home__vehicle > header { display: flex; align-items: center; justify-content: space-between; gap: 8px; grid-column: 1 / -1; }
 .idle-home__widget-label,
 .idle-home__vehicle > span,
 .idle-home__speed span { display: block; color: var(--muted); font-size: 12px; font-weight: 750; letter-spacing: .04em; }
 .idle-home__weather strong { display: block; margin-top: 5px; font-size: 28px; }
 .idle-home__weather b { align-self: center; color: var(--accent); font-family: Bahnschrift, "DIN Alternate", sans-serif; font-size: 42px; letter-spacing: -.08em; }
+.idle-home__weather-main { display: flex; align-items: end; justify-content: space-between; gap: 12px; grid-column: 1 / -1; }
+.idle-home__weather-main strong { margin: 0; }
 .idle-home__weather p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 13px; }
 .idle-home__widget button,
 .idle-home__vehicle > button { justify-self: start; border: 0; padding: 0; background: transparent; color: var(--accent-deep); font-size: 13px; font-weight: 800; }
+.idle-home__weather header button,
+.idle-home__vehicle > header button { justify-self: end; }
 .idle-home__schedule header { display: flex; align-items: center; justify-content: space-between; font-weight: 800; }
 .idle-home__schedule ol { display: grid; gap: 8px; margin: 13px 0 0; padding: 0; list-style: none; }
 .idle-home__schedule li { display: grid; grid-template-columns: 45px 1fr auto; align-items: center; gap: 8px; font-size: 13px; }
@@ -3123,41 +3151,63 @@ a:focus-visible {
 .idle-home__schedule em[data-status='进行中'] { color: var(--green-ink); font-weight: 800; }
 .idle-home__vehicle,
 .idle-home__speed { padding: 18px; }
+.idle-home__vehicle-hero { display: flex; align-items: baseline; gap: 10px; }
 .idle-home__vehicle > strong,
 .idle-home__speed strong { display: block; margin: 6px 0 14px; color: var(--accent); font-family: Bahnschrift, "DIN Alternate", sans-serif; font-size: 42px; letter-spacing: -.07em; }
+.idle-home__vehicle-hero strong { margin: 0; font-size: 48px; }
+.idle-home__vehicle-hero span { color: var(--muted); font-size: 12px; font-weight: 750; letter-spacing: .04em; }
 .idle-home__vehicle dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0 0 14px; }
 .idle-home__vehicle dl div { padding: 9px; border-radius: 11px; background: color-mix(in srgb, var(--control) 74%, transparent); }
 .idle-home__vehicle dt { color: var(--muted); font-size: 11px; }
 .idle-home__vehicle dd { margin: 4px 0 0; color: var(--ink); font-size: 14px; font-weight: 800; }
+.idle-home__vehicle-note { margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.idle-home__vehicle-note span { color: var(--muted); }
 .idle-home__speed { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; }
 .idle-home__speed > p { grid-column: 1 / -1; margin: 0 0 8px; color: var(--muted); font-size: 12px; }
 .idle-home__speed-actions { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .idle-home__speed-actions button { min-height: 38px; border: 1px solid var(--rule); border-radius: 10px; background: var(--control); color: var(--ink); font-weight: 750; }
 .idle-home__speed-actions button:disabled { opacity: .52; }
 .idle-home__location,
-.idle-home__voice { margin: 0; padding: 9px 12px; color: var(--ink); font-size: 12px; font-weight: 700; }
+.idle-home__voice { color: var(--ink); font-size: 12px; font-weight: 700; }
+.idle-home__context { display: grid; gap: 8px; padding: 12px; }
+.idle-home__context p { margin: 0; }
 .idle-home__location span { display: block; margin-top: 3px; color: var(--muted); font-weight: 500; }
 .idle-home__voice { display: flex; align-items: center; gap: 8px; color: var(--muted); }
 .idle-home__voice i { width: 9px; height: 9px; border-radius: 50%; background: var(--green); box-shadow: 0 0 12px color-mix(in srgb, var(--green) 78%, transparent); }
-.idle-vehicle-visual { position: absolute; z-index: 2; top: 50%; left: 50%; width: min(48vw, 680px); pointer-events: none; transform: translate(-50%, -43%); filter: drop-shadow(0 34px 38px rgba(39, 24, 16, .24)); }
-.idle-vehicle-visual svg { display: block; width: 100%; height: auto; }
+.idle-vehicle-visual { position: absolute; z-index: 2; top: 50%; left: 50%; width: min(52vw, 780px); pointer-events: none; transform: translate(-50%, -46%); filter: drop-shadow(0 40px 44px rgba(2, 8, 14, .5)); }
+.idle-vehicle-visual img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; user-select: none; -webkit-user-drag: none; }
 .idle-vehicle-visual--muted { opacity: .26; filter: saturate(.65) blur(.4px); }
 
 @media (max-width: 1040px) {
   .idle-home__living { left: 16px; }
   .idle-home__capabilities { right: 16px; }
-  .idle-vehicle-visual { width: min(54vw, 610px); opacity: .68; }
+  .idle-vehicle-visual { width: min(56vw, 640px); opacity: .82; }
 }
 @media (max-width: 720px) {
   .cockpit-workspace:has(.cockpit-primary-panel[data-phase='collecting-airport']) .cockpit-workspace__primary { top: 50%; width: calc(100vw - 24px); max-height: calc(100dvh - 130px); }
   .cockpit-primary-panel[data-phase='collecting-airport'] { padding: 26px 20px; }
   .cockpit-primary-panel[data-phase='collecting-airport'] .ui-card__actions { grid-template-columns: 1fr; }
-  .idle-home__living { top: 88px; left: 12px; width: min(290px, calc(100vw - 24px)); }
-  .idle-home__capabilities { top: auto; right: 12px; bottom: 94px; width: min(290px, calc(100vw - 24px)); }
-  .idle-home__schedule { display: none; }
-  .idle-vehicle-visual { top: 43%; width: min(90vw, 460px); opacity: .42; }
+  .cockpit-workspace[data-cockpit-mode='idle'] .cockpit-workspace__primary { overflow: auto; overscroll-behavior: contain; }
+  .idle-home {
+    display: flex;
+    height: auto;
+    min-height: calc(100dvh + 640px);
+    flex-direction: column;
+    gap: 12px;
+    padding: 88px 12px 176px;
+  }
+  .idle-home__living,
+  .idle-home__capabilities { position: relative; inset: auto; width: 100%; }
+  .idle-home__living { order: 2; }
+  .idle-home__capabilities { order: 3; }
+  .idle-vehicle-visual { position: relative; order: 1; top: auto; left: auto; width: 100%; min-height: 210px; opacity: .9; transform: none; }
+  .idle-vehicle-visual img { position: absolute; inset: 50% auto auto 50%; width: min(112vw, 520px); max-width: none; transform: translate(-50%, -50%); }
   .idle-home__clock time { font-size: 46px; }
-  .idle-home__vehicle { display: none; }
+  .idle-home__clock,
+  .idle-home__widget,
+  .idle-home__vehicle,
+  .idle-home__context { border-radius: 16px; backdrop-filter: blur(14px) saturate(1.1); }
+  .idle-home__schedule li { grid-template-columns: 48px minmax(0, 1fr) auto; }
 }
 
 .ui-action--unavailable {

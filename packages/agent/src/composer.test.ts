@@ -30,7 +30,7 @@ describe('Agent UISpec composer', () => {
 
     expect(component).toMatchObject({
       type: 'status-banner',
-      props: { title: '去哪个机场？', message: '请选择虹桥机场或浦东机场。' },
+      props: { title: '你要去虹桥机场还是浦东机场？' },
     })
     expect(spec.actions.map((action) => action.style)).toEqual(['secondary', 'secondary'])
   })

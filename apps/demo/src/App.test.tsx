@@ -77,17 +77,16 @@ describe('demo integration', () => {
     const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
     render(<AppComponent api={api} voiceEnabled={false} />)
     const workspace = screen.getByTestId('cockpit-workspace')
-    const map = screen.getByTestId('persistent-map-layer')
+    const map = screen.queryByTestId('persistent-map-layer')
     expect(workspace).toHaveAttribute('data-cockpit-mode', 'idle')
-    expect(map).toHaveAttribute('data-mode', 'idle')
-    expect(map).toHaveAttribute('data-session-key', 'cockpit-session')
+    expect(map).not.toBeInTheDocument()
     expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
-    expect(map).toBeInTheDocument()
     // Voice-unavailable mode keeps the explicit text path open inside the
     // persistent entry slot; the idle shell must still contain no task content.
     expect(screen.getByLabelText('任务输入')).toHaveValue('')
     expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
     expect(screen.queryByText(/航班/)).not.toBeInTheDocument()
+    expect(screen.getByLabelText('座舱状态')).toBeEmptyDOMElement()
     expect(screen.getByRole('status')).toHaveTextContent('语音不可用，请用文字告诉我。')
     expect(api.create).not.toHaveBeenCalled()
   })
@@ -111,7 +110,10 @@ describe('demo integration', () => {
     expect(screen.getByRole('button', { name: '查看天气' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '查看日程' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '查看车辆状态' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '调快' })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: '调快' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '调慢' })).not.toBeInTheDocument()
+    expect(screen.getByText('0 km/h')).toBeInTheDocument()
+    expect(screen.getByText('驻车')).toBeInTheDocument()
     expect(screen.queryByText('天气接口')).not.toBeInTheDocument()
     expect(screen.queryByText('日程接口')).not.toBeInTheDocument()
 
@@ -136,8 +138,7 @@ describe('demo integration', () => {
 
     const panel = screen.getByRole('region', { name: '当前行程' })
     expect(panel).toHaveAttribute('data-phase', 'collecting-airport')
-    expect(panel).toHaveTextContent('去哪个机场？')
-    expect(panel).toHaveTextContent('请选择虹桥机场或浦东机场。')
+    expect(panel).toHaveTextContent('你要去虹桥机场还是浦东机场？')
     expect(panel).not.toHaveTextContent('行程提示')
     expect(panel).not.toHaveTextContent('信息')
     expect(panel.querySelector('.ui-status-card__glyph')).not.toBeInTheDocument()
@@ -159,14 +160,14 @@ describe('demo integration', () => {
     }} />)
 
     expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'light')
-    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-theme', 'light')
+    expect(screen.queryByTestId('persistent-map-layer')).not.toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: '打开演示控制' }))
+    await openControls(user)
+    await user.click(screen.getByText('开发诊断'))
     expect(screen.getByRole('button', { name: '白天' })).toHaveAttribute('aria-pressed', 'true')
     await user.click(screen.getByRole('button', { name: '夜间' }))
     expect(screen.getByRole('button', { name: '夜间' })).toHaveAttribute('aria-pressed', 'true')
     expect(screen.getByRole('main')).toHaveAttribute('data-theme', 'dark')
-    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-theme', 'dark')
   })
 
   it('requires Xiaonan for speech but lets explicit text send create the task', async () => {
@@ -567,6 +568,64 @@ describe('demo integration', () => {
     expect(confirmation.querySelector('[data-action-id="start-outbound"]')).not.toBeNull()
   })
 
+  it.each([
+    ['collecting-airport', createCockpitTask('map-collecting')],
+    ['choosing-flight', {
+      ...createCockpitTask('map-choosing'),
+      phase: 'choosing-flight',
+      pickupAirport: { label: '虹桥机场', code: 'SHA' },
+    }],
+    ['confirming-outbound', {
+      ...createCockpitTask('map-confirming'),
+      phase: 'confirming-outbound',
+      pickupAirport: { label: '虹桥机场', code: 'SHA' },
+      navigation: { routeId: 'route-confirming', destination: '虹桥机场 T2', eta: '2026-08-11T14:40:00+08:00', status: 'planned' },
+    }],
+    ['completed', { ...createCockpitTask('map-completed'), phase: 'completed' }],
+  ] as const)('does not mount AMap during the %s phase', (_phase, task) => {
+    render(<App initialTask={task as AirportPickupTaskState} />)
+    expect(screen.queryByTestId('persistent-map-layer')).not.toBeInTheDocument()
+  })
+
+  it('mounts the real map during formal navigation', () => {
+    const collectingTask = createCockpitTask('map-lifecycle')
+    const choosingTask = {
+      ...collectingTask,
+      phase: 'choosing-flight',
+      taskRevision: 1,
+      pickupAirport: { label: '虹桥机场', code: 'SHA' },
+    } as AirportPickupTaskState
+    const confirmingTask = {
+      ...choosingTask,
+      phase: 'confirming-outbound',
+      taskRevision: 2,
+      flight: {
+        flightNumber: 'MU5102', trusted: true, status: 'in-air',
+        scheduledArrival: '2026-08-11T15:20:00+08:00', estimatedArrival: '2026-08-11T15:30:00+08:00',
+        terminal: 'T2', arrivalAirport: 'SHA', arrivalAirportName: '虹桥机场',
+      },
+      navigation: { routeId: 'route-lifecycle', destination: '虹桥机场 T2', eta: '2026-08-11T14:40:00+08:00', status: 'planned' },
+      navigationSimulation: {
+        leg: 'outbound', routeId: 'route-lifecycle', distanceKm: 32, initialBatteryPercent: 42,
+        estimatedBatteryAtArrival: 29, profiles: {
+          slow: { durationSeconds: 150, displaySpeedKph: 35 },
+          normal: { durationSeconds: 90, displaySpeedKph: 55 },
+          fast: { durationSeconds: 45, displaySpeedKph: 75 },
+        },
+      },
+    } as AirportPickupTaskState
+    const drivingTask = {
+      ...confirmingTask,
+      phase: 'outbound-driving',
+      taskRevision: 3,
+      navigation: { ...confirmingTask.navigation!, status: 'active' },
+    } as AirportPickupTaskState
+
+    render(<App initialTask={drivingTask} />)
+    const map = screen.getByTestId('persistent-map-layer')
+    expect(map).toHaveAttribute('data-mode', 'route')
+  })
+
   it('disables the legacy timeline advance for a cockpit task', async () => {
     const user = userEvent.setup()
     const task = {
@@ -603,7 +662,11 @@ describe('demo integration', () => {
   })
 
   it('keeps the waiting-for-passengers HUD inside the persistent cockpit workspace', () => {
-    render(<App initialTask={{ ...createInitialTask(), phase: 'waiting-for-passengers' }} />)
+    render(<App initialTask={{
+      ...createCockpitTask('waiting-task'),
+      phase: 'waiting-for-passengers',
+      navigation: { routeId: 'route-waiting', destination: '虹桥机场 T2', eta: '2026-08-11T15:30:00+08:00', status: 'arrived' },
+    } as AirportPickupTaskState} />)
     expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'navigation')
     expect(screen.getByTestId('persistent-map-layer')).toBeInTheDocument()
     expect(document.querySelector('.task-surface')).not.toBeInTheDocument()
@@ -642,13 +705,11 @@ describe('demo integration', () => {
     }
     render(<AppComponent api={api} voiceEnabled={false} initialText="完成返程" />)
 
-    const map = screen.getByTestId('persistent-map-layer')
     await user.click(screen.getByRole('button', { name: '发送' }))
 
     expect(await screen.findByText('已到家')).toBeInTheDocument()
     expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
-    expect(screen.getByTestId('persistent-map-layer')).toBe(map)
-    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
+    expect(screen.queryByTestId('persistent-map-layer')).not.toBeInTheDocument()
     expect(screen.queryByText('行程结束')).not.toBeInTheDocument()
     expect(document.querySelector('.cockpit-window')).not.toBeInTheDocument()
   })
@@ -1033,6 +1094,9 @@ describe('demo integration', () => {
    * have to open it first, exactly as an engineer would.
    */
   async function openControls(user: ReturnType<typeof userEvent.setup>) {
+    const currentUrl = new URL(window.location.href)
+    currentUrl.searchParams.set('demoControls', 'developer')
+    window.history.replaceState({}, '', currentUrl)
     const dialog = screen.queryByRole('dialog', { name: '演示控制' })
     if (dialog?.getAttribute('data-mode') === 'minimized') {
       await user.click(screen.getByRole('button', { name: '恢复演示控制' }))
@@ -1117,7 +1181,7 @@ describe('demo integration', () => {
     // Before creation the persistent shell owns the empty state; no synthetic
     // task phase or legacy task surface should be fabricated.
     expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
-    expect(screen.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
+    expect(screen.queryByTestId('persistent-map-layer')).not.toBeInTheDocument()
     expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
     expect(screen.queryByText('告诉我接谁，我来安排这趟行程。')).not.toBeInTheDocument()
     expect(document.querySelector('.task-surface')).not.toBeInTheDocument()

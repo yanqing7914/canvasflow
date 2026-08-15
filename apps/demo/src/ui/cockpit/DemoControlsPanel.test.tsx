@@ -46,56 +46,81 @@ function callbacks() {
 }
 
 describe('DemoControlsPanel', () => {
-  it('keeps the first view focused on phase, progress, advance, and voice fallback', async () => {
+  it('keeps the competition view focused on phase, progress, advance, and recovery', async () => {
     const user = userEvent.setup()
     const actions = callbacks()
     render(<DemoControlsPanel viewModel={viewModel()} {...actions} />)
 
     expect(screen.getByText('准备接机')).toBeInTheDocument()
-    expect(screen.getByText('模型 · qwen-plus')).toBeInTheDocument()
     expect(screen.getByRole('progressbar', { name: '演示进度' })).toHaveAttribute('aria-valuenow', '25')
     expect(screen.getByText('2 / 8')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: '推进下一事件' }))
     expect(actions.onAdvance).toHaveBeenCalledOnce()
-    expect(screen.getByRole('group', { name: '语音兜底回放' })).toBeInTheDocument()
-
-    expect(screen.getByText('高级工具').closest('details')).not.toHaveAttribute('open')
-    expect(screen.getByText('运行详情').closest('details')).not.toHaveAttribute('open')
+    expect(screen.getByText('故障恢复').closest('details')).not.toHaveAttribute('open')
   })
 
-  it('keeps advanced tools and runtime details collapsed until requested', async () => {
-    const user = userEvent.setup()
+  it('does not expose developer metadata, voice fixtures, or key switching in competition mode', () => {
     render(<DemoControlsPanel viewModel={viewModel()} {...callbacks()} />)
 
-    await user.click(screen.getByText('高级工具'))
-    expect(screen.getByRole('group', { name: '车外光线' })).toBeInTheDocument()
-    expect(screen.getByRole('group', { name: '地图恢复' })).toBeInTheDocument()
-    expect(screen.getByText('navigation.start:succeeded')).toBeInTheDocument()
-
-    await user.click(screen.getByText('运行详情'))
-    expect(screen.getByText('preparing')).toBeInTheDocument()
-    expect(screen.getByText('pickup-001')).toBeInTheDocument()
-    expect(screen.getByText('taskRevision 3')).toBeInTheDocument()
-    expect(screen.getByText('uiRevision 4')).toBeInTheDocument()
-    expect(screen.getByText('qwen-plus')).toBeInTheDocument()
+    expect(screen.queryByText('模型 · qwen-plus')).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: '语音兜底回放' })).not.toBeInTheDocument()
+    expect(screen.queryByText('pickup-001')).not.toBeInTheDocument()
+    expect(screen.queryByText('taskRevision 3')).not.toBeInTheDocument()
+    expect(screen.queryByText('uiRevision 4')).not.toBeInTheDocument()
+    expect(screen.queryByText('compact')).not.toBeInTheDocument()
+    expect(screen.queryByText('navigation.start:succeeded')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '切换 Key' })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Key 1/i)).not.toBeInTheDocument()
   })
 
-  it('routes lighting, map recovery, and fixture replay through their callbacks', async () => {
+  it('routes the formal recovery action without exposing its key index', async () => {
     const user = userEvent.setup()
     const actions = callbacks()
     render(<DemoControlsPanel viewModel={viewModel()} {...actions} />)
+
+    await user.click(screen.getByText('故障恢复'))
+    expect(screen.getByRole('group', { name: '地图恢复' })).toBeInTheDocument()
+    expect(screen.getByText('运行中')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: '重新尝试地图' }))
+    expect(actions.onRecoverMap).toHaveBeenCalledWith(false)
+  })
+
+  it('opens recovery immediately when the map is unavailable', () => {
+    render(<DemoControlsPanel viewModel={viewModel({ mapStatus: '暂时不可用 · Key 1' })} {...callbacks()} />)
+
+    expect(screen.getByText('故障恢复').closest('details')).toHaveAttribute('open')
+    expect(screen.getByText('暂时不可用')).toBeInTheDocument()
+    expect(screen.queryByText(/Key 1/i)).not.toBeInTheDocument()
+  })
+
+  it('preserves diagnostic callbacks behind the explicit developer mode', async () => {
+    const user = userEvent.setup()
+    const actions = callbacks()
+    render(<DemoControlsPanel mode="developer" viewModel={viewModel()} {...actions} />)
 
     await user.click(screen.getByRole('button', { name: '虹桥机场' }))
     expect(actions.onReplayVoiceFixture).toHaveBeenCalledWith('airport')
     expect(screen.getByRole('button', { name: '虹桥机场' })).toHaveClass('voice-fallback-button')
     expect(screen.getByRole('button', { name: 'MU5102' })).toBeDisabled()
 
-    await user.click(screen.getByText('高级工具'))
+    await user.click(screen.getByText('开发诊断'))
     await user.click(screen.getByRole('button', { name: '夜间' }))
     expect(actions.onSelectLighting).toHaveBeenCalledWith('night')
-    await user.click(screen.getByRole('button', { name: '重新尝试地图' }))
-    expect(actions.onRecoverMap).toHaveBeenCalledWith(false)
     expect(screen.getByRole('button', { name: '切换 Key' })).toBeDisabled()
+    expect(screen.getByText('pickup-001')).toBeInTheDocument()
+    expect(screen.getByText('navigation.start:succeeded')).toBeInTheDocument()
+  })
+
+  it('offers the developer tools to the full app through an explicit query mode', () => {
+    const originalLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    window.history.replaceState({}, '', '/?demoControls=developer')
+    try {
+      render(<DemoControlsPanel viewModel={viewModel()} {...callbacks()} />)
+      expect(screen.getByRole('group', { name: '语音兜底回放' })).toBeInTheDocument()
+      expect(screen.getByText('开发诊断')).toBeInTheDocument()
+    } finally {
+      window.history.replaceState({}, '', originalLocation)
+    }
   })
 
   it('renders an idle state without inventing task metadata', () => {
@@ -107,7 +132,17 @@ describe('DemoControlsPanel', () => {
     })} {...callbacks()} />)
 
     expect(screen.getByText('尚无任务')).toBeInTheDocument()
-    expect(screen.getByText('未规划')).toBeInTheDocument()
+    expect(screen.queryByText('未规划')).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '推进下一事件' })).toBeDisabled()
+  })
+
+  it('clamps invalid progress values before exposing or painting them', () => {
+    const { rerender } = render(<DemoControlsPanel viewModel={viewModel({ progressPercent: 125 })} {...callbacks()} />)
+
+    expect(screen.getByRole('progressbar', { name: '演示进度' })).toHaveAttribute('aria-valuenow', '100')
+    expect(screen.getByRole('progressbar', { name: '演示进度' }).firstElementChild).toHaveStyle({ width: '100%' })
+
+    rerender(<DemoControlsPanel viewModel={viewModel({ progressPercent: Number.NaN })} {...callbacks()} />)
+    expect(screen.getByRole('progressbar', { name: '演示进度' })).toHaveAttribute('aria-valuenow', '0')
   })
 })

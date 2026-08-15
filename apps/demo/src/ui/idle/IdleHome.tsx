@@ -62,32 +62,36 @@ export function IdleHome({
       <IdleVehicleVisual />
       <aside className="idle-home__living" aria-label="生活信息">
         <section className="idle-home__clock" aria-label="当前时间">
+          <span className="idle-home__eyebrow">上海座舱</span>
           <time>{timeText(now)}</time>
           <p>{dateText(now)}</p>
         </section>
         <section className="idle-home__widget idle-home__weather" aria-label="模拟天气">
-          <div><span className="idle-home__widget-label">人民广场 · 模拟天气</span><strong>多云</strong></div>
-          <b>25°</b>
-          <p>风力 2 级 · 降水 20%</p>
-          <button type="button" onClick={onWeather}>查看天气</button>
+          <header>
+            <span className="idle-home__widget-label">人民广场</span>
+            <button type="button" onClick={onWeather}>查看天气</button>
+          </header>
+          <div className="idle-home__weather-main"><strong>多云</strong><b>25°</b></div>
+          <p>风力 2 级，降水 20%</p>
         </section>
         <section className="idle-home__widget idle-home__schedule" aria-label="今日日程">
           <header><span>今日日程</span><button type="button" onClick={onSchedule}>查看日程</button></header>
           <ol>{scheduleState.map((item) => <li key={item.time}><time>{item.time}</time><span>{item.title}</span><em data-status={item.status}>{item.status}</em></li>)}</ol>
         </section>
-        <p className="idle-home__location">模拟位置：人民广场 <span>模拟位置，非真实 GPS</span></p>
-        <p className="idle-home__voice"><i aria-hidden="true" />小南 {voiceStatus || '待命中'}</p>
+        <div className="idle-home__context">
+          <p className="idle-home__location">模拟位置：人民广场 <span>模拟位置，非真实 GPS</span></p>
+          <p className="idle-home__voice"><i aria-hidden="true" />小南 {voiceStatus || '待命中'}</p>
+        </div>
       </aside>
       <aside className="idle-home__capabilities" aria-label="座舱能力">
         <section className="idle-home__vehicle">
-          <span>车辆状态</span><strong>{Math.round(vehicle.batteryPercent)}%</strong>
-          <dl><div><dt>预计续航</dt><dd>{Math.round(vehicle.remainingRangeKm)} km</dd></div><div><dt>当前挡位</dt><dd>{vehicle.gear}</dd></div><div><dt>光线条件</dt><dd>{vehicle.isNight ? '夜间' : '白天'}</dd></div><div><dt>车辆状态</dt><dd>{vehicle.speedKph > 0 ? '行驶中' : '驻车'}</dd></div></dl>
-          <button type="button" onClick={onVehicleStatus}>查看车辆状态</button>
-        </section>
-        <section className="idle-home__speed" aria-label="车速控制">
-          <div><span>车速控制</span><strong>{Math.round(vehicle.speedKph)} km/h</strong></div>
-          <p>{vehicle.speedKph > 0 ? '当前速度档位由导航控制' : '导航开始后可用'}</p>
-          <div className="idle-home__speed-actions"><button type="button" disabled={vehicle.speedKph === 0} onClick={onSpeedDown}>调慢</button><button type="button" disabled={vehicle.speedKph === 0} onClick={onSpeedUp}>调快</button></div>
+          <header><span>车辆状态</span><button type="button" onClick={onVehicleStatus}>查看车辆状态</button></header>
+          <div className="idle-home__vehicle-hero"><strong>{Math.round(vehicle.batteryPercent)}%</strong><span>当前电量</span></div>
+          <dl><div><dt>预计续航</dt><dd>{Math.round(vehicle.remainingRangeKm)} km</dd></div><div><dt>当前挡位</dt><dd>{vehicle.gear}</dd></div><div><dt>车辆状态</dt><dd>{vehicle.speedKph > 0 ? '行驶中' : '驻车'}</dd></div><div><dt>当前车速</dt><dd>{Math.round(vehicle.speedKph)} km/h</dd></div></dl>
+          <p className="idle-home__vehicle-note">{vehicle.isNight ? '夜间座舱' : '日间座舱'}，{vehicle.speedKph > 0 ? '导航控制中' : '车辆已准备好'}</p>
+          {vehicle.speedKph > 0 ? (
+            <div className="idle-home__speed-actions"><button type="button" onClick={onSpeedDown}>调慢</button><button type="button" onClick={onSpeedUp}>调快</button></div>
+          ) : null}
         </section>
       </aside>
     </section>

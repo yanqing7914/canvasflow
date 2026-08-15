@@ -92,6 +92,18 @@ const phaseIdentityLabels: Record<AirportPickupTaskState['phase'], string> = {
   cancelled: '行程已取消',
 }
 
+const navigationMapPhases = new Set<AirportPickupTaskState['phase']>([
+  'outbound-driving',
+  'waiting-for-passengers',
+  'passengers-onboard',
+  'confirming-return',
+  'return-driving',
+  // Keep the historical flow navigable while its phases remain replayable.
+  'driving-to-airport',
+  'approaching-airport',
+  'returning-home',
+])
+
 function isDrivingVehicle(vehicle: VehicleContext): boolean {
   return vehicle.speedKph > 0 || vehicle.gear !== 'P'
 }
@@ -2019,7 +2031,7 @@ export default function App({
   const mapStatus = mapRuntimeFailed
     ? '暂时不可用'
     : mapLoader.state === 'ready'
-      ? `运行中 · Key ${Math.min((mapLoader.keyIndex ?? 0) + 1, Math.max(mapLoader.keyCount, 1))}`
+      ? '运行中'
       : mapLoader.state === 'loading'
         ? '正在恢复'
         : mapLoader.state === 'failed'
@@ -2093,13 +2105,13 @@ export default function App({
   const auxiliarySpec = windowSpec
     ? { ...windowSpec, windows: cockpitView.auxiliaryWindows } as CockpitUISpec
     : undefined
-  // Legacy task fixtures can still carry a real route/navigation phase without
-  // the newer cockpit simulation seed. Keep the persistent map faithful to that
-  // fact; only NavigationWorkspace requires the richer cockpit contract.
-  const mapRouteActive = Boolean(runtimeTask && spec && (
-    navigationActive
-    || ['driving-to-airport', 'approaching-airport', 'returning-home'].includes(runtimeTask.phase)
-  ))
+  // Formal navigation owns the real map. Idle, task setup, and completion keep
+  // the workspace shell but leave AMap unmounted; navigation UI revisions keep
+  // this phase gate true, so the map instance remains stable within a trip.
+  const shouldRenderMap = Boolean(
+    runtimeTask && spec && navigationMapPhases.has(runtimeTask.phase as AirportPickupTaskState['phase']),
+  )
+  const mapRouteActive = shouldRenderMap
   const routeSketch = mapRouteActive && runtimeTask && spec
     ? navigationSketchForTask(runtimeTask, spec)
     : undefined
@@ -2221,7 +2233,7 @@ export default function App({
       <CockpitWorkspace
         mode={cockpitView.mode}
         phase={cockpitView.phase}
-        map={(
+        map={shouldRenderMap ? (
           <PersistentMapLayer
             mode={mapMode}
             sketch={routeSketch}
@@ -2241,8 +2253,8 @@ export default function App({
             }}
             onRuntimeReady={() => setMapRuntimeFailed(false)}
           />
-        )}
-        status={<CockpitStatusBar vehicle={vehicleContext} phaseLabel={phaseIdentity} />}
+        ) : null}
+        status={task ? <CockpitStatusBar vehicle={vehicleContext} phaseLabel={phaseIdentity} /> : null}
         feedback={(
           <>
             {!task && idleNotice ? <p className="cockpit-idle-notice" role="status">{idleNotice}</p> : null}
@@ -2328,6 +2340,7 @@ export default function App({
             >
               <DemoControlsPanel
                 viewModel={controlsViewModel}
+                mode={typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('demoControls') === 'developer' ? 'developer' : 'competition'}
                 onAdvance={advance}
                 onReplayVoiceFixture={(fixtureId) => {
                   const sample = voiceFixtureSamples.find((candidate) => candidate.id === fixtureId)

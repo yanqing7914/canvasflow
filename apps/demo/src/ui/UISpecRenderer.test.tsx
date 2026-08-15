@@ -52,7 +52,7 @@ describe('UISpecRenderer', () => {
     const spec = baseSpec({
       phase: 'collecting-airport',
       layout: { type: 'stack', gap: 'md', slots: { main: ['airport-required'] } },
-      components: [{ id: 'airport-required', type: 'status-banner', props: { level: 'info', title: '去哪个机场？', message: '请选择虹桥机场或浦东机场。' } }],
+      components: [{ id: 'airport-required', type: 'status-banner', props: { level: 'info', title: '你要去虹桥机场还是浦东机场？' } }],
       actions: [],
     })
 
@@ -63,7 +63,7 @@ describe('UISpecRenderer', () => {
     expect(prompt?.querySelector('.ui-status-card__glyph')).not.toBeInTheDocument()
     expect(prompt).not.toHaveTextContent('行程提示')
     expect(prompt).not.toHaveTextContent('信息')
-    expect(prompt).toHaveTextContent('去哪个机场？')
+    expect(prompt).toHaveTextContent('你要去虹桥机场还是浦东机场？')
   })
 
   it('renders components in layout slot order and exposes presentation state', () => {

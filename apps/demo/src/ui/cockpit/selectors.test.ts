@@ -65,7 +65,7 @@ describe('deriveCockpitView', () => {
     const view = deriveCockpitView(componentSpec('collecting-airport', {
       id: 'airport-required',
       type: 'status-banner',
-      props: { level: 'info', title: '去哪个机场？', message: '请选择虹桥机场或浦东机场。' },
+      props: { level: 'info', title: '你要去虹桥机场还是浦东机场？' },
       actions: ['select-pudong-airport', 'select-hongqiao-airport'],
     }))
 
