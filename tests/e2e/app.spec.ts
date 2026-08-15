@@ -3,7 +3,17 @@ import { emitMockAMapInteraction, installMockAMap, mockAMapSnapshot } from './mo
 
 const legacyTaskText = '我现在要去机场接妈妈和豆豆'
 
+/** Opt a diagnostic/fixture spec into the operator-only developer drawer. */
+async function enableDeveloperControls(page: Page) {
+  await page.addInitScript(() => {
+    const url = new URL(window.location.href)
+    url.searchParams.set('demoControls', 'developer')
+    window.history.replaceState({}, '', url)
+  })
+}
+
 test.beforeEach(async ({ page }, testInfo) => {
+  if (testInfo.tags.includes('@developer')) await enableDeveloperControls(page)
   if (testInfo.tags.includes('@cockpit')) return
   // These specs protect the historical fixture timeline. Production now opts
   // into cockpit v1 by default, so only legacy UI sheds that capability.
@@ -78,7 +88,7 @@ async function closeControls(page: Page) {
   await expect(dialog).toBeHidden()
 }
 
-/** Engineering metadata and the demo player stay in one non-modal tool window. */
+/** Reads developer-only raw phase/effect diagnostics from the tool window. */
 async function readControls(page: Page, expected: string | RegExp) {
   const dialog = await ensureControlsOpen(page)
   await expect(dialog).toContainText(expected)
@@ -368,12 +378,23 @@ test('keeps the idle home as a full cockpit surface without a map-blocking task 
   await expectNoScroll(page)
 })
 
+test('keeps the formal demo controls free of engineering metadata @cockpit', async ({ page }) => {
+  await page.goto('/')
+
+  const controls = await ensureControlsOpen(page)
+  await expect(controls.getByText('故障恢复')).toBeVisible()
+  await expect(controls.getByRole('group', { name: '语音兜底回放' })).toHaveCount(0)
+  await expect(controls.getByText('开发诊断')).toHaveCount(0)
+  await expect(controls.getByText('任务 ID')).toHaveCount(0)
+  await expect(controls.getByText('Effect receipts')).toHaveCount(0)
+  await expect(controls.getByRole('button', { name: '切换 Key' })).toHaveCount(0)
+})
+
 test('runs the real cockpit airport pickup loop over a persistent mock AMap @cockpit', async ({ page }, testInfo) => {
   test.setTimeout(60_000)
   await installMockAMap(page)
   await installControllableNavigationClock(page)
   await page.goto('/')
-  await page.getByTestId('persistent-map-layer').evaluate((node) => { node.setAttribute('data-e2e-map-node', 'persistent') })
 
   // The production entry is a quiet cabin, not a pre-created task or form.
   await expect(page.getByRole('region', { name: '空闲座舱' })).toBeVisible()
@@ -381,8 +402,8 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(page.getByText('模拟位置，非真实 GPS')).toBeVisible()
   await expect(page.getByLabel('任务输入')).toHaveCount(0)
   await expect(page.locator('.task-surface')).toHaveCount(0)
-  await expect(page.locator('.persistent-map-layer')).toHaveCount(1)
-  await expect.poll(async () => (await mockAMapSnapshot(page)).mapCreates).toBe(1)
+  await expect(page.locator('.persistent-map-layer')).toHaveCount(0)
+  await expect.poll(async () => (await mockAMapSnapshot(page)).mapCreates).toBe(0)
   const idleMap = await mockAMapSnapshot(page)
   expect(idleMap.mapDestroys).toBe(0)
 
@@ -398,8 +419,8 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(createRequest.postDataJSON()).toMatchObject({ clientCapabilities: { cockpitVersion: '1' } })
   await expect(page.locator('.demo-shell')).toHaveAttribute('data-phase', 'collecting-airport')
   await expect(page.locator('.task-surface')).toHaveCount(0)
-  await expect(page.getByText('去哪个机场？')).toBeVisible()
-  await expect(page.getByText('请选择虹桥机场或浦东机场。')).toBeVisible()
+  await expect(page.getByText('你要去虹桥机场还是浦东机场？')).toBeVisible()
+  await expect(page.getByTestId('persistent-map-layer')).toHaveCount(0)
   await expect(page.locator('.cockpit-window[data-kind]')).toHaveCount(0)
 
   const airportChoiceRequestPromise = page.waitForRequest((request) => {
@@ -416,6 +437,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   const flightList = await primaryWindow(page, 'flight-list')
   const rows = flightList.locator('.ui-flight-choices__row')
   await expect(rows).toHaveCount(5)
+  await expect(page.getByTestId('persistent-map-layer')).toHaveCount(0)
   for (let index = 0; index < 5; index += 1) {
     await expect(rows.nth(index)).toContainText('虹桥机场')
     await expect(rows.nth(index)).toBeEnabled()
@@ -431,7 +453,10 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(outboundConfirmation).toContainText(selectedFlight)
   await expect(outboundConfirmation).toContainText('虹桥机场')
   await expect(outboundConfirmation).toContainText(/42%|电量/u)
+  await expect(page.getByTestId('persistent-map-layer')).toHaveCount(0)
   await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
+  await expect(page.getByTestId('persistent-map-layer')).toHaveCount(1)
+  await page.getByTestId('persistent-map-layer').evaluate((node) => { node.setAttribute('data-e2e-map-node', 'persistent') })
   await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-e2e-map-node', 'persistent')
 
   const workspace = page.locator('.navigation-workspace[data-leg="outbound"]')
@@ -456,7 +481,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   const departedMap = await mockAMapSnapshot(page)
   // The cockpit owns one map for its whole lifetime. Task, HUD, windows and leg
   // changes replace overlays/routes without rebuilding the AMap instance.
-  expect(departedMap.mapCreates).toBe(idleMap.mapCreates)
+  expect(departedMap.mapCreates).toBe(idleMap.mapCreates + 1)
   expect(departedMap.mapDestroys).toBe(0)
   expect(departedMap.routeSearches).toHaveLength(1)
   await expect.poll(async () => (await mockAMapSnapshot(page)).markerPositions.length).toBeGreaterThan(2)
@@ -564,8 +589,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   await expect(page.getByRole('status')).toContainText('已到家')
   await expect(page.locator('.cockpit-window[data-kind]')).toHaveCount(0)
   await expect(page.locator('.navigation-workspace')).toHaveCount(0)
-  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-mode', 'idle')
-  await expect(page.getByTestId('persistent-map-layer')).toHaveAttribute('data-e2e-map-node', 'persistent')
+  await expect(page.getByTestId('persistent-map-layer')).toHaveCount(0)
   await expect(page.locator('[data-cockpit-slot="primary"]')).not.toContainText(selectedFlight)
   await expect(page.locator('[data-cockpit-slot="primary"]')).not.toContainText('虹桥机场')
   await expect(await composer(page)).toHaveValue('')
@@ -573,7 +597,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   const completedMap = await mockAMapSnapshot(page)
   expect(completedMap.mapCreates).toBe(departedMap.mapCreates)
   expect(completedMap.routeSearches.length).toBeGreaterThanOrEqual(2)
-  expect(completedMap.mapDestroys).toBe(0)
+  expect(completedMap.mapDestroys).toBeGreaterThanOrEqual(1)
   expect(completedMap.markerPositions.length).toBeGreaterThan(departedMap.markerPositions.length)
 
   await captureCockpitScreenshot(page, testInfo, 'desktop-completed.png')
@@ -843,7 +867,7 @@ test('keeps maximized cockpit chrome and voice toolbar reachable on desktop @coc
   await expect(page.locator('.cockpit-window[data-kind="vehicle-status"]')).toHaveCount(0)
 })
 
-test('renders the UISpec surface responsively and keeps primary controls keyboard accessible @layout', async ({ page }, testInfo) => {
+test('renders the UISpec surface responsively and keeps primary controls keyboard accessible @layout @developer', async ({ page }, testInfo) => {
   // The 1920x720 project supplies the demo resolution through its own viewport, so
   // resizing here would throw it away; the default project still sweeps both widths.
   const viewports = testInfo.project.name === 'chromium-1920x720'
@@ -974,7 +998,7 @@ async function briefWidth(page: Page) {
  * axes after each phase change. It runs at 1280x720 and at 1920x720 — the
  * resolution DESIGN.md actually names — through the tagged 1920 project.
  */
-test('keeps the brief inside the fixed frame through every phase @layout', async ({ page }) => {
+test('keeps the brief inside the fixed frame through every phase @layout @developer', async ({ page }) => {
   await page.goto('/')
   await expect(controlsTrigger(page)).toBeVisible()
   await expectNoScroll(page)
@@ -1019,7 +1043,7 @@ test('keeps the brief inside the fixed frame through every phase @layout', async
   await expectNoScroll(page)
 })
 
-test('surfaces a transient weather card on demand without growing the preparing frame @layout', async ({ page }) => {
+test('surfaces a transient weather card on demand without growing the preparing frame @layout @developer', async ({ page }) => {
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
@@ -1047,7 +1071,7 @@ test('surfaces a transient weather card on demand without growing the preparing 
   await expectNoScroll(page)
 })
 
-test('surfaces a transient schedule card on demand without growing the preparing frame @layout', async ({ page }) => {
+test('surfaces a transient schedule card on demand without growing the preparing frame @layout @developer', async ({ page }) => {
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
@@ -1073,7 +1097,7 @@ test('surfaces a transient schedule card on demand without growing the preparing
   await expectNoScroll(page)
 })
 
-test('raises the rain advisory en route and sends the umbrella reminder through confirmation @layout', async ({ page }) => {
+test('raises the rain advisory en route and sends the umbrella reminder through confirmation @layout @developer', async ({ page }) => {
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
@@ -1125,7 +1149,7 @@ test('raises the rain advisory en route and sends the umbrella reminder through 
   await expectNoScroll(page)
 })
 
-test('dismissing the rain advisory returns the drive and never re-prompts @layout', async ({ page }) => {
+test('dismissing the rain advisory returns the drive and never re-prompts @layout @developer', async ({ page }) => {
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
@@ -1141,7 +1165,7 @@ test('dismissing the rain advisory returns the drive and never re-prompts @layou
   await expectNoScroll(page)
 })
 
-test('answers when to leave from the button on the brief without growing the frame @layout', async ({ page }) => {
+test('answers when to leave from the button on the brief without growing the frame @layout @developer', async ({ page }) => {
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
@@ -1259,7 +1283,7 @@ test('reflows the departure answer at phone width instead of cutting its facts o
   await expectNoHorizontalOverflow(page)
 })
 
-test('answers weather and the calendar from the driving brief without breaking the frame @layout', async ({ page }) => {
+test('answers weather and the calendar from the driving brief without breaking the frame @layout @developer', async ({ page }) => {
   await page.goto('/')
   await sendText(page)
   await sendText(page, 'MU5102')
@@ -1423,7 +1447,7 @@ test('fits longer and mixed-script media titles in the cabin metric @layout', as
  * of its own with height in it, foldable where it floats, and still inside the
  * fixed frame at the demo resolution.
  */
-test('draws the persistent route layer and steps its marker on authored progress @layout', async ({ page }) => {
+test('draws the persistent route layer and steps its marker on authored progress @layout @developer', async ({ page }) => {
   await installControllableNavigationClock(page)
   await page.goto('/')
   await sendText(page)
@@ -1434,17 +1458,15 @@ test('draws the persistent route layer and steps its marker on authored progress
   const line = map.locator('.persistent-map-layer__route')
   const progress = map.locator('.persistent-map-layer__source')
 
-  // 准备出发 keeps the persistent cockpit map in idle mode: the planned route
-  // rides inside the navigation card until the drive starts.
+  // Before departure the map slot stays dark: the planned route rides inside
+  // the navigation card until the drive actually starts.
   await expect(tripAction(page, '开始导航')).toBeEnabled()
-  await expect(map).toHaveAttribute('data-mode', 'idle')
-  await expect(line).toHaveCount(0)
+  await expect(map).toHaveCount(0)
   await expectNoScroll(page)
 
   await tripAction(page, '开始导航').click()
   await readControls(page, 'driving-to-airport')
-  // The cockpit map owns the route: it switches into route mode on the same DOM
-  // node instead of mounting a separate panel card.
+  // Formal navigation mounts the route map only after departure.
   await expect(map).toHaveAttribute('data-mode', 'route')
   await expect(map).toHaveAttribute('data-map-source', /amap|fallback/)
   await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
@@ -1543,7 +1565,7 @@ test('keeps the persistent HUD layered over the cockpit map on every engine @coc
   await flightList.locator('.ui-flight-choices__row').first().click()
   const outboundConfirmation = await primaryWindow(page, 'outbound-confirmation')
   await outboundConfirmation.getByRole('button', { name: '现在出发', exact: true }).click()
-  await readControls(page, 'outbound-driving')
+  await expect(page.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-phase', 'outbound-driving')
 
   const map = page.getByTestId('persistent-map-layer')
   const hud = page.getByLabel('导航层')
@@ -1590,11 +1612,12 @@ test('keeps the persistent HUD layered over the cockpit map on every engine @coc
   expect(tokens.saturate).not.toBe('')
 })
 
-test('completes the airport pickup flow through the Agent API', async ({ page }) => {
+test('completes the airport pickup flow through the Agent API @developer', async ({ page }) => {
   await page.goto('/')
 
   await expect(page.getByTestId('cockpit-workspace')).toBeVisible()
   await expect(page.getByRole('region', { name: '座舱地图' }).first()).toBeVisible()
+  await expect(page.getByTestId('persistent-map-layer')).toHaveCount(0)
   // Without a task there is nothing to advance, and the drawer says so.
   await expectAdvanceEnabled(page, false)
   await readControls(page, '尚无任务')
@@ -1659,7 +1682,7 @@ test('completes the airport pickup flow through the Agent API', async ({ page })
   await expect(controls.getByRole('progressbar', { name: '演示进度' })).toHaveAttribute('aria-valuenow', '0')
 })
 
-test('prepares the trip from a flight picked off the arrivals board', async ({ page }) => {
+test('prepares the trip from a flight picked off the arrivals board @developer', async ({ page }) => {
   await page.goto('/')
   await sendText(page)
   await readControls(page, 'collecting-information')
@@ -1678,7 +1701,7 @@ test('prepares the trip from a flight picked off the arrivals board', async ({ p
   await expect(tripAction(page, '开始导航')).toBeEnabled()
 })
 
-test('prepares the trip from a spoken ordinal against the rendered board', async ({ page }) => {
+test('prepares the trip from a spoken ordinal against the rendered board @developer', async ({ page }) => {
   await page.goto('/')
   await sendText(page)
   await readControls(page, 'collecting-information')
@@ -1717,7 +1740,7 @@ test('prepares the trip from a spoken ordinal against the rendered board', async
  * board is the failure the identity exists to prevent, so the refusal is asserted
  * together with the state that was not touched.
  */
-test('follows a 浦东 pick east, and refuses a rank aimed at the board before a refresh', async ({ page }) => {
+test('follows a 浦东 pick east, and refuses a rank aimed at the board before a refresh @developer', async ({ page }) => {
   await page.goto('/')
   const createResponsePromise = page.waitForResponse((response) => (
     response.request().method() === 'POST'
@@ -1809,7 +1832,7 @@ test('follows a 浦东 pick east, and refuses a rank aimed at the board before a
  * a layout regression hides: a card composed correctly on its own can still be the
  * second card in a slot that only holds one.
  */
-test('walks the pickup scenario from the arrivals board to the airport @layout', async ({ page }) => {
+test('walks the pickup scenario from the arrivals board to the airport @layout @developer', async ({ page }) => {
   await page.goto('/')
 
   // 1 — the intent, in words. No flight number yet, on purpose.
@@ -1890,7 +1913,7 @@ test('walks the pickup scenario from the arrivals board to the airport @layout',
   await expect(page.getByTestId('cockpit-workspace')).not.toContainText('flight.list-arrivals')
 })
 
-test('keeps the task usable around a voice attempt', async ({ page }) => {
+test('keeps the task usable around a voice attempt @developer', async ({ page }) => {
   await page.goto('/')
   await expect(page.getByRole('region', { name: '空闲座舱', exact: true })).toBeVisible()
   const mic = page.getByRole('button', { name: /启用小南语音唤醒|小南语音状态|语音入口暂不可用/ })
@@ -1912,7 +1935,7 @@ test('keeps the task usable around a voice attempt', async ({ page }) => {
   await readControls(page, 'collecting-information')
 })
 
-test('falls back to text when the browser has no speech recognition', async ({ page }) => {
+test('falls back to text when the browser has no speech recognition @developer', async ({ page }) => {
   await page.addInitScript(() => {
     const scope = window as unknown as Record<string, unknown>
     delete scope.SpeechRecognition
@@ -1936,7 +1959,7 @@ test('falls back to text when the browser has no speech recognition', async ({ p
   await expect(page.getByLabel('任务输入')).toBeEnabled()
 })
 
-test('replays a fixture utterance deterministically from the demo drawer', async ({ page }) => {
+test('replays a fixture utterance deterministically from the demo drawer @developer', async ({ page }) => {
   await page.goto('/')
 
   // The offline fallback must not depend on a speech service or on the audio
@@ -1972,7 +1995,7 @@ test('replays a fixture utterance deterministically from the demo drawer', async
   await readControls(page, 'collecting-information')
 })
 
-test('replays cockpit fixtures through default wake mode without SpeechRecognition @cockpit', async ({ page }) => {
+test('replays cockpit fixtures through default wake mode without SpeechRecognition @cockpit @developer', async ({ page }) => {
   await installMockAMap(page)
   await page.addInitScript(() => {
     const scope = window as unknown as Record<string, unknown>
@@ -2056,7 +2079,7 @@ test('replays cockpit fixtures through default wake mode without SpeechRecogniti
   await expect(page.locator('.navigation-workspace[data-leg="outbound"]')).toBeVisible()
 })
 
-test('covers the main trip beats with state-bound WAV fallbacks', async ({ page }) => {
+test('covers the main trip beats with state-bound WAV fallbacks @developer', async ({ page }) => {
   await page.goto('/')
 
   async function replay(label: string, expectedText: string, expectedPath: RegExp, requestBody: 'input' | 'event') {
@@ -2096,7 +2119,7 @@ test('covers the main trip beats with state-bound WAV fallbacks', async ({ page 
   expect(next.task.processedEventIds).toContain('event-charging-completed')
 })
 
-test('replays the direct flight-number and advisory-dismiss WAV branches', async ({ page }) => {
+test('replays the direct flight-number and advisory-dismiss WAV branches @developer', async ({ page }) => {
   await page.goto('/')
 
   async function replay(label: string, expectedText: string, requestBody: 'input' | 'event' = 'event') {
@@ -2130,7 +2153,7 @@ test('replays the direct flight-number and advisory-dismiss WAV branches', async
   expect(next.task.processedEventIds).toContain('event-charging-completed')
 })
 
-test('applies an out-of-band task update through the durable SSE stream', async ({ page }) => {
+test('applies an out-of-band task update through the durable SSE stream @developer', async ({ page }) => {
   await page.goto('/')
   const createResponsePromise = page.waitForResponse((response) => (
     response.request().method() === 'POST'
@@ -2164,7 +2187,7 @@ test('applies an out-of-band task update through the durable SSE stream', async 
   await readControls(page, 'driving-to-airport')
 })
 
-test('rejects the arrival memory proposal through the confirmation API', async ({ page }) => {
+test('rejects the arrival memory proposal through the confirmation API @developer', async ({ page }) => {
   await page.goto('/')
 
   await sendText(page)
@@ -2237,7 +2260,7 @@ async function failAutoLandingNotice(page: Page) {
   })
 }
 
-test('retries a failed landing message through action and confirmation APIs', async ({ page }) => {
+test('retries a failed landing message through action and confirmation APIs @developer', async ({ page }) => {
   await failAutoLandingNotice(page)
   await page.goto('/')
 
@@ -2461,7 +2484,7 @@ test('does not create a landing notification when no passenger authorized one', 
   })
 })
 
-test('shows a deterministic fallback when the flight provider times out', async ({ page }) => {
+test('shows a deterministic fallback when the flight provider times out @developer', async ({ page }) => {
   await page.goto('/')
   await sendText(page, '接妈妈，航班 MU0000')
 

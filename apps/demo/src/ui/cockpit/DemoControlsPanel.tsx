@@ -40,6 +40,7 @@ export type DemoControlsPanelProps = {
   onReplayVoiceFixture: (fixtureId: string) => void
   onSelectLighting: (lighting: DemoControlsLighting) => void
   onRecoverMap: (rotate: boolean) => void
+  mode?: 'competition' | 'developer'
 }
 
 const lightingOptions = [
@@ -54,7 +55,22 @@ export function DemoControlsPanel({
   onReplayVoiceFixture,
   onSelectLighting,
   onRecoverMap,
+  mode,
 }: DemoControlsPanelProps) {
+  const progressPercent = Number.isFinite(viewModel.progressPercent)
+    ? Math.min(100, Math.max(0, viewModel.progressPercent))
+    : 0
+  const publicMapStatus = viewModel.mapStatus
+    .replace(/\s*[·•|/—–-]\s*key\s*#?\d+(?:\s*[/／]\s*\d+)?.*$/i, '')
+    .replace(/\bkey\s*#?\d+(?:\s*[/／]\s*\d+)?\b/gi, '')
+    .replace(/^[\s·•|/—–-]+|[\s·•|/—–-]+$/g, '')
+    .trim() || '状态待确认'
+  const mapNeedsRecovery = /不可用|失败|未配置|error|failed/i.test(publicMapStatus)
+  const developerMode = mode === 'developer'
+    || (mode === undefined
+      && typeof window !== 'undefined'
+      && new URLSearchParams(window.location.search).get('demoControls') === 'developer')
+
   return (
     <section className="demo-controls-panel">
       <div className="demo-controls-panel__summary">
@@ -62,7 +78,6 @@ export function DemoControlsPanel({
           <span>当前阶段</span>
           <strong>{viewModel.phaseLabel}</strong>
         </div>
-        <span className="demo-controls-panel__source">{viewModel.planningSourceLabel}</span>
       </div>
 
       <div className="demo-controls-panel__progress">
@@ -76,9 +91,9 @@ export function DemoControlsPanel({
           aria-label="演示进度"
           aria-valuemin={0}
           aria-valuemax={100}
-          aria-valuenow={Math.round(viewModel.progressPercent)}
+          aria-valuenow={Math.round(progressPercent)}
         >
-          <span style={{ width: `${viewModel.progressPercent}%` }} />
+          <span style={{ width: `${progressPercent}%` }} />
         </div>
       </div>
 
@@ -91,84 +106,96 @@ export function DemoControlsPanel({
         <span>{viewModel.advanceLabel}</span><span aria-hidden="true">→</span>
       </button>
 
-      <div className="demo-controls-panel__fixtures" role="group" aria-label="语音兜底回放">
-        <span>语音兜底回放</span>
-        <div>
-          {viewModel.voiceFixtures.map((fixture) => {
-            const hintId = `voice-fixture-${fixture.id}-hint`
-            return (
-              <span key={fixture.id}>
-                <button
-                  className="voice-fallback-button"
-                  type="button"
-                  disabled={!fixture.available}
-                  aria-describedby={!fixture.available && fixture.unavailableReason ? hintId : undefined}
-                  title={fixture.available ? undefined : fixture.unavailableReason}
-                  onClick={() => onReplayVoiceFixture(fixture.id)}
-                >
-                  {fixture.label}
-                </button>
-                {!fixture.available && fixture.unavailableReason
-                  ? <span id={hintId} className="sr-only">{fixture.unavailableReason}</span>
-                  : null}
-              </span>
-            )
-          })}
-        </div>
-      </div>
-
-      <details className="demo-controls-panel__details">
-        <summary>高级工具</summary>
+      <details className="demo-controls-panel__details" open={mapNeedsRecovery || undefined}>
+        <summary>故障恢复</summary>
         <div className="demo-controls-panel__details-body">
-          <div className="demo-controls-panel__lighting" role="group" aria-label="车外光线">
-            <div><span>车外光线</span><strong>{viewModel.lighting === 'auto' ? '跟随时间' : viewModel.lighting === 'day' ? '白天' : '夜间'}</strong></div>
-            <div>
-              {lightingOptions.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  aria-pressed={viewModel.lighting === option.id}
-                  disabled={viewModel.lightingDisabled}
-                  onClick={() => onSelectLighting(option.id)}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <p>{viewModel.lightingHint}</p>
-          </div>
-
           <div className="demo-controls-panel__map" role="group" aria-label="地图恢复">
-            <div><span>地图服务</span><strong>{viewModel.mapStatus}</strong></div>
-            <div>
-              <button type="button" disabled={viewModel.mapRecoverDisabled} onClick={() => onRecoverMap(false)}>重新尝试地图</button>
-              <button type="button" disabled={viewModel.mapRotateDisabled} onClick={() => onRecoverMap(true)}>切换 Key</button>
-            </div>
-          </div>
-
-          <div className="demo-controls-panel__effects">
-            <span>Effect receipts</span>
-            <p aria-label="Effect receipts" data-empty={viewModel.effects.length === 0 || undefined}>
-              {viewModel.effects.length > 0 ? viewModel.effects.join(' · ') : '暂无回执'}
-            </p>
+            <div><span>地图服务</span><strong aria-live="polite">{publicMapStatus}</strong></div>
+            <button type="button" disabled={viewModel.mapRecoverDisabled} onClick={() => onRecoverMap(false)}>
+              重新尝试地图
+            </button>
           </div>
         </div>
       </details>
 
-      <details className="demo-controls-panel__details">
-        <summary>运行详情</summary>
-        <dl className="demo-controls-panel__runtime">
-          <div><dt>Raw phase</dt><dd>{viewModel.rawPhase ?? '—'}</dd></div>
-          <div><dt>任务 ID</dt><dd>{viewModel.taskId ?? '—'}</dd></div>
-          <div><dt>任务版本</dt><dd>{viewModel.taskRevision === undefined ? '—' : `taskRevision ${viewModel.taskRevision}`}</dd></div>
-          <div><dt>界面版本</dt><dd>{viewModel.uiRevision === undefined ? '—' : `uiRevision ${viewModel.uiRevision}`}</dd></div>
-          <div><dt>信息密度</dt><dd>{viewModel.density ?? '—'}</dd></div>
-          <div><dt>优先级</dt><dd>{viewModel.priority ?? '—'}</dd></div>
-          <div><dt>规划来源</dt><dd>{viewModel.planningSourceExact ?? '—'}</dd></div>
-        </dl>
-      </details>
+      {developerMode ? (
+        <>
+          <div className="demo-controls-panel__fixtures" role="group" aria-label="语音兜底回放">
+            <span>语音兜底回放</span>
+            <div>
+              {viewModel.voiceFixtures.map((fixture) => {
+                const hintId = `voice-fixture-${fixture.id}-hint`
+                return (
+                  <span key={fixture.id}>
+                    <button
+                      className="voice-fallback-button"
+                      type="button"
+                      disabled={!fixture.available}
+                      aria-describedby={!fixture.available && fixture.unavailableReason ? hintId : undefined}
+                      title={fixture.available ? undefined : fixture.unavailableReason}
+                      onClick={() => onReplayVoiceFixture(fixture.id)}
+                    >
+                      {fixture.label}
+                    </button>
+                    {!fixture.available && fixture.unavailableReason
+                      ? <span id={hintId} className="sr-only">{fixture.unavailableReason}</span>
+                      : null}
+                  </span>
+                )
+              })}
+            </div>
+          </div>
 
-      <p className="demo-controls-panel__safety">{viewModel.safetyNote}</p>
+          <details className="demo-controls-panel__details">
+            <summary>开发诊断</summary>
+            <div className="demo-controls-panel__details-body">
+              <div className="demo-controls-panel__lighting" role="group" aria-label="车外光线">
+                <div><span>车外光线</span><strong>{viewModel.lighting === 'auto' ? '跟随时间' : viewModel.lighting === 'day' ? '白天' : '夜间'}</strong></div>
+                <div>
+                  {lightingOptions.map((option) => (
+                    <button
+                      key={option.id}
+                      type="button"
+                      aria-pressed={viewModel.lighting === option.id}
+                      disabled={viewModel.lightingDisabled}
+                      onClick={() => onSelectLighting(option.id)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <p>{viewModel.lightingHint}</p>
+              </div>
+
+              <div className="demo-controls-panel__map" role="group" aria-label="地图开发工具">
+                <div><span>地图内部状态</span><strong>{viewModel.mapStatus}</strong></div>
+                <div>
+                  <button type="button" disabled={viewModel.mapRotateDisabled} onClick={() => onRecoverMap(true)}>切换 Key</button>
+                </div>
+              </div>
+
+              <div className="demo-controls-panel__effects">
+                <span>Effect receipts</span>
+                <p aria-label="Effect receipts" data-empty={viewModel.effects.length === 0 || undefined}>
+                  {viewModel.effects.length > 0 ? viewModel.effects.join(' · ') : '暂无回执'}
+                </p>
+              </div>
+
+              <dl className="demo-controls-panel__runtime">
+                <div><dt>Raw phase</dt><dd>{viewModel.rawPhase ?? '-'}</dd></div>
+                <div><dt>任务 ID</dt><dd>{viewModel.taskId ?? '-'}</dd></div>
+                <div><dt>任务版本</dt><dd>{viewModel.taskRevision === undefined ? '-' : `taskRevision ${viewModel.taskRevision}`}</dd></div>
+                <div><dt>界面版本</dt><dd>{viewModel.uiRevision === undefined ? '-' : `uiRevision ${viewModel.uiRevision}`}</dd></div>
+                <div><dt>信息密度</dt><dd>{viewModel.density ?? '-'}</dd></div>
+                <div><dt>优先级</dt><dd>{viewModel.priority ?? '-'}</dd></div>
+                <div><dt>规划来源</dt><dd>{viewModel.planningSourceExact ?? '-'}</dd></div>
+              </dl>
+            </div>
+          </details>
+
+          <p className="demo-controls-panel__safety">{viewModel.safetyNote}</p>
+        </>
+      ) : null}
     </section>
   )
 }

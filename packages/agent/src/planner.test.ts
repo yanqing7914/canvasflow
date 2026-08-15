@@ -13,7 +13,7 @@ describe('airport pickup Planner', () => {
       intent: 'create-airport-pickup',
       slotUpdates: {},
       missingSlots: ['airport'],
-      assistantText: expect.stringContaining('哪个机场'),
+      assistantText: expect.stringContaining('虹桥机场还是浦东机场'),
     })
   })
 

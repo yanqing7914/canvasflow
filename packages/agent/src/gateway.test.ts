@@ -275,7 +275,7 @@ describe('AgentGateway', () => {
     const created = gateway.createTask(cockpitRequest)
     expect(created.task.phase).toBe('collecting-airport')
     expect(created.task.passengers).toMatchObject({ memberIds: ['mom', 'doubao'], names: ['妈妈', '豆豆'] })
-    expect(created.assistant?.text).toContain('哪个机场')
+    expect(created.assistant?.text).toContain('虹桥机场还是浦东机场')
     const airportActions = created.ui.actions.filter((action) => action.event.type === 'agent-message')
     expect(airportActions).toEqual([
       expect.objectContaining({ label: '浦东机场', event: { type: 'agent-message', text: '浦东机场' } }),
