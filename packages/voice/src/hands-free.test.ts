@@ -219,6 +219,22 @@ describe('hands-free machine', () => {
     ])
   })
 
+  it('keeps continuous follow-up open without an expiry timer', async () => {
+    const h = harness({ config: { continuousFollowUp: true } })
+    await enable(h)
+    const generation = submitOneTurn(h)
+
+    h.machine.turnEnded(generation)
+
+    expect(h.machine.snapshot().state).toBe(HANDS_FREE_STATE.FOLLOW_UP)
+    expect(h.pendingTimerMs()).toEqual([])
+    h.speechStart()
+    expect(h.machine.snapshot()).toMatchObject({
+      state: HANDS_FREE_STATE.LISTENING,
+      listeningSource: 'follow-up',
+    })
+  })
+
   it('treats an explicit wake during FOLLOW_UP as a fresh wake utterance', async () => {
     const h = harness()
     await enable(h)

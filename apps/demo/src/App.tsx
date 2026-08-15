@@ -1218,6 +1218,7 @@ export default function App({
 
   useEffect(() => {
     const session = createWakeSession({
+      continuousFollowUp: true,
       effects: {
         requestRecognition: () => {
           if (useLocalHandsFree) {
@@ -1235,6 +1236,7 @@ export default function App({
                   const result = controlResult ?? 'ignored'
                   return result === 'ignored'
                 }
+                if (controlResult === 'conversation-ended') return false
                 if (controlResult === 'accepted') return true
                 const outcome = await enqueueWakeCommandRef.current(command, meta)
                 if (!outcome.sent) return false
@@ -1594,8 +1596,7 @@ export default function App({
   // or a parked transcript stay until they are sent or cleared by hand.
   const draftBlocksReplay = draftProtected && text.trim() !== ''
   const wakeBlocksReplay = wakeWordEnabled && (
-    wakeSession.state === 'follow-up'
-    || wakeSession.state === 'reset-confirmation'
+    wakeSession.state === 'reset-confirmation'
     || wakeCommandDrainingRef.current
     || wakeCommandQueueRef.current.length > 0
   )
@@ -2039,7 +2040,7 @@ export default function App({
         : pending
           ? '演示正在处理，请稍候。'
           : wakeBlocksReplay || voiceEngineBlocksReplay
-            ? '语音回合正在进行，结束聆听或完成确认后再回放。'
+            ? '语音回合正在进行；说“结束对话”或完成确认后再回放。'
             : sample.unavailableHint
       return { id: sample.id, label: sample.label, available, unavailableReason }
     }),

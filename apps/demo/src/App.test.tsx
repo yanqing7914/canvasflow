@@ -207,7 +207,7 @@ describe('demo integration', () => {
     await waitFor(() => expect(api.create).toHaveBeenCalledWith('查天气', expect.objectContaining({ source: 'voice' })))
   })
 
-  it('explains that fixture replay is blocked while the wake session owns the turn', async () => {
+  it('keeps fixture replay available during an idle continuous voice session', async () => {
     const user = userEvent.setup()
     const speech = createFakeSpeech()
     render(<AppComponent api={{ create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }} speech={speech.deps} />)
@@ -218,9 +218,8 @@ describe('demo integration', () => {
 
     const controls = await openControls(user)
     const replay = fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })
-    expect(replay).toBeDisabled()
-    expect(controls).toHaveTextContent('语音回合正在进行')
-    expect(controls).not.toHaveTextContent('仅在尚未创建任务时可用')
+    expect(replay).toBeEnabled()
+    expect(controls).not.toHaveTextContent('语音回合正在进行')
   })
 
   it('gives reset confirmation priority over ordinary wake command handling', async () => {
@@ -284,7 +283,7 @@ describe('demo integration', () => {
     await user.type(input, '取消')
     await user.click(screen.getByRole('button', { name: '发送' }))
     expect(screen.queryByLabelText('任务输入')).not.toBeInTheDocument()
-    expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0)
+    expect(screen.getAllByText('正在聆听').length).toBeGreaterThan(0)
   })
 
   it('retries a reset revision conflict and releases a stuck wake drain for the next task', async () => {
@@ -434,7 +433,7 @@ describe('demo integration', () => {
     }))
   })
 
-  it('does not enable fixture replay while wake follow-up is active', async () => {
+  it('keeps fixture replay available while continuous follow-up is idle', async () => {
     const user = userEvent.setup()
     const speech = createFakeSpeech()
     const api = { create: vi.fn(), event: vi.fn(), action: vi.fn(), confirmation: vi.fn() }
@@ -442,7 +441,39 @@ describe('demo integration', () => {
     await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
     act(() => { speech.engine().onstart?.(); speech.engine().emit('小南', true) })
     await openControls(user)
-    expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeDisabled()
+    expect(fixtureReplayControls().getByRole('button', { name: '模糊接机目标' })).toBeEnabled()
+  })
+
+  it('accepts the next airport command without repeating the wake word', async () => {
+    const user = userEvent.setup()
+    const speech = createFakeSpeech()
+    const created = apiResponse(createCockpitTask('continuous-wake'))
+    const airport = apiResponse({
+      ...created.task,
+      phase: 'choosing-flight',
+      taskRevision: created.task.taskRevision + 1,
+      pickupAirport: { label: '虹桥机场', code: 'SHA' },
+    })
+    const api = {
+      create: vi.fn().mockResolvedValue(created),
+      event: vi.fn().mockResolvedValue(airport),
+      action: vi.fn(),
+      confirmation: vi.fn(),
+    }
+    render(<AppComponent api={api} speech={speech.deps} />)
+
+    await user.click(screen.getByRole('button', { name: '启用小南语音唤醒' }))
+    act(() => { speech.engine().onstart?.(); speech.engine().emit('小南，我要去机场接人', true, 0.9) })
+    await waitFor(() => expect(api.create).toHaveBeenCalledOnce())
+    expect(screen.getByRole('button', { name: '小南语音状态' })).toHaveTextContent('正在聆听')
+
+    act(() => { speech.engine().emit('虹桥机场', true, 0.93) })
+
+    await waitFor(() => expect(api.event).toHaveBeenCalledWith(
+      created.task,
+      expect.objectContaining({ type: 'user.input', text: '虹桥机场', source: 'voice' }),
+    ))
+    expect(screen.getByRole('button', { name: '小南语音状态' })).toHaveTextContent('正在聆听')
   })
 
   it('keeps the flight chooser in the primary cockpit window instead of an auxiliary floating window', async () => {
@@ -3113,7 +3144,7 @@ describe('demo integration', () => {
         await waitFor(() => expect(api.cancel).toHaveBeenCalledWith(active.task, '用户确认重新开始'))
         expect(await screen.findByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
       } else {
-        await waitFor(() => expect(screen.getAllByText('等待唤醒').length).toBeGreaterThan(0))
+        await waitFor(() => expect(screen.getAllByText('正在聆听').length).toBeGreaterThan(0))
         expect(api.cancel).not.toHaveBeenCalled()
         expect(screen.getByRole('region', { name: '当前行程' })).toHaveAttribute('data-window-title', '机场接人任务')
       }
