@@ -47,7 +47,7 @@ import {
 import { PersistentMapLayer } from './ui/cockpit/PersistentMapLayer'
 import { IdleHome } from './ui/idle/IdleHome'
 import { createLocalHandsFreeController, type LocalHandsFreeController } from './voice/localHandsFreeController'
-import { amapLoaderSnapshot, retryAMap, subscribeAMapLoader, switchAMapKey, type AMapLoaderSnapshot } from './ui/amap/loader'
+import { amapLoaderSnapshot, loadAMap, retryAMap, subscribeAMapLoader, switchAMapKey, type AMapLoaderSnapshot } from './ui/amap/loader'
 import {
   createFixtureRecognition,
   playFixtureSampleAudio,
@@ -505,6 +505,15 @@ export default function App({
   navigationActiveRef.current = navigationActive
 
   useEffect(() => subscribeAMapLoader(setMapLoader), [])
+
+  useEffect(() => {
+    if (runtimeTask?.phase !== 'confirming-outbound') return
+    if (!runtimeTask.navigation && !runtimeTask.navigationSimulation) return
+    // The route map intentionally stays hidden until the driver departs, but
+    // the SDK can be warmed while the confirmation card is on screen. That
+    // keeps "现在出发" from briefly dropping to the offline sketch on slow loads.
+    void loadAMap()
+  }, [runtimeTask?.phase, runtimeTask?.navigation, runtimeTask?.navigationSimulation])
 
   useEffect(() => {
     if (localOnly || !remoteTaskId || !api.subscribeTaskUpdates) return

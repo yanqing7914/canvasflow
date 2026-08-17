@@ -59,6 +59,7 @@ describe('loadAMap', () => {
   })
 
   it('supports manual retry on the same key and explicit key switching', async () => {
+    vi.useFakeTimers()
     __setAMapKeysForTest(['first-key', 'second-key'])
     const firstLoad = loadAMap()
     script().dispatchEvent(new Event('error'))
@@ -68,6 +69,7 @@ describe('loadAMap', () => {
     const retried = retryAMap()
     expect(script().src).toContain('key=first-key')
     invalidateAMap({ rotate: false })
+    await vi.advanceTimersByTimeAsync(10_000)
     await expect(retried).resolves.toBeNull()
     const switched = switchAMapKey()
     expect(script().src).toContain('key=second-key')
@@ -85,7 +87,7 @@ describe('loadAMap', () => {
     succeed(freshScript)
     await expect(fresh).resolves.toBe(amap)
     staleScript.dispatchEvent(new Event('error'))
-    await vi.advanceTimersByTimeAsync(3_000)
+    await vi.advanceTimersByTimeAsync(10_000)
     await expect(stale).resolves.toBeNull()
     expect(amapWindow.AMap).toBe(amap)
     expect(document.getElementById('amap-js-api')).toBe(freshScript)
