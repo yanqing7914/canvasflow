@@ -3050,8 +3050,24 @@ a:focus-visible {
   width: min(820px, calc(100vw - 48px));
   margin: auto;
   padding: clamp(32px, 5vh, 58px);
-  border-color: color-mix(in srgb, var(--accent) 28%, var(--rule));
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--rule));
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, .07), transparent 46%),
+    color-mix(in srgb, var(--surface) 78%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .1), 0 28px 72px rgba(0, 0, 0, .28);
+  backdrop-filter: blur(28px) saturate(1.18);
 }
+.cockpit-primary-panel[data-phase='choosing-flight'],
+.cockpit-primary-panel[data-phase='confirming-outbound'] {
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--rule));
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, .065), transparent 44%),
+    color-mix(in srgb, var(--surface) 84%, transparent);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 28px 72px rgba(0, 0, 0, .26);
+  backdrop-filter: blur(26px) saturate(1.16);
+}
+.cockpit-primary-panel[data-phase='choosing-flight'] .ui-card,
+.cockpit-primary-panel[data-phase='confirming-outbound'] .ui-card { background: transparent; }
 .cockpit-workspace:has(.cockpit-primary-panel[data-phase='collecting-airport']) .cockpit-workspace__primary {
   top: 50%;
   left: 50%;
