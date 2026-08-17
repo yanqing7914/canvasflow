@@ -31,15 +31,11 @@ export function IdleHome({
   onWeather,
   onSchedule,
   onVehicleStatus,
-  onSpeedDown,
-  onSpeedUp,
 }: {
   vehicle: VehicleContext
   onWeather: () => void
   onSchedule: () => void
   onVehicleStatus: () => void
-  onSpeedDown: () => void
-  onSpeedUp: () => void
 }) {
   const [now, setNow] = useState(() => new Date())
   useEffect(() => {
@@ -84,9 +80,6 @@ export function IdleHome({
           <div className="idle-home__vehicle-hero"><strong>{Math.round(vehicle.batteryPercent)}%</strong><span>当前电量</span></div>
           <dl><div><dt>预计续航</dt><dd>{Math.round(vehicle.remainingRangeKm)} km</dd></div><div><dt>当前挡位</dt><dd>{vehicle.gear}</dd></div><div><dt>车辆状态</dt><dd>{vehicle.speedKph > 0 ? '行驶中' : '驻车'}</dd></div><div><dt>当前车速</dt><dd>{Math.round(vehicle.speedKph)} km/h</dd></div></dl>
           <p className="idle-home__vehicle-note">{vehicle.isNight ? '夜间座舱' : '日间座舱'}，{vehicle.speedKph > 0 ? '导航控制中' : '车辆已准备好'}</p>
-          {vehicle.speedKph > 0 ? (
-            <div className="idle-home__speed-actions"><button type="button" onClick={onSpeedDown}>调慢</button><button type="button" onClick={onSpeedUp}>调快</button></div>
-          ) : null}
         </section>
       </aside>
     </section>

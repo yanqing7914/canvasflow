@@ -2322,10 +2322,6 @@ export default function App({
                   onWeather={() => { void sendInput('查天气') }}
                   onSchedule={() => { void sendInput('查看日程') }}
                   onVehicleStatus={() => { void sendInput('查看车辆状态') }}
-                  // These controls are disabled while parked. Keep the existing
-                  // Agent command path ready for a future in-navigation surface.
-                  onSpeedDown={() => { void sendInput('跑慢点') }}
-                  onSpeedUp={() => { void sendInput('跑快点') }}
                 />
               )}
             </section>

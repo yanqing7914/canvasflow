@@ -8,7 +8,7 @@ const vehicle: VehicleContext = { speedKph: 0, batteryPercent: 42, remainingRang
 
 describe('IdleHome', () => {
   it('shows the three simulated home capabilities from vehicle context only once', () => {
-    render(<IdleHome vehicle={vehicle} onWeather={() => {}} onSchedule={() => {}} onVehicleStatus={() => {}} onSpeedDown={() => {}} onSpeedUp={() => {}} />)
+    render(<IdleHome vehicle={vehicle} onWeather={() => {}} onSchedule={() => {}} onVehicleStatus={() => {}} />)
     expect(screen.getByRole('region', { name: '空闲座舱' })).toBeInTheDocument()
     expect(screen.getByText('多云')).toBeInTheDocument()
     expect(screen.getByText('Her 开发日会')).toBeInTheDocument()
@@ -38,7 +38,7 @@ describe('IdleHome', () => {
   it('delegates each capability instead of changing vehicle facts locally', async () => {
     const user = userEvent.setup()
     const weather = vi.fn(), calendar = vi.fn(), vehicleStatus = vi.fn()
-    render(<IdleHome vehicle={{ ...vehicle, speedKph: 55, gear: 'D' }} onWeather={weather} onSchedule={calendar} onVehicleStatus={vehicleStatus} onSpeedDown={() => {}} onSpeedUp={() => {}} />)
+    render(<IdleHome vehicle={{ ...vehicle, speedKph: 55, gear: 'D' }} onWeather={weather} onSchedule={calendar} onVehicleStatus={vehicleStatus} />)
     await user.click(screen.getByRole('button', { name: '查看天气' }))
     await user.click(screen.getByRole('button', { name: '查看日程' }))
     await user.click(screen.getByRole('button', { name: '查看车辆状态' }))
