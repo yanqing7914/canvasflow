@@ -35,7 +35,7 @@ export type AMapLoaderSnapshot = { state: 'idle' | 'loading' | 'ready' | 'failed
 type LoaderListener = (snapshot: AMapLoaderSnapshot) => void
 
 const SCRIPT_ID = 'amap-js-api'
-const LOAD_TIMEOUT_MS = 3_000
+const LOAD_TIMEOUT_MS = 10_000
 const listeners = new Set<LoaderListener>()
 let pending: Promise<AMapApi | null> | null = null
 let generation = 0

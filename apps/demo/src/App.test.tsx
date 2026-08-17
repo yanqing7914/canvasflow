@@ -587,6 +587,17 @@ describe('demo integration', () => {
     expect(screen.queryByTestId('persistent-map-layer')).not.toBeInTheDocument()
   })
 
+  it('preloads AMap before departure without showing it', async () => {
+    const task = {
+      ...createCockpitTask('map-preload'),
+      phase: 'confirming-outbound',
+      pickupAirport: { label: '虹桥机场', code: 'SHA' },
+      navigation: { routeId: 'route-preload', destination: '虹桥机场 T2', eta: '2026-08-11T14:40:00+08:00', status: 'planned' },
+    } as AirportPickupTaskState
+    render(<App initialTask={task} />)
+    await waitFor(() => expect(screen.queryByTestId('persistent-map-layer')).not.toBeInTheDocument())
+  })
+
   it('mounts the real map during formal navigation', () => {
     const collectingTask = createCockpitTask('map-lifecycle')
     const choosingTask = {
