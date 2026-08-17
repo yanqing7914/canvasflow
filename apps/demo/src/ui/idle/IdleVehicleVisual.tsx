@@ -8,9 +8,9 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
   return (
     <div className={`idle-vehicle-visual${muted ? ' idle-vehicle-visual--muted' : ''}`} aria-hidden="true">
       <img
-        src="/car/idle-car.png"
+        src="/car/idle-car.svg"
         alt=""
-        width={2000}
+        width={1600}
         height={900}
         draggable={false}
       />

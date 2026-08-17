@@ -30,8 +30,8 @@ describe('IdleHome', () => {
     expect(screen.getByText('模拟位置：人民广场 · 非真实 GPS')).toBeInTheDocument()
     expect(screen.queryByText(/小南\s*等待唤醒/)).not.toBeInTheDocument()
     const vehicleImage = screen.getByAltText('')
-    expect(vehicleImage).toHaveAttribute('src', '/car/idle-car.png')
-    expect(vehicleImage).toHaveAttribute('width', '2000')
+    expect(vehicleImage).toHaveAttribute('src', '/car/idle-car.svg')
+    expect(vehicleImage).toHaveAttribute('width', '1600')
     expect(vehicleImage).toHaveAttribute('height', '900')
   })
 
