@@ -105,8 +105,7 @@ describe('demo integration', () => {
     }} />)
 
     expect(screen.getByRole('region', { name: '空闲座舱' })).toBeInTheDocument()
-    expect(screen.getByText('模拟位置：人民广场')).toBeInTheDocument()
-    expect(screen.getByText('模拟位置，非真实 GPS')).toBeInTheDocument()
+    expect(screen.getByText('模拟位置：人民广场 · 非真实 GPS')).toBeInTheDocument()
     expect(screen.getByText('多云')).toBeInTheDocument()
     expect(screen.getByText('今日日程')).toBeInTheDocument()
     expect(screen.getByText('Her 开发日会')).toBeInTheDocument()

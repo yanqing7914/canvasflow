@@ -2319,7 +2319,6 @@ export default function App({
               ) : task ? <h1 className="sr-only">机场接人</h1> : (
                 <IdleHome
                   vehicle={vehicleContext}
-                  voiceStatus={voiceStatus}
                   onWeather={() => { void sendInput('查天气') }}
                   onSchedule={() => { void sendInput('查看日程') }}
                   onVehicleStatus={() => { void sendInput('查看车辆状态') }}

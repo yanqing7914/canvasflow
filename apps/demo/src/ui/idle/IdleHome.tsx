@@ -28,7 +28,6 @@ function minutesInShanghai(date: Date) {
 
 export function IdleHome({
   vehicle,
-  voiceStatus,
   onWeather,
   onSchedule,
   onVehicleStatus,
@@ -36,7 +35,6 @@ export function IdleHome({
   onSpeedUp,
 }: {
   vehicle: VehicleContext
-  voiceStatus: string
   onWeather: () => void
   onSchedule: () => void
   onVehicleStatus: () => void
@@ -78,10 +76,7 @@ export function IdleHome({
           <header><span>今日日程</span><button type="button" onClick={onSchedule}>查看日程</button></header>
           <ol>{scheduleState.map((item) => <li key={item.time}><time>{item.time}</time><span>{item.title}</span><em data-status={item.status}>{item.status}</em></li>)}</ol>
         </section>
-        <div className="idle-home__context">
-          <p className="idle-home__location">模拟位置：人民广场 <span>模拟位置，非真实 GPS</span></p>
-          <p className="idle-home__voice"><i aria-hidden="true" />小南 {voiceStatus || '待命中'}</p>
-        </div>
+        <p className="idle-home__location">模拟位置：人民广场 · 非真实 GPS</p>
       </aside>
       <aside className="idle-home__capabilities" aria-label="座舱能力">
         <section className="idle-home__vehicle">
