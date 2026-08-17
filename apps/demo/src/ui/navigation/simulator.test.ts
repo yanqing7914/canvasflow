@@ -5,6 +5,7 @@ import {
   createNavigationSimulatorState,
   navigationSimulatorReducer,
   nextSpeedTier,
+  pendingFlightLandingReminder,
   pendingManeuverReminder,
   simulatorSnapshot,
 } from './simulator'
@@ -83,5 +84,43 @@ describe('navigation simulator', () => {
     expect(reminder?.text).toMatch(/300 米/u)
     state = navigationSimulatorReducer(state, { type: 'mark-reminded', maneuverId: reminder!.id })
     expect(pendingManeuverReminder(state, snapshot)).toBeUndefined()
+  })
+
+  it('offers the outbound flight landing reminder once around 60% progress', () => {
+    const flight = {
+      flightNumber: 'MU5103',
+      estimatedArrival: '2026-08-11T11:32:00+08:00',
+      terminal: 'T2',
+      airportLabel: '虹桥机场',
+      navigationEta: '2026-08-11T11:40:00+08:00',
+    }
+    let state = navigationSimulatorReducer(createNavigationSimulatorState(0), {
+      type: 'start-leg', leg: 'outbound', nowMs: 0, batteryPercent: 72,
+    })
+    const before = simulatorSnapshot(state, 45_000)
+    expect(pendingFlightLandingReminder(state, before, flight)).toBeUndefined()
+
+    state = navigationSimulatorReducer(state, { type: 'tick', nowMs: 54_000 })
+    const around = simulatorSnapshot(state, 54_000)
+    expect(around.progress).toBeGreaterThanOrEqual(0.6)
+    const reminder = pendingFlightLandingReminder(state, around, flight)
+    expect(reminder).toBeDefined()
+    expect(reminder!.text).toContain('MU5103')
+    expect(reminder!.text).toContain('虹桥机场 T2')
+    expect(reminder!.text).toContain('模拟估算')
+
+    state = navigationSimulatorReducer(state, { type: 'mark-reminded', maneuverId: reminder!.id })
+    expect(pendingFlightLandingReminder(state, around, flight)).toBeUndefined()
+  })
+
+  it('never offers the flight landing reminder on the return leg', () => {
+    let state = navigationSimulatorReducer(createNavigationSimulatorState(0), {
+      type: 'start-leg', leg: 'return', nowMs: 0, batteryPercent: 72,
+    })
+    state = navigationSimulatorReducer(state, { type: 'tick', nowMs: 54_000 })
+    const snapshot = simulatorSnapshot(state, 54_000)
+    expect(pendingFlightLandingReminder(state, snapshot, {
+      flightNumber: 'MU5103', estimatedArrival: '2026-08-11T11:32:00+08:00', terminal: 'T2',
+    })).toBeUndefined()
   })
 })

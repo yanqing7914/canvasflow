@@ -256,4 +256,43 @@ describe('NavigationWorkspace', () => {
     expect(cancel).toHaveBeenCalledOnce()
   })
 
+  it('shows the flight landing reminder once near 60% and can be closed', () => {
+    const clock = manualClock()
+    const onReminder = vi.fn()
+    render(
+      <NavigationWorkspace task={task()} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} onReminder={onReminder} />,
+    )
+
+    act(() => clock.advance(45_000))
+    expect(screen.queryByRole('status', { name: '航班落地提醒' })).not.toBeInTheDocument()
+
+    act(() => clock.advance(9_000))
+    const reminder = screen.getByRole('status', { name: '航班落地提醒' })
+    expect(reminder).toHaveTextContent('MU5102')
+    expect(reminder).toHaveTextContent('模拟估算')
+    expect(onReminder).toHaveBeenCalledOnce()
+
+    act(() => clock.advance(9_000))
+    expect(screen.getAllByRole('status', { name: '航班落地提醒' }).length).toBe(1)
+    expect(onReminder).toHaveBeenCalledOnce()
+
+    act(() => { screen.getByRole('button', { name: '最小化航班落地提醒' }).click() })
+    expect(screen.queryByRole('status', { name: '航班落地提醒' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '恢复航班落地提醒' })).toBeInTheDocument()
+    act(() => { screen.getByRole('button', { name: '恢复航班落地提醒' }).click() })
+    expect(screen.getByRole('status', { name: '航班落地提醒' })).toBeInTheDocument()
+    act(() => { screen.getByRole('button', { name: '关闭航班落地提醒' }).click() })
+    expect(screen.queryByRole('status', { name: '航班落地提醒' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '恢复航班落地提醒' })).not.toBeInTheDocument()
+  })
+
+  it('does not offer the flight reminder when the flight is unknown', () => {
+    const clock = manualClock()
+    render(
+      <NavigationWorkspace task={{ ...task(), flight: undefined }} spec={spec()} initialVehicle={vehicle} clock={clock} pending={false} />,
+    )
+    act(() => clock.advance(54_000))
+    expect(screen.queryByRole('status', { name: '航班落地提醒' })).not.toBeInTheDocument()
+  })
+
 })

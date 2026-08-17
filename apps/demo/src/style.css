@@ -789,6 +789,35 @@ a:focus-visible {
 .navigation-hud--minimum__alert { max-width: 22ch; margin: 0; color: var(--ink); font-size: 13px; font-weight: 700; line-height: 1.35; }
 .navigation-hud--minimum button { white-space: nowrap; }
 
+.navigation-flight-reminder {
+  position: absolute;
+  z-index: 14;
+  top: 24px;
+  right: 24px;
+  width: min(360px, calc(100vw - 48px));
+  padding: 17px 18px 15px;
+  border: 1px solid color-mix(in srgb, var(--route) 36%, var(--rule));
+  border-radius: 16px;
+  background:
+    linear-gradient(145deg, color-mix(in srgb, var(--route) 14%, transparent), transparent 56%),
+    color-mix(in srgb, var(--surface) 92%, var(--cabin));
+  box-shadow: 0 20px 46px color-mix(in srgb, var(--ink) 24%, transparent), inset 0 1px 0 rgba(255, 255, 255, .12);
+  backdrop-filter: blur(20px) saturate(1.15);
+  pointer-events: auto;
+}
+.navigation-flight-reminder header { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.navigation-flight-reminder header div { display: grid; gap: 4px; }
+.navigation-flight-reminder header span { color: var(--route); font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+.navigation-flight-reminder header strong { color: var(--ink); font-size: 18px; }
+.navigation-flight-reminder header button,
+.navigation-flight-reminder__minimize,
+.navigation-flight-reminder__restore { border: 1px solid var(--rule); border-radius: 8px; background: var(--control); color: var(--ink); font-size: 12px; font-weight: 750; }
+.navigation-flight-reminder header button { min-height: 30px; padding: 0 8px; }
+.navigation-flight-reminder p { margin: 13px 0 8px; color: var(--ink); font-size: 13px; font-weight: 700; line-height: 1.55; }
+.navigation-flight-reminder small { display: block; color: var(--muted); font-size: 11px; line-height: 1.4; }
+.navigation-flight-reminder__minimize { margin-top: 12px; min-height: 30px; padding: 0 10px; }
+.navigation-flight-reminder__restore { position: absolute; z-index: 14; top: 24px; right: 24px; min-height: 36px; padding: 0 12px; pointer-events: auto; }
+
 @media (max-width: 600px) {
   .navigation-hud--minimum {
     width: calc(100vw - 24px);
@@ -801,6 +830,8 @@ a:focus-visible {
   .navigation-hud--minimum__maneuver,
   .navigation-hud--minimum__alert { grid-column: 1 / -1; }
   .navigation-hud--minimum button { grid-column: 2; grid-row: 2; }
+  .navigation-flight-reminder { top: 116px; right: 12px; width: calc(100vw - 24px); }
+  .navigation-flight-reminder__restore { top: 116px; right: 12px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -8,6 +8,7 @@ import {
   currentBattery,
   navigationSimulatorReducer,
   pendingManeuverReminder,
+  pendingFlightLandingReminder,
   resolveNavigationClock,
   simulatorSnapshot,
   type NavigationClock,
@@ -95,11 +96,14 @@ export function NavigationWorkspace({
   const [nowMs, setNowMs] = useState(activeClock.now)
   const [localHudExpanded, setLocalHudExpanded] = useState(true)
   const [reminderText, setReminderText] = useState<string | undefined>()
+  const [flightReminder, setFlightReminder] = useState<{ id: string; text: string } | undefined>()
+  const [flightReminderMode, setFlightReminderMode] = useState<'open' | 'minimized' | 'closed'>('closed')
   const [retryGeneration, setRetryGeneration] = useState(0)
   const [mapRuntimeFailure, setMapRuntimeFailure] = useState(initialMapRuntimeFailure)
   const completedLeg = useRef<NavigationLeg | undefined>(undefined)
   const completingLeg = useRef<NavigationLeg | undefined>(undefined)
   const failedLeg = useRef<NavigationLeg | undefined>(undefined)
+  const announcedFlightReminder = useRef(false)
   const mountedMapRetryNonce = useRef(mapRetryNonce)
   const onVehicleSnapshotRef = useRef(onVehicleSnapshot)
   onVehicleSnapshotRef.current = onVehicleSnapshot
@@ -213,6 +217,22 @@ export function NavigationWorkspace({
     onReminder?.(reminder.text)
   }, [onReminder, snapshot, state])
 
+  useEffect(() => {
+    const reminder = pendingFlightLandingReminder(state, snapshot, task.flight ? {
+      flightNumber: task.flight.flightNumber,
+      estimatedArrival: task.flight.estimatedArrival,
+      terminal: task.flight.terminal,
+      airportLabel: task.pickupAirport?.label ?? task.flight.arrivalAirportName,
+      navigationEta: task.navigation?.eta,
+    } : undefined)
+    if (!reminder || announcedFlightReminder.current) return
+    announcedFlightReminder.current = true
+    dispatch({ type: 'mark-reminded', maneuverId: reminder.id })
+    setFlightReminder(reminder)
+    setFlightReminderMode('open')
+    onReminder?.(reminder.text)
+  }, [onReminder, snapshot, state, task.flight, task.navigation?.eta, task.pickupAirport?.label])
+
   return (
     <section
       className={`navigation-workspace${renderMap ? '' : ' navigation-workspace--hud-only'}`}
@@ -256,6 +276,20 @@ export function NavigationWorkspace({
           else setLocalHudExpanded(visible)
         }}
       />
+      {flightReminder && flightReminderMode === 'open' ? (
+        <aside className="navigation-flight-reminder" aria-label="航班落地提醒" role="status">
+          <header>
+            <div><span>航班落地提醒</span><strong>{task.flight?.flightNumber ?? '已选航班'}</strong></div>
+            <button type="button" aria-label="关闭航班落地提醒" onClick={() => setFlightReminderMode('closed')}>关闭</button>
+          </header>
+          <p>{flightReminder.text}</p>
+          <small>模拟估算，不来自机场实时系统</small>
+          <button type="button" className="navigation-flight-reminder__minimize" aria-label="最小化航班落地提醒" onClick={() => setFlightReminderMode('minimized')}>稍后查看</button>
+        </aside>
+      ) : null}
+      {flightReminder && flightReminderMode === 'minimized' ? (
+        <button type="button" className="navigation-flight-reminder__restore" aria-label="恢复航班落地提醒" onClick={() => setFlightReminderMode('open')}>航班提醒</button>
+      ) : null}
     </section>
   )
 }
