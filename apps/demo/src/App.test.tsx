@@ -86,7 +86,13 @@ describe('demo integration', () => {
     expect(screen.getByLabelText('任务输入')).toHaveValue('')
     expect(screen.queryByText('等待创建任务')).not.toBeInTheDocument()
     expect(screen.queryByText(/航班/)).not.toBeInTheDocument()
-    expect(screen.getByLabelText('座舱状态')).toBeEmptyDOMElement()
+    // The persistent top rail is mounted even without a task: brand, assistant
+    // status, idle phase label and compact battery.
+    const statusBar = screen.getByLabelText('座舱状态')
+    expect(statusBar).not.toBeEmptyDOMElement()
+    expect(within(statusBar).getByText('pilotflow')).toBeInTheDocument()
+    expect(within(statusBar).getByText('小南待命')).toBeInTheDocument()
+    expect(within(statusBar).getByText('空闲')).toBeInTheDocument()
     expect(screen.getByRole('status')).toHaveTextContent('语音不可用，请用文字告诉我。')
     expect(api.create).not.toHaveBeenCalled()
   })

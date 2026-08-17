@@ -2033,6 +2033,28 @@ export default function App({
   // Before the first task there is no phase to name, so the brief says what it is
   // waiting for rather than borrowing a phase label it does not have.
   const phaseIdentity = task ? phaseIdentityLabels[task.phase] : undefined
+
+  // The top rail names the assistant's current voice loop so idle and task
+  // phases share one persistent status line. 待命 is the calm default; the
+  // wake session's speaking flag is the authority for 播报中 because system
+  // utterances (导航提醒等) do not run through the voice machine.
+  const assistantStatus = wakeWordEnabled
+    ? wakeSession.speaking
+      ? '播报中'
+      : wakeError
+        ? '待命'
+        : wakeSession.state === 'follow-up'
+          ? '聆听中'
+          : wakeSession.state === 'reset-confirmation' || wakeSession.state === 'authorizing'
+            ? '处理中'
+            : '待命'
+    : voice.state === 'speaking'
+      ? '播报中'
+      : voice.state === 'listening'
+        ? '聆听中'
+        : voice.state === 'transcribing' || voice.state === 'submitting'
+          ? '处理中'
+          : '待命'
   // Model provenance comes straight from the Agent's response envelope: it is only
   // present when a validated model plan was actually applied, so showing it never
   // overstates what the model did. Rules-only turns render nothing.
@@ -2263,7 +2285,9 @@ export default function App({
             onRuntimeReady={() => setMapRuntimeFailed(false)}
           />
         ) : null}
-        status={task ? <CockpitStatusBar vehicle={vehicleContext} phaseLabel={phaseIdentity} /> : null}
+        status={(
+          <CockpitStatusBar vehicle={vehicleContext} phaseLabel={phaseIdentity} assistantStatus={assistantStatus} />
+        )}
         feedback={(
           <>
             {!task && idleNotice ? <p className="cockpit-idle-notice" role="status">{idleNotice}</p> : null}
