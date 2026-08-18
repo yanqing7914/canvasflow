@@ -3255,14 +3255,72 @@ a:focus-visible {
 .idle-home__location,
 .idle-home__voice { color: var(--idle-ink); font-size: 12px; font-weight: 700; }
 .idle-home__location { margin: 0; padding: 10px 14px; color: var(--idle-muted); font-weight: 600; }
-.idle-vehicle-visual { position: absolute; z-index: 2; top: 50%; left: 50%; width: min(52vw, 780px); pointer-events: none; transform: translate(-50%, -46%); filter: drop-shadow(0 40px 44px rgba(2, 8, 14, .5)); }
-.idle-vehicle-visual img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; object-fit: contain; user-select: none; -webkit-user-drag: none; }
+.idle-vehicle-visual {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  width: min(43vw, 640px);
+  pointer-events: none;
+  transform: translate(-54%, -48%);
+}
+.idle-vehicle-visual::before {
+  position: absolute;
+  z-index: -2;
+  right: 7%;
+  bottom: 7%;
+  left: 8%;
+  height: 12%;
+  border-radius: 50%;
+  background: radial-gradient(ellipse, rgba(0, 0, 0, .48) 0%, rgba(0, 0, 0, .24) 46%, transparent 74%);
+  content: '';
+  filter: blur(13px);
+  transform: skewX(-8deg);
+}
+.idle-vehicle-visual__ground,
+.idle-vehicle-visual__reflection {
+  position: absolute;
+  z-index: -1;
+  display: block;
+  pointer-events: none;
+}
+.idle-vehicle-visual__ground {
+  right: 14%;
+  bottom: 8%;
+  left: 15%;
+  height: 8%;
+  border-radius: 50%;
+  background: rgba(7, 12, 16, .35);
+  filter: blur(8px);
+}
+.idle-vehicle-visual__reflection {
+  right: 18%;
+  bottom: 2%;
+  left: 19%;
+  height: 16%;
+  border-radius: 50%;
+  background: linear-gradient(90deg, transparent, rgba(180, 201, 220, .12) 43%, rgba(244, 214, 180, .1) 61%, transparent);
+  filter: blur(20px);
+  opacity: .72;
+  transform: scaleY(.45) skewX(-10deg);
+  transform-origin: center top;
+}
+.idle-vehicle-visual img {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: auto;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
 .idle-vehicle-visual--muted { opacity: .26; filter: saturate(.65) blur(.4px); }
 
 @media (max-width: 1040px) {
   .idle-home__living { left: 16px; }
   .idle-home__capabilities { right: 16px; }
-  .idle-vehicle-visual { width: min(56vw, 640px); opacity: .82; }
+  .idle-vehicle-visual { width: min(40vw, 500px); opacity: .82; }
 }
 @media (max-width: 720px) {
   .cockpit-workspace:has(.cockpit-primary-panel[data-phase='collecting-airport']) .cockpit-workspace__primary { top: 50%; width: calc(100vw - 24px); max-height: calc(100dvh - 130px); }
@@ -3282,7 +3340,7 @@ a:focus-visible {
   .idle-home__living { order: 2; }
   .idle-home__capabilities { order: 3; }
   .idle-vehicle-visual { position: relative; order: 1; top: auto; left: auto; width: 100%; min-height: 210px; opacity: .9; transform: none; }
-  .idle-vehicle-visual img { position: absolute; inset: 50% auto auto 50%; width: min(112vw, 520px); max-width: none; transform: translate(-50%, -50%); }
+  .idle-vehicle-visual img { position: absolute; inset: 50% auto auto 50%; width: min(96vw, 440px); max-width: none; transform: translate(-50%, -50%); }
   .idle-home__clock time { font-size: 46px; }
   .idle-home__clock,
   .idle-home__widget,

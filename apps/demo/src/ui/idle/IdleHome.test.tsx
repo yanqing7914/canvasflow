@@ -30,9 +30,11 @@ describe('IdleHome', () => {
     expect(screen.getByText('模拟位置：人民广场 · 非真实 GPS')).toBeInTheDocument()
     expect(screen.queryByText(/小南\s*等待唤醒/)).not.toBeInTheDocument()
     const vehicleImage = screen.getByAltText('')
-    expect(vehicleImage).toHaveAttribute('src', '/car/idle-car.svg')
-    expect(vehicleImage).toHaveAttribute('width', '1600')
-    expect(vehicleImage).toHaveAttribute('height', '900')
+    expect(vehicleImage).toHaveAttribute('src', '/car/idle-car-ev-neutral.png')
+    expect(vehicleImage).toHaveAttribute('width', '1617')
+    expect(vehicleImage).toHaveAttribute('height', '676')
+    expect(screen.getByTestId('idle-vehicle-ground')).toBeInTheDocument()
+    expect(screen.getByTestId('idle-vehicle-reflection')).toBeInTheDocument()
   })
 
   it('delegates each capability instead of changing vehicle facts locally', async () => {
