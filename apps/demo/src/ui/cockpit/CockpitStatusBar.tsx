@@ -1,38 +1,29 @@
-import { useEffect, useState } from 'react'
 import type { VehicleContext } from '@canvasflow/schema'
 
 export type CockpitStatusBarProps = {
   vehicle: VehicleContext
   phaseLabel?: string
-  now?: () => Date
+  /** 小南当前语音状态：待命 / 聆听 / 处理中 / 播报中 */
+  assistantStatus?: string
 }
 
-function displayDate(value: Date): string {
-  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', month: 'long', day: 'numeric', weekday: 'short' }).format(value)
-}
-
-function displayTime(value: Date): string {
-  return new Intl.DateTimeFormat('zh-CN', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false }).format(value)
-}
-
-/** Quiet, persistent vehicle facts; task changes do not replace this layer. */
-export function CockpitStatusBar({ vehicle, phaseLabel, now = () => new Date() }: CockpitStatusBarProps) {
-  const [current, setCurrent] = useState(now)
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setCurrent(now()), 30_000)
-    return () => window.clearInterval(timer)
-  }, [now])
-
+/**
+ * Persistent top status rail, mounted in every cockpit phase. It carries only
+ * the brand, the assistant's current voice state, the current task phase and a
+ * compact battery readout; full clock/date/range belong to the living and
+ * vehicle cards below so they are not repeated here.
+ */
+export function CockpitStatusBar({ vehicle, phaseLabel, assistantStatus = '待命' }: CockpitStatusBarProps) {
   return (
     <div className="cockpit-status-bar">
       <span className="cockpit-status-bar__brand">pilotflow</span>
-      <span className="cockpit-status-bar__phase" {...(phaseLabel ? { 'data-phase-identity': true } : {})}>{phaseLabel ?? '小南待命'}</span>
+      <span className="cockpit-status-bar__assistant" data-assistant-status>
+        <i className="cockpit-status-bar__lamp" aria-hidden="true" />
+        小南{assistantStatus}
+      </span>
+      <span className="cockpit-status-bar__phase" {...(phaseLabel ? { 'data-phase-identity': true } : {})}>{phaseLabel ?? '空闲'}</span>
       <dl className="cockpit-status-bar__facts">
-        <div><dt>时间</dt><dd>{displayTime(current)}</dd></div>
-        <div><dt>日期</dt><dd>{displayDate(current)}</dd></div>
         <div><dt>电量</dt><dd>{Math.round(vehicle.batteryPercent)}%</dd></div>
-        <div><dt>续航</dt><dd>{Math.round(vehicle.remainingRangeKm)} km</dd></div>
       </dl>
     </div>
   )

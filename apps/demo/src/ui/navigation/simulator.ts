@@ -234,6 +234,49 @@ export function pendingManeuverReminder(
   return { id: snapshot.maneuverId, text: reminderText(snapshot.maneuver) }
 }
 
+const FLIGHT_LANDING_REMIND_PROGRESS = 0.6
+
+/**
+ * Simulated arrival walk-off reminder, offered once per navigation. The
+ * minutes are deterministic estimates labelled as such; they are never
+ * presented as live airport data.
+ */
+export function pendingFlightLandingReminder(
+  state: NavigationSimulatorState,
+  snapshot: NavigationSnapshot,
+  flight: {
+    flightNumber: string
+    estimatedArrival: string
+    terminal: string
+    airportLabel?: string
+    navigationEta?: string
+  } | undefined,
+): { id: string; text: string } | undefined {
+  if (snapshot.runState !== 'driving' || snapshot.leg !== 'outbound') return undefined
+  if (snapshot.progress < FLIGHT_LANDING_REMIND_PROGRESS || state.remindedManeuvers.includes('flight-landing')) return undefined
+  if (!flight) return undefined
+  const arrivalLabel = formatClockLabel(flight.estimatedArrival)
+  const driveEtaLabel = snapshot.etaMs ? formatClockLabel(snapshot.etaMs) : flight.navigationEta ? formatClockLabel(flight.navigationEta) : undefined
+  const destination = (flight.airportLabel ?? '机场').replace(/\s*T\d+/u, '')
+  return {
+    id: 'flight-landing',
+    text: [
+      `${flight.flightNumber} 预计 ${arrivalLabel} 抵达${destination}${flight.terminal ? ` ${flight.terminal}` : ''}，`,
+      '模拟估算下机及步行至到达出口约 20 分钟。',
+      driveEtaLabel ? `你预计 ${driveEtaLabel} 到达，无需着急。` : '无需着急。',
+      '以上为模拟估算，不来自机场实时系统。',
+    ].join(''),
+  }
+}
+
+function formatClockLabel(value: string | number): string {
+  const timestamp = typeof value === 'number' ? value : Date.parse(value)
+  if (!Number.isFinite(timestamp)) return '—'
+  return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(timestamp))
+}
+
 function roadAt(leg: NavigationLeg, progress: number, distanceKm: number) {
   const segments = ROADS[leg]
   let segment = segments[0]!

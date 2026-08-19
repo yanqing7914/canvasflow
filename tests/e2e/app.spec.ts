@@ -399,7 +399,15 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   // The production entry is a quiet cabin, not a pre-created task or form.
   await expect(page.getByRole('region', { name: '空闲座舱' })).toBeVisible()
   await expect(page.getByText('模拟位置：人民广场')).toBeVisible()
-  await expect(page.getByText('模拟位置，非真实 GPS')).toBeVisible()
+  await expect(page.getByText('模拟位置：人民广场 · 非真实 GPS')).toBeVisible()
+  // The compact status rail is mounted even without a task: brand, assistant
+  // voice state, 空闲 phase label, and a single battery fact. Clock/date/range
+  // belong to the living and vehicle cards, never to the rail.
+  await expect(page.getByText('pilotflow')).toBeVisible()
+  await expect(page.getByText(/小南待命|小南等待唤醒|小南点击启用/)).toBeVisible()
+  await expect(page.getByText('空闲', { exact: true })).toBeVisible()
+  await expect(page.getByText('电量', { exact: true })).toBeVisible()
+  await expect(page.locator('.cockpit-status-bar')).not.toContainText('预计续航')
   await expect(page.getByLabel('任务输入')).toHaveCount(0)
   await expect(page.locator('.task-surface')).toHaveCount(0)
   await expect(page.locator('.persistent-map-layer')).toHaveCount(0)
