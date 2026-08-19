@@ -5,7 +5,7 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
       <span className="idle-vehicle-visual__reflection" data-testid="idle-vehicle-reflection" />
       <span className="idle-vehicle-visual__ground" data-testid="idle-vehicle-ground" />
       <img
-        src="/car/idle-car-ev-neutral.png"
+        src="/car/idle-car-ev.png"
         alt=""
         width={1617}
         height={676}
