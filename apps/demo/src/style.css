@@ -3425,6 +3425,7 @@ a:focus-visible {
   .idle-home__living { order: 2; }
   .idle-home__capabilities { order: 3; }
   .idle-vehicle-visual { position: relative; order: 1; top: auto; left: auto; width: 100%; min-height: 210px; opacity: .9; transform: none; }
+  .idle-vehicle-visual model-viewer,
   .idle-vehicle-visual img { position: absolute; inset: 50% auto auto 50%; width: min(96vw, 440px); max-width: none; transform: translate(-50%, -50%); }
   .idle-home__clock time { font-size: 46px; }
   .idle-home__clock,
