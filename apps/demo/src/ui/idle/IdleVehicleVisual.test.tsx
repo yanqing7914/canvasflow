@@ -9,7 +9,7 @@ const webGL2RenderingContext = Object.getOwnPropertyDescriptor(window, 'WebGL2Re
 
 function restoreWebGLProperty(name: 'WebGLRenderingContext' | 'WebGL2RenderingContext', descriptor?: PropertyDescriptor) {
   if (descriptor) Object.defineProperty(window, name, descriptor)
-  else delete (window as Window & Record<string, unknown>)[name]
+  else delete (window as unknown as Record<string, unknown>)[name]
 }
 
 describe('IdleVehicleVisual', () => {
