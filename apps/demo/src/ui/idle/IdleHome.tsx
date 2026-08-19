@@ -53,6 +53,17 @@ export function IdleHome({
 
   return (
     <section className="idle-home" aria-label="空闲座舱">
+      <div
+        className="idle-home__environment"
+        data-testid="idle-natural-environment"
+        data-environment="grass-parking-trees"
+        aria-hidden="true"
+      >
+        <span className="idle-home__environment-sky" />
+        <span className="idle-home__environment-trees" />
+        <span className="idle-home__environment-grass" />
+        <span className="idle-home__environment-parking" />
+      </div>
       <IdleVehicleVisual />
       <aside className="idle-home__living" aria-label="生活信息">
         <section className="idle-home__clock" aria-label="当前时间">

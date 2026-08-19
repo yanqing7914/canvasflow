@@ -10,6 +10,7 @@ describe('IdleHome', () => {
   it('shows the three simulated home capabilities from vehicle context only once', () => {
     render(<IdleHome vehicle={vehicle} onWeather={() => {}} onSchedule={() => {}} onVehicleStatus={() => {}} />)
     expect(screen.getByRole('region', { name: '空闲座舱' })).toBeInTheDocument()
+    expect(screen.getByTestId('idle-natural-environment')).toHaveAttribute('data-environment', 'grass-parking-trees')
     expect(screen.getByText('多云')).toBeInTheDocument()
     expect(screen.getByText('Her 开发日会')).toBeInTheDocument()
     expect(screen.getByText('新建 Her')).toBeInTheDocument()

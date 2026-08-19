@@ -3167,6 +3167,89 @@ a:focus-visible {
   min-height: 100dvh;
   pointer-events: none;
 }
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  isolation: isolate;
+  pointer-events: none;
+  background: linear-gradient(180deg, #2d3b3d 0%, #354342 43%, #2b3534 100%);
+}
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-sky,
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-trees,
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-grass,
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-parking {
+  position: absolute;
+  display: block;
+  pointer-events: none;
+}
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-sky {
+  inset: 0 0 42%;
+  background:
+    radial-gradient(ellipse at 50% 8%, rgba(202, 211, 198, .14), transparent 38%),
+    radial-gradient(ellipse at 82% 28%, rgba(163, 180, 169, .1), transparent 24%),
+    linear-gradient(180deg, rgba(12, 22, 24, .2), transparent 72%);
+}
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-trees {
+  top: 6%;
+  right: -10%;
+  left: -10%;
+  height: 46%;
+  opacity: .86;
+  background:
+    radial-gradient(ellipse 9% 27% at 5% 69%, #21352d 0 58%, transparent 61%),
+    radial-gradient(ellipse 12% 33% at 15% 63%, #263b31 0 58%, transparent 61%),
+    radial-gradient(ellipse 9% 26% at 27% 71%, #1f332a 0 58%, transparent 61%),
+    radial-gradient(ellipse 9% 27% at 73% 70%, #23362e 0 58%, transparent 61%),
+    radial-gradient(ellipse 13% 34% at 85% 63%, #263a31 0 58%, transparent 61%),
+    radial-gradient(ellipse 9% 25% at 96% 70%, #1f322a 0 58%, transparent 61%),
+    linear-gradient(180deg, transparent 55%, rgba(21, 35, 29, .74) 100%);
+}
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-trees::after {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 31%;
+  opacity: .48;
+  background:
+    linear-gradient(90deg, transparent 0 7%, rgba(27, 40, 33, .9) 7.2% 7.8%, transparent 8% 18%, rgba(26, 39, 32, .9) 18.2% 18.8%, transparent 19% 80%, rgba(26, 39, 32, .9) 80.2% 80.8%, transparent 81% 91%, rgba(27, 40, 33, .9) 91.2% 91.8%, transparent 92%);
+  content: '';
+}
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-grass {
+  top: 34%;
+  right: -4%;
+  bottom: 23%;
+  left: -4%;
+  opacity: .88;
+  background:
+    repeating-linear-gradient(96deg, transparent 0 13px, rgba(166, 182, 145, .045) 14px 15px, transparent 16px 29px),
+    linear-gradient(180deg, rgba(56, 79, 62, .76), rgba(28, 48, 38, .9));
+  clip-path: polygon(0 10%, 100% 0, 100% 82%, 0 100%);
+}
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-parking {
+  top: 47%;
+  right: -18%;
+  bottom: -29%;
+  left: -18%;
+  overflow: hidden;
+  background:
+    linear-gradient(180deg, rgba(91, 104, 100, .2), transparent 21%),
+    linear-gradient(135deg, #3b4747 0%, #313e3e 56%, #273333 100%);
+  box-shadow: inset 0 14px 24px rgba(10, 18, 19, .24);
+  transform: perspective(780px) rotateX(52deg) scale(1.18);
+  transform-origin: center top;
+}
+.cockpit-workspace[data-cockpit-mode='idle'] .idle-home__environment-parking::after {
+  position: absolute;
+  inset: 8% 5% 0;
+  opacity: .42;
+  background:
+    repeating-linear-gradient(90deg, transparent 0 15%, rgba(223, 224, 205, .42) 15.15% 15.45%, transparent 15.6% 30.5%),
+    repeating-linear-gradient(0deg, transparent 0 118px, rgba(18, 31, 31, .28) 120px 122px);
+  content: '';
+}
 .cockpit-workspace[data-cockpit-mode='idle'] {
   background:
     radial-gradient(circle at 50% 58%, rgba(105, 133, 151, .18), transparent 28%),
@@ -3261,7 +3344,7 @@ a:focus-visible {
   top: 50%;
   left: 50%;
   width: min(35vw, 520px);
-  pointer-events: none;
+  pointer-events: auto;
   transform: translate(-54%, -48%);
 }
 .idle-vehicle-visual::before {
@@ -3305,6 +3388,7 @@ a:focus-visible {
   transform: scaleY(.45) skewX(-10deg);
   transform-origin: center top;
 }
+.idle-vehicle-visual model-viewer,
 .idle-vehicle-visual img {
   position: relative;
   z-index: 1;
@@ -3315,6 +3399,7 @@ a:focus-visible {
   user-select: none;
   -webkit-user-drag: none;
 }
+.idle-vehicle-visual model-viewer { aspect-ratio: 1617 / 676; }
 .idle-vehicle-visual--muted { opacity: .26; filter: saturate(.65) blur(.4px); }
 
 @media (max-width: 1040px) {
