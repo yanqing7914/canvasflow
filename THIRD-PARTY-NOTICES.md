@@ -46,6 +46,24 @@ this file is about attribution for what the project uses and borrows, and a
 generated full-tree dependency license inventory would be a different artifact
 with a different purpose.
 
+### Car Concept vehicle model — bundled derivative
+
+The browser bundle includes `apps/demo/public/car/idle-ev-concept.glb`, a
+modified derivative of Khronos Group's **Car Concept** sample asset:
+
+- **Source:** [KhronosGroup/glTF-Sample-Assets, CarConcept/glTF-Binary](https://github.com/KhronosGroup/glTF-Sample-Assets/tree/44b6f9bdb08a5b16e92b91857ec3c87de9401dfa/Models/CarConcept/glTF-Binary), pinned to commit `44b6f9bdb08a5b16e92b91857ec3c87de9401dfa`.
+- **Creator / attribution:** Eric Chadwick of Darmstadt Graphics Group GmbH, 2024.
+- **License:** [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/legalcode), SPDX `CC-BY-4.0`. The source package's `CarConcept-LICENSE.md` separately excludes Khronos and other logos/trademarks from that license; this repository does not claim or grant trademark rights.
+- **Pinned source SHA-256:** `c272098089d78c5cd9fd9f24ff50ee8acf8d932c55f2d55fc10adb6c8998966b` (`CarConcept.glb`, 11,778,688 bytes).
+- **Published derivative SHA-256:** `91a5b2158a0ef936baeefcf14a6f12bbfcbf5627085fe8bc7ba39d06120e1b1e` (`idle-ev-concept.glb`, 11,261,644 bytes; audited 2026-08-19).
+- **Modification:** `scripts/sanitize-carconcept.mjs` removes the `InteriorSteeringEmblem` and `License Plate` meshes, removes the `Khronos_C`, `Tireside_C`, and `Tireside_N` image payloads and all references, replaces the tire-side mark material with a plain dark material, strips source trademark metadata, and repacks only referenced bufferViews. The script pins the source SHA and performs structural plus forbidden-mark checks before writing the output.
+- **Reproduction:** `node scripts/sanitize-carconcept.mjs /path/to/CarConcept.glb apps/demo/public/car/idle-ev-concept.glb`.
+
+The derivative keeps the original vehicle geometry and non-marking materials. Its
+asset metadata and binary payload contain no source trademark metadata,
+license-plate or steering-emblem names, or the removed image payload hashes. The
+CC BY 4.0 attribution above remains required for redistribution of the derivative.
+
 The tracked binary assets are the deterministic voice fixtures
 (`fixtures/airport-pickup/voice/*.wav`, mono 16-bit PCM). Generated KWS/VAD
 models and runtime files under `apps/demo/public/voice/` are ignored and must be
