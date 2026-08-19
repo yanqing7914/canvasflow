@@ -37,11 +37,23 @@ describe('IdleVehicleVisual', () => {
     expect(model).toHaveAttribute('camera-controls')
     expect(model).toHaveAttribute('auto-rotate')
     expect(model).toHaveAttribute('auto-rotate-delay', '1200')
-    expect(model).toHaveAttribute('rotation-per-second', '18deg')
+    expect(model).toHaveAttribute('rotation-per-second', '10deg')
+    expect(model).toHaveAttribute('variant-name', 'Torched Graphite')
+    expect(model).toHaveAttribute('camera-orbit', '-35deg 70deg 82%')
+    expect(model).toHaveAttribute('camera-target', '0m 0.57m 0.24m')
+    expect(model).toHaveAttribute('field-of-view', '30deg')
+    expect(model).toHaveAttribute('min-camera-orbit', 'auto auto 74%')
+    expect(model).toHaveAttribute('max-camera-orbit', 'auto auto 104%')
+    expect(model).toHaveAttribute('disable-zoom')
+    expect(model).toHaveAttribute('disable-pan')
+    expect(model).toHaveAttribute('shadow-intensity', '0.8')
+    expect(model).toHaveAttribute('shadow-softness', '1')
+    expect(model).toHaveAttribute('exposure', '1.05')
     expect(model).toHaveAttribute('touch-action', 'pan-y')
 
     fireEvent(model, new Event('error'))
     await waitFor(() => expect(screen.getByTestId('idle-vehicle-fallback')).toHaveAttribute('src', '/car/idle-car-ev.png'))
+    expect(screen.getByTestId('idle-vehicle-fallback-status')).toHaveTextContent('三维车辆暂不可用，已切换为本地静态车辆展示。')
   })
 
   it('keeps the local PNG when WebGL is unavailable', async () => {
@@ -52,5 +64,6 @@ describe('IdleVehicleVisual', () => {
 
     await waitFor(() => expect(screen.getByTestId('idle-vehicle-fallback')).toHaveAttribute('src', '/car/idle-car-ev.png'))
     expect(screen.queryByTestId('idle-vehicle-model')).not.toBeInTheDocument()
+    expect(screen.getByTestId('idle-vehicle-fallback-status')).toHaveTextContent('三维车辆暂不可用，已切换为本地静态车辆展示。')
   })
 })

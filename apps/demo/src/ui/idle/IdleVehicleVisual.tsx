@@ -2,6 +2,7 @@ import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 
 const MODEL_SRC = '/car/idle-ev-concept.glb'
 const FALLBACK_SRC = '/car/idle-car-ev.png'
+const FALLBACK_MESSAGE = '三维车辆暂不可用，已切换为本地静态车辆展示。'
 
 function supportsWebGL() {
   if (typeof window === 'undefined' || (!window.WebGLRenderingContext && !window.WebGL2RenderingContext)) return false
@@ -60,6 +61,7 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
   return (
     <div
       className={`idle-vehicle-visual${muted ? ' idle-vehicle-visual--muted' : ''}`}
+      data-testid="idle-vehicle-visual"
       data-renderer={isModelViewer ? 'model-viewer' : renderer}
     >
       <span className="idle-vehicle-visual__reflection" data-testid="idle-vehicle-reflection" aria-hidden="true" />
@@ -77,8 +79,24 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
           'camera-controls': '',
           'auto-rotate': '',
           'auto-rotate-delay': '1200',
-          'rotation-per-second': '18deg',
-          'interaction-prompt': 'auto',
+          'rotation-per-second': '10deg',
+          // Select the neutral graphite variant instead of the source's red
+          // showroom default. The model keeps its PBR paint, glass, and light
+          // materials while staying visually quiet behind the cockpit cards.
+          'variant-name': 'Torched Graphite',
+          // Lock the opening view to a composed front three-quarter angle while
+          // leaving the vehicle free to orbit horizontally under direct drag.
+          'camera-orbit': '-35deg 70deg 82%',
+          'camera-target': '0m 0.57m 0.24m',
+          'field-of-view': '30deg',
+          'min-camera-orbit': 'auto auto 74%',
+          'max-camera-orbit': 'auto auto 104%',
+          'disable-zoom': '',
+          'disable-pan': '',
+          'shadow-intensity': '0.8',
+          'shadow-softness': '1',
+          exposure: '1.05',
+          'interaction-prompt': 'none',
           // Vertical gestures still scroll the mobile idle screen; horizontal drags orbit.
           'touch-action': 'pan-y',
           loading: 'eager',
@@ -95,6 +113,9 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
             draggable={false}
           />
         )}
+      {renderer === 'fallback'
+        ? <span className="sr-only" data-testid="idle-vehicle-fallback-status" aria-live="polite">{FALLBACK_MESSAGE}</span>
+        : null}
     </div>
   )
 }
