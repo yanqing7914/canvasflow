@@ -14,8 +14,8 @@ Every license statement below was verified against the upstream repository on
 No third-party source is vendored into this repository. Nothing under `packages/`
 or `apps/` is a copy, fork, or bundle of another project's tree.
 
-The shipped browser runtime has four third-party package dependencies plus two
-locally downloaded voice-model/runtime asset families:
+The shipped browser runtime has six direct third-party package dependencies plus
+two locally downloaded voice-model/runtime asset families:
 
 | Package | Declared range (installed) | License | Verified from |
 |---|---|---|---|
@@ -23,6 +23,8 @@ locally downloaded voice-model/runtime asset families:
 | `react-dom` | `^19.1.0` (19.2.7) | MIT | https://github.com/react/react/blob/main/LICENSE |
 | `zod` | `^4.0.5` (4.4.3) | MIT | https://github.com/colinhacks/zod/blob/main/LICENSE |
 | `onnxruntime-web` | `^1.27.0` (1.27.0) | MIT | https://github.com/microsoft/onnxruntime/blob/main/LICENSE |
+| `@google/model-viewer` | `4.3.1` | Apache-2.0 | https://github.com/google/model-viewer/blob/master/LICENSE |
+| `three` | `0.183.0` | MIT | https://github.com/mrdoob/three.js/blob/dev/LICENSE |
 
 Local voice assets are not tracked by Git. `scripts/voice-assets-manifest.json`
 pins their source URL, SHA-256, size, installed files, and declared license:
