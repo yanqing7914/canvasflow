@@ -3,6 +3,7 @@ import { createElement, useCallback, useEffect, useRef, useState } from 'react'
 const MODEL_SRC = '/car/idle-ev-concept.glb'
 const FALLBACK_SRC = '/car/idle-car-ev.png'
 const FALLBACK_MESSAGE = '三维车辆暂不可用，已切换为本地静态车辆展示。'
+const HYDRATION_DELAY_MS = 1_500
 
 function supportsWebGL() {
   if (typeof window === 'undefined' || (!window.WebGLRenderingContext && !window.WebGL2RenderingContext)) return false
@@ -20,12 +21,28 @@ function supportsWebGL() {
  * idle screen without its locally bundled vehicle visual.
  */
 export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
-  const [renderer, setRenderer] = useState<'loading' | 'model-viewer' | 'fallback'>('loading')
+  // Keep the first frame cheap and readable. The 3D runtime is hydrated only
+  // after the idle cabin has settled, so opening a task never competes with
+  // model parsing or WebGL setup.
+  const [renderer, setRenderer] = useState<'model-viewer' | 'fallback'>('fallback')
+  const [fallbackStatusVisible, setFallbackStatusVisible] = useState(false)
   const modelViewerRef = useRef<HTMLElement | null>(null)
-  const showFallback = useCallback(() => setRenderer('fallback'), [])
+  const showFallback = useCallback(() => {
+    setRenderer('fallback')
+    setFallbackStatusVisible(true)
+  }, [])
 
   useEffect(() => {
     let disposed = false
+    const idleTimer = window.setTimeout(() => {
+      if (disposed) return
+      if (typeof window.requestIdleCallback === 'function') {
+        idleCallback = window.requestIdleCallback(() => { void loadModelViewer() }, { timeout: 500 })
+      } else {
+        void loadModelViewer()
+      }
+    }, HYDRATION_DELAY_MS)
+    let idleCallback: number | undefined
 
     async function loadModelViewer() {
       try {
@@ -35,13 +52,19 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
         await window.customElements.whenDefined('model-viewer')
         if (!disposed && window.customElements.get('model-viewer')) setRenderer('model-viewer')
       } catch {
-        if (!disposed) setRenderer('fallback')
+        if (!disposed) showFallback()
       }
     }
 
-    void loadModelViewer()
-    return () => { disposed = true }
-  }, [])
+    // Delay hydration until the first idle frame has been presented. The
+    // timeout also makes the schedule deterministic on browsers without the
+    // non-standard requestIdleCallback API.
+    return () => {
+      disposed = true
+      if (idleTimer !== undefined) window.clearTimeout(idleTimer)
+      if (idleCallback !== undefined) window.cancelIdleCallback?.(idleCallback)
+    }
+  }, [showFallback])
 
   useEffect(() => {
     if (renderer !== 'model-viewer' || !modelViewerRef.current) return
@@ -77,9 +100,6 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
           role: 'img',
           tabIndex: 0,
           'camera-controls': '',
-          'auto-rotate': '',
-          'auto-rotate-delay': '1200',
-          'rotation-per-second': '10deg',
           // Select the neutral graphite variant instead of the source's red
           // showroom default. The model keeps its PBR paint, glass, and light
           // materials while staying visually quiet behind the cockpit cards.
@@ -113,7 +133,7 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
             draggable={false}
           />
         )}
-      {renderer === 'fallback'
+      {fallbackStatusVisible
         ? <span className="sr-only" data-testid="idle-vehicle-fallback-status" aria-live="polite">{FALLBACK_MESSAGE}</span>
         : null}
     </div>
