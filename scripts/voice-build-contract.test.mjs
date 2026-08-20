@@ -30,6 +30,17 @@ describe('voice asset reproduction scripts', () => {
     }
   })
 
+  it('retries downloads from a clean file after an integrity failure', () => {
+    expect(fetchScript).toContain('DOWNLOAD_RETRY_FAILED')
+    expect(fetchScript).toContain('rm -f -- "$partial"')
+    expect(fetchScript.match(/curl -fL --retry 3 --connect-timeout 20 -o "\$partial" "\$url"/g)).toHaveLength(2)
+  })
+
+  it('guards generated asset paths inside the repository root', () => {
+    expect(probeScript).toContain('ASSET_PATH_INVALID')
+    expect(probeScript).toContain('isSafeAssetPath')
+  })
+
   it('keeps binary voice assets out of git while tracking templates', () => {
     const binaryPaths = assetManifest.assets
       .flatMap((asset) => asset.files)
@@ -42,6 +53,9 @@ describe('voice asset reproduction scripts', () => {
       'apps/demo/public/voice/**/*.onnx',
       'apps/demo/public/voice/**/*.wasm',
       'apps/demo/public/voice/**/*.data',
+      'apps/demo/public/voice/kws/sherpa-onnx-kws.js',
+      'apps/demo/public/voice/kws/sherpa-onnx-wasm-kws-main.js',
+      'apps/demo/public/voice/**/tokens.txt',
     ])
   })
 })

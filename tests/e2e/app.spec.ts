@@ -594,7 +594,9 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(completedPayload.task).not.toHaveProperty('navigationSimulation')
   expect(completedPayload.task).not.toHaveProperty('cockpit')
   await expect(page.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
-  await expect(page.locator('.cockpit-idle-notice')).toHaveText('已到家')
+  // The empty persistent voice live region and completion announcement both
+  // have role=status; assert the semantic completion surface explicitly.
+  await expect(page.locator('.cockpit-idle-notice[role="status"]')).toHaveText('已到家')
   await expect(page.locator('.cockpit-window[data-kind]')).toHaveCount(0)
   await expect(page.locator('.navigation-workspace')).toHaveCount(0)
   await expect(page.getByTestId('persistent-map-layer')).toHaveCount(0)

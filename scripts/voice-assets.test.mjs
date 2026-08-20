@@ -141,6 +141,18 @@ describe('voice asset contract', () => {
     ]))
   })
 
+  it('rejects manifest paths that escape the repository root', () => {
+    const root = tempRoot()
+    const manifestPath = join(root, 'manifest.json')
+    writeFileSync(manifestPath, JSON.stringify({
+      schemaVersion: 1,
+      assets: [{ ...SILERO_VAD, files: ['../outside.onnx'] }],
+    }))
+    const result = inspectVoiceAssets({ root, manifestPath, assetIds: [SILERO_VAD.id] })
+    expect(result.exitCode).toBe(EXIT_CODES.INVALID_MANIFEST)
+    expect(result.errors).toContainEqual(expect.objectContaining({ code: 'ASSET_PATH_INVALID' }))
+  })
+
   it('can validate fetched models before the separately built WASM runtime exists', () => {
     const root = tempRoot()
     const tokens = writeTokens(root, ['x 1', 'iǎo 2', 'n 3', 'án 4'])

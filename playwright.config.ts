@@ -35,7 +35,13 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? 'github' : 'list',
+  reporter: process.env.CI
+    ? [
+      ['github'],
+      ['html', { outputFolder: 'playwright-report', open: 'never' }],
+      ['junit', { outputFile: 'test-results/playwright.xml' }],
+    ]
+    : 'list',
   use: {
     baseURL,
     trace: 'on-first-retry',

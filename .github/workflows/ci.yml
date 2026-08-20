@@ -18,6 +18,7 @@ jobs:
   quality:
     name: quality
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -39,30 +40,49 @@ jobs:
         run: npm run typecheck
 
       - name: Test
-        run: npm test
+        run: npm run test:ci
 
       - name: Build
         run: npm run build
 
-      - name: Upload production runtime
-        if: github.ref == 'refs/heads/main'
+      - name: Record bundle sizes and enforce budget
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          : > test-results/bundle-size.txt
+          find apps/demo/dist/assets -type f \( -name '*.js' -o -name '*.css' \) -print0 \
+            | xargs -0 -r stat -c '%s %n' | sort -nr | tee test-results/bundle-size.txt
+          if awk '$1 > 2097152 { found = 1 } END { exit found ? 0 : 1 }' test-results/bundle-size.txt; then
+            echo 'Bundle budget exceeded: an application JS/CSS chunk is over 2 MiB.' >&2
+            exit 1
+          fi
+
+      - name: Run production dependency audit
+        run: |
+          set -euo pipefail
+          mkdir -p test-results
+          npm audit --omit=dev --audit-level=high --json > test-results/npm-audit.json
+
+      - name: Upload quality reports
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
         with:
-          name: canvasflow-runtime
-          path: |
-            package.json
-            package-lock.json
-            tsconfig.json
-            scripts/dev.mjs
-            apps/demo/package.json
-            apps/demo/server.ts
-            apps/demo/server-runtime.ts
-            apps/demo/dist
-            packages
+          name: quality-reports
+          path: test-results
+          if-no-files-found: warn
+
+      - name: Upload Vitest report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vitest-report
+          path: vitest-report
+          if-no-files-found: warn
 
   e2e:
     name: e2e
     runs-on: ubuntu-latest
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -103,6 +123,14 @@ jobs:
       - name: Run end-to-end tests
         run: npm run test:e2e
 
+      - name: Upload Playwright trace
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-trace
+          path: test-results
+          if-no-files-found: warn
+
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4
@@ -110,3 +138,112 @@ jobs:
           name: playwright-report
           path: playwright-report
           retention-days: 7
+
+      - name: Upload end-to-end test results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-test-results
+          path: test-results
+          if-no-files-found: warn
+
+  # Voice runtime binaries are intentionally untracked. Build them on the
+  # release path so the artifact has the same local-wake capability it claims.
+  release-artifact:
+    name: release-artifact
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [quality, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install pinned Emscripten toolchain
+        env:
+          EMSDK_VERSION: 4.0.23
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/upstream/emscripten/emcc" --version
+
+      - name: Fetch and build pinned voice runtime
+        env:
+          EMSCRIPTEN: ${{ runner.temp }}/emsdk/upstream/emscripten
+        run: |
+          set -euo pipefail
+          bash scripts/fetch-voice-models.sh
+          bash scripts/voice-build-kws-wasm.sh
+          node scripts/voice-assets.mjs
+
+      - name: Build release artifact
+        run: npm run build
+
+      - name: Verify bundled voice runtime
+        run: |
+          set -euo pipefail
+          for file in \
+            sherpa-onnx-kws.js \
+            sherpa-onnx-wasm-kws-main.js \
+            sherpa-onnx-wasm-kws-main.wasm \
+            sherpa-onnx-wasm-kws-main.data; do
+            test -s "apps/demo/dist/voice/kws/$file"
+          done
+
+      - name: Start release server
+        env:
+          AGENT_DATABASE_PATH: ':memory:'
+          AGENT_HOST: 127.0.0.1
+          AGENT_PORT: 8787
+          DEMO_STATIC_DIR: ${{ github.workspace }}/apps/demo/dist
+        run: |
+          set -euo pipefail
+          nohup npm run agent --workspace @canvasflow/demo > "$RUNNER_TEMP/canvasflow-server.log" 2>&1 &
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/health >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat "$RUNNER_TEMP/canvasflow-server.log" >&2
+          exit 1
+
+      - name: Smoke test release artifact
+        run: |
+          set -euo pipefail
+          curl -fsS http://127.0.0.1:8787/health | grep -F '"ok":true'
+          curl -fsS http://127.0.0.1:8787/ | grep -F '<!doctype html'
+          curl -fsS http://127.0.0.1:8787/v1/voice/capabilities | grep -E '"(pcmAsr|streamingAsr)"'
+          for path in \
+            /voice/kws/sherpa-onnx-kws.js \
+            /voice/kws/sherpa-onnx-wasm-kws-main.js \
+            /voice/kws/sherpa-onnx-wasm-kws-main.wasm \
+            /voice/kws/sherpa-onnx-wasm-kws-main.data; do
+            curl -fsS -o /dev/null "http://127.0.0.1:8787$path"
+          done
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: canvasflow-runtime
+          path: |
+            apps/demo/dist
+            package.json
+            package-lock.json
+            apps/demo/package.json
+            apps/demo/server.ts
+            apps/demo/server-runtime.ts
+            packages
+          if-no-files-found: error

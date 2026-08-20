@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { resolve, dirname, relative } from 'node:path'
+import { resolve, dirname, relative, isAbsolute } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url))
@@ -75,6 +75,9 @@ export const RECOMMENDED_GITIGNORE_RULES = Object.freeze([
   'apps/demo/public/voice/**/*.onnx',
   'apps/demo/public/voice/**/*.wasm',
   'apps/demo/public/voice/**/*.data',
+  'apps/demo/public/voice/kws/sherpa-onnx-kws.js',
+  'apps/demo/public/voice/kws/sherpa-onnx-wasm-kws-main.js',
+  'apps/demo/public/voice/**/tokens.txt',
 ])
 
 const SHA256_RE = /^[0-9a-f]{64}$/
@@ -99,6 +102,14 @@ function filePath(entry) {
 function fileExpectation(entry) {
   if (typeof entry === 'string') return {}
   return entry && typeof entry === 'object' ? entry : {}
+}
+
+function isSafeAssetPath(root, path) {
+  if (typeof path !== 'string' || path.length === 0) return false
+  const absoluteRoot = resolve(root)
+  const absolutePath = resolve(root, path)
+  const pathFromRoot = relative(absoluteRoot, absolutePath)
+  return pathFromRoot !== '' && !pathFromRoot.startsWith('..') && !isAbsolute(pathFromRoot)
 }
 
 export function parseKeywordSpec(spec = KEYWORD_SPEC) {
@@ -303,6 +314,11 @@ export function inspectVoiceAssets({
     for (const entry of Array.isArray(asset.files) ? asset.files : []) {
       const path = filePath(entry)
       const expected = fileExpectation(entry)
+      if (!isSafeAssetPath(root, path)) {
+        result.errors.push(error('ASSET_PATH_INVALID', `Voice asset path must stay inside the repository root: ${path}`, { path }))
+        inspected.files.push({ path, exists: false })
+        continue
+      }
       const absolute = resolve(root, path ?? '')
       const file = { path, exists: existsSync(absolute) }
       if (file.exists) {

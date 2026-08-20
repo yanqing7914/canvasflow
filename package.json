@@ -18,8 +18,10 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:ci": "vitest run --reporter=default --reporter=junit --outputFile=test-results/vitest.xml",
     "test:e2e": "playwright test",
-    "test:voice-wake": "node scripts/probe-local-wake.mjs"
+    "test:voice-wake": "node scripts/probe-local-wake.mjs",
+    "test:reports": "vitest run --reporter=html --outputFile=vitest-report/index.html"
   },
   "devDependencies": {
     "@eslint/js": "^9.31.0",

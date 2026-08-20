@@ -37,6 +37,9 @@ download_verified() {
   fi
 
   local partial="$out.part"
+  # A partial file may contain bytes from an interrupted or changed response.
+  # Do not append to it indefinitely: a clean retry makes the pinned digest
+  # recoverable after a transient download failure.
   if ! curl -fL -C - --retry 3 --connect-timeout 20 -o "$partial" "$url"; then
     rm -f -- "$partial"
     if ! curl -fL --retry 3 --connect-timeout 20 -o "$partial" "$url"; then
@@ -48,7 +51,15 @@ download_verified() {
   actual_sha="$(sha256_of "$partial")"
   actual_size="$(wc -c < "$partial" | tr -d ' ')"
   if [[ "$actual_sha" != "$expected_sha" || "$actual_size" != "$expected_size" ]]; then
-    fail_json checksum_mismatch DOWNLOAD_CHECKSUM_MISMATCH "$name failed pinned SHA-256 or size verification" 4
+    rm -f -- "$partial"
+    if ! curl -fL --retry 3 --connect-timeout 20 -o "$partial" "$url"; then
+      fail_json download_failed DOWNLOAD_RETRY_FAILED "$name could not be re-downloaded after an integrity failure" 6
+    fi
+    actual_sha="$(sha256_of "$partial")"
+    actual_size="$(wc -c < "$partial" | tr -d ' ')"
+    if [[ "$actual_sha" != "$expected_sha" || "$actual_size" != "$expected_size" ]]; then
+      fail_json checksum_mismatch DOWNLOAD_CHECKSUM_MISMATCH "$name failed pinned SHA-256 or size verification" 4
+    fi
   fi
   mv -f -- "$partial" "$out"
 }

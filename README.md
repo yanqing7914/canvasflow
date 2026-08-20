@@ -146,7 +146,7 @@ The voice runtime is browser-side, but its static assets and response headers ar
    node scripts/voice-assets.mjs
    ```
 
-   If CI stores the generated runtime in an artifact/cache instead, copy the four files under `apps/demo/public/voice/kws/` before `npm run build` and run the asset probe.
+   The four runtime files are required for local wake-word support. They are intentionally ignored by Git, so a release job must run this build (or restore a cache produced by the same pinned source commit and Emscripten version) before `npm run build`; run the asset probe after restoring them. A plain frontend build without these files is not a complete voice release.
 
 4. Build and start the combined preview server:
 
