@@ -1487,7 +1487,9 @@ test('draws the persistent route layer and steps its marker on authored progress
   await readControls(page, 'driving-to-airport')
   // Formal navigation mounts the route map only after departure.
   await expect(map).toHaveAttribute('data-mode', 'route')
-  await expect(map).toHaveAttribute('data-map-source', /amap|fallback/)
+  // A real AMap load may take up to the production loader timeout before the
+  // route settles; do not turn that honest loading window into a flaky E2E.
+  await expect(map).toHaveAttribute('data-map-source', /amap|fallback/, { timeout: 15_000 })
   await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
   // The departed checkpoint authors a crawl from 8% to 34%, so there is no single
   // number to assert: by the time the browser has painted, some of the span has
