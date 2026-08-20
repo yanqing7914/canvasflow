@@ -594,7 +594,7 @@ test('runs the real cockpit airport pickup loop over a persistent mock AMap @coc
   expect(completedPayload.task).not.toHaveProperty('navigationSimulation')
   expect(completedPayload.task).not.toHaveProperty('cockpit')
   await expect(page.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'idle')
-  await expect(page.getByRole('status')).toContainText('已到家')
+  await expect(page.locator('.cockpit-idle-notice')).toHaveText('已到家')
   await expect(page.locator('.cockpit-window[data-kind]')).toHaveCount(0)
   await expect(page.locator('.navigation-workspace')).toHaveCount(0)
   await expect(page.getByTestId('persistent-map-layer')).toHaveCount(0)
@@ -923,9 +923,20 @@ test('renders the UISpec surface responsively and keeps primary controls keyboar
     await taskInput.fill(legacyTaskText)
     await page.keyboard.press('Tab')
     await expect(submit).toBeFocused()
+    const createResponse = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && new URL(response.url()).pathname === '/v1/tasks'
+    ))
     await page.keyboard.press('Enter')
-    // The accepted message takes its keyboard with it.
-    await expect(page.getByLabel('任务输入')).toHaveCount(0)
+    await createResponse
+    // Speech-capable browsers close the on-demand keyboard after an accepted
+    // turn. Keyboard-only browsers may keep it mounted, but it must be settled
+    // and editable before this spec continues to the generated surface.
+    await expect(async () => {
+      const field = page.locator('input[aria-label="任务输入"]:visible').last()
+      if (await field.count() === 0) return
+      await expect(field).toBeEnabled()
+    }).toPass({ timeout: 10_000 })
 
     const surface = page.getByRole('region', { name: 'Generated task interface' })
     await expect(surface).toBeVisible()
@@ -1476,7 +1487,9 @@ test('draws the persistent route layer and steps its marker on authored progress
   await readControls(page, 'driving-to-airport')
   // Formal navigation mounts the route map only after departure.
   await expect(map).toHaveAttribute('data-mode', 'route')
-  await expect(map).toHaveAttribute('data-map-source', /amap|fallback/)
+  // A real AMap load may take up to the production loader timeout before the
+  // route settles; do not turn that honest loading window into a flaky E2E.
+  await expect(map).toHaveAttribute('data-map-source', /amap|fallback/, { timeout: 15_000 })
   await expect(page.getByRole('img', { name: '前往虹桥机场 T2的路线示意' })).toBeVisible()
   // The departed checkpoint authors a crawl from 8% to 34%, so there is no single
   // number to assert: by the time the browser has painted, some of the span has

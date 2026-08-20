@@ -10,6 +10,7 @@ describe('IdleHome', () => {
   it('shows the three simulated home capabilities from vehicle context only once', () => {
     render(<IdleHome vehicle={vehicle} onWeather={() => {}} onSchedule={() => {}} onVehicleStatus={() => {}} />)
     expect(screen.getByRole('region', { name: '空闲座舱' })).toBeInTheDocument()
+    expect(screen.getByTestId('idle-natural-environment')).toHaveAttribute('data-environment', 'grass-parking-trees')
     expect(screen.getByText('多云')).toBeInTheDocument()
     expect(screen.getByText('Her 开发日会')).toBeInTheDocument()
     expect(screen.getByText('新建 Her')).toBeInTheDocument()
@@ -29,10 +30,10 @@ describe('IdleHome', () => {
     expect(screen.queryByText('天气接口')).not.toBeInTheDocument()
     expect(screen.getByText('模拟位置：人民广场 · 非真实 GPS')).toBeInTheDocument()
     expect(screen.queryByText(/小南\s*等待唤醒/)).not.toBeInTheDocument()
-    const vehicleImage = screen.getByAltText('')
-    expect(vehicleImage).toHaveAttribute('src', '/car/idle-car-ev.png')
-    expect(vehicleImage).toHaveAttribute('width', '1617')
-    expect(vehicleImage).toHaveAttribute('height', '676')
+    expect(screen.getByTestId('idle-vehicle-visual')).toBeInTheDocument()
+    // JSDOM has no WebGL, so the page-level contract is the readable local
+    // fallback. The component-specific test exercises the local GLB contract.
+    expect(screen.getByTestId('idle-vehicle-fallback')).toHaveAttribute('src', '/car/idle-car-ev.png')
     expect(screen.getByTestId('idle-vehicle-ground')).toBeInTheDocument()
     expect(screen.getByTestId('idle-vehicle-reflection')).toBeInTheDocument()
   })
