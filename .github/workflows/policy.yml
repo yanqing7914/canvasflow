@@ -11,6 +11,7 @@ jobs:
   branch-and-files:
     name: branch-and-files
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout merge commit
         uses: actions/checkout@v4
@@ -42,5 +43,16 @@ jobs:
           changed_files="$(git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}")"
           if printf '%s\n' "$changed_files" | grep -Eiq '(^|/)(\.env($|\.)|.*\.(pem|key|p12|pfx)$|id_rsa|id_ed25519)'; then
             echo "Credential or environment files are not allowed in pull requests."
+            exit 1
+          fi
+
+      - name: Scan changed text for private credentials
+        run: |
+          set -euo pipefail
+          if git diff --no-ext-diff --text --unified=0 \
+            "${{ github.event.pull_request.base.sha }}" \
+            "${{ github.event.pull_request.head.sha }}" \
+            | grep -nEI '^\+.*(-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16})'; then
+            echo 'Private key or AWS access-key material found in changed text.' >&2
             exit 1
           fi

@@ -12,7 +12,10 @@
   "gitignoreRequired": [
     "apps/demo/public/voice/**/*.onnx",
     "apps/demo/public/voice/**/*.wasm",
-    "apps/demo/public/voice/**/*.data"
+    "apps/demo/public/voice/**/*.data",
+    "apps/demo/public/voice/kws/sherpa-onnx-kws.js",
+    "apps/demo/public/voice/kws/sherpa-onnx-wasm-kws-main.js",
+    "apps/demo/public/voice/**/tokens.txt"
   ],
   "gitNote": "Generated voice binaries must remain untracked. Add these ignore rules in a dedicated repository change before committing assets."
 }

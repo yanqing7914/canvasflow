@@ -45,6 +45,13 @@ npm run build
 npm run test:e2e
 ```
 
+CI also runs a production dependency audit, records JS/CSS bundle sizes (with a
+2 MiB per-chunk budget), and uploads Vitest/Playwright reports. The `main` push
+workflow uploads the built runtime. Generated voice assets are intentionally
+absent from a clean checkout, so they must be produced with the pinned toolchain
+or restored from a verified artifact before a production voice release; do not
+represent a plain frontend build as local-wake capable.
+
 The end-to-end suite needs three browsers once per machine:
 
 ```bash
