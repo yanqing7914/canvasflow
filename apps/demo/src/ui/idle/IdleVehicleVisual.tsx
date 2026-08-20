@@ -100,6 +100,9 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
           role: 'img',
           tabIndex: 0,
           'camera-controls': '',
+          'auto-rotate': '',
+          'auto-rotate-delay': '1200',
+          'rotation-per-second': '10deg',
           // Select the neutral graphite variant instead of the source's red
           // showroom default. The model keeps its PBR paint, glass, and light
           // materials while staying visually quiet behind the cockpit cards.
@@ -109,8 +112,12 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
           'camera-orbit': '-35deg 70deg 82%',
           'camera-target': '0m 0.57m 0.24m',
           'field-of-view': '30deg',
-          'min-camera-orbit': 'auto auto 74%',
-          'max-camera-orbit': 'auto auto 104%',
+          // Keep the car in a grounded three-quarter presentation. The
+          // explicit polar bounds prevent drag gestures from reaching the
+          // roof or underside while the azimuth range still allows both
+          // side views.
+          'min-camera-orbit': '-115deg 62deg 80%',
+          'max-camera-orbit': '45deg 78deg 96%',
           'disable-zoom': '',
           'disable-pan': '',
           'shadow-intensity': '0.8',
