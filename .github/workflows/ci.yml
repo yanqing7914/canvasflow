@@ -52,7 +52,7 @@ jobs:
           : > test-results/bundle-size.txt
           find apps/demo/dist/assets -type f \( -name '*.js' -o -name '*.css' \) -print0 \
             | xargs -0 -r stat -c '%s %n' | sort -nr | tee test-results/bundle-size.txt
-          if ! awk '$1 > 2097152 { found = 1 } END { exit found }' test-results/bundle-size.txt; then
+          if awk '$1 > 2097152 { found = 1 } END { exit found ? 0 : 1 }' test-results/bundle-size.txt; then
             echo 'Bundle budget exceeded: an application JS/CSS chunk is over 2 MiB.' >&2
             exit 1
           fi
