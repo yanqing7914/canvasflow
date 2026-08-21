@@ -34,27 +34,23 @@ describe('IdleVehicleVisual', () => {
     restoreIdleCallback('cancelIdleCallback', cancelIdleCallback)
   })
 
-  it('loads the locally hosted model viewer with accessible drag and rotation controls', async () => {
-    vi.useFakeTimers()
+  it('loads the locally hosted model viewer with accessible manual drag controls', async () => {
     Object.defineProperty(window, 'requestIdleCallback', { configurable: true, value: undefined })
     Object.defineProperty(window, 'cancelIdleCallback', { configurable: true, value: undefined })
     Object.defineProperty(window, 'WebGLRenderingContext', { configurable: true, value: class WebGLRenderingContext {} })
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({} as WebGLRenderingContext)
 
     render(<IdleVehicleVisual />)
-    expect(screen.getByTestId('idle-vehicle-fallback')).toHaveAttribute('src', '/car/idle-car-ev.png')
-    expect(screen.queryByTestId('idle-vehicle-model')).not.toBeInTheDocument()
-
-    await act(async () => { await vi.advanceTimersByTimeAsync(1_500) })
+    await act(async () => { await Promise.resolve() })
 
     const model = screen.getByTestId('idle-vehicle-model')
     expect(model).toHaveAttribute('src', '/car/idle-ev-concept.glb')
     expect(model).toHaveAttribute('alt', '深银色纯电概念车的可交互三维模型')
     expect(model).toHaveAttribute('aria-label', '深银色纯电概念车三维模型，可拖动旋转查看')
     expect(model).toHaveAttribute('camera-controls')
-    expect(model).toHaveAttribute('auto-rotate')
-    expect(model).toHaveAttribute('auto-rotate-delay', '1200')
-    expect(model).toHaveAttribute('rotation-per-second', '10deg')
+    expect(model).not.toHaveAttribute('auto-rotate')
+    expect(model).not.toHaveAttribute('auto-rotate-delay')
+    expect(model).not.toHaveAttribute('rotation-per-second')
     expect(model).toHaveAttribute('variant-name', 'Torched Graphite')
     expect(model).toHaveAttribute('camera-orbit', '-35deg 70deg 82%')
     expect(model).toHaveAttribute('camera-target', '0m 0.57m 0.24m')
@@ -79,17 +75,13 @@ describe('IdleVehicleVisual', () => {
   })
 
   it('keeps the local PNG when WebGL is unavailable', async () => {
-    vi.useFakeTimers()
     Object.defineProperty(window, 'requestIdleCallback', { configurable: true, value: undefined })
     Object.defineProperty(window, 'cancelIdleCallback', { configurable: true, value: undefined })
     Object.defineProperty(window, 'WebGLRenderingContext', { configurable: true, value: undefined })
     Object.defineProperty(window, 'WebGL2RenderingContext', { configurable: true, value: undefined })
 
     render(<IdleVehicleVisual />)
-
-    expect(screen.getByTestId('idle-vehicle-fallback')).toHaveAttribute('src', '/car/idle-car-ev.png')
-    expect(screen.queryByTestId('idle-vehicle-fallback-status')).not.toBeInTheDocument()
-    await act(async () => { await vi.advanceTimersByTimeAsync(1_500) })
+    await act(async () => { await Promise.resolve() })
     expect(screen.queryByTestId('idle-vehicle-model')).not.toBeInTheDocument()
     expect(screen.getByTestId('idle-vehicle-fallback-status')).toHaveTextContent('三维车辆暂不可用，已切换为本地静态车辆展示。')
   })
