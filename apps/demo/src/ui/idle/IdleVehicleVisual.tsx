@@ -91,7 +91,7 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
           'variant-name': 'Torched Graphite',
           // Lock the opening view to a composed front three-quarter angle while
           // leaving the vehicle free to orbit horizontally under direct drag.
-          'camera-orbit': '-35deg 70deg 86%',
+          'camera-orbit': '-35deg 70deg 78%',
           'camera-target': '0m 0.57m 0.24m',
           'field-of-view': '30deg',
           // Keep the car in a grounded three-quarter presentation. The
@@ -100,7 +100,7 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
           // side views.
           // Keep useful front/side views while clamping vertical pitch and
           // leaving enough camera distance for the full vehicle to fit.
-          'min-camera-orbit': '-115deg 62deg 88%',
+          'min-camera-orbit': '-115deg 62deg 76%',
           'max-camera-orbit': '45deg 78deg 108%',
           'disable-zoom': '',
           'disable-pan': '',
