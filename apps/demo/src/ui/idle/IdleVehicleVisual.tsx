@@ -85,9 +85,6 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
           role: 'img',
           tabIndex: 0,
           'camera-controls': '',
-          'auto-rotate': '',
-          'auto-rotate-delay': '1200',
-          'rotation-per-second': '10deg',
           // Select the neutral graphite variant instead of the source's red
           // showroom default. The model keeps its PBR paint, glass, and light
           // materials while staying visually quiet behind the cockpit cards.
