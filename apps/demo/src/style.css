@@ -3343,7 +3343,7 @@ a:focus-visible {
   z-index: 2;
   top: 50%;
   left: 50%;
-  width: min(35vw, 520px);
+  width: min(44vw, 650px);
   pointer-events: auto;
   transform: translate(-54%, -48%);
 }
