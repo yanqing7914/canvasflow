@@ -52,7 +52,7 @@ describe('IdleVehicleVisual', () => {
     expect(model).not.toHaveAttribute('auto-rotate-delay')
     expect(model).not.toHaveAttribute('rotation-per-second')
     expect(model).toHaveAttribute('variant-name', 'Torched Graphite')
-    expect(model).toHaveAttribute('camera-orbit', '-35deg 70deg 92%')
+    expect(model).toHaveAttribute('camera-orbit', '-35deg 70deg 86%')
     expect(model).toHaveAttribute('camera-target', '0m 0.57m 0.24m')
     expect(model).toHaveAttribute('field-of-view', '30deg')
     expect(model).toHaveAttribute('min-camera-orbit', '-115deg 62deg 88%')
