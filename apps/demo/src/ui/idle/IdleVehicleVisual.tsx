@@ -100,8 +100,8 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
           // side views.
           // Keep useful front/side views while clamping vertical pitch and
           // leaving enough camera distance for the full vehicle to fit.
-          'min-camera-orbit': '-115deg 62deg 76%',
-          'max-camera-orbit': '45deg 78deg 108%',
+          'min-camera-orbit': '-115deg 66deg 76%',
+          'max-camera-orbit': '45deg 74deg 96%',
           'disable-zoom': '',
           'disable-pan': '',
           'shadow-intensity': '0.8',

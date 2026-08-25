@@ -3343,7 +3343,7 @@ a:focus-visible {
   z-index: 2;
   top: 50%;
   left: 50%;
-  width: min(44vw, 650px);
+  width: min(70vw, 1140px);
   pointer-events: auto;
   transform: translate(-54%, -48%);
 }
@@ -3405,7 +3405,7 @@ a:focus-visible {
 @media (max-width: 1040px) {
   .idle-home__living { left: 16px; }
   .idle-home__capabilities { right: 16px; }
-  .idle-vehicle-visual { width: min(34vw, 420px); opacity: .82; }
+  .idle-vehicle-visual { width: min(62vw, 760px); opacity: .82; }
 }
 @media (max-width: 720px) {
   .cockpit-workspace:has(.cockpit-primary-panel[data-phase='collecting-airport']) .cockpit-workspace__primary { top: 50%; width: calc(100vw - 24px); max-height: calc(100dvh - 130px); }
