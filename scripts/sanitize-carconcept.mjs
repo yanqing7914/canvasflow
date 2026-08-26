@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url'
 export const SOURCE_SHA256 = 'c272098089d78c5cd9fd9f24ff50ee8acf8d932c55f2d55fc10adb6c8998966b'
 
 const REMOVED_NODE_NAMES = new Set(['InteriorSteeringEmblem', 'License Plate'])
+const FRONT_WHEEL_NODE_NAMES = new Set(['WheelFrontL', 'WheelFrontR'])
+const FRONT_WHEEL_STEERING_CORRECTION_RADIANS = Math.PI / 6
 const BANNED_IMAGE_HASHES = new Set([
   // Khronos_C.png, Tireside_C.png, and Tireside_N.png in the pinned source.
   '1453559c58526ec236ea7f90a72b0e49823061e6c26b571928b9ea3b91593e4d',
@@ -49,6 +51,39 @@ function sha256(bytes) {
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
+}
+
+/**
+ * The source sample exports both front-wheel parent nodes with a shared 30deg
+ * steering yaw. That leaves the parked car looking as if its wheels are turned
+ * even though the idle scene has no steering input. Remove only that yaw while
+ * preserving each wheel's original side/camber frame and position.
+ */
+function normalizeFrontWheelMatrices(json) {
+  const cosine = Math.cos(FRONT_WHEEL_STEERING_CORRECTION_RADIANS)
+  const sine = Math.sin(FRONT_WHEEL_STEERING_CORRECTION_RADIANS)
+
+  for (const node of json.nodes ?? []) {
+    if (!FRONT_WHEEL_NODE_NAMES.has(node.name) || !Array.isArray(node.matrix) || node.matrix.length !== 16) continue
+
+    const matrix = node.matrix
+    node.matrix = [
+      cosine * matrix[0] - sine * matrix[1], cosine * matrix[1] + sine * matrix[0], matrix[2], 0,
+      cosine * matrix[4] - sine * matrix[5], cosine * matrix[5] + sine * matrix[4], matrix[6], 0,
+      cosine * matrix[8] - sine * matrix[9], cosine * matrix[9] + sine * matrix[8], matrix[10], 0,
+      matrix[12], matrix[13], matrix[14], 1,
+    ]
+  }
+}
+
+function assertFrontWheelsStraight(json) {
+  for (const node of json.nodes ?? []) {
+    if (!FRONT_WHEEL_NODE_NAMES.has(node.name)) continue
+    assert(Array.isArray(node.matrix) && node.matrix.length === 16, `${node.name} is missing its transform matrix`)
+    assert(Math.abs(node.matrix[0] - 1) < 1e-4, `${node.name} still has steering yaw`)
+    assert(Math.abs(node.matrix[1]) < 1e-4, `${node.name} still has steering yaw`)
+    assert(Math.abs(node.matrix[2]) < 1e-4, `${node.name} still has steering yaw`)
+  }
 }
 
 function parseGlb(bytes) {
@@ -339,6 +374,7 @@ function sanitizeJson(sourceJson, sourceBinary) {
   json.images = retainedImageIndices.map((index) => clone(sourceJson.images[index]))
   json.meshes = retainedMeshCopies
   json.nodes = retainedNodeIndices.map((index) => clone(sourceJson.nodes[index]))
+  normalizeFrontWheelMatrices(json)
   json.accessors = retainedAccessorIndices.map((index) => clone(sourceJson.accessors[index]))
   json.buffers = [{ byteLength: binary.length }]
 
@@ -386,6 +422,7 @@ function sanitizeJson(sourceJson, sourceBinary) {
     version: '2.0',
     copyright: 'Car Concept by Eric Chadwick / Darmstadt Graphics Group GmbH, 2024. CC BY 4.0. Modified by CanvasFlow; attribution in THIRD-PARTY-NOTICES.md.',
   }
+  assertFrontWheelsStraight(json)
   return { json, binary }
 }
 
@@ -404,6 +441,7 @@ export function validateSanitizedGlb(bytes) {
     assert(!names.includes(forbidden), `Output contains forbidden geometry name: ${forbidden}`)
   }
   assert(!json.nodes.some((node) => REMOVED_NODE_NAMES.has(node.name)), 'Trademark geometry remains')
+  assertFrontWheelsStraight(json)
   assert(json.images.length === 11, `Expected 11 retained images, found ${json.images.length}`)
   assert(!listImageHashes(json, binary).some((hash) => BANNED_IMAGE_HASHES.has(hash)), 'A marked texture remains')
   assert(tireside, 'Tireside material is missing')

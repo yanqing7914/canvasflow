@@ -57,8 +57,8 @@ modified derivative of Khronos Group's **Car Concept** sample asset:
 - **Creator / attribution:** Eric Chadwick of Darmstadt Graphics Group GmbH, 2024.
 - **License:** [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/legalcode), SPDX `CC-BY-4.0`. The source package's `CarConcept-LICENSE.md` separately excludes Khronos and other logos/trademarks from that license; this repository does not claim or grant trademark rights.
 - **Pinned source SHA-256:** `c272098089d78c5cd9fd9f24ff50ee8acf8d932c55f2d55fc10adb6c8998966b` (`CarConcept.glb`, 11,778,688 bytes).
-- **Published derivative SHA-256:** `91a5b2158a0ef936baeefcf14a6f12bbfcbf5627085fe8bc7ba39d06120e1b1e` (`idle-ev-concept.glb`, 11,261,644 bytes; audited 2026-08-19).
-- **Modification:** `scripts/sanitize-carconcept.mjs` removes the `InteriorSteeringEmblem` and `License Plate` meshes, removes the `Khronos_C`, `Tireside_C`, and `Tireside_N` image payloads and all references, replaces the tire-side mark material with a plain dark material, strips source trademark metadata, and repacks only referenced bufferViews. The script pins the source SHA and performs structural plus forbidden-mark checks before writing the output.
+- **Published derivative SHA-256:** `1467391a415356c480f3bf1302b9eea0ca4119ffa37f7c03ec48452dd604f607` (`idle-ev-concept.glb`, 11,261,544 bytes; wheel-pose corrected 2026-08-25).
+- **Modification:** `scripts/sanitize-carconcept.mjs` removes the `InteriorSteeringEmblem` and `License Plate` meshes, removes the `Khronos_C`, `Tireside_C`, and `Tireside_N` image payloads and all references, replaces the tire-side mark material with a plain dark material, strips source trademark metadata, normalizes the exported front-wheel parent matrices to the parked straight-ahead pose, and repacks only referenced bufferViews. The script pins the source SHA and performs structural plus forbidden-mark checks before writing the output.
 - **Reproduction:** `node scripts/sanitize-carconcept.mjs /path/to/CarConcept.glb apps/demo/public/car/idle-ev-concept.glb`.
 
 The derivative keeps the original vehicle geometry and non-marking materials. Its
