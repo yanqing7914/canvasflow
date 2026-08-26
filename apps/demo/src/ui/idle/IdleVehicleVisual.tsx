@@ -77,20 +77,21 @@ export function IdleVehicleVisual({ muted = false }: { muted?: boolean }) {
           role: 'img',
           tabIndex: 0,
           'camera-controls': '',
-          'auto-rotate': '',
-          'auto-rotate-delay': '1200',
-          'rotation-per-second': '10deg',
           // Select the neutral graphite variant instead of the source's red
           // showroom default. The model keeps its PBR paint, glass, and light
           // materials while staying visually quiet behind the cockpit cards.
           'variant-name': 'Torched Graphite',
           // Lock the opening view to a composed front three-quarter angle while
           // leaving the vehicle free to orbit horizontally under direct drag.
-          'camera-orbit': '-35deg 70deg 82%',
+          // The sanitized GLB's hood and headlights face +Z; theta near zero
+          // keeps the initial view on the front three-quarter side.
+          'camera-orbit': '-35deg 70deg 92%',
           'camera-target': '0m 0.57m 0.24m',
           'field-of-view': '30deg',
-          'min-camera-orbit': 'auto auto 74%',
-          'max-camera-orbit': 'auto auto 104%',
+          // Keep horizontal three-quarter views available while clamping the
+          // polar angle and leaving enough radius for the full car to fit.
+          'min-camera-orbit': '-115deg 62deg 88%',
+          'max-camera-orbit': '45deg 78deg 108%',
           'disable-zoom': '',
           'disable-pan': '',
           'shadow-intensity': '0.8',
