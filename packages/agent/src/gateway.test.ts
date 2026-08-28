@@ -83,6 +83,109 @@ describe('cockpit task cancellation', () => {
   })
 })
 
+describe('cockpit suspended queries', () => {
+  it('does not invent an airport for a first-turn airport weather query', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createCockpitRequest('机场天气怎么样？', 'pending-weather-first-turn'))
+    expect(created.task.pickupAirport).toBeUndefined()
+    expect(created.task.pendingQuery).toMatchObject({ kind: 'weather', requiredSlots: ['airport'] })
+    expect(created.assistant?.text).toBe('你想看虹桥机场还是浦东机场的天气？')
+    expect(created.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+  })
+
+  it('answers a first-turn flight-detail request when the flight number is included', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createCockpitRequest('浦东，帮我看看航班详情 MU5102', 'flight-detail-first-turn'))
+    expect(created.task.pickupAirport?.code).toBe('PVG')
+    expect(created.task.flight?.flightNumber).toBe('MU5102')
+    expect(created.task.pendingQuery).toBeUndefined()
+    expect(created.assistant?.text).toContain('MU5102')
+    expect(created.ui.components.some((component) => component.type === 'flight-detail')).toBe(true)
+  })
+
+  it('keeps a named airport when answering a first-turn weather query', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createCockpitRequest('浦东机场天气怎么样？', 'weather-named-airport'))
+    expect(created.task.pickupAirport?.code).toBe('PVG')
+    expect(created.task.pendingQuery).toBeUndefined()
+    expect(created.assistant?.text).toContain('浦东机场')
+    expect(created.assistant?.text).toContain('航班号')
+    expect(created.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+  })
+
+  it('suspends a first-turn flight-detail request even when the airport is named', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createCockpitRequest('浦东，帮我看看航班详情', 'pending-flight-first-turn'))
+    expect(created.task.pickupAirport?.code).toBe('PVG')
+    expect(created.task.pendingQuery).toMatchObject({ kind: 'flight-detail', requiredSlots: ['flightNumber'] })
+    expect(created.ui.components.some((component) => component.type === 'flight-choices')).toBe(false)
+    expect(created.assistant?.text).toBe('请告诉我航班号。')
+  })
+
+  it('completes an airport-dependent weather query from the next airport answer', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createCockpitRequest('晚上帮我把家里人接回来', 'pending-weather-create'))
+    const asked = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'pending-weather-question', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'pending-weather-question', type: 'user.input', text: '机场天气怎么样？', source: 'text', timestamp: now },
+    })
+    expect(asked.task.pendingQuery).toMatchObject({ kind: 'weather', requiredSlots: ['airport'] })
+    const answered = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'pending-weather-answer', expectedTaskRevision: asked.task.taskRevision,
+      event: { eventId: 'pending-weather-answer', type: 'user.input', text: '浦东', source: 'text', timestamp: now },
+    })
+    expect(answered.task.pickupAirport?.code).toBe('PVG')
+    expect(answered.task.pendingQuery).toBeUndefined()
+    expect(answered.assistant?.text).toContain('浦东机场')
+    expect(answered.assistant?.text).toContain('请告诉我航班号')
+    expect(answered.ui.components.some((component) => component.type === 'weather-card')).toBe(true)
+  })
+
+  it('completes a flight-detail query from a later flight number', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createCockpitRequest('晚上帮我把家里人接回来', 'pending-flight-create'))
+    const airport = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'pending-flight-airport', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'pending-flight-airport', type: 'user.input', text: '浦东', source: 'text', timestamp: now },
+    })
+    const asked = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'pending-flight-question', expectedTaskRevision: airport.task.taskRevision,
+      event: { eventId: 'pending-flight-question', type: 'user.input', text: '帮我看看航班详情', source: 'text', timestamp: now },
+    })
+    expect(asked.task.pendingQuery).toMatchObject({ kind: 'flight-detail', requiredSlots: ['flightNumber'] })
+    const answered = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'pending-flight-answer', expectedTaskRevision: asked.task.taskRevision,
+      event: { eventId: 'pending-flight-answer', type: 'user.input', text: 'MU5102', source: 'voice', timestamp: now },
+    })
+    expect(answered.task.flight?.flightNumber).toBe('MU5102')
+    expect(answered.task.pickupAirport?.code).toBe('PVG')
+    expect(answered.task.navigation).toBeUndefined()
+    expect(answered.task.pendingQuery).toBeUndefined()
+    expect(answered.assistant?.text).toContain('MU5102')
+    expect(answered.ui.components.some((component) => component.type === 'flight-detail')).toBe(true)
+  })
+
+  it('keeps only the newest transient info window', () => {
+    const gateway = createGateway()
+    const created = gateway.createTask(createCockpitRequest('晚上帮我把家里人接回来', 'pending-window-create'))
+    const selected = gateway.submitEvent(created.task.taskId, {
+      clientRequestId: 'pending-window-airport', expectedTaskRevision: created.task.taskRevision,
+      event: { eventId: 'pending-window-airport', type: 'user.input', text: '虹桥机场', timestamp: now },
+    })
+    const weather = gateway.submitEvent(selected.task.taskId, {
+      clientRequestId: 'pending-window-weather', expectedTaskRevision: selected.task.taskRevision,
+      event: { eventId: 'pending-window-weather', type: 'user.input', text: '机场天气怎么样？', timestamp: now },
+    })
+    const calendar = gateway.submitEvent(weather.task.taskId, {
+      clientRequestId: 'pending-window-calendar', expectedTaskRevision: weather.task.taskRevision,
+      event: { eventId: 'pending-window-calendar', type: 'user.input', text: '看看日程', timestamp: now },
+    })
+    expect(calendar.ui.windows?.filter((window) => ['weather', 'calendar', 'charging', 'flight-detail', 'vehicle-status'].includes(window.kind))).toHaveLength(1)
+    expect(calendar.ui.windows?.at(-1)?.kind).toBe('calendar')
+    expect(calendar.ui.components.some((component) => component.type === 'weather-card')).toBe(false)
+  })
+})
+
 function failedLandingMessageTask(gateway: AgentGateway) {
   const created = gateway.createTask(createRequest('接妈妈，航班 MU5102'))
   const started = gateway.submitAction(created.task.taskId, {
@@ -349,7 +452,7 @@ describe('AgentGateway', () => {
       event: { eventId: 'faster', type: 'user.input', text: '跑快点', source: 'text', timestamp: now },
     })
     expect(faster.task.cockpit?.speedMode).toBe('fast')
-    expect(faster.ui.windows?.some((window) => window.kind === 'weather')).toBe(true)
+    expect(faster.ui.windows?.some((window) => window.kind === 'weather')).toBe(false)
 
     expect(() => gateway.submitEvent(faster.task.taskId, {
       clientRequestId: 'premature-arrival', expectedTaskRevision: faster.task.taskRevision,

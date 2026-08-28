@@ -8,12 +8,12 @@ describe('CockpitWorkspace', () => {
     expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-workspace')
     expect(screen.getByTestId('cockpit-workspace')).toHaveAttribute('data-cockpit-mode', 'primary')
     expect(screen.getByLabelText('座舱地图')).toBeInTheDocument()
-    expect(screen.getByLabelText('座舱状态')).toBeInTheDocument()
-    expect(screen.getByLabelText('Agent反馈')).toBeInTheDocument()
-    expect(screen.getByLabelText('主任务窗口')).toBeInTheDocument()
-    expect(screen.getByLabelText('导航层')).toBeInTheDocument()
-    expect(screen.getByLabelText('辅助信息窗口')).toBeInTheDocument()
-    expect(screen.getByLabelText('文字和语音入口')).toBeInTheDocument()
+    expect(screen.queryByLabelText('座舱状态')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('Agent反馈')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('主任务窗口')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('导航层')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('辅助信息窗口')).not.toBeInTheDocument()
+    expect(screen.queryByLabelText('文字和语音入口')).not.toBeInTheDocument()
   })
 
   it('keeps the workspace and map node mounted while slot content changes', () => {

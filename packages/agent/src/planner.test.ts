@@ -5,6 +5,23 @@ import { Planner, planAirportPickup } from './planner'
 const timestamp = '2026-07-22T20:00:00+08:00'
 
 describe('airport pickup Planner', () => {
+  it.each([
+    '晚上帮我把家里人接回来',
+    '帮我安排一下接机',
+    '她们晚上到，帮我去接一下',
+    '我想安排一次机场接送',
+    '晚上去机场接家人',
+    '帮我把家人从机场接回来',
+  ])('recognizes bounded natural pickup phrasing: %s', (text) => {
+    expect(planAirportPickup({ text, eventId: `natural-${text}` }).intent).toBe('create-airport-pickup')
+  })
+
+  it('keeps airport and query intent together for a flight detail request', () => {
+    expect(planAirportPickup({ text: '浦东，帮我看看航班详情', eventId: 'flight-query-airport' })).toMatchObject({
+      intent: 'check-flight-detail', slotUpdates: { airport: { label: '浦东机场', code: 'PVG' } },
+    })
+  })
+
   it('does not treat a generic airport request as a named airport', () => {
     const state = createInitialTask('cockpit-001', timestamp)
     state.phase = 'collecting-airport'

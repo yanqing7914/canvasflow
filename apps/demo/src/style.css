@@ -3118,6 +3118,15 @@ a:focus-visible {
 .cockpit-primary-panel[data-phase='collecting-airport'] .ui-status-card--choice-prompt .ui-status-card__content { max-width: 100%; text-align: center; }
 .cockpit-primary-panel[data-phase='collecting-airport'] .ui-status-card--choice-prompt .ui-status-card__title { max-width: none; font-size: clamp(38px, 5vw, 62px); }
 .cockpit-primary-panel[data-phase='collecting-airport'] .ui-status-card--choice-prompt .ui-status-card__message { max-width: none; margin-top: 14px; font-size: clamp(16px, 1.5vw, 20px); }
+.cockpit-primary-panel[data-phase='collecting-airport'] .ui-spec-renderer {
+  box-sizing: border-box;
+  width: calc(100% + 20px);
+  margin: -10px;
+  padding: 28px 34px 30px;
+  border: 1px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  border-radius: 18px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5);
+}
 .cockpit-primary-panel[data-phase='collecting-airport'] .ui-card__actions {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
@@ -5084,3 +5093,42 @@ a:focus-visible {
 .ui-charge-brief__soc-head strong { color: var(--route); font-family: Bahnschrift, monospace; font-size: 22px; }
 .ui-charge-brief__soc-track { height: 12px; margin: 9px 0 7px; overflow: hidden; border-radius: 999px; background: var(--quiet-rule); }
 .ui-charge-brief__soc-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--route), var(--state-ink-positive)); }
+
+/* Desktop cockpit polish: keep the active decision above ambient chrome. */
+.persistent-map-layer__source {
+  left: max(18px, env(safe-area-inset-left));
+  bottom: max(18px, env(safe-area-inset-bottom));
+}
+.persistent-map-layer__recenter {
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(18px, env(safe-area-inset-bottom));
+  min-height: 44px;
+}
+.persistent-map-layer__zoom {
+  right: max(18px, env(safe-area-inset-right));
+  bottom: max(72px, calc(env(safe-area-inset-bottom) + 54px));
+}
+.persistent-map-layer__zoom button {
+  width: 44px;
+  height: 44px;
+}
+.persistent-map-layer__stops {
+  overflow-x: auto;
+}
+.persistent-map-layer__stops li {
+  min-width: max-content;
+}
+.cockpit-workspace[data-cockpit-mode='primary'] .idle-home__environment,
+.cockpit-workspace[data-cockpit-mode='navigation'] .idle-home__environment {
+  opacity: .52;
+}
+.cockpit-workspace[data-cockpit-mode='primary'] .cockpit-primary-panel,
+.cockpit-workspace[data-cockpit-mode='navigation'] .cockpit-primary-panel {
+  box-shadow: 0 28px 70px rgba(33, 22, 16, .24), 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+.cockpit-workspace[data-cockpit-mode='primary'] .demo-controls-panel,
+.cockpit-workspace[data-cockpit-mode='navigation'] .demo-controls-panel {
+  opacity: .82;
+  transform: scale(.96);
+  transform-origin: top right;
+}

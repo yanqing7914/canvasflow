@@ -365,10 +365,96 @@ export class AgentGateway {
         this.#throwProviderError(error)
       }
     }
+    if (plan.intent === 'check-flight-detail') {
+      if (airport) {
+        task = applyEvent(task, {
+          eventId: `${request.clientRequestId}:airport`, type: 'pickup.airport-selected', airport, timestamp,
+        }, this.#preferences)
+      }
+      if (plan.slotUpdates.flightNumber) {
+        const read = this.#orchestrator.resolveFlightStatus?.(taskId, request.clientRequestId, plan.slotUpdates.flightNumber)
+        if (!read) {
+          const stored = this.#store.create(this.#publish(task, toolResults, requestContext), request.clientRequestId)
+          return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+            text: '航班服务暂时不可用，请稍后重试。', shouldSpeak: request.input.source === 'voice' && request.clientCapabilities.supportsTts,
+          })
+        }
+        task = {
+          ...task,
+          flight: {
+            flightNumber: read.data.flightNumber,
+            airlineName: '航班',
+            originName: '出发地',
+            arrivalAirportName: read.data.arrivalAirportName,
+            status: read.data.status,
+            scheduledArrival: read.data.scheduledArrival,
+            estimatedArrival: read.data.estimatedArrival,
+            arrivalAirport: read.data.arrivalAirport,
+            terminal: read.data.terminal,
+            baggageClaim: read.data.baggageClaim,
+          },
+          taskRevision: task.taskRevision + 1,
+          updatedAt: timestamp,
+        }
+        toolResults = { ...toolResults, 'flight.get-status': read }
+        const published = this.#publish(task, toolResults, requestContext)
+        const component: UISpec['components'][number] = {
+          id: `flight-detail-${request.clientRequestId}:input`, type: 'flight-detail', props: {
+            flightNumber: read.data.flightNumber,
+            airlineName: '航班',
+            originName: '出发地',
+            arrivalAirportName: read.data.arrivalAirportName,
+            scheduledArrival: read.data.scheduledArrival,
+            estimatedArrival: read.data.estimatedArrival,
+            status: read.data.status,
+            terminal: read.data.terminal,
+            freshness: 'fixture',
+          },
+        }
+        const ui = this.#appendCockpitInfoWindow(taskId, published.ui, component, 'flight-detail', `${request.clientRequestId}:input`, timestamp)
+        const stored = this.#store.create({ ...published, task: { ...published.task, uiRevision: ui.uiRevision }, ui }, request.clientRequestId)
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+          text: `${cockpitFlightSummary(component)}${cockpitRecoveryPrompt(stored.task)}`,
+          shouldSpeak: request.input.source === 'voice' && request.clientCapabilities.supportsTts,
+        })
+      } else {
+        task = {
+          ...task,
+          pendingQuery: { kind: 'flight-detail', requiredSlots: ['flightNumber'], createdByEventId: `${request.clientRequestId}:input` },
+          taskRevision: task.taskRevision + 1,
+          updatedAt: timestamp,
+        }
+        const stored = this.#store.create(this.#publish(task, toolResults, requestContext), request.clientRequestId)
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+          text: '请告诉我航班号。', shouldSpeak: request.input.source === 'voice' && request.clientCapabilities.supportsTts,
+        })
+      }
+    }
     if (plan.intent === 'check-weather') {
+      if (!airport && /机场/.test(request.input.text)) {
+        task = {
+          ...task,
+          pendingQuery: { kind: 'weather', requiredSlots: ['airport'], createdByEventId: `${request.clientRequestId}:input` },
+          taskRevision: task.taskRevision + 1,
+          updatedAt: timestamp,
+        }
+        const stored = this.#store.create(this.#publish(task, toolResults, requestContext), request.clientRequestId)
+        return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+          text: '你想看虹桥机场还是浦东机场的天气？',
+          shouldSpeak: request.input.source === 'voice' && request.clientCapabilities.supportsTts,
+        })
+      }
+      if (airport && !task.pickupAirport) {
+        task = applyEvent(task, {
+          eventId: `${request.clientRequestId}:airport`, type: 'pickup.airport-selected', airport, timestamp,
+        }, this.#preferences)
+      }
       try {
+        const locationId = airport?.code
+          ? pickupDestinationForAirport(airport.code).id
+          : 'navigation-segment-origin'
         const weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, {
-          locationId: 'navigation-segment-origin',
+          locationId,
         })
         if (weather) {
           const published = this.#publish(task, toolResults, requestContext)
@@ -385,7 +471,7 @@ export class AgentGateway {
             ui,
           }, request.clientRequestId)
           return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
-            text: '已打开天气。',
+            text: `${cockpitWeatherSummary(component)}${cockpitRecoveryPrompt(stored.task)}`,
             shouldSpeak: request.input.source === 'voice' && request.clientCapabilities.supportsTts,
           })
         }
@@ -395,7 +481,7 @@ export class AgentGateway {
         assistantText = '天气服务暂时不可用，稍后可以再问我。'
       }
     }
-    if (airport) {
+    if (airport && plan.intent !== 'check-weather') {
       task = applyEvent(task, {
         eventId: `${request.clientRequestId}:airport`, type: 'pickup.airport-selected', airport, timestamp,
       }, this.#preferences)
@@ -1647,6 +1733,51 @@ export class AgentGateway {
 
     if (request.event.type === 'user.input') {
       const plan = this.#planUserInput(request.event.text, current.task, request.event.eventId, timestamp)
+      // A query answer may arrive as an ordinary slot utterance ("浦东" or
+      // "MU5102"). Resolve that answer before the normal airport/flight paths so
+      // it completes the suspended query instead of opening a second flow.
+      if (current.task.pendingQuery) {
+        const pending = current.task.pendingQuery
+        const airport = plan.slotUpdates.airport
+        const flightNumber = plan.slotUpdates.flightNumber
+        if (pending.kind === 'weather' && pending.requiredSlots.includes('airport') && airport) {
+          const task = current.task.phase === 'collecting-airport'
+            ? applyEvent(current.task, { eventId: request.event.eventId, type: 'pickup.airport-selected', airport, timestamp }, this.#preferences)
+            : { ...current.task, pickupAirport: airport, taskRevision: current.task.taskRevision + 1, updatedAt: timestamp }
+          const answered = this.#submitCockpitInfoWindow(taskId, { ...current, task }, request, startedAt, 'weather', commandSnapshot, plan)
+          return answered
+        }
+        if (pending.kind === 'flight-detail' && pending.requiredSlots.includes('flightNumber') && flightNumber) {
+          const task = applyEvent(current.task, {
+            eventId: request.event.eventId, type: 'user.input', text: request.event.text, timestamp,
+          }, this.#preferences, { userInputSlots: { flightNumber } })
+          try {
+            const read = this.#orchestrator.resolveFlightStatus?.(taskId, request.clientRequestId, flightNumber)
+            if (!read) return this.#cockpitNoop(current, request, startedAt, '航班服务暂时不可用，请稍后重试。')
+            const enrichedTask = {
+              ...task,
+              flight: {
+                flightNumber: read.data.flightNumber,
+                airlineName: '航班',
+                originName: '出发地',
+                arrivalAirportName: read.data.arrivalAirportName,
+                status: read.data.status,
+                scheduledArrival: read.data.scheduledArrival,
+                estimatedArrival: read.data.estimatedArrival,
+                arrivalAirport: read.data.arrivalAirport,
+                terminal: read.data.terminal,
+                baggageClaim: read.data.baggageClaim,
+              },
+              taskRevision: task.taskRevision + 1,
+              updatedAt: timestamp,
+            }
+            const answered = this.#submitCockpitInfoWindow(taskId, { ...current, task: enrichedTask, toolResults: { ...current.toolResults, 'flight.get-status': read } }, request, startedAt, 'flight-detail', commandSnapshot, plan)
+            return answered
+          } catch (error) {
+            this.#throwProviderError(error, current)
+          }
+        }
+      }
       if (plan.intent === 'provide-airport' && current.task.phase === 'collecting-airport' && plan.slotUpdates.airport) {
         const airportTask = applyEvent(current.task, {
           eventId: request.event.eventId, type: 'pickup.airport-selected', airport: plan.slotUpdates.airport, timestamp,
@@ -1727,10 +1858,10 @@ export class AgentGateway {
         this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
         return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: '返程路线已准备好，请确认开始返程。', shouldSpeak })
       }
-      if (plan.intent === 'check-weather') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'weather', commandSnapshot)
+      if (plan.intent === 'check-weather') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'weather', commandSnapshot, plan)
       if (plan.intent === 'check-charging') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'charging', commandSnapshot)
       if (plan.intent === 'check-schedule' || plan.intent === 'view-calendar') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'calendar')
-      if (plan.intent === 'check-flight-detail') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'flight-detail')
+      if (plan.intent === 'check-flight-detail') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'flight-detail', undefined, plan)
       if (plan.intent === 'check-vehicle-status') return this.#submitCockpitInfoWindow(taskId, current, request, startedAt, 'vehicle-status', commandSnapshot)
       if (plan.intent === 'confirm-passengers-onboard' && plan.proposedEvents[0]?.type === 'passengers.onboard') {
         if (!commandSnapshot || request.event.navigationSnapshot?.leg !== 'outbound' || request.event.navigationSnapshot.progress !== 1) {
@@ -2018,27 +2149,51 @@ export class AgentGateway {
     startedAt: number,
     kind: 'weather' | 'charging' | 'calendar' | 'flight-detail' | 'vehicle-status',
     commandSnapshot?: SanitizedCockpitSnapshot,
+    plan?: Plan,
   ): AgentResponse {
     const timestamp = this.#eventTimestamp(current.task.updatedAt)
     const supportsTts = current.requestContext?.clientCapabilities.supportsTts ?? true
+    let working = current
+    // An airport named alongside a query answers the airport dependency without
+    // querying the arrivals board. Keep the main task and its phase intact.
+    if (plan?.slotUpdates.airport && !working.task.pickupAirport) {
+      const airport = plan.slotUpdates.airport
+      const task = working.task.phase === 'collecting-airport'
+        ? applyEvent(working.task, { eventId: `${request.event.eventId}:airport`, type: 'pickup.airport-selected', airport, timestamp }, this.#preferences)
+        : { ...working.task, pickupAirport: airport, taskRevision: working.task.taskRevision + 1, updatedAt: timestamp }
+      working = { ...working, task }
+    }
+    if (kind === 'weather' && !working.task.pickupAirport && !working.task.pendingQuery && /机场/.test(request.event.type === 'user.input' ? request.event.text : '')) {
+      const task = {
+        ...working.task,
+        pendingQuery: { kind: 'weather' as const, requiredSlots: ['airport' as const], createdByEventId: request.event.eventId },
+        taskRevision: working.task.taskRevision + 1,
+        updatedAt: timestamp,
+      }
+      const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(task, current.toolResults, current.requestContext, current.effectReceipts)))
+      this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+      return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
+        text: '你想看虹桥机场还是浦东机场的天气？', shouldSpeak: request.event.type === 'user.input' && request.event.source === 'voice' && supportsTts,
+      })
+    }
     let component: UISpec['components'][number]
     if (kind === 'weather') {
-      const driving = current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving'
+      const driving = working.task.phase === 'outbound-driving' || working.task.phase === 'return-driving'
       if (driving && !commandSnapshot) {
         return this.#cockpitNoop(current, request, startedAt, '需要当前模拟位置后才能查询沿途天气。')
       }
-      const atAirport = current.task.phase === 'waiting-for-passengers'
-        || current.task.phase === 'passengers-onboard'
-        || current.task.phase === 'confirming-return'
+      const atAirport = working.task.phase === 'waiting-for-passengers'
+        || working.task.phase === 'passengers-onboard'
+        || working.task.phase === 'confirming-return'
       const locationId = commandSnapshot?.weatherLocationId
-        ?? (atAirport ? this.#arrivalWeatherLocationId(current) : 'navigation-segment-origin')
+        ?? (atAirport ? this.#arrivalWeatherLocationId(working) : working.task.pickupAirport ? this.#arrivalWeatherLocationId(working) : 'navigation-segment-origin')
       try {
         const weather = this.#orchestrator.resolveWeather?.(taskId, request.clientRequestId, { locationId })
         if (!weather) {
           throw new AgentGatewayError('PROVIDER_FAILED', '天气服务暂时不可用，请稍后重试。', true, current)
         }
         component = {
-          ...weatherCardComponent(current.task, weather.data, { timeLabel: '现在' }),
+          ...weatherCardComponent(working.task, weather.data, { timeLabel: '现在' }),
           id: `weather-${request.event.eventId}`,
         }
       } catch (error) {
@@ -2049,11 +2204,11 @@ export class AgentGateway {
         this.#throwProviderError(error, current)
       }
     } else if (kind === 'charging') {
-      const route = current.toolResults?.['navigation.plan-route']?.data
-      const vehicle = commandSnapshot?.vehicle ?? current.toolResults?.['vehicle.get-status']?.data ?? current.requestContext?.vehicle
-      let charging = current.toolResults?.['charging.recommend']?.data
+      const route = working.toolResults?.['navigation.plan-route']?.data
+      const vehicle = commandSnapshot?.vehicle ?? working.toolResults?.['vehicle.get-status']?.data ?? working.requestContext?.vehicle
+      let charging = working.toolResults?.['charging.recommend']?.data
       if (!route || !vehicle || !charging) return this.#cockpitNoop(current, request, startedAt, '当前还没有可用的接机路线和车辆电量。')
-      const driving = current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving'
+      const driving = working.task.phase === 'outbound-driving' || working.task.phase === 'return-driving'
       if (driving && !commandSnapshot) {
         return this.#cockpitNoop(current, request, startedAt, '需要当前模拟位置后才能规划充电路线。')
       }
@@ -2064,8 +2219,8 @@ export class AgentGateway {
             batteryPercent: vehicle.batteryPercent,
             remainingRangeKm: vehicle.remainingRangeKm,
             outboundDistanceKm: commandSnapshot.remainingDistanceKm,
-            returnDistanceKm: current.task.phase === 'outbound-driving'
-              ? current.task.navigationSimulation?.distanceKm ?? route.distanceKm
+            returnDistanceKm: working.task.phase === 'outbound-driving'
+              ? working.task.navigationSimulation?.distanceKm ?? route.distanceKm
               : 0,
           })
           if (!refreshed) {
@@ -2095,7 +2250,7 @@ export class AgentGateway {
           suggestedDurationMinutes: charging.suggestedDurationMinutes,
           etaImpactMinutes: charging.etaImpactMinutes,
           nearbyStations: nearbyChargingStations('full', vehicle.batteryPercent),
-          chargingRoute: chargingRoutePresentation(presentationRoute, current.task.navigation?.destination ?? current.task.pickupAirport?.label ?? '机场', vehicle.batteryPercent),
+          chargingRoute: chargingRoutePresentation(presentationRoute, working.task.navigation?.destination ?? working.task.pickupAirport?.label ?? '机场', vehicle.batteryPercent),
         },
       }
     } else if (kind === 'calendar') {
@@ -2115,13 +2270,19 @@ export class AgentGateway {
         this.#throwProviderError(error, current)
       }
     } else if (kind === 'flight-detail') {
-      const flight = current.task.flight
+      const flight = working.task.flight
       if (!flight?.airlineName || !flight.originName || !flight.arrivalAirportName) {
-        return this.#cockpitNoop(current, request, startedAt, '还没有选定航班。')
+        if (!working.task.pendingQuery) {
+          const task = { ...working.task, pendingQuery: { kind: 'flight-detail' as const, requiredSlots: ['flightNumber' as const], createdByEventId: request.event.eventId }, taskRevision: working.task.taskRevision + 1, updatedAt: timestamp }
+          const stored = this.#store.save(this.#mergeCockpitWindows(current, this.#publish(task, current.toolResults, current.requestContext, current.effectReceipts)))
+          this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+          return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, { text: '请告诉我航班号。', shouldSpeak: request.event.type === 'user.input' && request.event.source === 'voice' && supportsTts })
+        }
+        return this.#cockpitNoop(current, request, startedAt, '请告诉我航班号。')
       }
       component = {
         id: `flight-detail-${request.event.eventId}`, type: 'flight-detail', props: {
-          flightNumber: flight.flightNumber, airlineName: flight.airlineName, originName: flight.originName,
+        flightNumber: flight.flightNumber, airlineName: flight.airlineName, originName: flight.originName,
           arrivalAirportName: flight.arrivalAirportName, scheduledArrival: flight.scheduledArrival ?? flight.estimatedArrival,
           estimatedArrival: flight.estimatedArrival, status: flight.status, terminal: flight.terminal, freshness: 'fixture',
         },
@@ -2133,20 +2294,31 @@ export class AgentGateway {
       component = {
         id: `vehicle-status-${request.event.eventId}`, type: 'vehicle-status', props: {
           speedKph: vehicle.speedKph, batteryPercent: vehicle.batteryPercent, remainingRangeKm: vehicle.remainingRangeKm,
-          roadName: commandSnapshot?.roadName ?? current.task.cockpit?.currentRoad ?? '当前位置', destination: current.task.navigation?.destination ?? '当前位置',
+          roadName: commandSnapshot?.roadName ?? working.task.cockpit?.currentRoad ?? '当前位置', destination: working.task.navigation?.destination ?? '当前位置',
           remainingDistanceKm: commandSnapshot?.remainingDistanceKm ?? seed?.distanceKm ?? 0, eta: commandSnapshot?.eta ?? current.task.navigation?.eta ?? timestamp,
-          speedMode: current.task.cockpit?.speedMode ?? 'normal',
-          drivingStatus: current.task.phase === 'outbound-driving' || current.task.phase === 'return-driving' ? '正在导航' : '车辆已停稳', simulated: true,
+          speedMode: working.task.cockpit?.speedMode ?? 'normal',
+          drivingStatus: working.task.phase === 'outbound-driving' || working.task.phase === 'return-driving' ? '正在导航' : '车辆已停稳', simulated: true,
         },
       }
     }
-    const windowTitle = kind === 'weather' ? '天气' : kind === 'charging' ? '充电方案' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
-    const ui = this.#appendCockpitInfoWindow(taskId, current.ui, component, kind, request.event.eventId, timestamp)
-    const answered: StoredTask = { ...current, task: { ...current.task, uiRevision: ui.uiRevision }, ui }
+    const completedTask = working.task.pendingQuery?.kind === kind
+      ? { ...working.task, pendingQuery: undefined, taskRevision: working.task.taskRevision + 1, updatedAt: timestamp }
+      : working.task
+    const ui = this.#appendCockpitInfoWindow(taskId, working.ui, component, kind, request.event.eventId, timestamp)
+    const answered: StoredTask = { ...working, task: { ...completedTask, uiRevision: ui.uiRevision }, ui }
     const stored = this.#store.save(answered)
     this.#store.recordEventResult(taskId, request.event.eventId, { stored, effects: [] })
+    const spoken = kind === 'weather'
+      ? cockpitWeatherSummary(component)
+      : kind === 'flight-detail'
+        ? cockpitFlightSummary(component)
+        : kind === 'vehicle-status'
+          ? cockpitVehicleSummary(component)
+          : kind === 'charging'
+            ? cockpitChargingSummary(component)
+            : cockpitScheduleSummary(component)
     return this.#response(request.clientRequestId, stored, [], performance.now() - startedAt, {
-      text: `已打开${windowTitle}。`,
+      text: `${spoken}${cockpitRecoveryPrompt(stored.task)}`,
       shouldSpeak: request.event.type === 'user.input' && request.event.source === 'voice' && supportsTts,
     })
   }
@@ -2161,11 +2333,18 @@ export class AgentGateway {
   ): UISpec {
     const windowKind = kind === 'calendar' ? 'calendar' : kind
     const windowTitle = kind === 'weather' ? '天气' : kind === 'charging' ? '充电方案' : kind === 'calendar' ? '今日日程' : kind === 'flight-detail' ? '航班详情' : '车辆状态'
+    const transientKinds = new Set<NonNullable<UISpec['windows']>[number]['kind']>([
+      'weather', 'charging', 'calendar', 'flight-detail', 'vehicle-status',
+    ])
+    const existingWindows = (baseUi.windows ?? []).filter((window) => !transientKinds.has(window.kind))
+    const removedComponentIds = new Set(
+      (baseUi.windows ?? []).filter((window) => transientKinds.has(window.kind)).flatMap((window) => window.componentIds),
+    )
     return uiSpecSchema.parse({
       ...baseUi,
       uiRevision: baseUi.uiRevision + 1,
-      components: [...baseUi.components, component],
-      windows: [...(baseUi.windows ?? []), {
+      components: [...baseUi.components.filter((candidate) => !removedComponentIds.has(candidate.id)), component],
+      windows: [...existingWindows, {
         id: `${kind}-${eventId}`, kind: windowKind, title: windowTitle, componentIds: [component.id],
         size: kind === 'calendar' || kind === 'charging' ? 'large' : 'medium', controls: { closable: true, minimizable: true, maximizable: true },
       }],
@@ -3297,6 +3476,7 @@ export class AgentGateway {
    */
   #arrivalWeatherLocationId(current: StoredTask): string {
     if (current.requestContext?.destination) return current.requestContext.destination.id
+    if (current.task.pickupAirport?.code) return pickupDestinationForAirport(current.task.pickupAirport.code).id
     const airport = current.task.flight?.arrivalAirport
     return airport ? pickupDestinationForAirport(airport).id : 'destination-hongqiao-t2'
   }
@@ -3316,6 +3496,9 @@ export class AgentGateway {
         ...task,
         flight: {
           flightNumber: reads.flight.flightNumber,
+          airlineName: '航班',
+          originName: '出发地',
+          arrivalAirportName: reads.flight.arrivalAirportName,
           status: reads.flight.status,
           scheduledArrival: reads.flight.scheduledArrival,
           estimatedArrival: reads.flight.estimatedArrival,
@@ -4066,6 +4249,45 @@ function scheduleSpokenSummary(events: Array<{ title: string; startAt: string }>
   const nextClock = events[0]!.startAt.match(/T(\d{2}:\d{2})/)?.[1]
   const nextPart = nextClock ? `，最近是 ${nextClock} 的${events[0]!.title}` : ''
   return `今天还有 ${events.length} 项安排${nextPart}。`
+}
+
+function cockpitWeatherSummary(component: UISpec['components'][number]): string {
+  if (component.type !== 'weather-card') return '天气查询完成。'
+  const rain = component.props.precipitationChance !== undefined ? `，降水概率 ${Math.round(component.props.precipitationChance)}%` : ''
+  return `${component.props.location}${component.props.conditionLabel}，${Math.round(component.props.temperatureC)} 度${rain}。`
+}
+
+function cockpitFlightSummary(component: UISpec['components'][number]): string {
+  if (component.type !== 'flight-detail') return '航班详情查询完成。'
+  const clock = component.props.estimatedArrival.match(/T(\d{2}:\d{2})/)?.[1] ?? component.props.estimatedArrival
+  const status = component.props.status === 'cancelled' ? '已取消' : component.props.status === 'delayed' ? '有延误' : '目前状态正常'
+  return `${component.props.flightNumber} 预计 ${clock} 到达${component.props.arrivalAirportName}，${status}。`
+}
+
+function cockpitVehicleSummary(component: UISpec['components'][number]): string {
+  if (component.type !== 'vehicle-status') return '车辆状态查询完成。'
+  return `当前电量 ${Math.round(component.props.batteryPercent)}%，按当前路线可以完成本次行程。`
+}
+
+function cockpitChargingSummary(component: UISpec['components'][number]): string {
+  if (component.type !== 'charging-recommendation') return '充电方案查询完成。'
+  return component.props.recommended ? `建议补能，预计增加 ${component.props.suggestedDurationMinutes ?? 0} 分钟。` : '当前电量足够完成接机和返程，不需要额外补能。'
+}
+
+function cockpitScheduleSummary(component: UISpec['components'][number]): string {
+  if (component.type !== 'schedule-card') return '日程查询完成。'
+  const events = component.props.events
+  if (events.length === 0) return '今天没有更多安排了。'
+  return `你今天有 ${events.length} 项安排，最近是 ${events[0]!.startAt.match(/T(\d{2}:\d{2})/)?.[1] ?? ''} 的${events[0]!.title}。`
+}
+
+function cockpitRecoveryPrompt(task: AirportPickupTaskState): string {
+  if (task.pendingQuery?.requiredSlots.includes('airport')) return ' 回到接机安排：请告诉我机场。'
+  if (task.pendingQuery?.requiredSlots.includes('flightNumber')) return ' 回到接机安排：请告诉我航班号。'
+  if (!task.pickupAirport) return ' 回到接机安排：请告诉我机场。'
+  if (!task.flight?.flightNumber) return ' 回到接机安排：请告诉我航班号。'
+  if (!task.passengers.names.length) return ' 回到接机安排：请告诉我要接哪位家人。'
+  return ' 航班信息已确认，接机安排已准备好。'
 }
 
 function isCabinRevertPolicyDenial(errorCode: string | undefined): boolean {

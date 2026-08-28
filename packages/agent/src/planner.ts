@@ -86,7 +86,13 @@ export function planAirportPickup(input: PlannerInput): Plan {
   }
 
   if (isPauseRequest(compactText)) return informationPlan('pause-unsupported', '当前版本暂不支持暂停。')
-  if (isFlightDetailQuery(compactText)) return informationPlan('check-flight-detail', '好的，我打开当前航班详情。')
+  if (isFlightDetailQuery(compactText)) return {
+    ...informationPlan('check-flight-detail', '好的，我打开当前航班详情。'),
+    slotUpdates: {
+      ...(parsePickupAirport(text, state) ? { airport: parsePickupAirport(text, state) } : {}),
+      ...(flightNumber ? { flightNumber } : {}),
+    },
+  }
   if (isVehicleStatusQuery(compactText)) return informationPlan('check-vehicle-status', '好的，我打开车辆状态。')
   if (isSpeedUpRequest(compactText)) return informationPlan('speed-up', '好的，尝试调快一档。')
   if (isSpeedDownRequest(compactText)) return informationPlan('speed-down', '好的，尝试调慢一档。')
@@ -96,7 +102,9 @@ export function planAirportPickup(input: PlannerInput): Plan {
   if (isReturnRequest(compactText)) return informationPlan('request-return', '好的，先确认返程路线。')
 
   const airport = parsePickupAirport(text, state)
-  if (airport && state?.phase === 'collecting-airport') {
+  if (airport && state?.phase === 'collecting-airport'
+    && !isWeatherQuery(compactText)
+    && !isFlightDetailQuery(compactText)) {
     return {
       intent: 'provide-airport', confidence: 0.99, slotUpdates: { airport }, missingSlots: [],
       proposedEvents: [{ ...eventBase, type: 'pickup.airport-selected', airport }],
@@ -208,7 +216,7 @@ export function planAirportPickup(input: PlannerInput): Plan {
     return {
       intent: 'check-weather',
       confidence: 0.98,
-      slotUpdates: {},
+      slotUpdates: parsePickupAirport(text, state) ? { airport: parsePickupAirport(text, state) } : {},
       missingSlots: [],
       proposedEvents: [{ ...eventBase, type: 'user.input', text }],
       assistantText: '好的，正在为你查看接机目的地的天气。',
@@ -310,6 +318,11 @@ export function planAirportPickup(input: PlannerInput): Plan {
   const isPickupRequest = /去机场接/.test(actionableText)
     || /机场接(?:人|妈妈|爸爸|豆豆)/.test(actionableText)
     || /接(?:一下|一趟)?(?:妈妈|爸爸|豆豆)/.test(actionableText)
+    || /(?:晚上)?帮我(?:安排(?:一下)?接机|把(?:家里)?人接回来)/.test(actionableText)
+    || /她们晚上到[，,]?帮我去接一下/.test(actionableText)
+    || /我想安排一次机场接送/.test(actionableText)
+    || /晚上去机场接家人/.test(actionableText)
+    || /帮我把家人从机场接回来/.test(actionableText)
   if (isPickupRequest) {
     const cockpit = state?.phase === 'collecting-airport'
     const statedAirport = parsePickupAirport(text, cockpit ? state : undefined)
@@ -370,6 +383,8 @@ function informationPlan(intent: PlannerIntent, assistantText: string): Plan {
 export function parsePickupAirport(text: string, state?: AirportPickupTaskState): { label: string; code?: 'SHA' | 'PVG' } | undefined {
   if (state?.phase === 'collecting-airport' && /^虹桥[。！!？?]?$/.test(text)) return { label: '虹桥机场', code: 'SHA' }
   if (state?.phase === 'collecting-airport' && /^浦东[。！!？?]?$/.test(text)) return { label: '浦东机场', code: 'PVG' }
+  if (/^虹桥(?:机场)?(?:[，,]|$)/.test(text)) return { label: '虹桥机场', code: 'SHA' }
+  if (/^浦东(?:机场)?(?:[，,]|$)/.test(text)) return { label: '浦东机场', code: 'PVG' }
   if (/虹桥(?:国际)?机场|上海虹桥/.test(text)) return { label: '虹桥机场', code: 'SHA' }
   if (/浦东(?:国际)?机场|上海浦东/.test(text)) return { label: '浦东机场', code: 'PVG' }
   if (state?.phase !== 'collecting-airport' && !/机场/.test(text)) return undefined
@@ -383,6 +398,7 @@ export function parsePickupAirport(text: string, state?: AirportPickupTaskState)
     /^(?:(?:我)?(?:现在)?(?:要|想|准备)?(?:去|到|前往)|请(?:帮我)?|帮我|选择|是)+/u,
     '',
   )
+  if (/(?:安排|晚上|家人|接回|接机|帮我|想要|一次)/.test(label)) return undefined
   return label.slice(0, -2).length >= 2 ? { label } : undefined
 }
 
@@ -398,7 +414,15 @@ function pickupMissingSlots(
 }
 
 function isPauseRequest(text: string): boolean { return /^(?:暂停|先停一下|暂停导航)$/.test(text) }
-function isFlightDetailQuery(text: string): boolean { return /^(?:查看|看看|打开)?(?:当前)?航班详情$/.test(text) }
+function isFlightDetailQuery(text: string): boolean {
+  const airportPrefix = '(?:(?:虹桥|浦东)(?:国际)?(?:机场)?[，,]?)?'
+  const requestPrefix = '(?:帮我)?(?:查看|看看|查询|查一下|打开)?'
+  if (new RegExp(`^${airportPrefix}${requestPrefix}(?:当前)?航班详情$`).test(text)) return true
+  // Accept a flight number in the same utterance without broadening this into
+  // arbitrary status questions.
+  return new RegExp(`^${airportPrefix}${requestPrefix}(?:当前)?航班详情(?:是|：|:)?[A-Z]{2}\\d{4}$`, 'i').test(text)
+    || new RegExp(`^[A-Z]{2}\\d{4}(?:的)?(?:航班)?详情$`, 'i').test(text)
+}
 function isVehicleStatusQuery(text: string): boolean { return /^(?:查看|看看|打开)?车辆状态$|^(?:看看|查看)?电量$/.test(text) }
 function isSpeedUpRequest(text: string): boolean { return /^(?:跑快点|快一点|加快一档)$/.test(text) }
 function isSpeedDownRequest(text: string): boolean { return /^(?:跑慢点|慢一点|降低一档)$/.test(text) }
@@ -417,7 +441,7 @@ function isTaskCancellation(text: string): boolean {
  * task meaning and must not be consumed by the query path.
  */
 function isWeatherQuery(text: string): boolean {
-  return /^(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查|查下|查查|查一下|看一下)?(?:到(?:的时候|达时|那边))?(?:的)?天气(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
+  return /^(?:(?:虹桥|浦东)(?:国际)?机场?[，,]?)?(?:请|麻烦)?(?:帮我|给我)?(?:看下|看看|查|查下|查查|查一下|看一下)?(?:机场)?(?:到(?:的时候|达时|那边))?(?:的)?天气(?:怎么样|如何|情况)?[?？。！!]?$/.test(text)
 }
 
 function isChargingQuery(text: string): boolean {
