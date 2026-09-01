@@ -119,6 +119,8 @@ export interface ReadToolOrchestration {
    * orchestration without it degrades to the weather-unavailable reply.
    */
   resolveWeather?(taskId: string, requestId: string, input: { locationId: string; at?: string }): SuccessfulToolResult<WeatherOutput>
+  /** On-demand single-flight read for cockpit flight-detail queries. */
+  resolveFlightStatus?(taskId: string, requestId: string, flightNumber: string): SuccessfulToolResult<FlightStatusOutput>
   /**
    * On-demand calendar read for the check-schedule query intent. Optional for
    * the same reason as resolveWeather; a missing implementation degrades to
@@ -303,6 +305,16 @@ export class ReadToolOrchestrator implements ReadToolOrchestration {
       requestId,
       input,
       toolResultSchema(weatherOutputSchema),
+    )
+  }
+
+  resolveFlightStatus(taskId: string, requestId: string, flightNumber: string): SuccessfulToolResult<FlightStatusOutput> {
+    return this.#call(
+      'flight.get-status',
+      taskId,
+      requestId,
+      { flightNumber, date: this.#fixtureDate },
+      toolResultSchema(flightStatusOutputSchema),
     )
   }
 

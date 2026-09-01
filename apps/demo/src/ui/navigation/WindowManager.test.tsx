@@ -61,7 +61,23 @@ describe('WindowManager component behavior', () => {
     vi.stubGlobal('innerWidth', 1280)
     vi.stubGlobal('innerHeight', 720)
   })
-  afterEach(() => vi.unstubAllGlobals())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  it('automatically folds transient query windows without affecting the spec callback', () => {
+    vi.useFakeTimers()
+    const weather = windowSpec('weather-1', '当前位置天气')
+    const onWindowClose = vi.fn()
+    render(<WindowManager {...manager(spec([weather])).props} onWindowClose={onWindowClose} />)
+    expect(screen.getByRole('article', { name: '当前位置天气窗口' })).toBeInTheDocument()
+
+    act(() => { vi.advanceTimersByTime(12_000) })
+
+    expect(screen.queryByRole('article', { name: '当前位置天气窗口' })).not.toBeInTheDocument()
+    expect(onWindowClose).toHaveBeenCalledWith('weather-1')
+  })
 
   it('preserves the dragged position across a server spec refresh', () => {
     const weather = windowSpec('weather-1', '当前位置天气')

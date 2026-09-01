@@ -35,6 +35,11 @@ export function CockpitWorkspace({
   className,
 }: CockpitWorkspaceProps) {
   const classes = ['cockpit-workspace', className].filter(Boolean).join(' ')
+  const renderSlot = (slot: ReactNode, slotClass: string, label: string) => (
+    <div className={slotClass} data-cockpit-slot={slotClass.replace('cockpit-workspace__', '')}>
+      {slot !== undefined && slot !== null && slot !== false ? <section aria-label={label}>{slot}</section> : null}
+    </div>
+  )
   return (
     <section
       className={classes}
@@ -44,27 +49,13 @@ export function CockpitWorkspace({
       {...(phase ? { 'data-cockpit-phase': phase } : {})}
       aria-label="座舱工作区"
     >
-      <section className="cockpit-workspace__map" data-cockpit-slot="map" aria-label="座舱地图">
-        {map}
-      </section>
-      <section className="cockpit-workspace__status" data-cockpit-slot="status" aria-label="座舱状态">
-        {status}
-      </section>
-      <section className="cockpit-workspace__feedback" data-cockpit-slot="feedback" aria-label="Agent反馈">
-        {feedback}
-      </section>
-      <section className="cockpit-workspace__primary" data-cockpit-slot="primary" aria-label="主任务窗口">
-        {primary}
-      </section>
-      <section className="cockpit-workspace__hud" data-cockpit-slot="hud" aria-label="导航层">
-        {hud}
-      </section>
-      <section className="cockpit-workspace__auxiliary" data-cockpit-slot="auxiliary" aria-label="辅助信息窗口">
-        {auxiliary}
-      </section>
-      <section className="cockpit-workspace__entry" data-cockpit-slot="entry" aria-label="文字和语音入口">
-        {entry}
-      </section>
+      {renderSlot(map, 'cockpit-workspace__map', '座舱地图')}
+      {renderSlot(status, 'cockpit-workspace__status', '座舱状态')}
+      {renderSlot(feedback, 'cockpit-workspace__feedback', 'Agent反馈')}
+      {renderSlot(primary, 'cockpit-workspace__primary', '主任务窗口')}
+      {renderSlot(hud, 'cockpit-workspace__hud', '导航层')}
+      {renderSlot(auxiliary, 'cockpit-workspace__auxiliary', '辅助信息窗口')}
+      {renderSlot(entry, 'cockpit-workspace__entry', '文字和语音入口')}
     </section>
   )
 }

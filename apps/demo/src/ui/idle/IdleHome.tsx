@@ -68,7 +68,7 @@ export function IdleHome({
       <aside className="idle-home__living" aria-label="生活信息">
         <section className="idle-home__clock" aria-label="当前时间">
           <span className="idle-home__eyebrow">上海座舱</span>
-          <time>{timeText(now)}</time>
+          <time dateTime={now.toISOString()}>{timeText(now)}</time>
           <p>{dateText(now)}</p>
         </section>
         <section className="idle-home__widget idle-home__weather" aria-label="模拟天气">
@@ -81,7 +81,7 @@ export function IdleHome({
         </section>
         <section className="idle-home__widget idle-home__schedule" aria-label="今日日程">
           <header><span>今日日程</span><button type="button" onClick={onSchedule}>查看日程</button></header>
-          <ol>{scheduleState.map((item) => <li key={item.time}><time>{item.time}</time><span>{item.title}</span><em data-status={item.status}>{item.status}</em></li>)}</ol>
+          <ol>{scheduleState.map((item) => <li key={item.time}><time dateTime={`${now.toISOString().slice(0, 10)}T${item.time}:00+08:00`}>{item.time}</time><span>{item.title}</span><em data-status={item.status}>{item.status}</em></li>)}</ol>
         </section>
         <p className="idle-home__location">模拟位置：人民广场 · 非真实 GPS</p>
       </aside>

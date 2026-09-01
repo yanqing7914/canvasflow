@@ -190,11 +190,11 @@ export function PersistentMapLayer({
           <><span className="persistent-map-layer__car"><span /></span><span className="persistent-map-layer__location">上海 · 人民广场</span></>
         )}
       </div>
-      <span className="persistent-map-layer__source">
+      <span className="persistent-map-layer__source" role="status" aria-live="polite">
         {source === 'amap' ? '高德道路图层' : source === 'loading' ? '地图服务连接中' : '离线地图示意'}
         {effectiveProgress !== undefined ? ` · 模拟行程进度 ${Math.round(effectiveProgress * 100)}%` : ''}
       </span>
-      {!follow && mode === 'route' ? (
+      {!follow && mode === 'route' && source === 'amap' ? (
         <button
           className="persistent-map-layer__recenter"
           type="button"
@@ -206,7 +206,7 @@ export function PersistentMapLayer({
           回到车辆位置
         </button>
       ) : null}
-      {mode === 'route' ? (
+      {mode === 'route' && source === 'amap' ? (
         <div className="persistent-map-layer__zoom" aria-label="地图缩放">
           <button type="button" aria-label="放大地图" onClick={() => handle.current?.zoomIn()}>+</button>
           <button type="button" aria-label="缩小地图" onClick={() => handle.current?.zoomOut()}>−</button>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useReducer, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react'
 import type { UISpec } from '@canvasflow/schema'
 import { UISpecRenderer } from '../UISpecRenderer'
 import type { NavigationSnapshot } from './simulator'
@@ -17,6 +17,11 @@ export type WindowManagerProps = {
 }
 
 type DragState = { id: string; startX: number; startY: number; originX: number; originY: number }
+
+const TRANSIENT_WINDOW_KINDS = new Set<CockpitWindowSpec['kind']>([
+  'weather', 'charging', 'calendar', 'flight-detail', 'vehicle-status',
+])
+const TRANSIENT_WINDOW_LIFETIME_MS = 12_000
 
 function viewport() {
   return { width: window.innerWidth, height: window.innerHeight }
@@ -79,12 +84,22 @@ export function WindowManager({ spec, pending, driving, vehicle, onAction, clear
     }
   }, [])
 
-  function close(windowSpec: CockpitWindowSpec) {
+  const close = useCallback((windowSpec: CockpitWindowSpec) => {
     dispatch({ type: 'close', id: windowSpec.id })
     frozenSpecs.current.delete(windowSpec.id)
     onWindowClose?.(windowSpec.id)
     queueMicrotask(() => previousFocus.current.get(windowSpec.id)?.focus())
-  }
+  }, [onWindowClose])
+
+  // Auxiliary reads are deliberately ephemeral. The server keeps the task and
+  // latest UI spec durable, while this presentation layer folds the card away
+  // after the driver has had time to read it.
+  useEffect(() => {
+    const timers = incoming
+      .filter((windowSpec) => TRANSIENT_WINDOW_KINDS.has(windowSpec.kind))
+      .map((windowSpec) => window.setTimeout(() => close(windowSpec), TRANSIENT_WINDOW_LIFETIME_MS))
+    return () => timers.forEach((timer) => window.clearTimeout(timer))
+  }, [close, incoming])
 
   return (
     <section className="cockpit-windows" aria-label="行程信息窗口">

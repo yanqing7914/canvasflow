@@ -103,6 +103,12 @@ export const cockpitContextSchema = z.object({
   currentLocationId: z.string().min(1).optional(),
 }).strict()
 
+export const pendingQuerySchema = z.object({
+  kind: z.enum(['weather', 'flight-detail', 'vehicle-status', 'charging', 'schedule']),
+  requiredSlots: z.array(z.enum(['airport', 'flightNumber'])),
+  createdByEventId: z.string().min(1),
+}).strict()
+
 /**
  * A command-time reading from the deterministic browser simulator.
  *
@@ -168,6 +174,8 @@ export const airportPickupTaskStateSchema = z.object({
     })
     .optional(),
   navigationSimulation: navigationSimulationSeedSchema.optional(),
+  /** At most one suspended cockpit query; kept with the task for restart safety. */
+  pendingQuery: pendingQuerySchema.optional(),
   cockpit: cockpitContextSchema.optional(),
   /**
    * A standing "remind me when it is time to leave", set by 稍后提醒 on the

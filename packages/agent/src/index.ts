@@ -193,6 +193,7 @@ export function applyEvent(
     case 'charging.cancelled': if (next.charging.status === 'planned' || next.charging.status === 'active') next.charging = { ...next.charging, accepted: false, status: 'none' }; break
     case 'user.cancelled-task':
       next.phase = 'cancelled'
+      next.pendingQuery = undefined
       next.pendingConfirmation = undefined
       next.message.pendingMessageId = undefined
       next.message.pendingText = undefined
